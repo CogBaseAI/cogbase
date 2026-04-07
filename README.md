@@ -208,17 +208,20 @@ Skills are the atomic unit of capability in CogBase — discrete, stateless, and
 | `remember` | Write a confirmed fact or conclusion to long-term memory |
 | `recall` | Retrieve from long-term memory by key or semantic search |
 
-Every skill shares a consistent interface:
+Every skill shares a consistent interface, aligned with the [AgentSkills specification](https://agentskills.io/specification):
 
 ```python
 class Skill:
-    name: str
-    description: str        # what the LLM sees when deciding to invoke it
-    input_schema: dict      # JSON schema
-    output_schema: dict
+    name: str           # max 64 chars, lowercase alphanumeric + hyphens
+    description: str    # what the LLM sees when deciding to invoke it; max 1024 chars
+    compatibility: str  # optional — environment requirements
+    metadata: dict      # optional — arbitrary str→str key-value pairs
+    allowed_tools: list # optional — tools this skill may invoke
 
     def run(self, input: dict, session: Session) -> dict: ...
 ```
+
+Expected inputs and outputs are documented in each skill's class docstring or a `SKILL.md` file alongside the implementation.
 
 ### Agents
 
