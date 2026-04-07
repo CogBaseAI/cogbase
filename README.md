@@ -4,7 +4,7 @@
 
 CogBase is an open-source framework for building AI applications that need to understand, cross-reference, and reason over large volumes of unstructured data — documents, emails, transcripts, chat logs, reports, and more.
 
-It provides the foundational layer that vertical AI products are built on: typed fact extraction, contradiction detection, a hybrid retrieval store, intelligent query routing, composable skills, and goal-driven agents — all configurable for any domain.
+It provides the foundational layer that vertical AI products are built on: typed fact extraction, contradiction detection, a hybrid retrieval store, intelligent query routing, composable skills, goal-driven agents, and a multi-tier memory system — all configurable for any domain.
 
 ---
 
@@ -17,14 +17,15 @@ Most RAG pipelines retrieve text and pass it to an LLM. That works for simple Q&
 - Answer questions that require reasoning over structured facts, not just semantic similarity
 - Ground generated output in citable, auditable sources
 - Automate multi-step workflows across a large document set
+- Maintain continuity across sessions and accumulate knowledge over time
 
-CogBase solves this with a structured extraction layer sitting between raw ingestion and the LLM — turning unstructured input into typed, queryable facts before any reasoning begins — and an agent layer that composes skills into goal-driven workflows on top.
+CogBase solves this with a structured extraction layer sitting between raw ingestion and the LLM — turning unstructured input into typed, queryable facts before any reasoning begins — an agent layer that composes skills into goal-driven workflows, and a memory layer that persists knowledge across queries, sessions, and time.
 
 ---
 
 ## Architecture
 
-CogBase is organized into three layers with clean boundaries between them.
+CogBase is organized into four layers with clean boundaries between them.
 
 ```
 ╔═══════════════════════════════════════════════════════════╗
@@ -46,7 +47,7 @@ CogBase is organized into three layers with clean boundaries between them.
 ║  │  contradictions│                                       ║
 ║  └──────────────┘                                         ║
 ╚═══════════════════════════════════════════════════════════╝
-                         ↕  hybrid store
+          ↕  hybrid store              ↕  writes long-term memory
 ╔═══════════════════════════════════════════════════════════╗
 ║  REASONING ENGINE                          (real-time)    ║
 ║                                                           ║
@@ -57,29 +58,45 @@ CogBase is organized into three layers with clean boundaries between them.
 ║          ↓                                                ║
 ║  Skills  (atomic, composable capabilities)                ║
 ║          ↓                                                ║
-║  LLM reasoning layer                                      ║
+║  LLM reasoning layer  ←  short-term memory (context)      ║
 ║          ↓                                                ║
 ║  Grounded, cited response                                 ║
 ╚═══════════════════════════════════════════════════════════╝
-                         ↕  skill registry
+          ↕  skill registry             ↕  reads/writes episodic memory
 ╔═══════════════════════════════════════════════════════════╗
 ║  AGENT LAYER                               (goal-driven)  ║
 ║                                                           ║
 ║  Goal                                                     ║
 ║          ↓                                                ║
-║  Agent plans skill sequence                               ║
+║  Agent plans skill sequence  ←  episodic memory           ║
 ║          ↓                                                ║
 ║  Execute → observe → replan if needed                     ║
 ║          ↓                                                ║
 ║  Result                                                   ║
 ╚═══════════════════════════════════════════════════════════╝
+          ↕  read/write across all layers
+╔═══════════════════════════════════════════════════════════╗
+║  MEMORY LAYER                              (persistent)   ║
+║                                                           ║
+║  Short-term  →  Redis                                     ║
+║               (session-scoped context window)             ║
+║                                                           ║
+║  Episodic    →  Postgres                                  ║
+║               (conversation + agent action history)       ║
+║                                                           ║
+║  Long-term   →  Postgres + pgvector                       ║
+║               (cross-session facts, conclusions,          ║
+║                confirmed resolutions, user preferences)   ║
+╚═══════════════════════════════════════════════════════════╝
 ```
 
-**Knowledge Pipeline** runs asynchronously at ingest time. Raw inputs stay in blob storage. Extracted structured data — facts, timeline events, entities, risk flags, contradictions — goes into Postgres, FK-linked by `session_id`. Vector embeddings of chunked text go into pgvector for semantic search. These serve fundamentally different query patterns and are never conflated.
+**Knowledge Pipeline** runs asynchronously at ingest time. Raw inputs stay in blob storage. Extracted structured data — facts, timeline events, entities, risk flags, contradictions — goes into Postgres, FK-linked by `session_id`. Vector embeddings of chunked text go into pgvector for semantic search. Ingestion also writes to long-term memory, accumulating domain knowledge over time.
 
-**Reasoning Engine** runs in real-time at query time. A query router classifies intent before touching either store — Pattern A questions are pure SQL lookups and never reach the LLM. Pattern C and D queries assemble grounded context from both stores before passing it to the reasoning layer. Every capability in the engine is exposed as a composable skill.
+**Reasoning Engine** runs in real-time at query time. A query router classifies intent before touching either store — Pattern A questions are pure SQL lookups and never reach the LLM. Pattern C and D queries assemble grounded context from both stores and short-term memory before passing it to the reasoning layer. Every capability in the engine is exposed as a composable skill.
 
-**Agent Layer** sits on top of the Reasoning Engine. Agents receive a goal, access the skill registry, and use the LLM to plan and execute a sequence of skills — replanning if intermediate results change the approach. Domain packs can contribute their own agents.
+**Agent Layer** sits on top of the Reasoning Engine. Agents receive a goal, access the skill registry, and use the LLM to plan and execute a sequence of skills — replanning if intermediate results change the approach. Agents read and write episodic memory so multi-step tasks can resume across sessions without starting from zero.
+
+**Memory Layer** serves all three layers above. Short-term memory holds the assembled context for the current query. Episodic memory logs the full history of queries, answers, and agent actions. Long-term memory accumulates confirmed facts, resolved contradictions, learned patterns, and user preferences across sessions — the more CogBase is used, the richer the knowledge base becomes.
 
 ---
 
@@ -96,7 +113,7 @@ CogBase uses a two-phase approach rather than a single "find contradictions" pro
 1. Extract typed facts from each source individually
 2. Run a cross-document comparison pass over the fact store, using embedding distance + NLI classification to flag conflicts by type (date conflicts, numeric conflicts, statement conflicts)
 
-This makes contradiction detection a query over structured data, not a needle-in-a-haystack prompt.
+This makes contradiction detection a query over structured data, not a needle-in-a-haystack prompt. Previously resolved contradictions are stored in long-term memory and not re-flagged in future sessions.
 
 ### Typed query routing
 
@@ -110,6 +127,30 @@ Before touching either store, an intent classifier decides which execution path 
 | D — Grounded generation | Retrieve facts + quotes, then draft | "Draft a demand letter using these facts" |
 
 Pattern A questions never touch the LLM — they're SQL queries. Pattern C is where orchestration work lives. Pattern D separates the `[FACTS]` block (from Postgres) from the `[SUPPORTING_QUOTES]` block (from RAG) so every generated claim is auditable.
+
+### Memory
+
+CogBase maintains three tiers of memory, each scoped and persisted differently:
+
+| Tier | Storage | Scope | Purpose |
+|---|---|---|---|
+| Short-term | Redis | Session | Assembled context window for the current query; expires with the session |
+| Episodic | Postgres | User / session | Full history of queries, answers, and agent actions; enables follow-ups and agent continuity |
+| Long-term | Postgres + pgvector | User / project / org | Confirmed facts, resolved contradictions, learned patterns, user preferences; persists indefinitely |
+
+```python
+# Short-term: context for the current query is assembled automatically
+result = cog.query("What was the notice period?")
+
+# Episodic: follow-up questions work across turns
+result = cog.query("And did they comply with it?")  # knows what "it" refers to
+
+# Long-term: confirmed facts persist across sessions
+cog.memory.confirm("notice_period_was_45_days", source=result.citations)
+
+# Next session — no need to re-query
+cog.memory.recall("notice_period")  # returns confirmed fact instantly
+```
 
 ### Skills
 
@@ -129,6 +170,8 @@ Skills are the atomic unit of capability in CogBase — discrete, stateless, and
 | `flag_risks` | Identify risk patterns from facts |
 | `summarize` | Grounded summary of retrieved context |
 | `draft` | Grounded generation from facts + quotes |
+| `remember` | Write a confirmed fact or conclusion to long-term memory |
+| `recall` | Retrieve from long-term memory by key or semantic search |
 
 Every skill shares a consistent interface:
 
@@ -144,7 +187,7 @@ class Skill:
 
 ### Agents
 
-Agents orchestrate skills to accomplish multi-step goals. They plan a skill sequence, execute it, observe results, and replan if needed — rather than following a hardwired chain.
+Agents orchestrate skills to accomplish multi-step goals. They plan a skill sequence, execute it, observe results, and replan if needed. Episodic memory means agents can resume across sessions without losing context.
 
 **Built-in agents:**
 
@@ -202,6 +245,12 @@ print(result.answer)
 print(result.citations)       # source documents + page references
 print(result.contradictions)  # any flagged conflicts
 
+# Follow-up using episodic memory
+result = cog.query("Which document is the stronger evidence?")
+
+# Confirm a fact to long-term memory
+cog.memory.confirm("termination_was_pretextual", source=result.citations)
+
 # Run an agent for a multi-step goal
 agent = cog.agent("DiligenceAgent")
 report = agent.run("Identify every material risk in this document set")
@@ -222,7 +271,7 @@ CogBase is not limited to legal. The core architecture maps to any domain where 
 | Medical records review | EHR notes, lab results, imaging reports, referrals | Drug conflict detection, care summary drafting |
 | Academic / patent research | Papers, patents, citations | Prior art timelines, claim contradiction analysis |
 
-About 60% of the codebase — the ingestion pipeline, contradiction engine, query router, skill registry, and storage layer — is identical across all verticals. You write it once. The domain pack handles the rest.
+About 60% of the codebase — the ingestion pipeline, contradiction engine, query router, skill registry, memory layer, and storage layer — is identical across all verticals. You write it once. The domain pack handles the rest.
 
 ---
 
@@ -231,9 +280,9 @@ About 60% of the codebase — the ingestion pipeline, contradiction engine, quer
 | Layer | Technology | What lives here |
 |---|---|---|
 | Blob storage | S3-compatible | Raw input files |
-| Relational | Postgres | Facts, timeline events, entities, contradictions, session metadata |
-| Vector | pgvector (Postgres extension) | Chunked text embeddings |
-| Cache | Redis | Assembled context windows for repeated queries |
+| Relational | Postgres | Facts, timeline events, entities, contradictions, episodic memory, long-term memory, session metadata |
+| Vector | pgvector (Postgres extension) | Chunked text embeddings + long-term memory embeddings |
+| Cache | Redis | Short-term memory; assembled context windows for the current session |
 
 pgvector as a Postgres extension means you avoid a second infrastructure dependency. Migrate to a dedicated vector DB only if you're at tens of millions of chunks.
 
@@ -253,6 +302,10 @@ cogbase/
 │   │   ├── router/           # query intent classifier
 │   │   ├── retrieval/        # structured + semantic + hybrid execution
 │   │   └── generation/       # grounded generation layer
+│   ├── memory/               # Memory Layer
+│   │   ├── short_term.py     # Redis-backed session context
+│   │   ├── episodic.py       # conversation + agent action history
+│   │   └── long_term.py      # cross-session facts, conclusions, preferences
 │   ├── skills/               # built-in skill definitions + implementations
 │   ├── agents/               # built-in agents
 │   └── core/                 # skill registry, session, base classes
@@ -277,8 +330,11 @@ cogbase/
 - [ ] Postgres + pgvector storage layer
 - [ ] Contradiction detection engine (date, numeric, statement conflicts)
 - [ ] Query router (rule-based pre-filter + LLM classifier)
+- [ ] Short-term memory (Redis session context)
+- [ ] Episodic memory (conversation + agent history)
+- [ ] Long-term memory (cross-session knowledge store)
 - [ ] Skill registry + base skill interface
-- [ ] Built-in skills (ingest, extract_facts, query_*, draft, summarize, ...)
+- [ ] Built-in skills (ingest, extract_facts, query_*, draft, remember, recall, ...)
 - [ ] Built-in agents (ResearchAgent, ContradictionAgent, DraftingAgent, ...)
 - [ ] Legal domain pack
 - [ ] REST API + Python SDK
@@ -297,6 +353,7 @@ CogBase is in early development. The best way to contribute right now:
 - **Contribute a domain pack** — if you work in insurance, medical, compliance, or M&A, a YAML config + prompt file is all it takes
 - **Contribute a skill or agent** — new capabilities that implement the base interface are always welcome
 - **Improve the contradiction engine** — it's the hardest and most valuable part; PRs with test cases are especially welcome
+- **Improve the memory layer** — especially long-term memory retrieval and conflict resolution across sessions
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
 
