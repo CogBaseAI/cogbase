@@ -4,7 +4,7 @@
 
 CogBase is an open-source framework for building AI applications that need to understand, cross-reference, and reason over large volumes of unstructured data — documents, emails, transcripts, chat logs, reports, and more.
 
-It provides the foundational layer that vertical AI products are built on: typed fact extraction, contradiction detection, a hybrid retrieval store, intelligent query routing, composable skills, goal-driven agents, and a multi-tier memory system — all configurable for any domain.
+It provides the foundational layer that vertical AI products are built on: typed fact extraction, contradiction detection, a pluggable hybrid store, intelligent query routing, composable skills, goal-driven agents, and a multi-tier memory system — all configurable for any domain.
 
 ---
 
@@ -38,14 +38,12 @@ CogBase is organized into four layers with clean boundaries between them.
 ║          ↓                                                ║
 ║  Structured fact extraction  ←  domain pack               ║
 ║          ↓                ↓                               ║
-║  ┌──────────────┐  ┌─────────────┐                        ║
-║  │   Postgres   │  │  pgvector   │                        ║
-║  │  facts       │  │  semantic   │                        ║
-║  │  timeline    │  │  chunks     │                        ║
-║  │  entities    │  └─────────────┘                        ║
-║  │  risks       │                                         ║
-║  │  contradictions│                                       ║
-║  └──────────────┘                                         ║
+║  ┌──────────────────┐  ┌──────────────────┐               ║
+║  │ Structured Store │  │   Vector Store   │               ║
+║  │ (facts, timeline │  │ (semantic chunks)│               ║
+║  │  entities, risks │  │                  │               ║
+║  │  contradictions) │  │                  │               ║
+║  └──────────────────┘  └──────────────────┘               ║
 ╚═══════════════════════════════════════════════════════════╝
           ↕  hybrid store              ↕  writes long-term memory
 ╔═══════════════════════════════════════════════════════════╗
@@ -78,25 +76,25 @@ CogBase is organized into four layers with clean boundaries between them.
 ╔═══════════════════════════════════════════════════════════╗
 ║  MEMORY LAYER                              (persistent)   ║
 ║                                                           ║
-║  Short-term  →  Redis                                     ║
+║  Short-term  →  Redis / in-memory                         ║
 ║               (session-scoped context window)             ║
 ║                                                           ║
-║  Episodic    →  Postgres                                  ║
+║  Episodic    →  Structured Store                          ║
 ║               (conversation + agent action history)       ║
 ║                                                           ║
-║  Long-term   →  Postgres + pgvector                       ║
+║  Long-term   →  Structured Store + Vector Store           ║
 ║               (cross-session facts, conclusions,          ║
 ║                confirmed resolutions, user preferences)   ║
 ╚═══════════════════════════════════════════════════════════╝
 ```
 
-**Knowledge Pipeline** runs asynchronously at ingest time. Raw inputs stay in blob storage. Extracted structured data — facts, timeline events, entities, risk flags, contradictions — goes into Postgres, FK-linked by `session_id`. Vector embeddings of chunked text go into pgvector for semantic search. Ingestion also writes to long-term memory, accumulating domain knowledge over time.
+**Knowledge Pipeline** runs asynchronously at ingest time. Raw inputs stay in blob storage. Extracted structured data — facts, timeline events, entities, risk flags, contradictions — goes into the structured store. Vector embeddings of chunked text go into the vector store for semantic search. Both stores are pluggable — swap backends without changing application code.
 
-**Reasoning Engine** runs in real-time at query time. A query router classifies intent before touching either store — Pattern A questions are pure SQL lookups and never reach the LLM. Pattern C and D queries assemble grounded context from both stores and short-term memory before passing it to the reasoning layer. Every capability in the engine is exposed as a composable skill.
+**Reasoning Engine** runs in real-time at query time. A query router classifies intent before touching either store — Pattern A questions are pure structured lookups and never reach the LLM. Pattern C and D queries assemble grounded context from both stores and short-term memory before passing it to the reasoning layer. Every capability in the engine is exposed as a composable skill.
 
 **Agent Layer** sits on top of the Reasoning Engine. Agents receive a goal, access the skill registry, and use the LLM to plan and execute a sequence of skills — replanning if intermediate results change the approach. Agents read and write episodic memory so multi-step tasks can resume across sessions without starting from zero.
 
-**Memory Layer** serves all three layers above. Short-term memory holds the assembled context for the current query. Episodic memory logs the full history of queries, answers, and agent actions. Long-term memory accumulates confirmed facts, resolved contradictions, learned patterns, and user preferences across sessions — the more CogBase is used, the richer the knowledge base becomes.
+**Memory Layer** serves all three layers above. Short-term memory holds the assembled context for the current query. Episodic memory logs the full history of queries, answers, and agent actions. Long-term memory accumulates confirmed facts, resolved contradictions, learned patterns, and user preferences across sessions.
 
 ---
 
@@ -121,22 +119,59 @@ Before touching either store, an intent classifier decides which execution path 
 
 | Pattern | Description | Example |
 |---|---|---|
-| A — Structured lookup | Answer from Postgres facts directly | "How many days notice was given?" |
+| A — Structured lookup | Answer from structured store directly | "How many days notice was given?" |
 | B — Semantic retrieval | Vector search over embedded chunks | "What did Chen say about her own performance?" |
 | C — Hybrid reasoning | Retrieve from both stores, reason over results | "Does the review contradict the termination reason?" |
 | D — Grounded generation | Retrieve facts + quotes, then draft | "Draft a demand letter using these facts" |
 
-Pattern A questions never touch the LLM — they're SQL queries. Pattern C is where orchestration work lives. Pattern D separates the `[FACTS]` block (from Postgres) from the `[SUPPORTING_QUOTES]` block (from RAG) so every generated claim is auditable.
+Pattern A questions never touch the LLM. Pattern C is where orchestration work lives. Pattern D separates the `[FACTS]` block (from the structured store) from the `[SUPPORTING_QUOTES]` block (from the vector store) so every generated claim is auditable.
+
+### Pluggable stores
+
+CogBase defines clean adapter interfaces for both stores. Swap backends via config — no application code changes required.
+
+```python
+# Default — Postgres + pgvector
+cog = CogBase(pack="legal")
+
+# Mix and match backends
+cog = CogBase(
+    pack="legal",
+    structured_store="mongodb",
+    vector_store="pinecone",
+)
+
+# Bring your own adapter
+from cogbase.stores import StructuredStoreBase, VectorStoreBase
+
+class MyStructuredStore(StructuredStoreBase):
+    def save_facts(self, facts: list[Fact]) -> None: ...
+    def query_facts(self, filters: dict) -> list[Fact]: ...
+    def save_timeline(self, events: list[Event]) -> None: ...
+    def query_timeline(self, session_id: str) -> list[Event]: ...
+    def save_contradiction(self, c: Contradiction) -> None: ...
+    def query_contradictions(self, filters: dict) -> list[Contradiction]: ...
+
+class MyVectorStore(VectorStoreBase):
+    def upsert(self, chunks: list[Chunk]) -> None: ...
+    def search(self, query_embedding: list[float], top_k: int) -> list[Chunk]: ...
+    def delete(self, doc_id: str) -> None: ...
+
+cog = CogBase(
+    structured_store=MyStructuredStore(),
+    vector_store=MyVectorStore(),
+)
+```
 
 ### Memory
 
 CogBase maintains three tiers of memory, each scoped and persisted differently:
 
-| Tier | Storage | Scope | Purpose |
-|---|---|---|---|
-| Short-term | Redis | Session | Assembled context window for the current query; expires with the session |
-| Episodic | Postgres | User / session | Full history of queries, answers, and agent actions; enables follow-ups and agent continuity |
-| Long-term | Postgres + pgvector | User / project / org | Confirmed facts, resolved contradictions, learned patterns, user preferences; persists indefinitely |
+| Tier | Scope | Purpose |
+|---|---|---|
+| Short-term | Session | Assembled context window for the current query; expires with the session |
+| Episodic | User / session | Full history of queries, answers, and agent actions; enables follow-ups and agent continuity |
+| Long-term | User / project / org | Confirmed facts, resolved contradictions, learned patterns, preferences; persists indefinitely |
 
 ```python
 # Short-term: context for the current query is assembled automatically
@@ -163,7 +198,7 @@ Skills are the atomic unit of capability in CogBase — discrete, stateless, and
 | `ingest` | Parse and chunk a document or data source |
 | `extract_facts` | Run typed fact extraction on a chunk |
 | `detect_contradictions` | Compare facts across sources |
-| `query_structured` | SQL query over the fact store |
+| `query_structured` | Query the structured store |
 | `query_semantic` | Vector search over embeddings |
 | `query_hybrid` | Combined structured + semantic retrieval |
 | `build_timeline` | Assemble chronological event sequence |
@@ -209,8 +244,8 @@ packs/
 │   ├── facts.yaml
 │   ├── contradictions.yaml
 │   ├── prompts/
-│   ├── skills/             # domain-specific skills
-│   └── agents/             # domain-specific agents
+│   ├── skills/
+│   └── agents/
 ├── insurance/
 ├── medical/
 └── compliance/
@@ -271,20 +306,7 @@ CogBase is not limited to legal. The core architecture maps to any domain where 
 | Medical records review | EHR notes, lab results, imaging reports, referrals | Drug conflict detection, care summary drafting |
 | Academic / patent research | Papers, patents, citations | Prior art timelines, claim contradiction analysis |
 
-About 60% of the codebase — the ingestion pipeline, contradiction engine, query router, skill registry, memory layer, and storage layer — is identical across all verticals. You write it once. The domain pack handles the rest.
-
----
-
-## Storage stack
-
-| Layer | Technology | What lives here |
-|---|---|---|
-| Blob storage | S3-compatible | Raw input files |
-| Relational | Postgres | Facts, timeline events, entities, contradictions, episodic memory, long-term memory, session metadata |
-| Vector | pgvector (Postgres extension) | Chunked text embeddings + long-term memory embeddings |
-| Cache | Redis | Short-term memory; assembled context windows for the current session |
-
-pgvector as a Postgres extension means you avoid a second infrastructure dependency. Migrate to a dedicated vector DB only if you're at tens of millions of chunks.
+About 60% of the codebase — the ingestion pipeline, contradiction engine, query router, skill registry, memory layer, and store interfaces — is identical across all verticals. You write it once. The domain pack and store adapters handle the rest.
 
 ---
 
@@ -296,8 +318,7 @@ cogbase/
 │   ├── pipeline/             # Knowledge Pipeline
 │   │   ├── ingestion/        # parsers for PDF, DOCX, email, chat, etc.
 │   │   ├── extraction/       # typed fact extraction
-│   │   ├── contradiction/    # contradiction detection engine
-│   │   └── store/            # Postgres + pgvector adapters
+│   │   └── contradiction/    # contradiction detection engine
 │   ├── engine/               # Reasoning Engine
 │   │   ├── router/           # query intent classifier
 │   │   ├── retrieval/        # structured + semantic + hybrid execution
@@ -306,6 +327,10 @@ cogbase/
 │   │   ├── short_term.py     # Redis-backed session context
 │   │   ├── episodic.py       # conversation + agent action history
 │   │   └── long_term.py      # cross-session facts, conclusions, preferences
+│   ├── stores/               # Store adapter interfaces + built-in adapters
+│   │   ├── base.py           # StructuredStoreBase, VectorStoreBase
+│   │   ├── structured/
+│   │   └── vector/
 │   ├── skills/               # built-in skill definitions + implementations
 │   ├── agents/               # built-in agents
 │   └── core/                 # skill registry, session, base classes
@@ -327,10 +352,10 @@ cogbase/
 
 - [ ] Core ingestion pipeline (PDF, DOCX, email, chat export)
 - [ ] Typed fact extraction with configurable schema
-- [ ] Postgres + pgvector storage layer
+- [ ] Store adapter interfaces (StructuredStoreBase, VectorStoreBase)
 - [ ] Contradiction detection engine (date, numeric, statement conflicts)
 - [ ] Query router (rule-based pre-filter + LLM classifier)
-- [ ] Short-term memory (Redis session context)
+- [ ] Short-term memory (Redis + in-memory)
 - [ ] Episodic memory (conversation + agent history)
 - [ ] Long-term memory (cross-session knowledge store)
 - [ ] Skill registry + base skill interface
@@ -350,6 +375,7 @@ cogbase/
 CogBase is in early development. The best way to contribute right now:
 
 - **Try the quickstart** and file issues for anything that breaks
+- **Contribute a store adapter** — implement `StructuredStoreBase` or `VectorStoreBase` for a backend not yet supported
 - **Contribute a domain pack** — if you work in insurance, medical, compliance, or M&A, a YAML config + prompt file is all it takes
 - **Contribute a skill or agent** — new capabilities that implement the base interface are always welcome
 - **Improve the contradiction engine** — it's the hardest and most valuable part; PRs with test cases are especially welcome
