@@ -9,7 +9,8 @@ requires-python = ">=3.11"
 dependencies = ["pydantic>=2.0"]
 
 [project.optional-dependencies]
-dev = ["pytest", "mypy", "ruff"]
+faiss = ["faiss-cpu>=1.7"]
+dev = ["pytest", "mypy", "ruff", "faiss-cpu>=1.7"]
 
 [tool.ruff]
 line-length = 100
