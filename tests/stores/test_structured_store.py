@@ -1,220 +1,370 @@
 """Contract tests for StructuredStoreBase — run against every concrete adapter."""
 
 import pytest
+from pydantic import BaseModel
 
 from cogbase.core.models import Contradiction, Event, Fact
+from cogbase.stores.filters import Col
+from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
 
 
 # ------------------------------------------------------------------
-# Shared helpers
+# Record factories
 # ------------------------------------------------------------------
 
-def make_fact(**kwargs) -> Fact:
+def make_fact(**kw) -> Fact:
     defaults = dict(
-        type="notice_period",
-        value="60 days",
+        type="notice_period", value="60 days",
         raw_text="sixty (60) days written notice",
-        doc_id="doc-1",
-        confidence=0.95,
+        doc_id="doc-1", confidence=0.95,
     )
-    return Fact(**{**defaults, **kwargs})
+    return Fact(**{**defaults, **kw})
 
 
-def make_event(**kwargs) -> Event:
+def make_event(**kw) -> Event:
     defaults = dict(session_id="session-1", actor="user", action="query")
-    return Event(**{**defaults, **kwargs})
+    return Event(**{**defaults, **kw})
 
 
-def make_contradiction(fact_a: Fact, fact_b: Fact, **kwargs) -> Contradiction:
-    defaults = dict(conflict_type="date")
-    return Contradiction(fact_a=fact_a, fact_b=fact_b, **{**defaults, **kwargs})
+def make_contradiction(fact_a: Fact, fact_b: Fact, **kw) -> Contradiction:
+    return Contradiction(fact_a=fact_a, fact_b=fact_b, **{"conflict_type": "date", **kw})
 
 
 # ------------------------------------------------------------------
-# Facts
+# create_collection
 # ------------------------------------------------------------------
 
-def test_save_and_query_facts(structured_store):
+def test_create_collection_is_idempotent(structured_store):
+    from tests.stores.conftest import FACTS_SCHEMA
+    structured_store.create_collection(FACTS_SCHEMA)
+
+
+def test_create_collection_invalid_name():
+    with pytest.raises(Exception, match="invalid"):
+        CollectionSchema(
+            name="bad name!",
+            id_field="id",
+            fields={"id": FieldSchema(type=FieldType.STRING)},
+        )
+
+
+def test_create_collection_id_field_must_be_in_fields():
+    with pytest.raises(Exception, match="id_field"):
+        CollectionSchema(
+            name="things",
+            id_field="missing_field",
+            fields={"id": FieldSchema(type=FieldType.STRING)},
+        )
+
+
+def test_save_to_unknown_collection_raises(structured_store):
+    with pytest.raises(KeyError, match="unknown"):
+        structured_store.save("unknown", [make_fact()])
+
+
+# ------------------------------------------------------------------
+# Basic save / query
+# ------------------------------------------------------------------
+
+def test_save_and_query_no_filters(structured_store):
     fact = make_fact()
-    structured_store.save_facts([fact])
-    results = structured_store.query_facts({})
-    assert len(results) == 1
-    assert results[0].fact_id == fact.fact_id
+    structured_store.save("facts", [fact])
+    results = structured_store.query("facts")
+    assert len(results) == 1 and results[0]["fact_id"] == fact.fact_id
 
 
-def test_query_facts_filter_by_type(structured_store):
-    structured_store.save_facts([
+def test_query_as_deserialises_to_model(structured_store):
+    fact = make_fact()
+    structured_store.save("facts", [fact])
+    results = structured_store.query_as("facts", None, Fact)
+    assert isinstance(results[0], Fact) and results[0].fact_id == fact.fact_id
+
+
+def test_save_upserts_by_id(structured_store):
+    fact = make_fact(value="30 days")
+    structured_store.save("facts", [fact])
+    updated = Fact(
+        fact_id=fact.fact_id, type=fact.type, value="60 days",
+        raw_text=fact.raw_text, doc_id=fact.doc_id, confidence=fact.confidence,
+    )
+    structured_store.save("facts", [updated])
+    results = structured_store.query("facts")
+    assert len(results) == 1 and results[0]["value"] == "60 days"
+
+
+# ------------------------------------------------------------------
+# Equality  (=  and  !=)
+# ------------------------------------------------------------------
+
+def test_eq_filter(structured_store):
+    structured_store.save("facts", [
         make_fact(type="notice_period"),
         make_fact(type="termination_date"),
     ])
-    results = structured_store.query_facts({"type": "notice_period"})
-    assert len(results) == 1
-    assert results[0].type == "notice_period"
+    results = structured_store.query("facts", [Col("type") == "notice_period"])
+    assert len(results) == 1 and results[0]["type"] == "notice_period"
 
 
-def test_query_facts_filter_by_doc_id(structured_store):
-    structured_store.save_facts([
-        make_fact(doc_id="doc-1"),
-        make_fact(doc_id="doc-2"),
+def test_ne_filter(structured_store):
+    structured_store.save("facts", [
+        make_fact(type="notice_period"),
+        make_fact(type="termination_date"),
     ])
-    results = structured_store.query_facts({"doc_id": "doc-1"})
-    assert all(f.doc_id == "doc-1" for f in results)
-    assert len(results) == 1
-
-
-def test_query_facts_multi_filter(structured_store):
-    structured_store.save_facts([
-        make_fact(type="notice_period", doc_id="doc-1"),
-        make_fact(type="notice_period", doc_id="doc-2"),
-        make_fact(type="termination_date", doc_id="doc-1"),
-    ])
-    results = structured_store.query_facts({"type": "notice_period", "doc_id": "doc-1"})
-    assert len(results) == 1
-
-
-def test_query_facts_empty_filters_returns_all(structured_store):
-    structured_store.save_facts([make_fact(), make_fact(), make_fact()])
-    assert len(structured_store.query_facts({})) == 3
-
-
-def test_query_facts_no_match_returns_empty(structured_store):
-    structured_store.save_facts([make_fact(type="notice_period")])
-    assert structured_store.query_facts({"type": "nonexistent"}) == []
-
-
-def test_facts_upsert_by_id(structured_store):
-    fact = make_fact(value="30 days")
-    structured_store.save_facts([fact])
-    updated = Fact(
-        fact_id=fact.fact_id,
-        type=fact.type,
-        value="60 days",
-        raw_text=fact.raw_text,
-        doc_id=fact.doc_id,
-        confidence=fact.confidence,
-    )
-    structured_store.save_facts([updated])
-    results = structured_store.query_facts({"doc_id": fact.doc_id})
-    assert len(results) == 1
-    assert results[0].value == "60 days"
+    results = structured_store.query("facts", [Col("type") != "notice_period"])
+    assert len(results) == 1 and results[0]["type"] == "termination_date"
 
 
 # ------------------------------------------------------------------
-# Timeline
+# Comparisons  (<  <=  >  >=)
 # ------------------------------------------------------------------
 
-def test_save_and_query_timeline(structured_store):
-    events = [make_event(), make_event()]
-    structured_store.save_timeline(events)
-    results = structured_store.query_timeline("session-1")
+def test_gte_filter(structured_store):
+    structured_store.save("facts", [
+        make_fact(confidence=0.5),
+        make_fact(confidence=0.8),
+        make_fact(confidence=0.95),
+    ])
+    results = structured_store.query("facts", [Col("confidence") >= 0.8])
+    assert len(results) == 2
+    assert all(r["confidence"] >= 0.8 for r in results)
+
+
+def test_lt_filter(structured_store):
+    structured_store.save("facts", [
+        make_fact(confidence=0.5),
+        make_fact(confidence=0.8),
+    ])
+    results = structured_store.query("facts", [Col("confidence") < 0.8])
+    assert len(results) == 1 and results[0]["confidence"] == 0.5
+
+
+def test_lte_filter(structured_store):
+    structured_store.save("facts", [
+        make_fact(confidence=0.5),
+        make_fact(confidence=0.8),
+        make_fact(confidence=0.95),
+    ])
+    results = structured_store.query("facts", [Col("confidence") <= 0.8])
     assert len(results) == 2
 
 
-def test_query_timeline_isolates_by_session(structured_store):
-    structured_store.save_timeline([
-        make_event(session_id="session-1"),
-        make_event(session_id="session-2"),
-        make_event(session_id="session-1"),
+def test_gt_filter(structured_store):
+    structured_store.save("facts", [
+        make_fact(confidence=0.5),
+        make_fact(confidence=0.95),
     ])
-    assert len(structured_store.query_timeline("session-1")) == 2
-    assert len(structured_store.query_timeline("session-2")) == 1
-
-
-def test_query_timeline_ordered_by_timestamp(structured_store):
-    from datetime import datetime, timezone
-
-    t1 = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
-    t2 = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    t3 = datetime(2024, 1, 1, 11, 0, 0, tzinfo=timezone.utc)
-
-    structured_store.save_timeline([
-        make_event(session_id="s", timestamp=t1, action="first"),
-        make_event(session_id="s", timestamp=t2, action="third"),
-        make_event(session_id="s", timestamp=t3, action="second"),
-    ])
-    results = structured_store.query_timeline("s")
-    assert [r.action for r in results] == ["first", "second", "third"]
-
-
-def test_query_timeline_unknown_session_returns_empty(structured_store):
-    assert structured_store.query_timeline("no-such-session") == []
-
-
-def test_timeline_event_payload_roundtrip(structured_store):
-    event = make_event(payload={"query": "what is the notice period?", "count": 3})
-    structured_store.save_timeline([event])
-    results = structured_store.query_timeline(event.session_id)
-    assert results[0].payload == {"query": "what is the notice period?", "count": 3}
+    results = structured_store.query("facts", [Col("confidence") > 0.8])
+    assert len(results) == 1 and results[0]["confidence"] == 0.95
 
 
 # ------------------------------------------------------------------
-# Contradictions
+# IN / NOT IN
 # ------------------------------------------------------------------
 
-def test_save_and_query_contradiction(structured_store):
-    fa, fb = make_fact(doc_id="doc-1"), make_fact(doc_id="doc-2")
-    c = make_contradiction(fa, fb)
-    structured_store.save_contradiction(c)
-    results = structured_store.query_contradictions({})
+def test_in_filter(structured_store):
+    structured_store.save("facts", [
+        make_fact(type="notice_period"),
+        make_fact(type="termination_date"),
+        make_fact(type="salary"),
+    ])
+    results = structured_store.query(
+        "facts", [Col("type").in_(["notice_period", "termination_date"])]
+    )
+    assert len(results) == 2
+    assert {r["type"] for r in results} == {"notice_period", "termination_date"}
+
+
+def test_not_in_filter(structured_store):
+    structured_store.save("facts", [
+        make_fact(type="notice_period"),
+        make_fact(type="termination_date"),
+        make_fact(type="salary"),
+    ])
+    results = structured_store.query(
+        "facts", [Col("type").not_in(["notice_period", "termination_date"])]
+    )
+    assert len(results) == 1 and results[0]["type"] == "salary"
+
+
+# ------------------------------------------------------------------
+# LIKE
+# ------------------------------------------------------------------
+
+def test_like_filter_prefix(structured_store):
+    structured_store.save("facts", [
+        make_fact(value="30 days"),
+        make_fact(value="60 days"),
+        make_fact(value="annual bonus"),
+    ])
+    results = structured_store.query("facts", [Col("value").like("%days%")])
+    assert len(results) == 2
+
+
+def test_like_filter_case_insensitive(structured_store):
+    structured_store.save("facts", [make_fact(value="Sixty Days")])
+    results = structured_store.query("facts", [Col("value").like("%days%")])
     assert len(results) == 1
-    assert results[0].contradiction_id == c.contradiction_id
+
+
+# ------------------------------------------------------------------
+# IS NULL / IS NOT NULL
+# ------------------------------------------------------------------
+
+def test_is_null_filter(structured_store):
+    structured_store.save("facts", [
+        make_fact(page=None),
+        make_fact(page=3),
+    ])
+    results = structured_store.query("facts", [Col("page").is_null()])
+    assert len(results) == 1 and results[0]["page"] is None
+
+
+def test_is_not_null_filter(structured_store):
+    structured_store.save("facts", [
+        make_fact(page=None),
+        make_fact(page=3),
+    ])
+    results = structured_store.query("facts", [Col("page").is_not_null()])
+    assert len(results) == 1 and results[0]["page"] == 3
+
+
+# ------------------------------------------------------------------
+# Combined filters (AND)
+# ------------------------------------------------------------------
+
+def test_multiple_filters_are_anded(structured_store):
+    structured_store.save("facts", [
+        make_fact(type="notice_period", doc_id="doc-1", confidence=0.9),
+        make_fact(type="notice_period", doc_id="doc-2", confidence=0.9),
+        make_fact(type="termination_date", doc_id="doc-1", confidence=0.9),
+    ])
+    results = structured_store.query("facts", [
+        Col("type") == "notice_period",
+        Col("doc_id") == "doc-1",
+    ])
+    assert len(results) == 1
+
+
+def test_no_filters_returns_all(structured_store):
+    structured_store.save("facts", [make_fact(), make_fact(), make_fact()])
+    assert len(structured_store.query("facts")) == 3
+
+
+def test_no_match_returns_empty(structured_store):
+    structured_store.save("facts", [make_fact(type="notice_period")])
+    assert structured_store.query("facts", [Col("type") == "nonexistent"]) == []
+
+
+# ------------------------------------------------------------------
+# JSON columns (payload, nested facts)
+# ------------------------------------------------------------------
+
+def test_json_payload_roundtrip(structured_store):
+    e = make_event(payload={"query": "notice period?", "count": 3})
+    structured_store.save("events", [e])
+    results = structured_store.query("events", [Col("session_id") == "session-1"])
+    assert results[0]["payload"] == {"query": "notice period?", "count": 3}
 
 
 def test_contradiction_nested_facts_roundtrip(structured_store):
     fa = make_fact(doc_id="doc-1", value="30 days")
     fb = make_fact(doc_id="doc-2", value="60 days")
-    c = make_contradiction(fa, fb, conflict_type="numeric")
-    structured_store.save_contradiction(c)
-    results = structured_store.query_contradictions({})
-    assert results[0].fact_a.value == "30 days"
-    assert results[0].fact_b.value == "60 days"
+    structured_store.save("contradictions", [make_contradiction(fa, fb)])
+    result = structured_store.query("contradictions")[0]
+    assert result["fact_a"]["value"] == "30 days"
+    assert result["fact_b"]["value"] == "60 days"
 
 
-def test_query_contradictions_filter_by_type(structured_store):
+def test_boolean_filter(structured_store):
     fa, fb = make_fact(), make_fact()
-    structured_store.save_contradiction(make_contradiction(fa, fb, conflict_type="date"))
-    structured_store.save_contradiction(make_contradiction(fa, fb, conflict_type="numeric"))
-    results = structured_store.query_contradictions({"conflict_type": "date"})
-    assert len(results) == 1
-    assert results[0].conflict_type == "date"
+    structured_store.save("contradictions", [
+        make_contradiction(fa, fb, resolved=False),
+        make_contradiction(fa, fb, resolved=True),
+    ])
+    assert len(structured_store.query("contradictions", [Col("resolved") == False])) == 1
+    assert len(structured_store.query("contradictions", [Col("resolved") == True])) == 1
 
 
-def test_query_contradictions_filter_by_resolved(structured_store):
-    fa, fb = make_fact(), make_fact()
-    structured_store.save_contradiction(make_contradiction(fa, fb, resolved=False))
-    structured_store.save_contradiction(make_contradiction(fa, fb, resolved=True))
-    assert len(structured_store.query_contradictions({"resolved": False})) == 1
-    assert len(structured_store.query_contradictions({"resolved": True})) == 1
+# ------------------------------------------------------------------
+# delete_records
+# ------------------------------------------------------------------
+
+def test_delete_by_filter(structured_store):
+    structured_store.save("facts", [
+        make_fact(doc_id="doc-1"),
+        make_fact(doc_id="doc-2"),
+    ])
+    structured_store.delete_records("facts", [Col("doc_id") == "doc-1"])
+    remaining = structured_store.query("facts")
+    assert len(remaining) == 1 and remaining[0]["doc_id"] == "doc-2"
 
 
-def test_query_contradictions_filter_by_doc_id(structured_store):
-    fa = make_fact(doc_id="doc-1")
-    fb = make_fact(doc_id="doc-2")
-    fc = make_fact(doc_id="doc-3")
-    structured_store.save_contradiction(make_contradiction(fa, fb))
-    structured_store.save_contradiction(make_contradiction(fb, fc))
-    # doc-2 appears in both contradictions
-    results = structured_store.query_contradictions({"doc_id": "doc-2"})
-    assert len(results) == 2
-    # doc-1 appears in only one
-    results = structured_store.query_contradictions({"doc_id": "doc-1"})
-    assert len(results) == 1
+def test_delete_with_range_filter(structured_store):
+    structured_store.save("facts", [
+        make_fact(confidence=0.5),
+        make_fact(confidence=0.8),
+        make_fact(confidence=0.95),
+    ])
+    structured_store.delete_records("facts", [Col("confidence") < 0.8])
+    remaining = structured_store.query("facts")
+    assert len(remaining) == 2
+    assert all(r["confidence"] >= 0.8 for r in remaining)
 
 
-def test_contradiction_upsert_by_id(structured_store):
-    fa, fb = make_fact(), make_fact()
-    c = make_contradiction(fa, fb, resolved=False)
-    structured_store.save_contradiction(c)
-    resolved = Contradiction(
-        contradiction_id=c.contradiction_id,
-        fact_a=fa,
-        fact_b=fb,
-        conflict_type=c.conflict_type,
-        resolved=True,
-        resolution_note="confirmed same clause",
+def test_delete_all_with_no_filters(structured_store):
+    structured_store.save("facts", [make_fact(), make_fact()])
+    structured_store.delete_records("facts")
+    assert structured_store.query("facts") == []
+
+
+def test_delete_no_match_is_noop(structured_store):
+    structured_store.save("facts", [make_fact()])
+    structured_store.delete_records("facts", [Col("type") == "nonexistent"])
+    assert len(structured_store.query("facts")) == 1
+
+
+# ------------------------------------------------------------------
+# Custom collection (domain pack use case)
+# ------------------------------------------------------------------
+
+def test_custom_collection_with_rich_filters(structured_store):
+    class RiskFlag(BaseModel):
+        flag_id: str
+        severity: str
+        score: float
+        description: str
+        metadata: dict
+
+    schema = CollectionSchema(
+        name="risk_flags",
+        id_field="flag_id",
+        fields={
+            "flag_id":     FieldSchema(type=FieldType.STRING,  nullable=False),
+            "severity":    FieldSchema(type=FieldType.STRING,  index=True),
+            "score":       FieldSchema(type=FieldType.FLOAT),
+            "description": FieldSchema(type=FieldType.STRING),
+            "metadata":    FieldSchema(type=FieldType.JSON),
+        },
     )
-    structured_store.save_contradiction(resolved)
-    results = structured_store.query_contradictions({})
-    assert len(results) == 1
-    assert results[0].resolved is True
-    assert results[0].resolution_note == "confirmed same clause"
+    structured_store.create_collection(schema)
+
+    structured_store.save("risk_flags", [
+        RiskFlag(flag_id="f1", severity="high",   score=0.9, description="Missing indemnity", metadata={"page": 3}),
+        RiskFlag(flag_id="f2", severity="medium", score=0.6, description="Vague termination",  metadata={"page": 7}),
+        RiskFlag(flag_id="f3", severity="low",    score=0.2, description="Minor formatting",   metadata={"page": 1}),
+    ])
+
+    # Range + membership
+    results = structured_store.query("risk_flags", [
+        Col("score") >= 0.5,
+        Col("severity").in_(["high", "medium"]),
+    ])
+    assert len(results) == 2
+
+    # LIKE
+    results = structured_store.query("risk_flags", [Col("description").like("%termination%")])
+    assert len(results) == 1 and results[0]["flag_id"] == "f2"
+
+    # query_as
+    flags = structured_store.query_as("risk_flags", [Col("severity") == "high"], RiskFlag)
+    assert flags[0].metadata["page"] == 3

@@ -1,78 +1,72 @@
-"""In-memory implementation of StructuredStoreBase.
+"""In-memory implementation of StructuredStoreBase."""
 
-Useful for tests, prototyping, and single-process workloads that don't need persistence.
-All data is lost when the process exits.
-"""
+from pydantic import BaseModel
 
-from cogbase.core.models import Contradiction, Event, Fact
 from cogbase.stores.base import StructuredStoreBase
+from cogbase.stores.filters import Filter, matches
+from cogbase.stores.schema import CollectionSchema, FieldType
 
 
 class InMemoryStructuredStore(StructuredStoreBase):
     """Thread-unsafe in-memory store backed by plain dicts.
 
-    Upserts by primary ID on every save — saving the same fact_id twice
-    overwrites the previous value.
+    All filtering is done in Python via the filter DSL regardless of field type.
     """
 
     def __init__(self) -> None:
-        self._facts: dict[str, Fact] = {}
-        self._events: dict[str, Event] = {}
-        self._contradictions: dict[str, Contradiction] = {}
+        self._schemas: dict[str, CollectionSchema] = {}
+        # collection → { id_value → record_dict }
+        self._records: dict[str, dict[str, dict]] = {}
 
-    # ------------------------------------------------------------------
-    # Facts
-    # ------------------------------------------------------------------
+    def create_collection(self, schema: CollectionSchema) -> None:
+        if schema.name in self._schemas:
+            return  # idempotent
+        self._schemas[schema.name] = schema
+        self._records[schema.name] = {}
 
-    def save_facts(self, facts: list[Fact]) -> None:
-        for fact in facts:
-            self._facts[fact.fact_id] = fact
+    def save(self, collection: str, records: list[BaseModel]) -> None:
+        schema = self._get_schema(collection)
+        store = self._records[collection]
+        for record in records:
+            row = _serialize(record, schema)
+            store[row[schema.id_field]] = row
 
-    def query_facts(self, filters: dict) -> list[Fact]:
-        return [f for f in self._facts.values() if _fact_matches(f, filters)]
+    def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
+        self._get_schema(collection)
+        fs = filters or []
+        return [r for r in self._records[collection].values() if matches(r, fs)]
 
-    # ------------------------------------------------------------------
-    # Timeline
-    # ------------------------------------------------------------------
+    def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
+        schema = self._get_schema(collection)
+        store = self._records[collection]
+        fs = filters or []
+        if not fs:
+            store.clear()
+            return
+        to_delete = [r[schema.id_field] for r in store.values() if matches(r, fs)]
+        for key in to_delete:
+            del store[key]
 
-    def save_timeline(self, events: list[Event]) -> None:
-        for event in events:
-            self._events[event.event_id] = event
-
-    def query_timeline(self, session_id: str) -> list[Event]:
-        return sorted(
-            (e for e in self._events.values() if e.session_id == session_id),
-            key=lambda e: e.timestamp,
-        )
-
-    # ------------------------------------------------------------------
-    # Contradictions
-    # ------------------------------------------------------------------
-
-    def save_contradiction(self, c: Contradiction) -> None:
-        self._contradictions[c.contradiction_id] = c
-
-    def query_contradictions(self, filters: dict) -> list[Contradiction]:
-        return [c for c in self._contradictions.values() if _contradiction_matches(c, filters)]
-
-
-# ------------------------------------------------------------------
-# Filter helpers
-# ------------------------------------------------------------------
-
-def _fact_matches(fact: Fact, filters: dict) -> bool:
-    for key, value in filters.items():
-        if getattr(fact, key, None) != value:
-            return False
-    return True
+    def _get_schema(self, collection: str) -> CollectionSchema:
+        if collection not in self._schemas:
+            raise KeyError(f"Collection '{collection}' not found. Call create_collection first.")
+        return self._schemas[collection]
 
 
-def _contradiction_matches(c: Contradiction, filters: dict) -> bool:
-    for key, value in filters.items():
-        if key == "doc_id":
-            # Match if either nested fact belongs to the given doc
-            if c.fact_a.doc_id != value and c.fact_b.doc_id != value:
-                return False
-        elif getattr(c, key, None) != value:
-            return False
-    return True
+def _serialize(record: BaseModel, schema: CollectionSchema) -> dict:
+    raw = record.model_dump(mode="python")
+    row: dict = {}
+    for name, field in schema.fields.items():
+        val = raw.get(name)
+        if val is None:
+            row[name] = None
+            continue
+        if field.type == FieldType.BOOLEAN:
+            row[name] = bool(val)
+        elif field.type == FieldType.INTEGER:
+            row[name] = int(val)
+        elif field.type == FieldType.FLOAT:
+            row[name] = float(val)
+        else:
+            row[name] = val  # STRING and JSON stored as-is
+    return row

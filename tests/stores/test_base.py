@@ -1,7 +1,10 @@
 import pytest
+from pydantic import BaseModel
 
-from cogbase.core.models import Chunk, Contradiction, Event, Fact
+from cogbase.core.models import Chunk
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
+from cogbase.stores.filters import Filter
+from cogbase.stores.schema import CollectionSchema
 
 
 def test_structured_store_cannot_be_instantiated():
@@ -16,24 +19,34 @@ def test_vector_store_cannot_be_instantiated():
 
 def test_incomplete_structured_subclass_raises():
     class Partial(StructuredStoreBase):
-        def save_facts(self, facts: list[Fact]) -> None: ...
-        def query_facts(self, filters: dict) -> list[Fact]: return []
-        def save_timeline(self, events: list[Event]) -> None: ...
-        def query_timeline(self, session_id: str) -> list[Event]: return []
-        # save_contradiction and query_contradictions intentionally missing
+        def create_collection(self, schema: CollectionSchema) -> None: ...
+        def save(self, collection: str, records: list[BaseModel]) -> None: ...
+        def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]: return []
+        # delete_records intentionally missing
 
     with pytest.raises(TypeError):
         Partial()  # type: ignore[abstract]
 
 
 def test_complete_structured_subclass_ok():
-    class InMemory(StructuredStoreBase):
-        def save_facts(self, facts: list[Fact]) -> None: ...
-        def query_facts(self, filters: dict) -> list[Fact]: return []
-        def save_timeline(self, events: list[Event]) -> None: ...
-        def query_timeline(self, session_id: str) -> list[Event]: return []
-        def save_contradiction(self, c: Contradiction) -> None: ...
-        def query_contradictions(self, filters: dict) -> list[Contradiction]: return []
+    class Minimal(StructuredStoreBase):
+        def create_collection(self, schema: CollectionSchema) -> None: ...
+        def save(self, collection: str, records: list[BaseModel]) -> None: ...
+        def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]: return []
+        def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None: ...
 
-    store = InMemory()
-    assert store is not None
+    assert Minimal() is not None
+
+
+def test_query_as_uses_query():
+    class Stub(StructuredStoreBase):
+        def create_collection(self, schema: CollectionSchema) -> None: ...
+        def save(self, collection: str, records: list[BaseModel]) -> None: ...
+        def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
+            return [{"x": 1}]
+        def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None: ...
+
+    class M(BaseModel):
+        x: int
+
+    assert Stub().query_as("col", None, M) == [M(x=1)]

@@ -1,73 +1,40 @@
-"""SQLite implementation of StructuredStoreBase.
-
-Persistence via a single SQLite file. Pass ``path=":memory:"`` for an
-in-process SQLite database (useful when you want SQL semantics without a file).
-
-Not thread-safe — wrap with a lock if sharing across threads.
-"""
+"""SQLite implementation of StructuredStoreBase."""
 
 import json
 import sqlite3
 from pathlib import Path
 
-from cogbase.core.models import Contradiction, Event, Fact
+from pydantic import BaseModel
+
 from cogbase.stores.base import StructuredStoreBase
+from cogbase.stores.filters import Filter, matches, to_sql_where
+from cogbase.stores.schema import CollectionSchema, FieldType
 
-_CREATE_TABLES = """
-CREATE TABLE IF NOT EXISTS facts (
-    fact_id     TEXT PRIMARY KEY,
-    type        TEXT NOT NULL,
-    value       TEXT NOT NULL,
-    raw_text    TEXT NOT NULL,
-    doc_id      TEXT NOT NULL,
-    page        INTEGER,
-    confidence  REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS events (
-    event_id    TEXT PRIMARY KEY,
-    session_id  TEXT NOT NULL,
-    timestamp   TEXT NOT NULL,
-    actor       TEXT NOT NULL,
-    action      TEXT NOT NULL,
-    payload     TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS contradictions (
-    contradiction_id  TEXT PRIMARY KEY,
-    fact_a            TEXT NOT NULL,
-    fact_b            TEXT NOT NULL,
-    conflict_type     TEXT NOT NULL,
-    resolved          INTEGER NOT NULL DEFAULT 0,
-    resolution_note   TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
-CREATE INDEX IF NOT EXISTS idx_facts_type     ON facts(type);
-CREATE INDEX IF NOT EXISTS idx_facts_doc      ON facts(doc_id);
-"""
-
-# Columns that can be filtered directly in SQL for each table
-_FACT_COLUMNS = {"fact_id", "type", "value", "doc_id", "page", "confidence"}
-_CONTRADICTION_COLUMNS = {"contradiction_id", "conflict_type", "resolved", "resolution_note"}
+_SQL_TYPE: dict[FieldType, str] = {
+    FieldType.STRING:  "TEXT",
+    FieldType.INTEGER: "INTEGER",
+    FieldType.FLOAT:   "REAL",
+    FieldType.BOOLEAN: "INTEGER",  # SQLite has no native bool
+    FieldType.JSON:    "TEXT",
+}
 
 
 class SQLiteStructuredStore(StructuredStoreBase):
     """SQLite-backed structured store.
 
+    Primitive-column filters (STRING, INTEGER, FLOAT, BOOLEAN) are pushed to
+    SQL WHERE clauses.  JSON-column filters are applied in Python after the fetch.
+
     Args:
-        path: Path to the SQLite database file, or ``":memory:"`` for an
-              in-process database (data is lost when the connection closes).
+        path: Path to the SQLite file, or ``":memory:"`` for an in-process db.
     """
 
     def __init__(self, path: str | Path = ":memory:") -> None:
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_CREATE_TABLES)
-        self._conn.commit()
+        self._schemas: dict[str, CollectionSchema] = {}
 
     def close(self) -> None:
-        """Close the underlying SQLite connection."""
         self._conn.close()
 
     def __enter__(self) -> "SQLiteStructuredStore":
@@ -77,132 +44,126 @@ class SQLiteStructuredStore(StructuredStoreBase):
         self.close()
 
     # ------------------------------------------------------------------
-    # Facts
+    # StructuredStoreBase
     # ------------------------------------------------------------------
 
-    def save_facts(self, facts: list[Fact]) -> None:
-        self._conn.executemany(
-            "INSERT OR REPLACE INTO facts VALUES (?,?,?,?,?,?,?)",
-            [
-                (f.fact_id, f.type, f.value, f.raw_text, f.doc_id, f.page, f.confidence)
-                for f in facts
-            ],
-        )
-        self._conn.commit()
+    def create_collection(self, schema: CollectionSchema) -> None:
+        if schema.name in self._schemas:
+            return
 
-    def query_facts(self, filters: dict) -> list[Fact]:
-        sql_filters = {k: v for k, v in filters.items() if k in _FACT_COLUMNS}
-        sql, params = _build_where("SELECT * FROM facts", sql_filters)
-        rows = self._conn.execute(sql, params).fetchall()
-        return [
-            Fact(
-                fact_id=row["fact_id"],
-                type=row["type"],
-                value=row["value"],
-                raw_text=row["raw_text"],
-                doc_id=row["doc_id"],
-                page=row["page"],
-                confidence=row["confidence"],
-            )
-            for row in rows
-        ]
+        col_defs: list[str] = []
+        for field_name, field in schema.fields.items():
+            sql_type = _SQL_TYPE[field.type]
+            not_null = "" if field.nullable else " NOT NULL"
+            if field_name == schema.id_field:
+                col_defs.append(f'"{field_name}" {sql_type} PRIMARY KEY')
+            else:
+                col_defs.append(f'"{field_name}" {sql_type}{not_null}')
 
-    # ------------------------------------------------------------------
-    # Timeline
-    # ------------------------------------------------------------------
-
-    def save_timeline(self, events: list[Event]) -> None:
-        self._conn.executemany(
-            "INSERT OR REPLACE INTO events VALUES (?,?,?,?,?,?)",
-            [
-                (
-                    e.event_id,
-                    e.session_id,
-                    e.timestamp.isoformat(),
-                    e.actor,
-                    e.action,
-                    json.dumps(e.payload),
-                )
-                for e in events
-            ],
-        )
-        self._conn.commit()
-
-    def query_timeline(self, session_id: str) -> list[Event]:
-        rows = self._conn.execute(
-            "SELECT * FROM events WHERE session_id = ? ORDER BY timestamp",
-            (session_id,),
-        ).fetchall()
-        return [
-            Event(
-                event_id=row["event_id"],
-                session_id=row["session_id"],
-                timestamp=row["timestamp"],
-                actor=row["actor"],
-                action=row["action"],
-                payload=json.loads(row["payload"]),
-            )
-            for row in rows
-        ]
-
-    # ------------------------------------------------------------------
-    # Contradictions
-    # ------------------------------------------------------------------
-
-    def save_contradiction(self, c: Contradiction) -> None:
         self._conn.execute(
-            "INSERT OR REPLACE INTO contradictions VALUES (?,?,?,?,?,?)",
-            (
-                c.contradiction_id,
-                c.fact_a.model_dump_json(),
-                c.fact_b.model_dump_json(),
-                c.conflict_type,
-                int(c.resolved),
-                c.resolution_note,
-            ),
+            f'CREATE TABLE IF NOT EXISTS "{schema.name}" ({", ".join(col_defs)})'
+        )
+        for field_name, field in schema.fields.items():
+            if field.index and field_name != schema.id_field:
+                self._conn.execute(
+                    f'CREATE INDEX IF NOT EXISTS "idx_{schema.name}_{field_name}" '
+                    f'ON "{schema.name}" ("{field_name}")'
+                )
+        self._conn.commit()
+        self._schemas[schema.name] = schema
+
+    def save(self, collection: str, records: list[BaseModel]) -> None:
+        schema = self._get_schema(collection)
+        cols = list(schema.fields.keys())
+        col_list = ", ".join(f'"{c}"' for c in cols)
+        placeholders = ", ".join(["?"] * len(cols))
+        sql = f'INSERT OR REPLACE INTO "{collection}" ({col_list}) VALUES ({placeholders})'
+        self._conn.executemany(sql, [_to_sql_row(r, schema) for r in records])
+        self._conn.commit()
+
+    def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
+        schema = self._get_schema(collection)
+        fs = filters or []
+        json_fields = _json_fields(schema)
+
+        where, params = to_sql_where(fs, json_fields)
+        sql = f'SELECT * FROM "{collection}"'
+        if where:
+            sql += f" WHERE {where}"
+
+        rows = [_from_sql_row(dict(r), schema) for r in self._conn.execute(sql, params).fetchall()]
+
+        # Post-filter JSON-column conditions in Python
+        py_filters = [f for f in fs if f.field in json_fields]
+        if py_filters:
+            rows = [r for r in rows if matches(r, py_filters)]
+
+        return rows
+
+    def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
+        schema = self._get_schema(collection)
+        fs = filters or []
+
+        if not fs:
+            self._conn.execute(f'DELETE FROM "{collection}"')
+            self._conn.commit()
+            return
+
+        # Reuse query() so JSON-column filters work correctly
+        matching = self.query(collection, fs)
+        if not matching:
+            return
+
+        id_field = schema.id_field
+        ids = [r[id_field] for r in matching]
+        placeholders = ", ".join(["?"] * len(ids))
+        self._conn.execute(
+            f'DELETE FROM "{collection}" WHERE "{id_field}" IN ({placeholders})', ids
         )
         self._conn.commit()
 
-    def query_contradictions(self, filters: dict) -> list[Contradiction]:
-        # Translate `resolved` bool to int for SQL; filter on known columns only
-        sql_filters: dict = {}
-        for k, v in filters.items():
-            if k not in _CONTRADICTION_COLUMNS:
-                continue
-            sql_filters[k] = int(v) if k == "resolved" else v
+    # ------------------------------------------------------------------
 
-        sql, params = _build_where("SELECT * FROM contradictions", sql_filters)
-        rows = self._conn.execute(sql, params).fetchall()
-
-        results = [
-            Contradiction(
-                contradiction_id=row["contradiction_id"],
-                fact_a=Fact.model_validate_json(row["fact_a"]),
-                fact_b=Fact.model_validate_json(row["fact_b"]),
-                conflict_type=row["conflict_type"],
-                resolved=bool(row["resolved"]),
-                resolution_note=row["resolution_note"],
-            )
-            for row in rows
-        ]
-
-        # doc_id is nested inside the JSON blobs — post-filter in Python
-        if "doc_id" in filters:
-            doc_id = filters["doc_id"]
-            results = [
-                c for c in results
-                if c.fact_a.doc_id == doc_id or c.fact_b.doc_id == doc_id
-            ]
-
-        return results
+    def _get_schema(self, collection: str) -> CollectionSchema:
+        if collection not in self._schemas:
+            raise KeyError(f"Collection '{collection}' not found. Call create_collection first.")
+        return self._schemas[collection]
 
 
 # ------------------------------------------------------------------
-# SQL helpers
+# Row helpers
 # ------------------------------------------------------------------
 
-def _build_where(base_sql: str, filters: dict) -> tuple[str, list]:
-    if not filters:
-        return base_sql, []
-    clauses = [f"{col} = ?" for col in filters]
-    return f"{base_sql} WHERE {' AND '.join(clauses)}", list(filters.values())
+def _to_sql_row(record: BaseModel, schema: CollectionSchema) -> tuple:
+    raw = record.model_dump(mode="json")
+    row = []
+    for field_name, field in schema.fields.items():
+        val = raw.get(field_name)
+        if val is None:
+            row.append(None)
+        elif field.type == FieldType.JSON:
+            row.append(json.dumps(val))
+        elif field.type == FieldType.BOOLEAN:
+            row.append(int(val))
+        else:
+            row.append(val)
+    return tuple(row)
+
+
+def _from_sql_row(row: dict, schema: CollectionSchema) -> dict:
+    result: dict = {}
+    for field_name, field in schema.fields.items():
+        val = row.get(field_name)
+        if val is None:
+            result[field_name] = None
+        elif field.type == FieldType.JSON:
+            result[field_name] = json.loads(val)
+        elif field.type == FieldType.BOOLEAN:
+            result[field_name] = bool(val)
+        else:
+            result[field_name] = val
+    return result
+
+
+def _json_fields(schema: CollectionSchema) -> set[str]:
+    return {name for name, f in schema.fields.items() if f.type == FieldType.JSON}
