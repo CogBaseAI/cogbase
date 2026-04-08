@@ -29,9 +29,10 @@ class StructuredStoreBase(abc.ABC):
             Col("doc_id").in_(["doc-1", "doc-2"]),
         ])
 
-    All filters are ANDed together.  Primitive-column filters are pushed to the
-    database engine; JSON-column filters are applied in Python after the fetch.
-    ``None`` or an empty list means "no filter" (return / delete all).
+    All filters are ANDed together.  ``None`` or an empty list means "no filter"
+    (return / delete all).  How each filter is evaluated is adapter-defined —
+    backends with native JSON support (e.g. PostgreSQL) may push JSON-column
+    filters to the engine; others may evaluate them in Python after the fetch.
     """
 
     @abc.abstractmethod

@@ -23,7 +23,8 @@ class SQLiteStructuredStore(StructuredStoreBase):
     """SQLite-backed structured store.
 
     Primitive-column filters (STRING, INTEGER, FLOAT, BOOLEAN) are pushed to
-    SQL WHERE clauses.  JSON-column filters are applied in Python after the fetch.
+    SQL WHERE clauses.  JSON-column filters are post-filtered in Python, as
+    SQLite does not natively support the full filter DSL over JSON columns.
 
     Args:
         path: Path to the SQLite file, or ``":memory:"`` for an in-process db.

@@ -8,6 +8,34 @@ Build filter expressions with ``Col``:
     Col("page").is_null()
 
 All filters in a list are combined with AND.
+
+# Why a DSL instead of a raw SQL WHERE string?
+#
+# A raw WHERE string is tempting because it has zero learning curve:
+#
+#     store.query("facts", where="type = ? AND confidence >= ?",
+#                 params=["notice_period", 0.8])
+#
+# But it has three problems:
+#
+# 1. Breaks the in-memory adapter. There is no way to evaluate a SQL string
+#    against a Python dict without embedding a SQL parser or running SQLite
+#    in-process. The only alternative is silently ignoring the filter, which
+#    produces wrong results.
+#
+# 2. Not portable across backends. Raw SQL leaks dialect:
+#    Postgres JSON:  WHERE metadata->>'key' = ?
+#    SQLite JSON:    WHERE json_extract(metadata, '$.key') = ?
+#    Any code using a raw WHERE string is silently coupled to one backend.
+#
+# 3. SQL injection risk if any user-supplied value is interpolated into the
+#    string rather than passed as a parameter.
+#
+# The Col DSL solves all three: filters are backend-agnostic data structures
+# that each adapter translates into whatever the backend natively supports —
+# SQL WHERE clauses, Python predicates, or Postgres JSON operators. The API
+# is intentionally modelled on SQLAlchemy column expressions, so developers
+# familiar with SQLAlchemy Core will recognise it immediately.
 """
 
 from __future__ import annotations
@@ -42,6 +70,9 @@ class Filter:
 
 class Col:
     """Column reference — use to build ``Filter`` expressions.
+
+    Intentionally mirrors SQLAlchemy column expression syntax — if you've used
+    SQLAlchemy Core, the operators work the same way.
 
     Example::
 
@@ -161,10 +192,12 @@ def to_sql_where(
     filters: list[Filter],
     json_fields: set[str],
 ) -> tuple[str, list[Any]]:
-    """Translate primitive-column filters to a SQL WHERE clause.
+    """Translate filters to a parameterized SQL WHERE clause, skipping ``json_fields``.
 
-    JSON-column filters are skipped here — apply them in Python after fetch.
-    Returns ``(where_clause, params)`` where ``where_clause`` is empty if
+    Callers are responsible for handling skipped fields (e.g. post-filtering in
+    Python, or translating them separately using database-specific JSON operators).
+
+    Returns ``(where_clause, params)`` where ``where_clause`` is empty string if
     there are no applicable filters.
     """
     clauses: list[str] = []
