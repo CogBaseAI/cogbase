@@ -275,6 +275,48 @@ async def test_contradiction_nested_facts_roundtrip(structured_store):
     assert result["fact_b"]["value"] == "60 days"
 
 
+async def test_json_nested_field_eq_filter(memory_store):
+    await memory_store.save("events", [
+        make_event(session_id="s1", payload={"kind": "query",  "count": 1}),
+        make_event(session_id="s2", payload={"kind": "ingest", "count": 5}),
+        make_event(session_id="s3", payload={"kind": "query",  "count": 5}),
+    ])
+    results = await memory_store.query("events", [Col("payload.kind") == "query"])
+    assert {r["session_id"] for r in results} == {"s1", "s3"}
+
+
+async def test_json_nested_field_comparison_filter(memory_store):
+    await memory_store.save("events", [
+        make_event(session_id="s1", payload={"count": 1}),
+        make_event(session_id="s2", payload={"count": 3}),
+        make_event(session_id="s3", payload={"count": 5}),
+    ])
+    results = await memory_store.query("events", [Col("payload.count") >= 3])
+    assert {r["session_id"] for r in results} == {"s2", "s3"}
+
+
+async def test_json_nested_field_combined_with_primitive_filter(memory_store):
+    await memory_store.save("events", [
+        make_event(session_id="s1", payload={"kind": "query"}),
+        make_event(session_id="s2", payload={"kind": "query"}),
+        make_event(session_id="s3", payload={"kind": "ingest"}),
+    ])
+    results = await memory_store.query("events", [
+        Col("payload.kind") == "query",
+        Col("session_id") == "s1",
+    ])
+    assert len(results) == 1 and results[0]["session_id"] == "s1"
+
+
+async def test_json_nested_missing_key_treated_as_null(memory_store):
+    await memory_store.save("events", [
+        make_event(session_id="s1", payload={"kind": "query"}),
+        make_event(session_id="s2", payload={}),
+    ])
+    results = await memory_store.query("events", [Col("payload.kind").is_null()])
+    assert len(results) == 1 and results[0]["session_id"] == "s2"
+
+
 async def test_boolean_filter(structured_store):
     fa, fb = make_fact(), make_fact()
     await structured_store.save("contradictions", [

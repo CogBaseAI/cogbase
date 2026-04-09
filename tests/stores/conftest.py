@@ -49,7 +49,7 @@ CONTRADICTIONS_SCHEMA = CollectionSchema(
 
 
 # ---------------------------------------------------------------------------
-# Parametrised fixture
+# Fixtures
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(params=["memory", "sqlite_file", "sqlite_memory"])
@@ -63,6 +63,20 @@ async def structured_store(request, tmp_path):
         store = SQLiteStructuredStore(":memory:")
         request.addfinalizer(store.close)
 
+    await store.create_collection(FACTS_SCHEMA)
+    await store.create_collection(EVENTS_SCHEMA)
+    await store.create_collection(CONTRADICTIONS_SCHEMA)
+    return store
+
+
+@pytest.fixture
+async def memory_store():
+    """InMemoryStructuredStore with all standard collections pre-created.
+
+    Used for tests that exercise capabilities specific to the pandas backend
+    (e.g. dotted-path JSON field queries) that SQLite does not support.
+    """
+    store = InMemoryStructuredStore()
     await store.create_collection(FACTS_SCHEMA)
     await store.create_collection(EVENTS_SCHEMA)
     await store.create_collection(CONTRADICTIONS_SCHEMA)

@@ -93,10 +93,33 @@ def _to_frame(rows: list[dict], schema: CollectionSchema) -> pd.DataFrame:
     return df
 
 
+def _extract_col(df: pd.DataFrame, field: str) -> pd.Series:
+    """Return a Series for *field*, supporting dotted paths into JSON object columns.
+
+    ``"payload.count"`` → ``df["payload"].apply(lambda v: v.get("count"))``
+
+    Nested access stops early and returns ``None`` if any intermediate value is
+    not a dict (e.g. the path leads into a list or a scalar).
+    """
+    if "." not in field:
+        return df[field]
+    parts = field.split(".")
+    base, path = parts[0], parts[1:]
+    return df[base].apply(lambda v: _nested_get(v, path))
+
+
+def _nested_get(v: Any, path: list[str]) -> Any:
+    for key in path:
+        if not isinstance(v, dict):
+            return None
+        v = v.get(key)
+    return v
+
+
 def _build_mask(df: pd.DataFrame, filters: list[Filter]) -> pd.Series:
     mask = pd.Series(True, index=df.index)
     for f in filters:
-        col = df[f.field]
+        col = _extract_col(df, f.field)
         match f.op:
             case Op.EQ:
                 mask &= (col == f.value).fillna(False)
