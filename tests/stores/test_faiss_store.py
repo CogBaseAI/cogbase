@@ -27,56 +27,56 @@ def make_chunk(doc_id: str = "doc-1", embedding: list[float] | None = None, **kw
 # Basic upsert / search
 # ------------------------------------------------------------------
 
-def test_empty_store_returns_no_results():
+async def test_empty_store_returns_no_results():
     store = FAISSVectorStore()
-    assert store.search([1.0, 0.0, 0.0, 0.0], top_k=5) == []
+    assert await store.search([1.0, 0.0, 0.0, 0.0], top_k=5) == []
 
 
-def test_upsert_and_search_returns_chunk():
+async def test_upsert_and_search_returns_chunk():
     store = FAISSVectorStore()
     chunk = make_chunk(embedding=[1.0, 0.0, 0.0, 0.0])
-    store.upsert([chunk])
-    results = store.search([1.0, 0.0, 0.0, 0.0], top_k=1)
+    await store.upsert([chunk])
+    results = await store.search([1.0, 0.0, 0.0, 0.0], top_k=1)
     assert len(results) == 1
     assert results[0].chunk_id == chunk.chunk_id
 
 
-def test_search_returns_nearest_neighbour():
+async def test_search_returns_nearest_neighbour():
     store = FAISSVectorStore()
     # Three orthogonal unit vectors
     a = make_chunk(doc_id="doc-a", embedding=[1.0, 0.0, 0.0])
     b = make_chunk(doc_id="doc-b", embedding=[0.0, 1.0, 0.0])
     c = make_chunk(doc_id="doc-c", embedding=[0.0, 0.0, 1.0])
-    store.upsert([a, b, c])
+    await store.upsert([a, b, c])
 
     # Query close to vector b
-    results = store.search([0.1, 0.9, 0.1], top_k=1)
+    results = await store.search([0.1, 0.9, 0.1], top_k=1)
     assert results[0].chunk_id == b.chunk_id
 
 
-def test_search_top_k_limits_results():
+async def test_search_top_k_limits_results():
     store = FAISSVectorStore()
-    store.upsert([make_chunk(embedding=[float(i), 0.0, 0.0]) for i in range(1, 6)])
-    results = store.search([1.0, 0.0, 0.0], top_k=3)
+    await store.upsert([make_chunk(embedding=[float(i), 0.0, 0.0]) for i in range(1, 6)])
+    results = await store.search([1.0, 0.0, 0.0], top_k=3)
     assert len(results) == 3
 
 
-def test_search_top_k_larger_than_index_returns_all():
+async def test_search_top_k_larger_than_index_returns_all():
     store = FAISSVectorStore()
-    store.upsert([make_chunk(embedding=[1.0, 0.0]), make_chunk(embedding=[0.0, 1.0])])
-    results = store.search([1.0, 0.0], top_k=100)
+    await store.upsert([make_chunk(embedding=[1.0, 0.0]), make_chunk(embedding=[0.0, 1.0])])
+    results = await store.search([1.0, 0.0], top_k=100)
     assert len(results) == 2
 
 
-def test_cosine_order():
+async def test_cosine_order():
     """Verify results are ordered highest cosine similarity first."""
     store = FAISSVectorStore()
     # query = [1, 0]; a is closer, b is further
     a = make_chunk(doc_id="a", embedding=unit([0.9, 0.1]))   # ~84° from [0,1]
     b = make_chunk(doc_id="b", embedding=unit([0.1, 0.9]))   # ~6° from [0,1]
-    store.upsert([a, b])
+    await store.upsert([a, b])
 
-    results = store.search([1.0, 0.0], top_k=2)
+    results = await store.search([1.0, 0.0], top_k=2)
     assert results[0].chunk_id == a.chunk_id
     assert results[1].chunk_id == b.chunk_id
 
@@ -85,29 +85,29 @@ def test_cosine_order():
 # Chunks without embeddings
 # ------------------------------------------------------------------
 
-def test_chunks_without_embedding_are_skipped():
+async def test_chunks_without_embedding_are_skipped():
     store = FAISSVectorStore()
     no_emb = make_chunk(embedding=None)
     with_emb = make_chunk(embedding=[1.0, 0.0])
-    store.upsert([no_emb, with_emb])
+    await store.upsert([no_emb, with_emb])
     assert store.ntotal == 1
 
 
-def test_all_chunks_without_embeddings_is_a_no_op():
+async def test_all_chunks_without_embeddings_is_a_no_op():
     store = FAISSVectorStore()
-    store.upsert([make_chunk(embedding=None)])
+    await store.upsert([make_chunk(embedding=None)])
     assert store.ntotal == 0
-    assert store.search([1.0, 0.0], top_k=1) == []
+    assert await store.search([1.0, 0.0], top_k=1) == []
 
 
 # ------------------------------------------------------------------
 # Upsert (update existing)
 # ------------------------------------------------------------------
 
-def test_upsert_replaces_existing_chunk():
+async def test_upsert_replaces_existing_chunk():
     store = FAISSVectorStore()
     chunk = make_chunk(embedding=[1.0, 0.0, 0.0])
-    store.upsert([chunk])
+    await store.upsert([chunk])
 
     updated = Chunk(
         chunk_id=chunk.chunk_id,
@@ -115,10 +115,10 @@ def test_upsert_replaces_existing_chunk():
         text="updated text",
         embedding=[0.0, 1.0, 0.0],
     )
-    store.upsert([updated])
+    await store.upsert([updated])
 
     assert store.ntotal == 1
-    results = store.search([0.0, 1.0, 0.0], top_k=1)
+    results = await store.search([0.0, 1.0, 0.0], top_k=1)
     assert results[0].doc_id == "doc-updated"
 
 
@@ -126,41 +126,41 @@ def test_upsert_replaces_existing_chunk():
 # Delete
 # ------------------------------------------------------------------
 
-def test_delete_removes_doc_chunks():
+async def test_delete_removes_doc_chunks():
     store = FAISSVectorStore()
-    store.upsert([
+    await store.upsert([
         make_chunk(doc_id="doc-1", embedding=[1.0, 0.0]),
         make_chunk(doc_id="doc-1", embedding=[0.9, 0.1]),
         make_chunk(doc_id="doc-2", embedding=[0.0, 1.0]),
     ])
-    store.delete("doc-1")
+    await store.delete("doc-1")
     assert store.ntotal == 1
-    results = store.search([1.0, 0.0], top_k=5)
+    results = await store.search([1.0, 0.0], top_k=5)
     assert all(r.doc_id == "doc-2" for r in results)
 
 
-def test_delete_unknown_doc_is_a_no_op():
+async def test_delete_unknown_doc_is_a_no_op():
     store = FAISSVectorStore()
-    store.upsert([make_chunk(embedding=[1.0, 0.0])])
-    store.delete("nonexistent-doc")
+    await store.upsert([make_chunk(embedding=[1.0, 0.0])])
+    await store.delete("nonexistent-doc")
     assert store.ntotal == 1
 
 
-def test_delete_all_chunks_leaves_empty_store():
+async def test_delete_all_chunks_leaves_empty_store():
     store = FAISSVectorStore()
-    store.upsert([make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])])
-    store.delete("doc-1")
+    await store.upsert([make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])])
+    await store.delete("doc-1")
     assert store.ntotal == 0
-    assert store.search([1.0, 0.0], top_k=5) == []
+    assert await store.search([1.0, 0.0], top_k=5) == []
 
 
-def test_upsert_after_delete_works():
+async def test_upsert_after_delete_works():
     store = FAISSVectorStore()
-    store.upsert([make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])])
-    store.delete("doc-1")
+    await store.upsert([make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])])
+    await store.delete("doc-1")
     new_chunk = make_chunk(doc_id="doc-2", embedding=[0.0, 1.0])
-    store.upsert([new_chunk])
-    results = store.search([0.0, 1.0], top_k=1)
+    await store.upsert([new_chunk])
+    results = await store.search([0.0, 1.0], top_k=1)
     assert results[0].chunk_id == new_chunk.chunk_id
 
 
@@ -168,15 +168,15 @@ def test_upsert_after_delete_works():
 # Dimension mismatch
 # ------------------------------------------------------------------
 
-def test_dimension_mismatch_raises():
+async def test_dimension_mismatch_raises():
     store = FAISSVectorStore()
-    store.upsert([make_chunk(embedding=[1.0, 0.0])])
+    await store.upsert([make_chunk(embedding=[1.0, 0.0])])
     with pytest.raises(ValueError, match="dimension"):
-        store.upsert([make_chunk(embedding=[1.0, 0.0, 0.0])])
+        await store.upsert([make_chunk(embedding=[1.0, 0.0, 0.0])])
 
 
-def test_explicit_dim_constructor():
+async def test_explicit_dim_constructor():
     store = FAISSVectorStore(dim=3)
     assert store.ntotal == 0
-    store.upsert([make_chunk(embedding=[1.0, 0.0, 0.0])])
+    await store.upsert([make_chunk(embedding=[1.0, 0.0, 0.0])])
     assert store.ntotal == 1

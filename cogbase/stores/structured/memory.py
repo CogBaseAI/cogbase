@@ -18,25 +18,25 @@ class InMemoryStructuredStore(StructuredStoreBase):
         # collection → { id_value → record_dict }
         self._records: dict[str, dict[str, dict]] = {}
 
-    def create_collection(self, schema: CollectionSchema) -> None:
+    async def create_collection(self, schema: CollectionSchema) -> None:
         if schema.name in self._schemas:
             return  # idempotent
         self._schemas[schema.name] = schema
         self._records[schema.name] = {}
 
-    def save(self, collection: str, records: list[BaseModel]) -> None:
+    async def save(self, collection: str, records: list[BaseModel]) -> None:
         schema = self._get_schema(collection)
         store = self._records[collection]
         for record in records:
             row = _serialize(record, schema)
             store[row[schema.id_field]] = row
 
-    def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
+    async def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
         self._get_schema(collection)
         fs = filters or []
         return [r for r in self._records[collection].values() if matches(r, fs)]
 
-    def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
+    async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         schema = self._get_schema(collection)
         store = self._records[collection]
         fs = filters or []

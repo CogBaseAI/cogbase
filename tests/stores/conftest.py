@@ -53,7 +53,7 @@ CONTRADICTIONS_SCHEMA = CollectionSchema(
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(params=["memory", "sqlite_file", "sqlite_memory"])
-def structured_store(request, tmp_path):
+async def structured_store(request, tmp_path):
     if request.param == "memory":
         store = InMemoryStructuredStore()
     elif request.param == "sqlite_file":
@@ -63,7 +63,7 @@ def structured_store(request, tmp_path):
         store = SQLiteStructuredStore(":memory:")
         request.addfinalizer(store.close)
 
-    store.create_collection(FACTS_SCHEMA)
-    store.create_collection(EVENTS_SCHEMA)
-    store.create_collection(CONTRADICTIONS_SCHEMA)
+    await store.create_collection(FACTS_SCHEMA)
+    await store.create_collection(EVENTS_SCHEMA)
+    await store.create_collection(CONTRADICTIONS_SCHEMA)
     return store

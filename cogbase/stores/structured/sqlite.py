@@ -48,7 +48,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
     # StructuredStoreBase
     # ------------------------------------------------------------------
 
-    def create_collection(self, schema: CollectionSchema) -> None:
+    async def create_collection(self, schema: CollectionSchema) -> None:
         if schema.name in self._schemas:
             return
 
@@ -73,7 +73,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
         self._conn.commit()
         self._schemas[schema.name] = schema
 
-    def save(self, collection: str, records: list[BaseModel]) -> None:
+    async def save(self, collection: str, records: list[BaseModel]) -> None:
         schema = self._get_schema(collection)
         cols = list(schema.fields.keys())
         col_list = ", ".join(f'"{c}"' for c in cols)
@@ -82,7 +82,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
         self._conn.executemany(sql, [_to_sql_row(r, schema) for r in records])
         self._conn.commit()
 
-    def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
+    async def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
         schema = self._get_schema(collection)
         fs = filters or []
         json_fields = _json_fields(schema)
@@ -101,7 +101,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
 
         return rows
 
-    def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
+    async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         schema = self._get_schema(collection)
         fs = filters or []
 
@@ -111,7 +111,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
             return
 
         # Reuse query() so JSON-column filters work correctly
-        matching = self.query(collection, fs)
+        matching = await self.query(collection, fs)
         if not matching:
             return
 

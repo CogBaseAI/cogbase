@@ -10,7 +10,7 @@ dependencies = ["pydantic>=2.0"]
 
 [project.optional-dependencies]
 faiss = ["faiss-cpu>=1.7"]
-dev = ["pytest", "mypy", "ruff", "faiss-cpu>=1.7"]
+dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "faiss-cpu>=1.7"]
 
 [tool.ruff]
 line-length = 100
@@ -22,3 +22,4 @@ python_version = "3.11"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -23,7 +23,7 @@ class StructuredStoreBase(abc.ABC):
 
         from cogbase.stores.filters import Col
 
-        store.query("facts", [
+        await store.query("facts", [
             Col("type") == "notice_period",
             Col("confidence") >= 0.8,
             Col("doc_id").in_(["doc-1", "doc-2"]),
@@ -36,11 +36,11 @@ class StructuredStoreBase(abc.ABC):
     """
 
     @abc.abstractmethod
-    def create_collection(self, schema: CollectionSchema) -> None:
+    async def create_collection(self, schema: CollectionSchema) -> None:
         """Declare a collection. Idempotent — safe to call on every startup."""
 
     @abc.abstractmethod
-    def save(self, collection: str, records: list[BaseModel]) -> None:
+    async def save(self, collection: str, records: list[BaseModel]) -> None:
         """Upsert records into ``collection``.
 
         Fields not declared in the schema are dropped; the ``id_field`` drives
@@ -48,14 +48,14 @@ class StructuredStoreBase(abc.ABC):
         """
 
     @abc.abstractmethod
-    def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
+    async def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
         """Return all records matching every filter as plain dicts.
 
         Use ``query_as`` to deserialise into a Pydantic model.
         """
 
     @abc.abstractmethod
-    def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
+    async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         """Delete all records matching every filter.
 
         ``None`` or ``[]`` deletes the entire collection's contents.
@@ -65,24 +65,24 @@ class StructuredStoreBase(abc.ABC):
     # Concrete helpers
     # ------------------------------------------------------------------
 
-    def query_as(
+    async def query_as(
         self,
         collection: str,
         filters: list[Filter] | None,
         model: type[M],
     ) -> list[M]:
         """Typed wrapper around ``query`` — deserialises results into ``model``."""
-        return [model.model_validate(row) for row in self.query(collection, filters)]
+        return [model.model_validate(row) for row in await self.query(collection, filters)]
 
 
 class VectorStoreBase(abc.ABC):
     """Contract for any vector store backend."""
 
     @abc.abstractmethod
-    def upsert(self, chunks: list[Chunk]) -> None: ...
+    async def upsert(self, chunks: list[Chunk]) -> None: ...
 
     @abc.abstractmethod
-    def search(self, query_embedding: list[float], top_k: int) -> list[Chunk]: ...
+    async def search(self, query_embedding: list[float], top_k: int) -> list[Chunk]: ...
 
     @abc.abstractmethod
-    def delete(self, doc_id: str) -> None: ...
+    async def delete(self, doc_id: str) -> None: ...
