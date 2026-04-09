@@ -1,56 +1,148 @@
-"""In-memory implementation of StructuredStoreBase."""
+"""In-memory implementation of StructuredStoreBase — backed by pandas DataFrames."""
 
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+import pandas as pd
 from pydantic import BaseModel
 
 from cogbase.stores.base import StructuredStoreBase
-from cogbase.stores.filters import Filter, matches
+from cogbase.stores.filters import Filter, Op, _like
 from cogbase.stores.schema import CollectionSchema, FieldType
+
+_PANDAS_DTYPE: dict[FieldType, str] = {
+    FieldType.STRING:  "object",
+    FieldType.INTEGER: "Int64",    # nullable integer
+    FieldType.FLOAT:   "float64",
+    FieldType.BOOLEAN: "boolean",  # nullable boolean
+    FieldType.JSON:    "object",
+}
 
 
 class InMemoryStructuredStore(StructuredStoreBase):
-    """Thread-unsafe in-memory store backed by plain dicts.
+    """In-memory store backed by a pandas DataFrame per collection.
 
-    All filtering is done in Python via the filter DSL regardless of field type.
+    All filtering is translated to pandas boolean masks.  JSON-column filters
+    fall back to per-row Python evaluation via the existing ``_like`` helper
+    since pandas has no native understanding of the filter DSL over object columns.
     """
 
     def __init__(self) -> None:
         self._schemas: dict[str, CollectionSchema] = {}
-        # collection → { id_value → record_dict }
-        self._records: dict[str, dict[str, dict]] = {}
+        self._frames: dict[str, pd.DataFrame] = {}
 
     async def create_collection(self, schema: CollectionSchema) -> None:
         if schema.name in self._schemas:
             return  # idempotent
         self._schemas[schema.name] = schema
-        self._records[schema.name] = {}
+        self._frames[schema.name] = _empty_frame(schema)
 
     async def save(self, collection: str, records: list[BaseModel]) -> None:
         schema = self._get_schema(collection)
-        store = self._records[collection]
-        for record in records:
-            row = _serialize(record, schema)
-            store[row[schema.id_field]] = row
+        id_field = schema.id_field
+        rows = [_serialize(r, schema) for r in records]
+        new_df = _to_frame(rows, schema)
+        # Upsert: drop existing rows whose id appears in the incoming batch, then append.
+        df = self._frames[collection]
+        df = df[~df[id_field].isin(new_df[id_field])]
+        self._frames[collection] = pd.concat([df, new_df], ignore_index=True)
 
     async def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
         self._get_schema(collection)
-        fs = filters or []
-        return [r for r in self._records[collection].values() if matches(r, fs)]
+        df = self._frames[collection]
+        if filters:
+            mask = _build_mask(df, filters)
+            df = df[mask]
+        return _to_records(df)
 
     async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         schema = self._get_schema(collection)
-        store = self._records[collection]
-        fs = filters or []
-        if not fs:
-            store.clear()
+        if not filters:
+            self._frames[collection] = _empty_frame(schema)
             return
-        to_delete = [r[schema.id_field] for r in store.values() if matches(r, fs)]
-        for key in to_delete:
-            del store[key]
+        df = self._frames[collection]
+        mask = _build_mask(df, filters)
+        self._frames[collection] = df[~mask].reset_index(drop=True)
 
     def _get_schema(self, collection: str) -> CollectionSchema:
         if collection not in self._schemas:
             raise KeyError(f"Collection '{collection}' not found. Call create_collection first.")
         return self._schemas[collection]
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _empty_frame(schema: CollectionSchema) -> pd.DataFrame:
+    return pd.DataFrame({
+        name: pd.Series(dtype=_PANDAS_DTYPE[field.type])
+        for name, field in schema.fields.items()
+    })
+
+
+def _to_frame(rows: list[dict], schema: CollectionSchema) -> pd.DataFrame:
+    if not rows:
+        return _empty_frame(schema)
+    df = pd.DataFrame(rows)
+    for name, field in schema.fields.items():
+        if name in df.columns:
+            df[name] = df[name].astype(_PANDAS_DTYPE[field.type])
+    return df
+
+
+def _build_mask(df: pd.DataFrame, filters: list[Filter]) -> pd.Series:
+    mask = pd.Series(True, index=df.index)
+    for f in filters:
+        col = df[f.field]
+        match f.op:
+            case Op.EQ:
+                mask &= (col == f.value).fillna(False)
+            case Op.NE:
+                mask &= (col != f.value).fillna(False)
+            case Op.LT:
+                mask &= col.notna() & (col < f.value)
+            case Op.GT:
+                mask &= col.notna() & (col > f.value)
+            case Op.LTE:
+                mask &= col.notna() & (col <= f.value)
+            case Op.GTE:
+                mask &= col.notna() & (col >= f.value)
+            case Op.IN:
+                mask &= col.isin(f.value)
+            case Op.NOT_IN:
+                mask &= ~col.isin(f.value)
+            case Op.LIKE:
+                mask &= col.apply(lambda v: _like(v, f.value))
+            case Op.IS_NULL:
+                mask &= col.isna()
+            case Op.IS_NOT_NULL:
+                mask &= col.notna()
+    return mask
+
+
+def _to_records(df: pd.DataFrame) -> list[dict]:
+    return [
+        {k: _clean(v) for k, v in row.items()}
+        for row in df.to_dict("records")
+    ]
+
+
+def _clean(v: Any) -> Any:
+    """Convert pandas/numpy scalars and NA sentinels to plain Python types."""
+    if v is pd.NA:
+        return None
+    if isinstance(v, float) and np.isnan(v):
+        return None
+    if isinstance(v, np.integer):
+        return int(v)
+    if isinstance(v, np.floating):
+        return float(v)
+    if isinstance(v, np.bool_):
+        return bool(v)
+    return v
 
 
 def _serialize(record: BaseModel, schema: CollectionSchema) -> dict:
