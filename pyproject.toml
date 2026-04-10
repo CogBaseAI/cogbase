@@ -10,7 +10,8 @@ dependencies = ["pydantic>=2.0", "pandas>=2.0"]
 
 [project.optional-dependencies]
 faiss = ["faiss-cpu>=1.7"]
-dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "faiss-cpu>=1.7"]
+langchain = ["langchain-text-splitters>=0.3"]
+dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "faiss-cpu>=1.7", "langchain-text-splitters>=0.3"]
 
 [tool.ruff]
 line-length = 100
