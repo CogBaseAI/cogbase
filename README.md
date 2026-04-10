@@ -124,9 +124,9 @@ Before touching either store, an intent classifier decides which execution path 
 | A — Structured lookup | Answer from structured store directly | "How many days notice was given?" |
 | B — Semantic retrieval | Vector search over embedded chunks | "What did Chen say about her own performance?" |
 | C — Hybrid reasoning | Retrieve from both stores, reason over results | "Does the review contradict the termination reason?" |
-| D — Grounded generation | Retrieve facts + quotes, then draft | "Draft a demand letter using these facts" |
+| D — Grounded generation | Retrieve structured results + quotes, then draft | "Draft a demand letter using these facts" |
 
-Pattern A questions never touch the LLM. Pattern C is where orchestration work lives. Pattern D separates the `[FACTS]` block (from the structured store) from the `[SUPPORTING_QUOTES]` block (from the vector store) so every generated claim is auditable.
+Pattern A questions never touch the LLM. Pattern C is where orchestration work lives. Pattern D separates the `[FINDINGS]` block (structured results from the structured store) from the `[SUPPORTING_QUOTES]` block (verbatim text from the vector store) so every generated claim is auditable.
 
 ### Pluggable stores
 
@@ -204,7 +204,7 @@ Skills are the atomic unit of capability in CogBase — discrete, stateless, and
 | `build_timeline` | Assemble chronological event sequence |
 | `flag_risks` | Identify risk patterns from facts |
 | `summarize` | Grounded summary of retrieved context |
-| `draft` | Grounded generation from facts + quotes |
+| `draft` | Grounded generation from structured results + supporting quotes |
 | `remember` | Write a confirmed fact or conclusion to long-term memory |
 | `recall` | Retrieve from long-term memory by key or semantic search |
 
@@ -233,7 +233,7 @@ Agents orchestrate skills to accomplish multi-step goals. They plan a skill sequ
 |---|---|
 | `ResearchAgent` | Plans and chains retrieval skills to answer a complex question |
 | `ContradictionAgent` | Proactively scans a session for all conflicts across sources |
-| `DraftingAgent` | Retrieves relevant facts + quotes, then generates a grounded document |
+| `DraftingAgent` | Retrieves structured results + supporting quotes, then generates a grounded document |
 | `IngestionAgent` | Watches a folder or source, ingests new files, updates the store |
 | `DiligenceAgent` | Systematically works through a document set flagging risks and gaps |
 
