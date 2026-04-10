@@ -1,9 +1,27 @@
 """End-to-end ingestion pipeline: text → chunks → embeddings → vector store."""
 
 from cogbase.core.models import Chunk
+from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
 from cogbase.pipeline.ingestion.embedder import EmbedderBase
-from cogbase.stores.base import VectorStoreBase
+from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
+
+
+async def setup_extraction(
+    extractors: list[ExtractorBase],
+    structured_store: StructuredStoreBase,
+) -> None:
+    """Create structured store collections for a set of extractors.
+
+    Call this once at application startup before ingesting any documents.
+    ``create_collection`` is idempotent, so re-running on restart is safe.
+
+    Args:
+        extractors:       Extractors whose collections should be initialised.
+        structured_store: Store to create the collections in.
+    """
+    for extractor in extractors:
+        await structured_store.create_collection(extractor.schema)
 
 
 async def ingest(
@@ -13,26 +31,37 @@ async def ingest(
     chunker: ChunkerBase,
     embedder: EmbedderBase,
     vector_store: VectorStoreBase,
+    extractors: list[ExtractorBase] | None = None,
+    structured_store: StructuredStoreBase | None = None,
 ) -> list[Chunk]:
-    """Chunk, embed, and store a document's text.
+    """Chunk, embed, store, and optionally extract structured records from a document.
 
     This is the primary entry point for the ingestion layer.  It wires the
-    three pipeline steps together in order:
+    pipeline steps together in order:
 
     1. **Chunk** — split *text* into overlapping windows via *chunker*.
     2. **Embed** — attach a dense vector to each chunk via *embedder*.
-    3. **Store** — upsert the embedded chunks into *vector_store*.
+    3. **Store (vector)** — upsert the embedded chunks into *vector_store*.
+    4. **Extract** — run each extractor in *extractors* over *text* and save
+       results to *structured_store* (skipped when either is ``None``).
 
-    All three dependencies are injected, so any combination of implementations
-    can be composed without changing this function.
+    Collections must already exist in *structured_store* before calling this
+    function — call ``setup_extraction`` once at startup to create them.
 
     Args:
-        text:         Full document text to ingest.
-        doc_id:       Stable identifier for the source document.  Used for
-                      later retrieval and deletion.
-        chunker:      ``ChunkerBase`` implementation that splits *text*.
-        embedder:     ``EmbedderBase`` implementation that populates embeddings.
-        vector_store: ``VectorStoreBase`` implementation that persists chunks.
+        text:             Full document text to ingest.
+        doc_id:           Stable identifier for the source document.  Used for
+                          later retrieval and deletion.
+        chunker:          ``ChunkerBase`` implementation that splits *text*.
+        embedder:         ``EmbedderBase`` implementation that populates embeddings.
+        vector_store:     ``VectorStoreBase`` implementation that persists chunks.
+        extractors:       Optional list of ``ExtractorBase`` implementations.
+                          Each extractor pulls a different record type (facts,
+                          entities, clauses, events, …) from *text*.  Ignored
+                          when *structured_store* is ``None``.
+        structured_store: ``StructuredStoreBase`` implementation that persists
+                          extracted records.  Ignored when *extractors* is
+                          ``None`` or empty.
 
     Returns:
         The embedded ``Chunk`` objects that were upserted, in chunk order.
@@ -45,4 +74,11 @@ async def ingest(
 
     embedded = await embedder.embed(chunks)
     await vector_store.upsert(embedded)
+
+    if extractors and structured_store:
+        for extractor in extractors:
+            records = await extractor.extract(text, doc_id)
+            if records:
+                await structured_store.save(extractor.collection, records)
+
     return embedded
