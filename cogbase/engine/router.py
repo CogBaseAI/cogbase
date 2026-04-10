@@ -148,16 +148,20 @@ class LLMRouter(QueryRouter):
     with the OpenAI signature — this covers OpenAI, Anthropic's compatibility
     endpoint, vLLM, Ollama, and any other compatible server.
 
-    Errors from the LLM call or JSON parse failures propagate to the caller.
-    There is no silent fallback.
+    If the LLM returns malformed JSON, the call is retried up to ``max_retries``
+    times before the parse error is re-raised.  LLM API errors (network, auth,
+    rate-limit) are not retried — those should be handled at a higher level.
 
     Args:
-        client:     Async OpenAI-compatible client
-                    (e.g. ``openai.AsyncOpenAI(...)``).
-        model:      Model name to pass to the API (e.g. ``"claude-opus-4-6"``,
-                    ``"gpt-5.4"``, ``"llama3"``).
-        max_tokens: Maximum tokens to generate. 256 is sufficient for the small
-                    JSON response the router expects.
+        client:      Async OpenAI-compatible client
+                     (e.g. ``openai.AsyncOpenAI(...)``).
+        model:       Model name to pass to the API (e.g. ``"claude-opus-4-6"``,
+                     ``"gpt-5.4"``, ``"llama3"``).
+        max_tokens:  Maximum tokens to generate. 256 is sufficient for the small
+                     JSON response the router expects.
+        max_retries: How many additional attempts to make when the response
+                     cannot be parsed as valid JSON.  ``0`` disables retries.
+                     Defaults to ``2`` (3 total attempts).
 
     Example::
 
@@ -167,22 +171,35 @@ class LLMRouter(QueryRouter):
         result = await router.route("compare the indemnity clauses across both contracts")
     """
 
-    def __init__(self, client: Any, model: str, max_tokens: int = 256) -> None:
+    def __init__(
+        self,
+        client: Any,
+        model: str,
+        max_tokens: int = 256,
+        max_retries: int = 2,
+    ) -> None:
         self._client = client
         self._model = model
         self._max_tokens = max_tokens
+        self._max_retries = max_retries
 
     async def route(self, query: str) -> RouteResult:
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            messages=[
-                {"role": "system", "content": _ROUTER_SYSTEM_PROMPT},
-                {"role": "user", "content": query.strip()},
-            ],
-        )
-        raw: str = response.choices[0].message.content
-        return _parse_llm_response(raw, query)
+        last_exc: Exception | None = None
+        for attempt in range(self._max_retries + 1):
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                max_tokens=self._max_tokens,
+                messages=[
+                    {"role": "system", "content": _ROUTER_SYSTEM_PROMPT},
+                    {"role": "user", "content": query.strip()},
+                ],
+            )
+            raw: str = response.choices[0].message.content
+            try:
+                return _parse_llm_response(raw, query)
+            except (ValueError, KeyError, json.JSONDecodeError) as exc:
+                last_exc = exc
+        raise last_exc  # type: ignore[misc]
 
 
 def _parse_llm_response(raw: str, original_query: str) -> RouteResult:

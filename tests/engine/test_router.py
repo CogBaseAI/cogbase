@@ -100,7 +100,7 @@ async def test_llm_router_propagates_api_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_llm_router_propagates_parse_error() -> None:
+async def test_llm_router_propagates_parse_error_after_retries() -> None:
     message = MagicMock()
     message.content = "not valid json"
     choice = MagicMock()
@@ -110,9 +110,59 @@ async def test_llm_router_propagates_parse_error() -> None:
     client = MagicMock()
     client.chat.completions.create = AsyncMock(return_value=response)
 
-    router = LLMRouter(client, model="test-model")
+    router = LLMRouter(client, model="test-model", max_retries=2)
     with pytest.raises(Exception):
         await router.route("any query")
+
+    # 1 initial attempt + 2 retries = 3 total calls
+    assert client.chat.completions.create.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_llm_router_retries_on_bad_json_then_succeeds() -> None:
+    """Router succeeds on the second attempt when the first returns bad JSON."""
+    bad_message = MagicMock()
+    bad_message.content = "not valid json"
+    bad_choice = MagicMock()
+    bad_choice.message = bad_message
+    bad_response = MagicMock()
+    bad_response.choices = [bad_choice]
+
+    good_message = MagicMock()
+    good_message.content = '{"pattern": "B", "semantic_query": "notice period"}'
+    good_choice = MagicMock()
+    good_choice.message = good_message
+    good_response = MagicMock()
+    good_response.choices = [good_choice]
+
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(
+        side_effect=[bad_response, good_response]
+    )
+
+    router = LLMRouter(client, model="test-model", max_retries=2)
+    result = await router.route("what is the notice period")
+
+    assert result.pattern == QueryPattern.B
+    assert client.chat.completions.create.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_llm_router_no_retry_when_max_retries_zero() -> None:
+    message = MagicMock()
+    message.content = "not valid json"
+    choice = MagicMock()
+    choice.message = message
+    response = MagicMock()
+    response.choices = [choice]
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=response)
+
+    router = LLMRouter(client, model="test-model", max_retries=0)
+    with pytest.raises(Exception):
+        await router.route("any query")
+
+    assert client.chat.completions.create.call_count == 1
 
 
 # ---------------------------------------------------------------------------
