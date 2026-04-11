@@ -9,7 +9,7 @@ from cogbase.engine.retrieval.base import RetrievalResult
 from cogbase.engine.retrieval.hybrid import HybridRetriever
 from cogbase.engine.retrieval.structured import StructuredRetriever
 from cogbase.engine.retrieval.vector import VectorRetriever
-from cogbase.engine.router import QueryPattern, RouteResult
+from cogbase.engine.router import CollectionTarget, QueryPattern, RouteResult
 from cogbase.stores.filters import Col
 
 
@@ -24,11 +24,19 @@ def _route(
     collection: str | None = None,
     filters=None,
 ) -> RouteResult:
+    """Build a ``RouteResult`` from the legacy (collection, filters) signature.
+
+    Wraps the pair into a single ``CollectionTarget`` when *collection* is given,
+    leaving ``structured_targets`` empty otherwise.  This keeps test call-sites
+    unchanged while the public API uses the new multi-target model.
+    """
+    targets: list[CollectionTarget] = []
+    if collection is not None:
+        targets = [CollectionTarget(collection=collection, filters=filters or [])]
     return RouteResult(
         pattern=pattern,
         semantic_query=semantic_query,
-        collection=collection,
-        filters=filters,
+        structured_targets=targets,
     )
 
 
@@ -102,7 +110,7 @@ async def test_structured_retriever_empty_filters_queries_all() -> None:
 async def test_structured_retriever_raises_without_collection() -> None:
     store = _mock_structured_store([])
     retriever = StructuredRetriever(store)
-    route = _route(QueryPattern.A)  # collection=None
+    route = _route(QueryPattern.A)  # no collection → structured_targets=[]
 
     with pytest.raises(ValueError, match="collection"):
         await retriever.retrieve(route)
@@ -117,6 +125,33 @@ async def test_structured_retriever_preserves_route() -> None:
     result = await retriever.retrieve(route)
 
     assert result.route is route
+
+
+@pytest.mark.asyncio
+async def test_structured_retriever_merges_multiple_targets() -> None:
+    """Records from two collections are merged into a single list."""
+    contract_records = [{"id": "c1", "type": "contract"}]
+    fact_records = [{"id": "f1", "type": "date"}]
+
+    store = MagicMock()
+    store.query = AsyncMock(side_effect=[contract_records, fact_records])
+    retriever = StructuredRetriever(store)
+
+    route = RouteResult(
+        pattern=QueryPattern.C,
+        semantic_query="compare",
+        structured_targets=[
+            CollectionTarget(collection="contracts"),
+            CollectionTarget(collection="facts"),
+        ],
+    )
+
+    result = await retriever.retrieve(route)
+
+    assert result.structured_records == contract_records + fact_records
+    assert store.query.call_count == 2
+    store.query.assert_any_call("contracts", [])
+    store.query.assert_any_call("facts", [])
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +291,7 @@ async def test_hybrid_pattern_cd_no_collection_skips_structured(pattern: QueryPa
     v_store = _mock_vector_store([chunk])
     embedder = _mock_embedder()
     retriever = HybridRetriever(s_store, v_store, embedder)
-    route = _route(pattern)  # collection=None
+    route = _route(pattern)  # no collection → structured_targets=[]
 
     result = await retriever.retrieve(route)
 

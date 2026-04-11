@@ -86,7 +86,7 @@ class HybridRetriever(RetrieverBase):
                 )
 
     async def _structured_safe(self, route: RouteResult) -> RetrievalResult:
-        """Query structured store, returning an empty result when collection is unknown."""
-        if not route.collection:
+        """Query structured store, returning an empty result when no targets are known."""
+        if not route.structured_targets:
             return RetrievalResult(route=route)
         return await self._structured.retrieve(route)

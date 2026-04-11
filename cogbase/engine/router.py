@@ -18,19 +18,46 @@ Usage::
 
     import openai
     from cogbase.engine.router import LLMRouter
+    from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
 
-    # Anthropic OpenAI-compatible endpoint
+    # Reuse the same CollectionSchema you pass to the structured store —
+    # LLMRouter reads field types to explain valid filter operators to the LLM.
+    schema = [
+        CollectionSchema(
+            name="contracts", id_field="doc_id",
+            fields={
+                "doc_id":         FieldSchema(type=FieldType.STRING),
+                "party_a":        FieldSchema(type=FieldType.STRING),
+                "effective_date": FieldSchema(type=FieldType.STRING),
+            },
+        ),
+        CollectionSchema(
+            name="facts", id_field="fact_id",
+            fields={
+                "fact_id":    FieldSchema(type=FieldType.STRING),
+                "type":       FieldSchema(type=FieldType.STRING),
+                "confidence": FieldSchema(type=FieldType.FLOAT),
+                "metadata":   FieldSchema(type=FieldType.JSON),
+            },
+        ),
+    ]
+
     client = openai.AsyncOpenAI(
         base_url="https://api.anthropic.com/v1",
         api_key="...",
     )
-    router = LLMRouter(client, model="claude-opus-4-6")
+    router = LLMRouter(client, model="gpt-5.4", schema=schema)
     result = await router.route("does the review contradict the termination reason?")
-    # result.pattern == QueryPattern.C
+    # result.pattern              == QueryPattern.C
+    # result.structured_targets   — list of CollectionTarget (collection + filters)
+
+    # Without a schema the router still classifies patterns but cannot populate
+    # structured_targets.
+    router = LLMRouter(client, model="gpt-5.4")
 
     # vLLM / Ollama / any OpenAI-compatible server
     client = openai.AsyncOpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
-    router = LLMRouter(client, model="llama3")
+    router = LLMRouter(client, model="llama3", schema=schema)
 """
 
 from __future__ import annotations
@@ -43,7 +70,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from cogbase.stores.filters import Filter
+from cogbase.stores.filters import Filter, Op
+from cogbase.stores.schema import CollectionSchema, FieldType
 
 
 # ---------------------------------------------------------------------------
@@ -66,23 +94,39 @@ class QueryPattern(str, Enum):
     D = "D"
 
 
+class CollectionTarget(BaseModel):
+    """A single structured-store collection to query, with optional filters.
+
+    One ``RouteResult`` may contain several targets (e.g. Pattern C spanning
+    both a *contracts* and a *facts* collection).
+
+    Args:
+        collection: Collection name.
+        filters:    Filter expressions to apply. Empty list means "return all".
+    """
+
+    collection: str
+    filters: list[Filter] = []
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
 class RouteResult(BaseModel):
     """Output of a query router.
 
     All fields except ``pattern`` and ``semantic_query`` are optional — routers
-    that cannot extract structured information leave them as ``None``.
+    that cannot extract structured information leave them as empty/default.
     """
 
     pattern: QueryPattern
     semantic_query: str
     """Cleaned query string to use for embedding or LLM prompting."""
-    filters: list[Filter] | None = None
-    """Structured filters parsed from the query (primarily useful for Pattern A).
-    ``None`` when the router cannot extract filters from natural language.
-    """
-    collection: str | None = None
-    """Target structured-store collection for Pattern A queries.
-    ``None`` when the router cannot determine the collection from the query.
+    structured_targets: list[CollectionTarget] = []
+    """Structured-store collections to query, each with its own filter set.
+
+    Empty when the router cannot determine targets (pattern B, or no schema
+    provided).  May contain multiple entries for patterns C and D when the
+    query spans more than one collection.
     """
 
 
@@ -113,10 +157,10 @@ class QueryRouter(abc.ABC):
 
 
 # ---------------------------------------------------------------------------
-# LLM-based router (production)
+# System prompt construction
 # ---------------------------------------------------------------------------
 
-_ROUTER_SYSTEM_PROMPT = """\
+_ROUTER_PROMPT_TEMPLATE = """\
 You are a query router for a document intelligence system. Classify the user's
 query into exactly one of four retrieval patterns and return a JSON object.
 
@@ -132,13 +176,66 @@ Patterns:
   D — Grounded generation: the query asks for a generated artefact (draft,
       summary, report, letter, etc.) that must be grounded in retrieved evidence.
 
+{schema_section}\
+Filter operator notes:
+  in, not_in             value must be a JSON array
+  like                   SQL LIKE pattern (% matches any sequence)
+  is_null, is_not_null   no "value" key required
+  json fields            never include in filters
+
 Return ONLY valid JSON, no prose:
-{
+{{
   "pattern": "<A|B|C|D>",
   "semantic_query": "<cleaned query for embedding or prompting>",
-  "reasoning": "<one sentence explaining the classification>"
-}
+  "reasoning": "<one sentence explaining the classification>",
+  "structured_targets": [
+    {{
+      "collection": "<collection name>",
+      "filters": [
+        {{"field": "<field>", "op": "<op>", "value": <value>}}
+      ]
+    }}
+  ]
+}}
+
+Rules for structured_targets:
+- Populate only for patterns A, C, and D when the query targets specific collections.
+- A single query may target multiple collections — include one entry per collection.
+- Leave as [] for pattern B or when no collection can be determined.
+- Omit the "value" key for is_null / is_not_null operators.
 """
+
+
+_TYPE_OPERATORS_LEGEND = """\
+Field type → valid filter operators:
+  string:  =, !=, like, in, not_in, is_null, is_not_null
+  integer: =, !=, <, >, <=, >=, in, not_in, is_null, is_not_null
+  float:   =, !=, <, >, <=, >=, in, not_in, is_null, is_not_null
+  boolean: =, !=, is_null, is_not_null
+  json:    (not filterable — never include in filters)
+"""
+
+
+def _build_system_prompt(schema: list[CollectionSchema] | None) -> str:
+    """Return the router system prompt, optionally injecting collection schema."""
+    if schema:
+        lines = [_TYPE_OPERATORS_LEGEND, "Available collections (use these names exactly):\n"]
+        for c in schema:
+            fields_str = ", ".join(
+                f"{fname} ({fschema.type.value})"
+                for fname, fschema in c.fields.items()
+            )
+            lines.append(f"  {c.name}: {fields_str}\n")
+        lines.append("\n")
+        schema_section = "".join(lines)
+    else:
+        schema_section = ""
+    return _ROUTER_PROMPT_TEMPLATE.format(schema_section=schema_section)
+
+
+# ---------------------------------------------------------------------------
+# LLM-based router (production)
+# ---------------------------------------------------------------------------
 
 
 class LLMRouter(QueryRouter):
@@ -157,8 +254,15 @@ class LLMRouter(QueryRouter):
                      (e.g. ``openai.AsyncOpenAI(...)``).
         model:       Model name to pass to the API (e.g. ``"claude-opus-4-6"``,
                      ``"gpt-5.4"``, ``"llama3"``).
-        max_tokens:  Maximum tokens to generate. 256 is sufficient for the small
-                     JSON response the router expects.
+        schema:      Descriptions of available structured-store collections.
+                     When provided, injected into the system prompt so the LLM
+                     can populate ``structured_targets`` with the right collection
+                     names and field-level filters.  ``None`` disables schema
+                     injection — the router still classifies patterns but cannot
+                     determine targets.
+        max_tokens:  Maximum tokens to generate.  512 is a safe default for
+                     responses that include several structured targets with
+                     filters; increase for schemas with many collections.
         max_retries: How many additional attempts to make when the response
                      cannot be parsed as valid JSON.  ``0`` disables retries.
                      Defaults to ``2`` (3 total attempts).
@@ -166,8 +270,14 @@ class LLMRouter(QueryRouter):
     Example::
 
         import openai
+        from cogbase.engine.router import CollectionSchema, LLMRouter
+
+        schema = [
+            CollectionSchema(name="contracts", fields=["party_a", "party_b", "effective_date"]),
+            CollectionSchema(name="facts",     fields=["type", "value", "confidence"]),
+        ]
         client = openai.AsyncOpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
-        router = LLMRouter(client, model="llama3")
+        router = LLMRouter(client, model="llama3", schema=schema)
         result = await router.route("compare the indemnity clauses across both contracts")
     """
 
@@ -175,13 +285,15 @@ class LLMRouter(QueryRouter):
         self,
         client: Any,
         model: str,
-        max_tokens: int = 256,
+        schema: list[CollectionSchema] | None = None,
+        max_tokens: int = 512,
         max_retries: int = 2,
     ) -> None:
         self._client = client
         self._model = model
         self._max_tokens = max_tokens
         self._max_retries = max_retries
+        self._system_prompt = _build_system_prompt(schema)
 
     async def route(self, query: str) -> RouteResult:
         last_exc: Exception | None = None
@@ -190,7 +302,7 @@ class LLMRouter(QueryRouter):
                 model=self._model,
                 max_tokens=self._max_tokens,
                 messages=[
-                    {"role": "system", "content": _ROUTER_SYSTEM_PROMPT},
+                    {"role": "system", "content": self._system_prompt},
                     {"role": "user", "content": query.strip()},
                 ],
             )
@@ -200,6 +312,14 @@ class LLMRouter(QueryRouter):
             except (ValueError, KeyError, json.JSONDecodeError) as exc:
                 last_exc = exc
         raise last_exc  # type: ignore[misc]
+
+
+def _parse_filter(obj: dict) -> Filter:
+    """Parse a single filter dict from the LLM response into a ``Filter``."""
+    field = str(obj["field"])
+    op = Op(obj["op"])
+    value = obj.get("value")
+    return Filter(field=field, op=op, value=value)
 
 
 def _parse_llm_response(raw: str, original_query: str) -> RouteResult:
@@ -213,5 +333,16 @@ def _parse_llm_response(raw: str, original_query: str) -> RouteResult:
     pattern = QueryPattern(data["pattern"].upper())
     raw_sq = str(data.get("semantic_query", "")).strip()
     semantic_query = raw_sq if raw_sq else original_query.strip()
-    return RouteResult(pattern=pattern, semantic_query=semantic_query)
 
+    structured_targets: list[CollectionTarget] = []
+    for t in data.get("structured_targets", []) or []:
+        filters = [_parse_filter(f) for f in t.get("filters", []) or []]
+        structured_targets.append(
+            CollectionTarget(collection=str(t["collection"]), filters=filters)
+        )
+
+    return RouteResult(
+        pattern=pattern,
+        semantic_query=semantic_query,
+        structured_targets=structured_targets,
+    )
