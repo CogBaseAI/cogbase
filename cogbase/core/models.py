@@ -31,6 +31,22 @@ class Fact(BaseModel):
         return v
 
 
+class Document(BaseModel):
+    """A raw document to be ingested into CogBase.
+
+    ``doc_id`` is the stable identifier used to correlate chunks, extracted
+    facts, and vector embeddings back to their source.  ``metadata`` is an
+    open bag of string key-value pairs for caller-defined attributes (e.g.
+    filename, source URL, author).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    doc_id: str
+    text: str
+    metadata: dict = Field(default_factory=dict)
+
+
 class Chunk(BaseModel):
     """A text chunk from a document, optionally carrying its embedding vector."""
 

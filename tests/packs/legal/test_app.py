@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -16,7 +17,8 @@ from cogbase.pipeline.ingestion.embedder import EmbedderBase
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
-from packs.legal import LegalContractApp
+from cogbase.core.models import Document
+from packs.legal import IngestResult, LegalContractApp
 from packs.legal.schema import CLAUSES_COLLECTION
 
 
@@ -305,3 +307,210 @@ class TestLegalContractAppQuery:
         from cogbase.engine.engine import Engine
         assert isinstance(app.application, Application)
         assert isinstance(app.engine, Engine)
+
+
+# ---------------------------------------------------------------------------
+# ingest_many()
+# ---------------------------------------------------------------------------
+
+class TestIngestMany:
+    @pytest.mark.asyncio
+    async def test_returns_one_result_per_contract(self):
+        store = InMemoryStructuredStore()
+        client = _make_extractor_response(_clauses_payload("payment"))
+        app = LegalContractApp(client=client, model="test-model", structured_store=store)
+        await app.setup()
+
+        contracts = [
+            Document(doc_id="c-001", text="contract one"),
+            Document(doc_id="c-002", text="contract two"),
+            Document(doc_id="c-003", text="contract three"),
+        ]
+        results = await app.ingest_many(contracts)
+
+        assert len(results) == 3
+        assert all(isinstance(r, IngestResult) for r in results)
+
+    @pytest.mark.asyncio
+    async def test_results_in_input_order(self):
+        store = InMemoryStructuredStore()
+        client = _make_extractor_response("[]")
+        app = LegalContractApp(client=client, model="test-model", structured_store=store)
+        await app.setup()
+
+        doc_ids = [f"c-{i:03d}" for i in range(8)]
+        contracts = [Document(doc_id=d, text=f"text for {d}") for d in doc_ids]
+        results = await app.ingest_many(contracts, concurrency=3)
+
+        assert [r.doc_id for r in results] == doc_ids
+
+    @pytest.mark.asyncio
+    async def test_success_flag_set(self):
+        store = InMemoryStructuredStore()
+        client = _make_extractor_response(_clauses_payload("termination"))
+        app = LegalContractApp(client=client, model="test-model", structured_store=store)
+        await app.setup()
+
+        results = await app.ingest_many([Document(doc_id="c-001", text="some text")])
+
+        assert results[0].success is True
+        assert results[0].error is None
+
+    @pytest.mark.asyncio
+    async def test_clauses_extracted_count(self):
+        store = InMemoryStructuredStore()
+        client = _make_extractor_response(_clauses_payload("payment", "termination", "liability"))
+        app = LegalContractApp(client=client, model="test-model", structured_store=store)
+        await app.setup()
+
+        results = await app.ingest_many([Document(doc_id="c-001", text="contract text")])
+
+        assert results[0].clauses_extracted == 3
+
+    @pytest.mark.asyncio
+    async def test_clauses_per_doc_counted_independently(self):
+        """Each result reflects only that document's clauses, not a cumulative total."""
+        store = InMemoryStructuredStore()
+        call_n = 0
+
+        async def _create(**kwargs):
+            nonlocal call_n
+            call_n += 1
+            # First doc → 2 clauses, second doc → 1 clause
+            if call_n == 1:
+                content = _clauses_payload("payment", "termination")
+            else:
+                content = _clauses_payload("liability")
+            choice = SimpleNamespace(message=SimpleNamespace(content=content))
+            return SimpleNamespace(choices=[choice])
+
+        client = MagicMock()
+        client.chat = MagicMock()
+        client.chat.completions = MagicMock()
+        client.chat.completions.create = AsyncMock(side_effect=_create)
+
+        app = LegalContractApp(client=client, model="test-model", structured_store=store)
+        await app.setup()
+
+        results = await app.ingest_many(
+            [
+                Document(doc_id="c-001", text="first contract"),
+                Document(doc_id="c-002", text="second contract"),
+            ],
+            concurrency=1,  # sequential so call order is deterministic
+        )
+
+        assert results[0].doc_id == "c-001"
+        assert results[0].clauses_extracted == 2
+        assert results[1].doc_id == "c-002"
+        assert results[1].clauses_extracted == 1
+
+    @pytest.mark.asyncio
+    async def test_accepts_tuples(self):
+        store = InMemoryStructuredStore()
+        client = _make_extractor_response("[]")
+        app = LegalContractApp(client=client, model="test-model", structured_store=store)
+        await app.setup()
+
+        results = await app.ingest_many([
+            ("contract text A", "c-001"),
+            ("contract text B", "c-002"),
+        ])
+
+        assert len(results) == 2
+        assert results[0].doc_id == "c-001"
+        assert results[1].doc_id == "c-002"
+
+    @pytest.mark.asyncio
+    async def test_failure_captured_not_raised(self):
+        """A failure on one document does not abort the batch."""
+        store = InMemoryStructuredStore()
+        call_n = 0
+
+        async def _create(**kwargs):
+            nonlocal call_n
+            call_n += 1
+            if call_n == 1:
+                raise RuntimeError("LLM unavailable")
+            choice = SimpleNamespace(message=SimpleNamespace(content=_clauses_payload("payment")))
+            return SimpleNamespace(choices=[choice])
+
+        client = MagicMock()
+        client.chat = MagicMock()
+        client.chat.completions = MagicMock()
+        client.chat.completions.create = AsyncMock(side_effect=_create)
+
+        app = LegalContractApp(client=client, model="test-model", structured_store=store)
+        await app.setup()
+
+        results = await app.ingest_many(
+            [
+                Document(doc_id="c-fail", text="will fail"),
+                Document(doc_id="c-ok",   text="will succeed"),
+            ],
+            concurrency=1,
+        )
+
+        failed = [r for r in results if not r.success]
+        succeeded = [r for r in results if r.success]
+
+        assert len(failed) == 1
+        assert failed[0].doc_id == "c-fail"
+        assert isinstance(failed[0].error, RuntimeError)
+
+        assert len(succeeded) == 1
+        assert succeeded[0].doc_id == "c-ok"
+        assert succeeded[0].clauses_extracted == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_list_returns_empty(self):
+        store = InMemoryStructuredStore()
+        client = _make_extractor_response("[]")
+        app = LegalContractApp(client=client, model="test-model", structured_store=store)
+        await app.setup()
+
+        results = await app.ingest_many([])
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_invalid_concurrency_raises(self):
+        store = InMemoryStructuredStore()
+        client = _make_extractor_response("[]")
+        app = LegalContractApp(client=client, model="test-model", structured_store=store)
+        await app.setup()
+
+        with pytest.raises(ValueError, match="concurrency"):
+            await app.ingest_many([], concurrency=0)
+
+    @pytest.mark.asyncio
+    async def test_concurrency_limit_respected(self):
+        """Track peak simultaneous in-flight ingestions."""
+        store = InMemoryStructuredStore()
+        active = 0
+        peak = 0
+        lock = asyncio.Lock()
+
+        async def _create(**kwargs):
+            nonlocal active, peak
+            async with lock:
+                active += 1
+                if active > peak:
+                    peak = active
+            await asyncio.sleep(0)  # yield to allow other coroutines to enter
+            async with lock:
+                active -= 1
+            choice = SimpleNamespace(message=SimpleNamespace(content="[]"))
+            return SimpleNamespace(choices=[choice])
+
+        client = MagicMock()
+        client.chat = MagicMock()
+        client.chat.completions = MagicMock()
+        client.chat.completions.create = AsyncMock(side_effect=_create)
+
+        app = LegalContractApp(client=client, model="test-model", structured_store=store)
+        await app.setup()
+
+        contracts = [Document(doc_id=f"c-{i}", text="text") for i in range(10)]
+        await app.ingest_many(contracts, concurrency=3)
+
+        assert peak <= 3

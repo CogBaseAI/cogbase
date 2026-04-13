@@ -16,6 +16,7 @@ Typical usage (full mode)::
 
     import openai
     from packs.legal import LegalContractApp
+    from cogbase.core.models import Document
     from cogbase.stores.structured.sqlite import SQLiteStructuredStore
     from cogbase.stores.vector.faiss_store import FAISSVectorStore
     from cogbase.pipeline.ingestion.embedder import SentenceTransformersEmbedder
@@ -31,7 +32,16 @@ Typical usage (full mode)::
         chunker=FixedSizeChunker(chunk_size=512, overlap=64),
     )
     await app.setup()
-    await app.ingest(contract_text, doc_id="contract-001")
+
+    # Ingest a batch of contracts
+    results = await app.ingest_many([
+        Document(doc_id="vendor-001", text=vendor_contract),
+        Document(doc_id="nda-002",    text=nda_text),
+        Document(doc_id="lease-003",  text=lease_text),
+    ])
+    for r in results:
+        print(r.doc_id, "→", r.clauses_extracted, "clauses" if r.success else r.error)
+
     result = await app.query("what are the termination clauses?")
     print(result.answer)
 
@@ -49,10 +59,12 @@ Structured-only mode (no vector search)::
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from dataclasses import dataclass, field
+from typing import Any, Sequence
 
 from cogbase.core.application import Application, StructuredCollection, VectorCollection
-from cogbase.core.models import Chunk
+from cogbase.core.models import Chunk, Document
 from cogbase.engine.engine import Engine
 from cogbase.engine.generation.base import GenerationResult
 from cogbase.engine.generation.llm import LLMGenerator
@@ -61,9 +73,33 @@ from cogbase.engine.router import LLMRouter
 from cogbase.pipeline.ingestion.base import ChunkerBase
 from cogbase.pipeline.ingestion.embedder import EmbedderBase
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
+from cogbase.stores.filters import Col
 from cogbase.stores.schema import CollectionSchema
 from packs.legal.extractor import ClauseExtractor
-from packs.legal.schema import CLAUSES_SCHEMA
+from packs.legal.schema import CLAUSES_COLLECTION, CLAUSES_SCHEMA
+
+
+# ---------------------------------------------------------------------------
+# Public data types
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class IngestResult:
+    """Outcome of ingesting a single contract.
+
+    Args:
+        doc_id:           Identifier of the document that was processed.
+        success:          ``True`` when ingestion completed without error.
+        clauses_extracted: Number of clauses written to the structured store.
+                          Always ``0`` when *success* is ``False``.
+        error:            The exception raised, when *success* is ``False``.
+    """
+
+    doc_id: str
+    success: bool
+    clauses_extracted: int = 0
+    error: Exception | None = field(default=None, repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +108,7 @@ from packs.legal.schema import CLAUSES_SCHEMA
 
 
 class _NullVectorStore(VectorStoreBase):
-    """No-op vector store — returns empty results, raises on search if called."""
+    """No-op vector store for structured-only mode — search always returns []."""
 
     async def upsert(self, chunks: list[Chunk]) -> None:  # pragma: no cover
         pass  # unreachable: no VectorCollection is added in structured-only mode
@@ -101,7 +137,7 @@ class LegalContractApp:
     """Pre-configured CogBase application for legal contract analysis.
 
     Bundles clause extraction, structured storage, and the full query engine
-    under a single three-method interface: ``setup`` → ``ingest`` → ``query``.
+    under a small interface: ``setup`` → ``ingest`` / ``ingest_many`` → ``query``.
 
     Args:
         client:               Async OpenAI-compatible client used for both the
@@ -179,6 +215,8 @@ class LegalContractApp:
             effective_vector_store = _NullVectorStore()
             effective_embedder = _NullEmbedder()
 
+        self._structured_store = structured_store
+
         self._app = Application(
             name=name,
             vector_collections=vector_collections,
@@ -209,7 +247,7 @@ class LegalContractApp:
         await self._app.setup()
 
     async def ingest(self, text: str, doc_id: str) -> None:
-        """Ingest a contract document.
+        """Ingest a single contract document.
 
         Chunks and embeds the text into the vector store (if configured) and
         extracts typed clauses into the structured store.
@@ -219,6 +257,70 @@ class LegalContractApp:
             doc_id: Stable identifier for the source document.
         """
         await self._app.ingest(text, doc_id)
+
+    async def ingest_many(
+        self,
+        contracts: Sequence[Document | tuple[str, str]],
+        *,
+        concurrency: int = 5,
+    ) -> list[IngestResult]:
+        """Ingest a list of contracts, running up to *concurrency* at a time.
+
+        Each contract is processed independently.  A failure on one document does
+        not abort the others — the error is captured in the corresponding
+        ``IngestResult`` and ingestion continues for the remaining documents.
+
+        Results are returned in the same order as *contracts*.
+
+        Args:
+            contracts:   Sequence of ``Document`` objects **or**
+                         ``(text, doc_id)`` tuples (both forms are accepted).
+            concurrency: Maximum number of documents ingested simultaneously.
+                         Defaults to ``5`` — a safe limit for LLM API rate caps.
+                         Set to ``1`` for strictly sequential ingestion.
+
+        Returns:
+            ``list[IngestResult]`` in input order, one entry per document.
+            Each result carries: ``doc_id``, ``success``, ``clauses_extracted``
+            (count of clauses written to the structured store), and ``error``
+            (the exception raised, or ``None`` on success).
+
+        Example::
+
+            results = await app.ingest_many([
+                Document(doc_id="vendor-001", text=vendor_text),
+                Document(doc_id="nda-002",    text=nda_text),
+            ])
+            ok     = [r for r in results if r.success]
+            failed = [r for r in results if not r.success]
+        """
+        if concurrency < 1:
+            raise ValueError(f"concurrency must be at least 1, got {concurrency}")
+
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def _ingest_one(contract: Document | tuple[str, str]) -> IngestResult:
+            if isinstance(contract, tuple):
+                text, doc_id = contract
+            else:
+                text, doc_id = contract.text, contract.doc_id
+
+            async with semaphore:
+                try:
+                    await self._app.ingest(text, doc_id)
+                    clauses = await self._structured_store.query(
+                        CLAUSES_COLLECTION,
+                        [Col("doc_id") == doc_id],
+                    )
+                    return IngestResult(
+                        doc_id=doc_id,
+                        success=True,
+                        clauses_extracted=len(clauses),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    return IngestResult(doc_id=doc_id, success=False, error=exc)
+
+        return list(await asyncio.gather(*(_ingest_one(c) for c in contracts)))
 
     async def query(self, text: str) -> GenerationResult:
         """Answer a natural-language query over ingested contracts.
