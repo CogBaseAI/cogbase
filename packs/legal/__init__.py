@@ -12,18 +12,24 @@ Quick start::
         Document(doc_id="vendor-001", text=vendor_text),
         Document(doc_id="nda-002",    text=nda_text),
     ])
-    result = await app.query("what are the termination clauses?")
+    result = await app.query("which contracts expire before 2026-01-01?")
 """
 
 from packs.legal.app import IngestResult, LegalContractApp
-from packs.legal.extractor import ClauseExtractor
-from packs.legal.schema import CLAUSES_COLLECTION, CLAUSES_SCHEMA, Clause
+from packs.legal.extractor import ContractExtractor
+from packs.legal.schema import (
+    CONTRACTS_COLLECTION,
+    CONTRACTS_SCHEMA,
+    ContractRecord,
+    build_contracts_schema,
+)
 
 __all__ = [
     "LegalContractApp",
     "IngestResult",
-    "ClauseExtractor",
-    "Clause",
-    "CLAUSES_SCHEMA",
-    "CLAUSES_COLLECTION",
+    "ContractExtractor",
+    "ContractRecord",
+    "CONTRACTS_SCHEMA",
+    "CONTRACTS_COLLECTION",
+    "build_contracts_schema",
 ]

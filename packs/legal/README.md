@@ -1,6 +1,6 @@
 # Legal Contract Analyst Pack
 
-Pre-configured CogBase pack for ingesting and querying large volumes of legal contracts. Extracts typed clauses via LLM, stores them in a structured store, and exposes the full query engine for lookup, semantic search, hybrid reasoning, and grounded report generation.
+Pre-configured CogBase pack for ingesting and querying large volumes of legal contracts. Each document is processed by an LLM that extracts a single structured `ContractRecord` — covering contract basics, common clause text, and flexible fields for terms and conditions that vary by contract type. The full query engine is then available for structured lookup, semantic search, hybrid reasoning, and grounded report generation.
 
 ## Quick start
 
@@ -35,17 +35,17 @@ results = await app.ingest_many([
 
 for r in results:
     if r.success:
-        print(f"{r.doc_id}: {r.clauses_extracted} clauses extracted")
+        print(f"{r.doc_id}: {r.records_extracted} record extracted")
     else:
         print(f"{r.doc_id}: failed — {r.error}")
 
-result = await app.query("what are the termination clauses?")
+result = await app.query("which contracts expire before 2026-01-01?")
 print(result.answer)
 ```
 
 ## Structured-only mode
 
-Omit `vector_store`, `embedder`, and `chunker` to run without semantic search. Clause extraction and Pattern A structured lookups still work; Pattern B queries return empty results.
+Omit `vector_store`, `embedder`, and `chunker` to run without semantic search. Contract extraction and Pattern A structured lookups still work; Pattern B queries return empty results.
 
 ```python
 app = LegalContractApp(
@@ -55,23 +55,79 @@ app = LegalContractApp(
 )
 ```
 
-## Extracted clause types
+## Extracted contract record
 
-The extractor identifies the following clause categories:
+Each ingested document produces exactly one `ContractRecord`. The LLM is instructed to copy clause text verbatim — not paraphrase — so the stored text can serve as a citation.
 
-| Type | Description |
-|------|-------------|
-| `payment` | Payment terms, schedules, and amounts |
-| `termination` | Termination rights and conditions |
-| `liability` | Liability caps and exclusions |
-| `notice` | Notice periods and delivery requirements |
+### Contract basics
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `contract_id` | `str` | Stable unique ID: `{doc_id}_{uuid}` |
+| `doc_id` | `str` | Source document identifier |
+| `contract_type` | `str \| None` | Category: `"NDA"`, `"SaaS"`, `"employment"`, `"vendor"`, `"lease"`, etc. |
+| `purpose` | `str \| None` | One sentence describing what the contract is for |
+| `effective_date` | `str \| None` | Contract start date in `YYYY-MM-DD` format |
+| `expiry_date` | `str \| None` | Contract end/expiry date in `YYYY-MM-DD` format |
+| `party_a` | `str \| None` | Primary party name (client or buyer) |
+| `party_b` | `str \| None` | Counterparty name (vendor or seller) |
+| `contract_value` | `float \| None` | Total monetary value in `currency` units |
+| `currency` | `str \| None` | ISO 4217 currency code (e.g. `"USD"`) |
+
+### Common clause text
+
+Verbatim text copied from the contract. `null` when the clause is absent.
+
+| Field | Description |
+|-------|-------------|
+| `payment_terms` | Payment schedule, amounts, and conditions |
+| `termination` | Termination rights and procedures |
+| `liability` | Limitation of liability |
 | `governing_law` | Governing law and jurisdiction |
 | `confidentiality` | Confidentiality and non-disclosure obligations |
 | `indemnification` | Indemnification obligations |
-| `dispute_resolution` | Arbitration, mediation, and litigation provisions |
-| `other` | Any other significant clause |
+| `dispute_resolution` | Arbitration, mediation, or litigation provisions |
 
-Each extracted clause carries: `clause_id`, `doc_id`, `type`, `text` (verbatim), `page`, `confidence`.
+### Clause-level numeric
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `notice_period_days` | `int \| None` | Days of notice required for termination |
+| `liability_cap` | `float \| None` | Liability cap amount in `currency` units |
+
+### Flexible fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `key_terms` | `list[dict]` | Significant defined terms, unusual provisions, or contract-type-specific clauses not covered by the named fields. Each entry: `{"term": "...", "description": "..."}`. `[]` if none. |
+| `special_conditions` | `list[str]` | Verbatim text of conditions precedent, carve-outs, custom provisions, or anything unusual. `[]` if none. |
+
+## Customising the schema
+
+Different deployments may need a different set of fields. `build_contracts_schema` lets you add or remove fields without touching `CONTRACTS_SCHEMA`.
+
+```python
+from cogbase.stores.schema import FieldSchema, FieldType
+from packs.legal.schema import build_contracts_schema
+
+# Remove fields your organisation does not need
+schema = build_contracts_schema(exclude={"indemnification", "dispute_resolution"})
+
+# Add a company-specific field
+schema = build_contracts_schema(
+    extra_fields={"risk_score": FieldSchema(type=FieldType.FLOAT, nullable=True)}
+)
+
+# Both at once
+schema = build_contracts_schema(
+    extra_fields={"jurisdiction": FieldSchema(type=FieldType.STRING, nullable=True, index=True)},
+    exclude={"dispute_resolution"},
+)
+```
+
+`contract_id` and `doc_id` are core fields and cannot be excluded.
+
+Pass the custom schema to a `StructuredCollection` directly if you need to override it at the `Application` level. For most use cases, `LegalContractApp` uses `CONTRACTS_SCHEMA` directly.
 
 ## Query patterns
 
@@ -82,15 +138,16 @@ Queries are automatically routed to the correct retrieval strategy. No configura
 Answered directly from the structured store. Fast, no generation cost.
 
 ```python
-result = await app.query("which contracts have a termination-for-convenience clause?")
+result = await app.query("which contracts expire before 2026-01-01?")
 result = await app.query("list all contracts governed by New York law")
-result = await app.query("how many contracts contain a limitation of liability clause?")
-result = await app.query("show me all indemnification clauses with high confidence")
+result = await app.query("show all contracts where party_a is Acme Corp")
+result = await app.query("which contracts have a liability cap above 1 million?")
+result = await app.query("how many NDA contracts are in the portfolio?")
 ```
 
 ### Pattern B — Semantic search
 
-Open-ended questions answered from raw contract text via vector similarity.
+Open-ended questions answered from raw contract text via vector similarity. Requires the vector store to be configured.
 
 ```python
 result = await app.query("find passages about data breach notification obligations")
@@ -105,9 +162,9 @@ Retrieves from both stores and reasons across the combined results.
 
 ```python
 result = await app.query("do any contracts contradict each other on payment terms with Vendor X?")
-result = await app.query("which contracts have unusually long cure periods compared to the others?")
+result = await app.query("which contracts have unusually long notice periods compared to the others?")
 result = await app.query("which NDAs have shorter confidentiality periods than our standard template?")
-result = await app.query("are there any contracts where notice periods differ between the parties?")
+result = await app.query("are there contracts where the liability cap seems low for the contract value?")
 ```
 
 ### Pattern D — Grounded report
@@ -132,13 +189,14 @@ print(result.supporting_quotes)  # list[str] — verbatim excerpts
 |-----------|------|----------|-------------|
 | `client` | `AsyncOpenAI` | yes | OpenAI-compatible async client |
 | `model` | `str` | yes | Model name for extraction, routing, and generation |
-| `structured_store` | `StructuredStoreBase` | yes | Persistent store for extracted clauses |
+| `structured_store` | `StructuredStoreBase` | yes | Persistent store for extracted contract records |
 | `vector_store` | `VectorStoreBase` | no | Vector store for raw contract text |
 | `embedder` | `EmbedderBase` | no | Embedder for contract text chunks |
 | `chunker` | `ChunkerBase` | no | Chunker for splitting contract text |
-| `extractor_max_tokens` | `int` | no | Max tokens for clause extraction (default: 4096) |
-| `generator_max_tokens` | `int` | no | Max tokens for answer generation (default: 1024) |
-| `retriever_top_k` | `int` | no | Vector search neighbours to retrieve (default: 10) |
+| `name` | `str` | no | Logical application name (default: `"legal"`) |
+| `extractor_max_tokens` | `int` | no | Max tokens for contract extraction (default: `4096`) |
+| `generator_max_tokens` | `int` | no | Max tokens for answer generation (default: `1024`) |
+| `retriever_top_k` | `int` | no | Vector search neighbours to retrieve (default: `10`) |
 
 `vector_store`, `embedder`, and `chunker` must all be provided together or all omitted.
 
@@ -158,15 +216,13 @@ Accepts `Document` objects or `(text, doc_id)` tuples.
 |-------|------|-------------|
 | `doc_id` | `str` | Document identifier |
 | `success` | `bool` | `True` when ingestion completed without error |
-| `clauses_extracted` | `int` | Number of clauses written to the structured store |
+| `records_extracted` | `int` | `1` on success, `0` when text was blank or LLM output was unparseable |
 | `error` | `Exception \| None` | The exception raised, or `None` on success |
 
 ## Known limitations
 
-The current `CLAUSES_SCHEMA` handles clause types well but is missing fields that drive many high-value Pattern A queries:
-
-- **Dates** — expiry dates, effective dates, and notice periods need typed fields for date-range lookups ("contracts expiring before December 31, 2025").
-- **Party names** — "all contracts with Acme Corp" requires a structured field; `doc_id` is the only identifier today.
-- **Contract value** — numeric comparisons ("liability cap lower than contract value") need amount fields.
 - **Contradiction detection** — cross-contract inconsistency detection is planned in the CogBase architecture but not yet implemented in this pack.
 - **Template comparison** — deviation from a standard template requires a reference document concept that does not yet exist.
+- **Multi-party contracts** — only two parties (`party_a`, `party_b`) are modelled. Contracts with three or more named parties will have additional parties captured in `key_terms` or `special_conditions` only.
+- **Date format** — dates are stored as `YYYY-MM-DD` strings. The extractor normalises common formats, but ambiguous dates (e.g. "the last day of the fiscal year") will be `null`.
+- **One record per document** — the extractor produces a single `ContractRecord` per ingested document. Consolidated agreements or multi-part contracts should be split into individual documents before ingestion.

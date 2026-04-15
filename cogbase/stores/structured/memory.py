@@ -34,10 +34,22 @@ class InMemoryStructuredStore(StructuredStoreBase):
         self._frames: dict[str, pd.DataFrame] = {}
 
     async def create_collection(self, schema: CollectionSchema) -> None:
-        if schema.name in self._schemas:
-            return  # idempotent
+        if schema.name not in self._schemas:
+            self._schemas[schema.name] = schema
+            self._frames[schema.name] = _empty_frame(schema)
+            return
+
+        # Collection already exists — add columns for any fields that are new
+        # in the desired schema (handles fields added between restarts or within
+        # the same session).  Removed fields are silently ignored: the DataFrame
+        # retains the old column but the row helpers only read/write schema fields.
+        old_fields = self._schemas[schema.name].fields
+        df = self._frames[schema.name]
+        for field_name, field in schema.fields.items():
+            if field_name not in old_fields:
+                df[field_name] = pd.Series(dtype=_PANDAS_DTYPE[field.type])
+        self._frames[schema.name] = df
         self._schemas[schema.name] = schema
-        self._frames[schema.name] = _empty_frame(schema)
 
     async def save(self, collection: str, records: list[BaseModel]) -> None:
         schema = self._get_schema(collection)
@@ -50,12 +62,16 @@ class InMemoryStructuredStore(StructuredStoreBase):
         self._frames[collection] = pd.concat([df, new_df], ignore_index=True)
 
     async def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
-        self._get_schema(collection)
+        schema = self._get_schema(collection)
         df = self._frames[collection]
         if filters:
             mask = _build_mask(df, filters)
             df = df[mask]
-        return _to_records(df)
+        # Project to schema fields only — columns removed from the schema are
+        # silently dropped from results; columns not yet in the DataFrame
+        # (e.g. race between add-column and query) are skipped safely.
+        schema_cols = [c for c in schema.fields if c in df.columns]
+        return _to_records(df[schema_cols])
 
     async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         schema = self._get_schema(collection)

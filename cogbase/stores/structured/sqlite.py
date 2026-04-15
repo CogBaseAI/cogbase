@@ -49,9 +49,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
     # ------------------------------------------------------------------
 
     async def create_collection(self, schema: CollectionSchema) -> None:
-        if schema.name in self._schemas:
-            return
-
+        # 1. Create the table if it does not exist yet.
         col_defs: list[str] = []
         for field_name, field in schema.fields.items():
             sql_type = _SQL_TYPE[field.type]
@@ -64,12 +62,30 @@ class SQLiteStructuredStore(StructuredStoreBase):
         self._conn.execute(
             f'CREATE TABLE IF NOT EXISTS "{schema.name}" ({", ".join(col_defs)})'
         )
+
+        # 2. Add any columns present in the desired schema but missing from the
+        #    table (handles fields added after the initial create).  Columns
+        #    removed from the schema are left in the table but silently ignored
+        #    by the row helpers — no data is lost, and DROP COLUMN is not needed.
+        existing_cols = {
+            row[1]
+            for row in self._conn.execute(f'PRAGMA table_info("{schema.name}")')
+        }
+        for field_name, field in schema.fields.items():
+            if field_name not in existing_cols:
+                sql_type = _SQL_TYPE[field.type]
+                self._conn.execute(
+                    f'ALTER TABLE "{schema.name}" ADD COLUMN "{field_name}" {sql_type}'
+                )
+
+        # 3. Ensure indexes exist (idempotent).
         for field_name, field in schema.fields.items():
             if field.index and field_name != schema.id_field:
                 self._conn.execute(
                     f'CREATE INDEX IF NOT EXISTS "idx_{schema.name}_{field_name}" '
                     f'ON "{schema.name}" ("{field_name}")'
                 )
+
         self._conn.commit()
         self._schemas[schema.name] = schema
 

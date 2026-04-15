@@ -410,3 +410,111 @@ async def test_custom_collection_with_rich_filters(structured_store):
     # query_as
     flags = await structured_store.query_as("risk_flags", [Col("severity") == "high"], RiskFlag)
     assert flags[0].metadata["page"] == 3
+
+
+# ------------------------------------------------------------------
+# Schema migration — add / remove fields
+# ------------------------------------------------------------------
+
+async def test_add_field_to_existing_collection(structured_store):
+    """A field added to the schema after initial create becomes queryable."""
+    class FactV2(BaseModel):
+        fact_id: str
+        type: str
+        value: str
+        raw_text: str
+        doc_id: str
+        page: int | None = None
+        confidence: float
+        source: str | None = None  # new field
+
+    schema_v2 = CollectionSchema(
+        name="facts",
+        id_field="fact_id",
+        fields={
+            "fact_id":    FieldSchema(type=FieldType.STRING,  nullable=False),
+            "type":       FieldSchema(type=FieldType.STRING,  index=True),
+            "value":      FieldSchema(type=FieldType.STRING),
+            "raw_text":   FieldSchema(type=FieldType.STRING),
+            "doc_id":     FieldSchema(type=FieldType.STRING,  index=True),
+            "page":       FieldSchema(type=FieldType.INTEGER, nullable=True),
+            "confidence": FieldSchema(type=FieldType.FLOAT),
+            "source":     FieldSchema(type=FieldType.STRING,  nullable=True),
+        },
+    )
+
+    # Save a record with the original schema
+    await structured_store.save("facts", [make_fact()])
+
+    # Migrate: add the new field
+    await structured_store.create_collection(schema_v2)
+
+    # Write a record using the new schema
+    new_fact = FactV2(
+        fact_id="new-1", type="notice_period", value="30 days",
+        raw_text="thirty days", doc_id="doc-new", confidence=0.9,
+        source="upload",
+    )
+    await structured_store.save("facts", [new_fact])
+
+    results = await structured_store.query("facts", [Col("fact_id") == "new-1"])
+    assert results[0]["source"] == "upload"
+
+
+async def test_existing_rows_get_null_for_added_field(structured_store):
+    """Rows written before the migration have NULL for the new field."""
+    old_fact = make_fact()
+    await structured_store.save("facts", [old_fact])
+
+    schema_v2 = CollectionSchema(
+        name="facts",
+        id_field="fact_id",
+        fields={
+            "fact_id":    FieldSchema(type=FieldType.STRING, nullable=False),
+            "type":       FieldSchema(type=FieldType.STRING, index=True),
+            "value":      FieldSchema(type=FieldType.STRING),
+            "raw_text":   FieldSchema(type=FieldType.STRING),
+            "doc_id":     FieldSchema(type=FieldType.STRING, index=True),
+            "page":       FieldSchema(type=FieldType.INTEGER, nullable=True),
+            "confidence": FieldSchema(type=FieldType.FLOAT),
+            "source":     FieldSchema(type=FieldType.STRING, nullable=True),
+        },
+    )
+    await structured_store.create_collection(schema_v2)
+
+    results = await structured_store.query("facts", [Col("fact_id") == old_fact.fact_id])
+    assert results[0]["source"] is None
+
+
+async def test_remove_field_from_schema_is_ignored_on_read(structured_store):
+    """Removing a field from the schema leaves its column in the store but
+    the field is absent from query results — no error is raised."""
+    await structured_store.save("facts", [make_fact()])
+
+    # New schema without the 'value' field
+    schema_no_value = CollectionSchema(
+        name="facts",
+        id_field="fact_id",
+        fields={
+            "fact_id":    FieldSchema(type=FieldType.STRING, nullable=False),
+            "type":       FieldSchema(type=FieldType.STRING, index=True),
+            "raw_text":   FieldSchema(type=FieldType.STRING),
+            "doc_id":     FieldSchema(type=FieldType.STRING, index=True),
+            "page":       FieldSchema(type=FieldType.INTEGER, nullable=True),
+            "confidence": FieldSchema(type=FieldType.FLOAT),
+        },
+    )
+    await structured_store.create_collection(schema_no_value)
+
+    results = await structured_store.query("facts")
+    assert len(results) == 1
+    assert "value" not in results[0]
+
+
+async def test_migration_is_idempotent(structured_store):
+    """Calling create_collection twice with the same schema is safe."""
+    from tests.stores.conftest import FACTS_SCHEMA
+    await structured_store.create_collection(FACTS_SCHEMA)
+    await structured_store.create_collection(FACTS_SCHEMA)
+    await structured_store.save("facts", [make_fact()])
+    assert len(await structured_store.query("facts")) == 1

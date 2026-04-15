@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cogbase.core.models import Chunk
+from cogbase.core.models import Chunk, Document
 from cogbase.engine.generation.base import GenerationResult
 from cogbase.engine.router import QueryPattern
 from cogbase.pipeline.ingestion.base import ChunkerBase
@@ -17,9 +17,8 @@ from cogbase.pipeline.ingestion.embedder import EmbedderBase
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
-from cogbase.core.models import Document
 from packs.legal import IngestResult, LegalContractApp
-from packs.legal.schema import CLAUSES_COLLECTION
+from packs.legal.schema import CONTRACTS_COLLECTION, ContractRecord
 
 
 # ---------------------------------------------------------------------------
@@ -37,12 +36,31 @@ def _make_extractor_response(content: str) -> MagicMock:
     return client
 
 
-def _clauses_payload(*clause_types: str) -> str:
-    """Return a JSON clause array with the given types."""
-    return json.dumps([
-        {"type": t, "text": f"Clause text for {t}.", "confidence": 0.9}
-        for t in clause_types
-    ])
+def _contract_payload(**overrides) -> str:
+    """Return a minimal valid ContractExtractor JSON response (single object)."""
+    data = {
+        "contract_type": "NDA",
+        "purpose": "Test non-disclosure agreement.",
+        "effective_date": None,
+        "expiry_date": None,
+        "party_a": "Acme Corp",
+        "party_b": "Supplier Ltd",
+        "contract_value": None,
+        "currency": None,
+        "payment_terms": None,
+        "termination": None,
+        "liability": None,
+        "governing_law": None,
+        "confidentiality": None,
+        "indemnification": None,
+        "dispute_resolution": None,
+        "notice_period_days": None,
+        "liability_cap": None,
+        "key_terms": [],
+        "special_conditions": [],
+    }
+    data.update(overrides)
+    return json.dumps(data)
 
 
 class StubEmbedder(EmbedderBase):
@@ -59,7 +77,7 @@ class StubEmbedder(EmbedderBase):
 
 class TestLegalContractAppConstruction:
     def test_structured_only_builds(self):
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         app = LegalContractApp(
             client=client,
             model="test-model",
@@ -67,11 +85,11 @@ class TestLegalContractAppConstruction:
         )
         assert app.application.name == "legal"
         assert len(app.application.structured_collections) == 1
-        assert app.application.structured_collections[0].name == CLAUSES_COLLECTION
+        assert app.application.structured_collections[0].name == CONTRACTS_COLLECTION
         assert app.application.vector_collections == []
 
     def test_full_mode_builds(self):
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         app = LegalContractApp(
             client=client,
             model="test-model",
@@ -84,7 +102,7 @@ class TestLegalContractAppConstruction:
         assert app.application.vector_collections[0].name == "documents"
 
     def test_partial_vector_params_raises(self):
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         with pytest.raises(ValueError, match="all be provided together"):
             LegalContractApp(
                 client=client,
@@ -95,7 +113,7 @@ class TestLegalContractAppConstruction:
             )
 
     def test_custom_name(self):
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         app = LegalContractApp(
             client=client,
             model="test-model",
@@ -105,7 +123,7 @@ class TestLegalContractAppConstruction:
         assert app.application.name == "my-legal-app"
 
     def test_structured_schemas_exposed(self):
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         app = LegalContractApp(
             client=client,
             model="test-model",
@@ -113,7 +131,7 @@ class TestLegalContractAppConstruction:
         )
         schemas = app.structured_schemas
         assert len(schemas) == 1
-        assert schemas[0].name == CLAUSES_COLLECTION
+        assert schemas[0].name == CONTRACTS_COLLECTION
 
 
 # ---------------------------------------------------------------------------
@@ -124,53 +142,51 @@ class TestLegalContractAppLifecycle:
     @pytest.mark.asyncio
     async def test_setup_creates_collection(self):
         store = InMemoryStructuredStore()
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
         # Collection exists — query must not raise
-        rows = await store.query(CLAUSES_COLLECTION)
+        rows = await store.query(CONTRACTS_COLLECTION)
         assert rows == []
 
     @pytest.mark.asyncio
     async def test_setup_idempotent(self):
         store = InMemoryStructuredStore()
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
         await app.setup()  # must not raise
 
     @pytest.mark.asyncio
-    async def test_ingest_extracts_clauses(self):
+    async def test_ingest_extracts_contract(self):
         store = InMemoryStructuredStore()
-        client = _make_extractor_response(_clauses_payload("payment", "termination"))
+        client = _make_extractor_response(_contract_payload(contract_type="SaaS"))
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
         await app.ingest("Some contract text.", doc_id="c-001")
-        rows = await store.query(CLAUSES_COLLECTION)
-        assert len(rows) == 2
-        types = {r["type"] for r in rows}
-        assert types == {"payment", "termination"}
+        rows = await store.query(CONTRACTS_COLLECTION)
+        assert len(rows) == 1
+        assert rows[0]["contract_type"] == "SaaS"
 
     @pytest.mark.asyncio
     async def test_ingest_empty_text_is_noop(self):
         store = InMemoryStructuredStore()
-        # extractor won't be called for empty text, but client returns empty regardless
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
         await app.ingest("", doc_id="c-empty")
-        rows = await store.query(CLAUSES_COLLECTION)
+        rows = await store.query(CONTRACTS_COLLECTION)
         assert rows == []
 
     @pytest.mark.asyncio
     async def test_ingest_multiple_docs_accumulate(self):
         store = InMemoryStructuredStore()
-        client = _make_extractor_response(_clauses_payload("payment"))
+        client = _make_extractor_response(_contract_payload())
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
         await app.ingest("contract one text", doc_id="c-001")
         await app.ingest("contract two text", doc_id="c-002")
-        rows = await store.query(CLAUSES_COLLECTION)
+        rows = await store.query(CONTRACTS_COLLECTION)
         assert len(rows) == 2
         doc_ids = {r["doc_id"] for r in rows}
         assert doc_ids == {"c-001", "c-002"}
@@ -179,7 +195,7 @@ class TestLegalContractAppLifecycle:
     async def test_ingest_full_mode_populates_vector_store(self):
         store = InMemoryStructuredStore()
         vector_store = FAISSVectorStore(dim=4)
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         app = LegalContractApp(
             client=client,
             model="test-model",
@@ -203,19 +219,13 @@ class TestLegalContractAppQuery:
         router_json: str,
         generator_answer: str,
         *,
-        extractor_json: str = "[]",
+        extractor_json: str = "{}",
     ) -> tuple[LegalContractApp, InMemoryStructuredStore]:
         """Create an app whose LLM always responds with the given router and generator content."""
         store = InMemoryStructuredStore()
-        call_count = 0
 
         async def _create(**kwargs):
-            nonlocal call_count
-            call_count += 1
             messages = kwargs.get("messages", [])
-            user_content = messages[-1].get("content", "") if messages else ""
-            # Extractor calls have the contract text; router/generator have query text
-            # Distinguish by checking for the system prompt pattern
             system_content = messages[0].get("content", "") if messages else ""
             if "legal contract analyst" in system_content:
                 content = extractor_json
@@ -238,30 +248,30 @@ class TestLegalContractAppQuery:
     async def test_query_pattern_a_returns_structured_answer(self):
         router_resp = json.dumps({
             "pattern": "A",
-            "semantic_query": "list payment clauses",
-            "structured_targets": [{"collection": CLAUSES_COLLECTION, "filters": []}],
+            "semantic_query": "list NDA contracts",
+            "structured_targets": [{"collection": CONTRACTS_COLLECTION, "filters": []}],
         })
         app, store = self._make_app_with_router_response(
             router_resp,
             generator_answer="unused for pattern A",
         )
         await app.setup()
-        # Pre-load a clause directly into the store
-        from packs.legal.schema import Clause
-        await store.save(CLAUSES_COLLECTION, [
-            Clause(
-                clause_id="c-001_payment_0_abc",
+        # Pre-load a contract record directly into the store
+        await store.save(CONTRACTS_COLLECTION, [
+            ContractRecord(
+                contract_id="c-001_abc",
                 doc_id="c-001",
-                type="payment",
-                text="Payment is due within 30 days.",
-                confidence=0.95,
+                contract_type="NDA",
+                party_a="Acme Corp",
+                party_b="Supplier Ltd",
+                payment_terms="Payment is due within 30 days.",
             )
         ])
 
-        result = await app.query("list payment clauses")
+        result = await app.query("list NDA contracts")
         assert isinstance(result, GenerationResult)
         assert result.pattern == QueryPattern.A
-        assert "payment" in result.answer.lower() or "30 days" in result.answer
+        assert "acme" in result.answer.lower() or "nda" in result.answer.lower() or "30 days" in result.answer
 
     @pytest.mark.asyncio
     async def test_query_pattern_b_returns_answer(self):
@@ -284,7 +294,7 @@ class TestLegalContractAppQuery:
         router_resp = json.dumps({
             "pattern": "D",
             "semantic_query": "summarise indemnification",
-            "structured_targets": [{"collection": CLAUSES_COLLECTION, "filters": []}],
+            "structured_targets": [{"collection": CONTRACTS_COLLECTION, "filters": []}],
         })
         gen_answer = (
             "[FINDINGS]\nBoth parties have broad indemnification obligations.\n\n"
@@ -300,9 +310,8 @@ class TestLegalContractAppQuery:
 
     @pytest.mark.asyncio
     async def test_engine_and_application_accessible(self):
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         app = LegalContractApp(client=client, model="test-model", structured_store=InMemoryStructuredStore())
-        # Both properties return the right types
         from cogbase.core.application import Application
         from cogbase.engine.engine import Engine
         assert isinstance(app.application, Application)
@@ -317,7 +326,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_returns_one_result_per_contract(self):
         store = InMemoryStructuredStore()
-        client = _make_extractor_response(_clauses_payload("payment"))
+        client = _make_extractor_response(_contract_payload())
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
 
@@ -334,7 +343,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_results_in_input_order(self):
         store = InMemoryStructuredStore()
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
 
@@ -347,7 +356,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_success_flag_set(self):
         store = InMemoryStructuredStore()
-        client = _make_extractor_response(_clauses_payload("termination"))
+        client = _make_extractor_response(_contract_payload())
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
 
@@ -357,38 +366,22 @@ class TestIngestMany:
         assert results[0].error is None
 
     @pytest.mark.asyncio
-    async def test_clauses_extracted_count(self):
+    async def test_records_extracted_count(self):
+        """Each contract produces exactly 1 record."""
         store = InMemoryStructuredStore()
-        client = _make_extractor_response(_clauses_payload("payment", "termination", "liability"))
+        client = _make_extractor_response(_contract_payload())
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
 
         results = await app.ingest_many([Document(doc_id="c-001", text="contract text")])
 
-        assert results[0].clauses_extracted == 3
+        assert results[0].records_extracted == 1
 
     @pytest.mark.asyncio
-    async def test_clauses_per_doc_counted_independently(self):
-        """Each result reflects only that document's clauses, not a cumulative total."""
+    async def test_records_per_doc_counted_independently(self):
+        """Each result reflects only that document's records, not a cumulative total."""
         store = InMemoryStructuredStore()
-        call_n = 0
-
-        async def _create(**kwargs):
-            nonlocal call_n
-            call_n += 1
-            # First doc → 2 clauses, second doc → 1 clause
-            if call_n == 1:
-                content = _clauses_payload("payment", "termination")
-            else:
-                content = _clauses_payload("liability")
-            choice = SimpleNamespace(message=SimpleNamespace(content=content))
-            return SimpleNamespace(choices=[choice])
-
-        client = MagicMock()
-        client.chat = MagicMock()
-        client.chat.completions = MagicMock()
-        client.chat.completions.create = AsyncMock(side_effect=_create)
-
+        client = _make_extractor_response(_contract_payload())
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
 
@@ -397,18 +390,18 @@ class TestIngestMany:
                 Document(doc_id="c-001", text="first contract"),
                 Document(doc_id="c-002", text="second contract"),
             ],
-            concurrency=1,  # sequential so call order is deterministic
+            concurrency=1,
         )
 
         assert results[0].doc_id == "c-001"
-        assert results[0].clauses_extracted == 2
+        assert results[0].records_extracted == 1
         assert results[1].doc_id == "c-002"
-        assert results[1].clauses_extracted == 1
+        assert results[1].records_extracted == 1
 
     @pytest.mark.asyncio
     async def test_accepts_tuples(self):
         store = InMemoryStructuredStore()
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
 
@@ -432,7 +425,7 @@ class TestIngestMany:
             call_n += 1
             if call_n == 1:
                 raise RuntimeError("LLM unavailable")
-            choice = SimpleNamespace(message=SimpleNamespace(content=_clauses_payload("payment")))
+            choice = SimpleNamespace(message=SimpleNamespace(content=_contract_payload()))
             return SimpleNamespace(choices=[choice])
 
         client = MagicMock()
@@ -460,12 +453,12 @@ class TestIngestMany:
 
         assert len(succeeded) == 1
         assert succeeded[0].doc_id == "c-ok"
-        assert succeeded[0].clauses_extracted == 1
+        assert succeeded[0].records_extracted == 1
 
     @pytest.mark.asyncio
     async def test_empty_list_returns_empty(self):
         store = InMemoryStructuredStore()
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
 
@@ -475,7 +468,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_invalid_concurrency_raises(self):
         store = InMemoryStructuredStore()
-        client = _make_extractor_response("[]")
+        client = _make_extractor_response("{}")
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
 
@@ -499,7 +492,7 @@ class TestIngestMany:
             await asyncio.sleep(0)  # yield to allow other coroutines to enter
             async with lock:
                 active -= 1
-            choice = SimpleNamespace(message=SimpleNamespace(content="[]"))
+            choice = SimpleNamespace(message=SimpleNamespace(content="{}"))
             return SimpleNamespace(choices=[choice])
 
         client = MagicMock()

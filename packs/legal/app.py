@@ -3,12 +3,12 @@
 ``LegalContractApp`` bundles the full CogBase pipeline for legal contract
 analysis into a single object, wiring together:
 
-- ``ClauseExtractor``  — extracts typed clauses from contract text via LLM
-- ``Application``      — orchestrates chunking, embedding, and extraction
-- ``Engine``           — routes queries and generates grounded answers
+- ``ContractExtractor`` — extracts a structured summary from contract text via LLM
+- ``Application``       — orchestrates chunking, embedding, and extraction
+- ``Engine``            — routes queries and generates grounded answers
 
 The vector store, embedder, and chunker are optional.  When omitted the app
-operates in *structured-only* mode: contracts are processed for clause
+operates in *structured-only* mode: contracts are processed for structured
 extraction but raw text is not stored for semantic search (Pattern B queries
 return empty results; Patterns A, C, D still work).
 
@@ -40,9 +40,10 @@ Typical usage (full mode)::
         Document(doc_id="lease-003",  text=lease_text),
     ])
     for r in results:
-        print(r.doc_id, "→", r.clauses_extracted, "clauses" if r.success else r.error)
+        status = f"{r.records_extracted} record extracted" if r.success else str(r.error)
+        print(f"{r.doc_id}: {status}")
 
-    result = await app.query("what are the termination clauses?")
+    result = await app.query("which contracts expire before 2026-01-01?")
     print(result.answer)
 
 Structured-only mode (no vector search)::
@@ -54,7 +55,7 @@ Structured-only mode (no vector search)::
     )
     await app.setup()
     await app.ingest(contract_text, doc_id="contract-001")
-    result = await app.query("list all payment clauses")   # routes Pattern A
+    result = await app.query("list all contracts with Acme Corp")
 """
 
 from __future__ import annotations
@@ -75,8 +76,8 @@ from cogbase.pipeline.ingestion.embedder import EmbedderBase
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
 from cogbase.stores.filters import Col
 from cogbase.stores.schema import CollectionSchema
-from packs.legal.extractor import ClauseExtractor
-from packs.legal.schema import CLAUSES_COLLECTION, CLAUSES_SCHEMA
+from packs.legal.extractor import ContractExtractor
+from packs.legal.schema import CONTRACTS_COLLECTION, CONTRACTS_SCHEMA
 
 
 # ---------------------------------------------------------------------------
@@ -91,14 +92,15 @@ class IngestResult:
     Args:
         doc_id:           Identifier of the document that was processed.
         success:          ``True`` when ingestion completed without error.
-        clauses_extracted: Number of clauses written to the structured store.
-                          Always ``0`` when *success* is ``False``.
+        records_extracted: Number of records written to the structured store
+                          (always 0 or 1 for a contract — 0 on empty text or
+                          unparseable LLM output, 1 on success).
         error:            The exception raised, when *success* is ``False``.
     """
 
     doc_id: str
     success: bool
-    clauses_extracted: int = 0
+    records_extracted: int = 0
     error: Exception | None = field(default=None, repr=False)
 
 
@@ -136,15 +138,15 @@ class _NullEmbedder(EmbedderBase):
 class LegalContractApp:
     """Pre-configured CogBase application for legal contract analysis.
 
-    Bundles clause extraction, structured storage, and the full query engine
+    Bundles contract extraction, structured storage, and the full query engine
     under a small interface: ``setup`` → ``ingest`` / ``ingest_many`` → ``query``.
 
     Args:
         client:               Async OpenAI-compatible client used for both the
-                              ``ClauseExtractor`` and the query ``Engine``.
+                              ``ContractExtractor`` and the query ``Engine``.
         model:                Model name forwarded to the extractor, router, and
                               generator (e.g. ``"claude-sonnet-4-6"``).
-        structured_store:     Persistent store for extracted clauses.
+        structured_store:     Persistent store for extracted contract records.
         vector_store:         Vector store for raw contract text chunks.  Must be
                               provided together with *embedder* and *chunker*.
                               When ``None`` the app runs in structured-only mode.
@@ -153,7 +155,7 @@ class LegalContractApp:
         chunker:              Chunker for splitting contract text.  Required when
                               *vector_store* is supplied.
         name:                 Logical name for the application.
-        extractor_max_tokens: Max tokens for the ``ClauseExtractor`` LLM call.
+        extractor_max_tokens: Max tokens for the ``ContractExtractor`` LLM call.
         generator_max_tokens: Max tokens for the ``LLMGenerator`` LLM call.
         retriever_top_k:      Number of nearest-neighbour chunks to return from
                               the vector store on semantic queries.
@@ -185,11 +187,11 @@ class LegalContractApp:
                 "or all omitted. Received a partial set."
             )
 
-        extractor = ClauseExtractor(client, model, max_tokens=extractor_max_tokens)
+        extractor = ContractExtractor(client, model, max_tokens=extractor_max_tokens)
 
         structured_collections = [
             StructuredCollection(
-                schema=CLAUSES_SCHEMA,
+                schema=CONTRACTS_SCHEMA,
                 store=structured_store,
                 extractor=extractor,
             )
@@ -250,7 +252,7 @@ class LegalContractApp:
         """Ingest a single contract document.
 
         Chunks and embeds the text into the vector store (if configured) and
-        extracts typed clauses into the structured store.
+        extracts a structured ``ContractRecord`` into the structured store.
 
         Args:
             text:   Full contract text.
@@ -281,8 +283,8 @@ class LegalContractApp:
 
         Returns:
             ``list[IngestResult]`` in input order, one entry per document.
-            Each result carries: ``doc_id``, ``success``, ``clauses_extracted``
-            (count of clauses written to the structured store), and ``error``
+            Each result carries: ``doc_id``, ``success``, ``records_extracted``
+            (0 or 1 — always 1 for a successfully parsed contract), and ``error``
             (the exception raised, or ``None`` on success).
 
         Example::
@@ -308,14 +310,14 @@ class LegalContractApp:
             async with semaphore:
                 try:
                     await self._app.ingest(text, doc_id)
-                    clauses = await self._structured_store.query(
-                        CLAUSES_COLLECTION,
+                    records = await self._structured_store.query(
+                        CONTRACTS_COLLECTION,
                         [Col("doc_id") == doc_id],
                     )
                     return IngestResult(
                         doc_id=doc_id,
                         success=True,
-                        clauses_extracted=len(clauses),
+                        records_extracted=len(records),
                     )
                 except Exception as exc:  # noqa: BLE001
                     return IngestResult(doc_id=doc_id, success=False, error=exc)
@@ -327,9 +329,9 @@ class LegalContractApp:
 
         Automatically routes to the correct retrieval pattern:
 
-        - Pattern A — structured clause lookup (no LLM call needed)
+        - Pattern A — structured lookup (no LLM call needed)
         - Pattern B — semantic search over raw contract text
-        - Pattern C — hybrid reasoning across clauses and text
+        - Pattern C — hybrid reasoning across structured records and text
         - Pattern D — grounded report with ``[FINDINGS]`` / ``[SUPPORTING_QUOTES]``
 
         Args:
