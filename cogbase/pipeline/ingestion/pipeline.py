@@ -77,8 +77,8 @@ async def ingest(
 
     if extractors and structured_store:
         for extractor in extractors:
-            records = await extractor.extract(text, doc_id)
-            if records:
-                await structured_store.save(extractor.collection, records)
+            record = await extractor.extract(text, doc_id)
+            if record is not None:
+                await structured_store.save(extractor.collection, [record])
 
     return embedded

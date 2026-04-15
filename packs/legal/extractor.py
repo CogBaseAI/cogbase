@@ -12,8 +12,8 @@ Typical usage::
     client = openai.AsyncOpenAI(api_key="...")
     extractor = ContractExtractor(client, model="claude-sonnet-4-6")
 
-    records = await extractor.extract(contract_text, doc_id="contract-001")
-    # returns list[ContractRecord] with exactly one element
+    record = await extractor.extract(contract_text, doc_id="contract-001")
+    # returns a ContractRecord, or None when the text is blank / unparseable
 """
 
 from __future__ import annotations
@@ -44,9 +44,10 @@ _SYSTEM_PROMPT = (
 class ContractExtractor(ExtractorBase):
     """Extracts a structured summary from a contract document using an LLM.
 
-    Each call to ``extract`` produces exactly one ``ContractRecord`` for the
-    document — covering contract basics, common clause text, and two flexible
-    JSON fields for terms and conditions that vary by contract type.
+    Each call to ``extract`` produces one ``ContractRecord`` for the document —
+    covering contract basics, common clause text, and two flexible JSON fields
+    for terms and conditions that vary by contract type — or ``None`` when the
+    text is blank or the LLM returns unparseable output.
 
     Args:
         client:     Async OpenAI-compatible client
@@ -68,7 +69,7 @@ class ContractExtractor(ExtractorBase):
     def schema(self) -> CollectionSchema:
         return CONTRACTS_SCHEMA
 
-    async def extract(self, text: str, doc_id: str) -> list[BaseModel]:
+    async def extract(self, text: str, doc_id: str) -> ContractRecord | None:
         """Extract a contract summary from *text*.
 
         Args:
@@ -76,11 +77,11 @@ class ContractExtractor(ExtractorBase):
             doc_id: Stable identifier for the source document.
 
         Returns:
-            A list containing a single ``ContractRecord``.  Returns an empty
-            list when *text* is blank or the LLM returns unparseable output.
+            A ``ContractRecord``, or ``None`` when *text* is blank or the LLM
+            returns unparseable output.
         """
         if not text.strip():
-            return []
+            return None
 
         response = await self._client.chat.completions.create(
             model=self._model,
@@ -98,12 +99,12 @@ class ContractExtractor(ExtractorBase):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _parse(self, raw: str, doc_id: str) -> list[ContractRecord]:
+    def _parse(self, raw: str, doc_id: str) -> ContractRecord | None:
         """Parse the LLM JSON response into a ``ContractRecord``."""
         try:
             extraction = ContractExtraction.model_validate_json(raw)
         except (ValidationError, ValueError):
-            return []
+            return None
 
         contract_id = f"{doc_id}_{uuid.uuid4().hex[:8]}"
-        return [ContractRecord(contract_id=contract_id, doc_id=doc_id, **extraction.model_dump())]
+        return ContractRecord(contract_id=contract_id, doc_id=doc_id, **extraction.model_dump())

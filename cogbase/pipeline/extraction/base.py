@@ -42,7 +42,7 @@ class ExtractorBase(abc.ABC):
                     },
                 )
 
-            async def extract(self, text: str, doc_id: str) -> list[BaseModel]:
+            async def extract(self, text: str, doc_id: str) -> BaseModel | None:
                 ...
     """
 
@@ -62,16 +62,16 @@ class ExtractorBase(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def extract(self, text: str, doc_id: str) -> list[BaseModel]:
-        """Return extracted records for *text*.
+    async def extract(self, text: str, doc_id: str) -> BaseModel | None:
+        """Return an extracted record for *text*, or ``None``.
 
         Args:
             text:   Full or chunked document text passed to this extractor.
             doc_id: Stable identifier of the source document; implementations
-                    should propagate it onto every returned record.
+                    should propagate it onto the returned record.
 
         Returns:
-            A (possibly empty) list of Pydantic records.  All records must be
-            instances of the same ``BaseModel`` subclass — the one whose fields
-            match ``self.schema``.
+            A single Pydantic record whose fields match ``self.schema``, or
+            ``None`` when *text* is blank or the extractor cannot produce a
+            valid result.
         """

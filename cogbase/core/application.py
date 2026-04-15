@@ -212,10 +212,10 @@ class Application:
 
         total_records = 0
         for sc in self._structured_collections:
-            records = await sc.extractor.extract(text, doc_id)
-            if records:
-                await sc.store.save(sc.schema.name, records)
-                total_records += len(records)
+            record = await sc.extractor.extract(text, doc_id)
+            if record is not None:
+                await sc.store.save(sc.schema.name, [record])
+                total_records += 1
         return total_records
 
     async def ingest_many(

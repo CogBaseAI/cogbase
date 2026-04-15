@@ -73,32 +73,31 @@ def test_schema_returned():
 @pytest.mark.asyncio
 async def test_extract_returns_one_contract_record():
     extractor = ContractExtractor(_make_client(_full_payload()), model="test-model")
-    results = await extractor.extract("contract text", doc_id="doc-001")
+    result = await extractor.extract("contract text", doc_id="doc-001")
 
-    assert len(results) == 1
-    assert isinstance(results[0], ContractRecord)
+    assert isinstance(result, ContractRecord)
 
 
 @pytest.mark.asyncio
 async def test_extract_contract_id_contains_doc_id():
     extractor = ContractExtractor(_make_client(_full_payload()), model="test-model")
-    results = await extractor.extract("contract text", doc_id="vendor-42")
+    result = await extractor.extract("contract text", doc_id="vendor-42")
 
-    assert results[0].contract_id.startswith("vendor-42_")
+    assert result.contract_id.startswith("vendor-42_")
 
 
 @pytest.mark.asyncio
 async def test_extract_doc_id_set():
     extractor = ContractExtractor(_make_client(_full_payload()), model="test-model")
-    results = await extractor.extract("contract text", doc_id="doc-001")
+    result = await extractor.extract("contract text", doc_id="doc-001")
 
-    assert results[0].doc_id == "doc-001"
+    assert result.doc_id == "doc-001"
 
 
 @pytest.mark.asyncio
 async def test_extract_contract_basics():
     extractor = ContractExtractor(_make_client(_full_payload()), model="test-model")
-    r = (await extractor.extract("contract text", doc_id="doc-001"))[0]
+    r = await extractor.extract("contract text", doc_id="doc-001")
 
     assert r.contract_type == "NDA"
     assert r.effective_date == "2024-03-01"
@@ -112,7 +111,7 @@ async def test_extract_contract_basics():
 @pytest.mark.asyncio
 async def test_extract_common_clause_text_verbatim():
     extractor = ContractExtractor(_make_client(_full_payload()), model="test-model")
-    r = (await extractor.extract("contract text", doc_id="doc-001"))[0]
+    r = await extractor.extract("contract text", doc_id="doc-001")
 
     assert r.termination == "Either party may terminate with 30 days written notice."
     assert r.governing_law == "This agreement is governed by the laws of England and Wales."
@@ -122,7 +121,7 @@ async def test_extract_common_clause_text_verbatim():
 @pytest.mark.asyncio
 async def test_extract_absent_clauses_are_none():
     extractor = ContractExtractor(_make_client(_full_payload()), model="test-model")
-    r = (await extractor.extract("contract text", doc_id="doc-001"))[0]
+    r = await extractor.extract("contract text", doc_id="doc-001")
 
     assert r.payment_terms is None
     assert r.indemnification is None
@@ -134,7 +133,7 @@ async def test_extract_absent_clauses_are_none():
 @pytest.mark.asyncio
 async def test_extract_notice_period_days():
     extractor = ContractExtractor(_make_client(_full_payload(notice_period_days=30)), model="test-model")
-    r = (await extractor.extract("contract text", doc_id="doc-001"))[0]
+    r = await extractor.extract("contract text", doc_id="doc-001")
 
     assert r.notice_period_days == 30
 
@@ -142,7 +141,7 @@ async def test_extract_notice_period_days():
 @pytest.mark.asyncio
 async def test_extract_key_terms():
     extractor = ContractExtractor(_make_client(_full_payload()), model="test-model")
-    r = (await extractor.extract("contract text", doc_id="doc-001"))[0]
+    r = await extractor.extract("contract text", doc_id="doc-001")
 
     assert len(r.key_terms) == 1
     assert isinstance(r.key_terms[0], str)
@@ -156,7 +155,7 @@ async def test_extract_special_conditions():
         "Obligations survive termination for 5 years.",
     ])
     extractor = ContractExtractor(_make_client(payload), model="test-model")
-    r = (await extractor.extract("contract text", doc_id="doc-001"))[0]
+    r = await extractor.extract("contract text", doc_id="doc-001")
 
     assert len(r.special_conditions) == 2
     assert "supersedes" in r.special_conditions[0]
@@ -166,7 +165,7 @@ async def test_extract_special_conditions():
 async def test_extract_contract_value_and_currency():
     payload = _full_payload(contract_value=250000.0, currency="USD")
     extractor = ContractExtractor(_make_client(payload), model="test-model")
-    r = (await extractor.extract("contract text", doc_id="doc-001"))[0]
+    r = await extractor.extract("contract text", doc_id="doc-001")
 
     assert r.contract_value == 250000.0
     assert r.currency == "USD"
@@ -176,7 +175,7 @@ async def test_extract_contract_value_and_currency():
 async def test_extract_liability_cap():
     payload = _full_payload(liability_cap=500000.0, currency="GBP")
     extractor = ContractExtractor(_make_client(payload), model="test-model")
-    r = (await extractor.extract("contract text", doc_id="doc-001"))[0]
+    r = await extractor.extract("contract text", doc_id="doc-001")
 
     assert r.liability_cap == 500000.0
 
@@ -186,56 +185,55 @@ async def test_extract_liability_cap():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_extract_empty_text_returns_empty():
+async def test_extract_empty_text_returns_none():
     extractor = ContractExtractor(_make_client("{}"), model="test-model")
-    results = await extractor.extract("   ", doc_id="doc-002")
-    assert results == []
+    result = await extractor.extract("   ", doc_id="doc-002")
+    assert result is None
 
 
 @pytest.mark.asyncio
-async def test_extract_invalid_json_returns_empty():
+async def test_extract_invalid_json_returns_none():
     extractor = ContractExtractor(_make_client("not json"), model="test-model")
-    results = await extractor.extract("contract text", doc_id="doc-003")
-    assert results == []
+    result = await extractor.extract("contract text", doc_id="doc-003")
+    assert result is None
 
 
 @pytest.mark.asyncio
-async def test_extract_json_array_instead_of_object_returns_empty():
-    """LLM accidentally returns an array — should return empty, not crash."""
+async def test_extract_json_array_instead_of_object_returns_none():
+    """LLM accidentally returns an array — should return None, not crash."""
     extractor = ContractExtractor(_make_client("[1, 2, 3]"), model="test-model")
-    results = await extractor.extract("contract text", doc_id="doc-004")
-    assert results == []
+    result = await extractor.extract("contract text", doc_id="doc-004")
+    assert result is None
 
 
 @pytest.mark.asyncio
 async def test_extract_missing_fields_default_to_none_or_empty():
     """Minimal response — only the outer object, no fields."""
     extractor = ContractExtractor(_make_client("{}"), model="test-model")
-    results = await extractor.extract("contract text", doc_id="doc-005")
+    result = await extractor.extract("contract text", doc_id="doc-005")
 
-    assert len(results) == 1
-    r = results[0]
-    assert r.contract_type is None
-    assert r.parties == []
-    assert r.key_terms == []
-    assert r.special_conditions == []
+    assert isinstance(result, ContractRecord)
+    assert result.contract_type is None
+    assert result.parties == []
+    assert result.key_terms == []
+    assert result.special_conditions == []
 
 
 @pytest.mark.asyncio
 async def test_extract_invalid_numeric_fields_rejects_record():
-    """Non-numeric strings for int/float fields fail Pydantic validation — whole record is dropped."""
+    """Non-numeric strings for int/float fields fail Pydantic validation — record is None."""
     payload = _full_payload(notice_period_days="thirty", contract_value="one million")
     extractor = ContractExtractor(_make_client(payload), model="test-model")
-    results = await extractor.extract("contract text", doc_id="doc-006")
+    result = await extractor.extract("contract text", doc_id="doc-006")
 
-    assert results == []
+    assert result is None
 
 
 @pytest.mark.asyncio
 async def test_extract_explicit_null_fields():
     payload = _full_payload(parties=[], effective_date=None)
     extractor = ContractExtractor(_make_client(payload), model="test-model")
-    r = (await extractor.extract("contract text", doc_id="doc-007"))[0]
+    r = await extractor.extract("contract text", doc_id="doc-007")
 
     assert r.parties == []
     assert r.effective_date is None
@@ -243,27 +241,27 @@ async def test_extract_explicit_null_fields():
 
 @pytest.mark.asyncio
 async def test_extract_non_list_key_terms_rejects_record():
-    """A scalar where a list is expected fails Pydantic validation — whole record is dropped."""
+    """A scalar where a list is expected fails Pydantic validation — record is None."""
     payload = _full_payload(key_terms="not a list")
     extractor = ContractExtractor(_make_client(payload), model="test-model")
-    results = await extractor.extract("contract text", doc_id="doc-008")
+    result = await extractor.extract("contract text", doc_id="doc-008")
 
-    assert results == []
+    assert result is None
 
 
 @pytest.mark.asyncio
 async def test_extract_non_list_special_conditions_rejects_record():
-    """A dict where a list is expected fails Pydantic validation — whole record is dropped."""
+    """A dict where a list is expected fails Pydantic validation — record is None."""
     payload = _full_payload(special_conditions={"key": "value"})
     extractor = ContractExtractor(_make_client(payload), model="test-model")
-    results = await extractor.extract("contract text", doc_id="doc-009")
+    result = await extractor.extract("contract text", doc_id="doc-009")
 
-    assert results == []
+    assert result is None
 
 
 @pytest.mark.asyncio
 async def test_extract_unique_contract_ids_per_call():
     extractor = ContractExtractor(_make_client(_full_payload()), model="test-model")
-    r1 = (await extractor.extract("text", doc_id="doc-010"))[0]
-    r2 = (await extractor.extract("text", doc_id="doc-010"))[0]
+    r1 = await extractor.extract("text", doc_id="doc-010")
+    r2 = await extractor.extract("text", doc_id="doc-010")
     assert r1.contract_id != r2.contract_id
