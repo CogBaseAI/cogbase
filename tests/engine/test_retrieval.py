@@ -298,3 +298,52 @@ async def test_hybrid_pattern_cd_no_collection_skips_structured(pattern: QueryPa
     assert result.chunks == [chunk]
     assert result.structured_records == []
     s_store.query.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# HybridRetriever — no vector store (structured-only mode)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hybrid_no_vector_pattern_b_returns_empty_chunks() -> None:
+    """Pattern B with no vector store yields an empty RetrievalResult."""
+    s_store = _mock_structured_store([])
+    retriever = HybridRetriever(s_store)  # no vector_store / embedder
+    route = _route(QueryPattern.B)
+
+    result = await retriever.retrieve(route)
+
+    assert result.chunks == []
+    assert result.structured_records == []
+    s_store.query.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pattern", [QueryPattern.C, QueryPattern.D])
+async def test_hybrid_no_vector_pattern_cd_returns_structured_only(pattern: QueryPattern) -> None:
+    """Without a vector store, C/D still return structured records but no chunks."""
+    records = [{"id": "r1"}]
+    s_store = _mock_structured_store(records)
+    retriever = HybridRetriever(s_store)
+    route = _route(pattern, collection="facts")
+
+    result = await retriever.retrieve(route)
+
+    assert result.structured_records == records
+    assert result.chunks == []
+    s_store.query.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_hybrid_no_vector_pattern_a_unaffected() -> None:
+    """Pattern A never touches the vector store — behaviour is unchanged."""
+    records = [{"id": "r1"}]
+    s_store = _mock_structured_store(records)
+    retriever = HybridRetriever(s_store)
+    route = _route(QueryPattern.A, collection="facts")
+
+    result = await retriever.retrieve(route)
+
+    assert result.structured_records == records
+    assert result.chunks == []

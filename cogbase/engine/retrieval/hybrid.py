@@ -48,21 +48,27 @@ class HybridRetriever(RetrieverBase):
 
     Args:
         structured_store: Any ``StructuredStoreBase`` implementation.
-        vector_store:     Any ``VectorStoreBase`` implementation.
-        embedder:         Any ``EmbedderBase`` implementation. Required for
-                          patterns B, C, and D; unused for pattern A.
+        vector_store:     Any ``VectorStoreBase`` implementation.  ``None``
+                          disables vector retrieval — patterns B, C, and D
+                          return empty chunks rather than raising.
+        embedder:         Any ``EmbedderBase`` implementation. Required when
+                          *vector_store* is provided; ignored otherwise.
         top_k:            Number of vector-search results to return. Defaults to 10.
     """
 
     def __init__(
         self,
         structured_store: StructuredStoreBase,
-        vector_store: VectorStoreBase,
-        embedder: EmbedderBase,
+        vector_store: VectorStoreBase | None = None,
+        embedder: EmbedderBase | None = None,
         top_k: int = 10,
     ) -> None:
         self._structured = StructuredRetriever(structured_store)
-        self._vector = VectorRetriever(vector_store, embedder, top_k)
+        self._vector = (
+            VectorRetriever(vector_store, embedder, top_k)
+            if vector_store is not None and embedder is not None
+            else None
+        )
 
     async def retrieve(self, route: RouteResult) -> RetrievalResult:
         match route.pattern:
@@ -70,18 +76,25 @@ class HybridRetriever(RetrieverBase):
                 return await self._structured.retrieve(route)
 
             case QueryPattern.B:
+                if self._vector is None:
+                    return RetrievalResult(route=route)
                 return await self._vector.retrieve(route)
 
             case QueryPattern.C | QueryPattern.D:
-                # Both stores queried concurrently; merge into one result.
+                # Both stores queried concurrently where possible; merge results.
                 structured_task = asyncio.create_task(self._structured_safe(route))
-                vector_task = asyncio.create_task(self._vector.retrieve(route))
-                structured_result, vector_result = await asyncio.gather(
-                    structured_task, vector_task
-                )
+                if self._vector is not None:
+                    vector_task = asyncio.create_task(self._vector.retrieve(route))
+                    structured_result, vector_result = await asyncio.gather(
+                        structured_task, vector_task
+                    )
+                    chunks = vector_result.chunks
+                else:
+                    structured_result = await structured_task
+                    chunks = []
                 return RetrievalResult(
                     structured_records=structured_result.structured_records,
-                    chunks=vector_result.chunks,
+                    chunks=chunks,
                     route=route,
                 )
 

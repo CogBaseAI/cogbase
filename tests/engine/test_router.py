@@ -10,6 +10,7 @@ from cogbase.engine.router import (
     LLMRouter,
     QueryPattern,
     RouteResult,
+    _build_system_prompt,
     _parse_llm_response,
 )
 from cogbase.stores.filters import Op
@@ -383,3 +384,48 @@ def test_parse_in_filter_with_array_value() -> None:
     f = result.structured_targets[0].filters[0]
     assert f.op == Op.IN
     assert f.value == ["date", "numeric"]
+
+
+# ---------------------------------------------------------------------------
+# available_patterns — system prompt restriction
+# ---------------------------------------------------------------------------
+
+
+def test_available_patterns_restricts_prompt_to_ad() -> None:
+    """When available_patterns=[A, D], patterns B and C must not appear in the prompt."""
+    prompt = _build_system_prompt(None, [QueryPattern.A, QueryPattern.D])
+    assert "B —" not in prompt
+    assert "C —" not in prompt
+    assert "A —" in prompt
+    assert "D —" in prompt
+
+
+def test_available_patterns_pattern_ids_reflect_restriction() -> None:
+    """The pattern placeholder in the return-JSON hint is narrowed to available patterns."""
+    prompt = _build_system_prompt(None, [QueryPattern.A, QueryPattern.D])
+    assert "<A|D>" in prompt
+
+
+def test_available_patterns_none_includes_all_four() -> None:
+    """Passing None (default) keeps all four patterns in the prompt."""
+    prompt = _build_system_prompt(None, None)
+    for label in ("A —", "B —", "C —", "D —"):
+        assert label in prompt
+    assert "<A|B|C|D>" in prompt
+
+
+@pytest.mark.asyncio
+async def test_llm_router_available_patterns_injected_into_system_prompt() -> None:
+    """LLMRouter passes available_patterns to the system prompt builder."""
+    client = _make_openai_client("A")
+    router = LLMRouter(
+        client,
+        model="test-model",
+        available_patterns=[QueryPattern.A, QueryPattern.D],
+    )
+    await router.route("list all contracts")
+    system_content = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    assert "B —" not in system_content
+    assert "C —" not in system_content
+    assert "A —" in system_content
+    assert "D —" in system_content

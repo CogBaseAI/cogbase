@@ -63,12 +63,12 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 from cogbase.core.application import Application, IngestResult, StructuredCollection, VectorCollection
-from cogbase.core.models import Chunk, Document
+from cogbase.core.models import Document
 from cogbase.engine.engine import Engine
 from cogbase.engine.generation.base import GenerationResult
 from cogbase.engine.generation.llm import LLMGenerator
 from cogbase.engine.retrieval.hybrid import HybridRetriever
-from cogbase.engine.router import LLMRouter
+from cogbase.engine.router import LLMRouter, QueryPattern
 from cogbase.pipeline.ingestion.base import ChunkerBase
 from cogbase.pipeline.ingestion.embedder import EmbedderBase
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
@@ -76,31 +76,8 @@ from cogbase.stores.schema import CollectionSchema
 from packs.legal.extractor import ContractExtractor
 from packs.legal.schema import CONTRACTS_SCHEMA
 
-
-# ---------------------------------------------------------------------------
-# Null-object adapters (used when vector params are absent)
-# ---------------------------------------------------------------------------
-
-
-class _NullVectorStore(VectorStoreBase):
-    """No-op vector store for structured-only mode — search always returns []."""
-
-    async def upsert(self, chunks: list[Chunk]) -> None:  # pragma: no cover
-        pass  # unreachable: no VectorCollection is added in structured-only mode
-
-    async def search(self, query_embedding: list[float], top_k: int) -> list[Chunk]:
-        return []
-
-    async def delete(self, doc_id: str) -> None:  # pragma: no cover
-        pass
-
-
-class _NullEmbedder(EmbedderBase):
-    """No-op embedder — attaches a zero-length dummy embedding so VectorRetriever
-    can proceed; _NullVectorStore.search ignores the embedding and returns []."""
-
-    async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
-        return [c.model_copy(update={"embedding": []}) for c in chunks]
+# Patterns available when no vector store is configured (B and C require a vector store).
+_STRUCTURED_ONLY_PATTERNS = [QueryPattern.A, QueryPattern.D]
 
 
 # ---------------------------------------------------------------------------
@@ -171,9 +148,6 @@ class LegalContractApp:
         ]
 
         vector_collections: list[VectorCollection] = []
-        effective_vector_store: VectorStoreBase
-        effective_embedder: EmbedderBase
-
         if vector_store is not None:
             assert embedder is not None and chunker is not None  # validated above
             vector_collections.append(
@@ -184,11 +158,6 @@ class LegalContractApp:
                     chunker=chunker,
                 )
             )
-            effective_vector_store = vector_store
-            effective_embedder = embedder
-        else:
-            effective_vector_store = _NullVectorStore()
-            effective_embedder = _NullEmbedder()
 
         self._app = Application(
             name=name,
@@ -201,11 +170,12 @@ class LegalContractApp:
                 client,
                 model,
                 schema=self._app.structured_schemas,
+                available_patterns=None if vector_store else _STRUCTURED_ONLY_PATTERNS,
             ),
             retriever=HybridRetriever(
                 structured_store=structured_store,
-                vector_store=effective_vector_store,
-                embedder=effective_embedder,
+                vector_store=vector_store,
+                embedder=embedder,
                 top_k=retriever_top_k,
             ),
             generator=LLMGenerator(client, model, max_tokens=generator_max_tokens),

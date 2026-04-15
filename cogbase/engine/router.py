@@ -160,21 +160,33 @@ class QueryRouter(abc.ABC):
 # System prompt construction
 # ---------------------------------------------------------------------------
 
+_PATTERN_DESCRIPTIONS: dict[QueryPattern, str] = {
+    QueryPattern.A: (
+        "A — Structured lookup: the query asks for specific records from a structured\n"
+        "      store (filter by field, count, list all of a type, etc.). No LLM reasoning\n"
+        "      needed — pure data retrieval."
+    ),
+    QueryPattern.B: (
+        "B — Semantic search: the query asks an open-ended question best answered by\n"
+        "      finding similar passages in a vector store."
+    ),
+    QueryPattern.C: (
+        "C — Hybrid reasoning: the query requires retrieving from both stores and\n"
+        "      reasoning across the results (compare, reconcile, cross-reference, detect\n"
+        "      contradictions, analyse across multiple documents)."
+    ),
+    QueryPattern.D: (
+        "D — Grounded generation: the query asks for a generated artefact (draft,\n"
+        "      summary, report, letter, etc.) that must be grounded in retrieved evidence."
+    ),
+}
+
 _ROUTER_PROMPT_TEMPLATE = """\
 You are a query router for a document intelligence system. Classify the user's
-query into exactly one of four retrieval patterns and return a JSON object.
+query into exactly one of the retrieval patterns listed below and return a JSON object.
 
 Patterns:
-  A — Structured lookup: the query asks for specific records from a structured
-      store (filter by field, count, list all of a type, etc.). No LLM reasoning
-      needed — pure data retrieval.
-  B — Semantic search: the query asks an open-ended question best answered by
-      finding similar passages in a vector store.
-  C — Hybrid reasoning: the query requires retrieving from both stores and
-      reasoning across the results (compare, reconcile, cross-reference, detect
-      contradictions, analyse across multiple documents).
-  D — Grounded generation: the query asks for a generated artefact (draft,
-      summary, report, letter, etc.) that must be grounded in retrieved evidence.
+{patterns_section}
 
 {schema_section}\
 Filter operator notes:
@@ -185,7 +197,7 @@ Filter operator notes:
 
 Return ONLY valid JSON, no prose:
 {{
-  "pattern": "<A|B|C|D>",
+  "pattern": "<{pattern_ids}>",
   "semantic_query": "<cleaned query for embedding or prompting>",
   "reasoning": "<one sentence explaining the classification>",
   "structured_targets": [
@@ -216,8 +228,21 @@ Field type → valid filter operators:
 """
 
 
-def _build_system_prompt(schema: list[CollectionSchema] | None) -> str:
-    """Return the router system prompt, optionally injecting collection schema."""
+def _build_system_prompt(
+    schema: list[CollectionSchema] | None,
+    available_patterns: list[QueryPattern] | None = None,
+) -> str:
+    """Return the router system prompt, optionally injecting collection schema.
+
+    Args:
+        schema:             Structured-store collection schemas to inject.
+        available_patterns: Restrict the LLM to these patterns only.  ``None``
+                            means all four patterns (A, B, C, D) are available.
+    """
+    patterns = available_patterns or list(QueryPattern)
+    patterns_section = "\n".join(f"  {_PATTERN_DESCRIPTIONS[p]}" for p in patterns)
+    pattern_ids = "|".join(p.value for p in patterns)
+
     if schema:
         lines = [_TYPE_OPERATORS_LEGEND, "Available collections (use these names exactly):\n"]
         for c in schema:
@@ -230,7 +255,11 @@ def _build_system_prompt(schema: list[CollectionSchema] | None) -> str:
         schema_section = "".join(lines)
     else:
         schema_section = ""
-    return _ROUTER_PROMPT_TEMPLATE.format(schema_section=schema_section)
+    return _ROUTER_PROMPT_TEMPLATE.format(
+        patterns_section=patterns_section,
+        pattern_ids=pattern_ids,
+        schema_section=schema_section,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -254,13 +283,17 @@ class LLMRouter(QueryRouter):
                      (e.g. ``openai.AsyncOpenAI(...)``).
         model:       Model name to pass to the API (e.g. ``"claude-opus-4-6"``,
                      ``"gpt-5.4"``, ``"llama3"``).
-        schema:      Descriptions of available structured-store collections.
-                     When provided, injected into the system prompt so the LLM
-                     can populate ``structured_targets`` with the right collection
-                     names and field-level filters.  ``None`` disables schema
-                     injection — the router still classifies patterns but cannot
-                     determine targets.
-        max_tokens:  Maximum tokens to generate.  512 is a safe default for
+        schema:              Descriptions of available structured-store collections.
+                             When provided, injected into the system prompt so the
+                             LLM can populate ``structured_targets`` with the right
+                             collection names and field-level filters.  ``None``
+                             disables schema injection.
+        available_patterns:  Restrict the LLM to this subset of patterns.  Use
+                             ``[QueryPattern.A, QueryPattern.D]`` for
+                             structured-only deployments (no vector store) to
+                             prevent the LLM from selecting B or C.  ``None``
+                             (default) allows all four patterns.
+        max_tokens:          Maximum tokens to generate.  512 is a safe default for
                      responses that include several structured targets with
                      filters; increase for schemas with many collections.
         max_retries: How many additional attempts to make when the response
@@ -286,6 +319,7 @@ class LLMRouter(QueryRouter):
         client: Any,
         model: str,
         schema: list[CollectionSchema] | None = None,
+        available_patterns: list[QueryPattern] | None = None,
         max_tokens: int = 512,
         max_retries: int = 2,
     ) -> None:
@@ -293,7 +327,7 @@ class LLMRouter(QueryRouter):
         self._model = model
         self._max_tokens = max_tokens
         self._max_retries = max_retries
-        self._system_prompt = _build_system_prompt(schema)
+        self._system_prompt = _build_system_prompt(schema, available_patterns)
 
     async def route(self, query: str) -> RouteResult:
         last_exc: Exception | None = None

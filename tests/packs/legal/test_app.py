@@ -320,6 +320,104 @@ class TestLegalContractAppQuery:
 
 
 # ---------------------------------------------------------------------------
+# Structured-only mode — pattern B/C skipping
+# ---------------------------------------------------------------------------
+
+class TestStructuredOnlyPatternRestriction:
+    """Verify that structured-only mode excludes B and C from the router prompt."""
+
+    def _capture_system_prompt(self, app: LegalContractApp) -> str:
+        """Trigger a route call and return the system prompt the router sent."""
+        # The router's system prompt is baked in at construction time; we read
+        # it directly from the private attribute so no LLM call is needed.
+        return app.engine._router._system_prompt
+
+    def test_structured_only_prompt_excludes_pattern_b(self):
+        client = _make_extractor_response("{}")
+        app = LegalContractApp(
+            client=client,
+            model="test-model",
+            structured_store=InMemoryStructuredStore(),
+        )
+        assert "B —" not in self._capture_system_prompt(app)
+
+    def test_structured_only_prompt_excludes_pattern_c(self):
+        client = _make_extractor_response("{}")
+        app = LegalContractApp(
+            client=client,
+            model="test-model",
+            structured_store=InMemoryStructuredStore(),
+        )
+        assert "C —" not in self._capture_system_prompt(app)
+
+    def test_structured_only_prompt_includes_pattern_a_and_d(self):
+        client = _make_extractor_response("{}")
+        app = LegalContractApp(
+            client=client,
+            model="test-model",
+            structured_store=InMemoryStructuredStore(),
+        )
+        prompt = self._capture_system_prompt(app)
+        assert "A —" in prompt
+        assert "D —" in prompt
+
+    def test_full_mode_prompt_includes_all_four_patterns(self):
+        client = _make_extractor_response("{}")
+        app = LegalContractApp(
+            client=client,
+            model="test-model",
+            structured_store=InMemoryStructuredStore(),
+            vector_store=FAISSVectorStore(dim=4),
+            embedder=StubEmbedder(dim=4),
+            chunker=FixedSizeChunker(chunk_size=64, overlap=0),
+        )
+        prompt = self._capture_system_prompt(app)
+        for label in ("A —", "B —", "C —", "D —"):
+            assert label in prompt
+
+    @pytest.mark.asyncio
+    async def test_structured_only_query_pattern_b_returns_empty_chunks(self):
+        """Even if the router somehow returns B, retrieval yields empty chunks."""
+        router_resp = json.dumps({
+            "pattern": "B",
+            "semantic_query": "termination clause",
+            "structured_targets": [],
+        })
+        app, _ = self._make_app_with_router_response(router_resp, "The answer.")
+        await app.setup()
+        result = await app.query("what is the termination clause?")
+        # No vector store — chunks are empty; generation still returns an answer.
+        assert isinstance(result, GenerationResult)
+
+    def _make_app_with_router_response(
+        self,
+        router_json: str,
+        generator_answer: str,
+    ) -> tuple[LegalContractApp, InMemoryStructuredStore]:
+        store = InMemoryStructuredStore()
+
+        async def _create(**kwargs):
+            messages = kwargs.get("messages", [])
+            system_content = messages[0].get("content", "") if messages else ""
+            if "legal contract analyst" in system_content:
+                content = "{}"
+            elif "query router" in system_content:
+                content = router_json
+            else:
+                content = generator_answer
+            choice = SimpleNamespace(message=SimpleNamespace(content=content))
+            return SimpleNamespace(choices=[choice])
+
+        client = MagicMock()
+        client.chat = MagicMock()
+        client.chat.completions = MagicMock()
+        client.chat.completions.create = AsyncMock(side_effect=_create)
+
+        app = LegalContractApp(client=client, model="test-model", structured_store=store)
+        return app, store
+
+
+# ---------------------------------------------------------------------------
 # ingest_many()
 # ---------------------------------------------------------------------------
 
