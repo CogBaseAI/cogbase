@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from cogbase.core.models import Document
-from packs.legal.extractor import ContractExtractor
-from packs.legal.schema import CONTRACTS_COLLECTION, CONTRACTS_SCHEMA, ContractRecord, Party, PaymentTerms
+from packs.legal.contract_analyst.extractor import ContractExtractor
+from packs.legal.contract_analyst.schema import CONTRACTS_COLLECTION, CONTRACTS_SCHEMA, ContractRecord, Party, PaymentTerms
 
 
 def _make_client(content: str) -> MagicMock:

@@ -7,7 +7,7 @@ the ``contracts`` structured store collection.
 Typical usage::
 
     import openai
-    from packs.legal.extractor import ContractExtractor
+    from packs.legal.contract_analyst.extractor import ContractExtractor
 
     client = openai.AsyncOpenAI(api_key="...")
     extractor = ContractExtractor(client, model="claude-sonnet-4-6")
@@ -28,7 +28,7 @@ from cogbase.core.models import Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.stores.schema import CollectionSchema
 from cogbase.stores.schema_util import cls_json_schema_for_llm
-from packs.legal.schema import CONTRACTS_COLLECTION, CONTRACTS_SCHEMA, ContractExtraction, ContractRecord
+from packs.legal.contract_analyst.schema import CONTRACTS_COLLECTION, CONTRACTS_SCHEMA, ContractExtraction, ContractRecord
 
 logger = logging.getLogger(__name__)
 

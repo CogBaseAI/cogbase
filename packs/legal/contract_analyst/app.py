@@ -15,7 +15,7 @@ return empty results; Patterns A, C, D still work).
 Typical usage (full mode)::
 
     import openai
-    from packs.legal import LegalContractApp
+    from packs.legal.contract_analyst import LegalContractApp
     from cogbase.core.models import Document
     from cogbase.stores.structured.sqlite import SQLiteStructuredStore
     from cogbase.stores.vector.faiss_store import FAISSVectorStore
@@ -74,8 +74,8 @@ from cogbase.pipeline.ingestion.base import ChunkerBase
 from cogbase.pipeline.ingestion.embedder import EmbedderBase
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
 from cogbase.stores.schema import CollectionSchema
-from packs.legal.extractor import ContractExtractor
-from packs.legal.schema import CONTRACTS_SCHEMA
+from packs.legal.contract_analyst.extractor import ContractExtractor
+from packs.legal.contract_analyst.schema import CONTRACTS_SCHEMA
 
 logger = logging.getLogger(__name__)
 

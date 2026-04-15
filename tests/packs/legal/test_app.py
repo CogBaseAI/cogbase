@@ -17,8 +17,8 @@ from cogbase.pipeline.ingestion.embedder import EmbedderBase
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
-from packs.legal import IngestResult, LegalContractApp
-from packs.legal.schema import CONTRACTS_COLLECTION, ContractRecord, Party, PaymentTerms
+from packs.legal.contract_analyst import IngestResult, LegalContractApp
+from packs.legal.contract_analyst.schema import CONTRACTS_COLLECTION, ContractRecord, Party, PaymentTerms
 
 
 # ---------------------------------------------------------------------------
