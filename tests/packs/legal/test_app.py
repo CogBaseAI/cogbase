@@ -18,7 +18,7 @@ from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
 from packs.legal import IngestResult, LegalContractApp
-from packs.legal.schema import CONTRACTS_COLLECTION, ContractRecord
+from packs.legal.schema import CONTRACTS_COLLECTION, ContractRecord, Party, PaymentTerms
 
 
 # ---------------------------------------------------------------------------
@@ -43,8 +43,10 @@ def _contract_payload(**overrides) -> str:
         "purpose": "Test non-disclosure agreement.",
         "effective_date": None,
         "expiry_date": None,
-        "party_a": "Acme Corp",
-        "party_b": "Supplier Ltd",
+        "parties": [
+            {"name": "Acme Corp", "role": "discloser", "jurisdiction": None},
+            {"name": "Supplier Ltd", "role": "recipient", "jurisdiction": None},
+        ],
         "contract_value": None,
         "currency": None,
         "payment_terms": None,
@@ -262,9 +264,8 @@ class TestLegalContractAppQuery:
                 contract_id="c-001_abc",
                 doc_id="c-001",
                 contract_type="NDA",
-                party_a="Acme Corp",
-                party_b="Supplier Ltd",
-                payment_terms="Payment is due within 30 days.",
+                parties=[Party(name="Acme Corp", role="discloser"), Party(name="Supplier Ltd", role="recipient")],
+                payment_terms=PaymentTerms(schedule="net-30", verbatim="Payment is due within 30 days."),
             )
         ])
 

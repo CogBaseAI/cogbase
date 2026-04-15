@@ -14,11 +14,39 @@ _CORE_FIELDS = frozenset({"contract_id", "doc_id"})
 CONTRACTS_COLLECTION = "contracts"
 
 
-class KeyTerm(BaseModel):
-    """A significant defined term or unusual provision extracted from a contract."""
+class Party(BaseModel):
+    """A named party to the contract."""
 
-    term: str = Field(description="defined term or clause name")
-    description: str = Field(description="brief description of the term")
+    name: str = Field(description="full legal name of the party")
+    role: str | None = Field(
+        default=None,
+        description='role in the contract, e.g. "buyer", "seller", "licensor", "licensee", "employer", "employee"',
+    )
+    jurisdiction: str | None = Field(
+        default=None,
+        description="state or country of incorporation / governing jurisdiction",
+    )
+
+
+class PaymentTerms(BaseModel):
+    """Structured payment terms extracted from the contract."""
+
+    schedule: str | None = Field(
+        default=None,
+        description='payment schedule, e.g. "net-30", "monthly", "upfront", "milestone-based"',
+    )
+    due_date: str | None = Field(
+        default=None,
+        description="specific payment due date in YYYY-MM-DD format, if stated",
+    )
+    late_penalty: str | None = Field(
+        default=None,
+        description="penalty or interest rate for late payment, verbatim if present",
+    )
+    verbatim: str | None = Field(
+        default=None,
+        description="verbatim payment terms clause from the contract",
+    )
 
 
 class ContractExtraction(BaseModel):
@@ -46,13 +74,9 @@ class ContractExtraction(BaseModel):
         default=None,
         description="end/expiry date in YYYY-MM-DD format",
     )
-    party_a: str | None = Field(
-        default=None,
-        description="primary party name (client or buyer)",
-    )
-    party_b: str | None = Field(
-        default=None,
-        description="counterparty name (vendor or seller)",
+    parties: list[Party] = Field(
+        default_factory=list,
+        description="all named parties to the contract; use [] if none identified",
     )
     contract_value: float | None = Field(
         default=None,
@@ -63,9 +87,9 @@ class ContractExtraction(BaseModel):
         description='ISO 4217 currency code (e.g. "USD")',
     )
     # common clause text (verbatim)
-    payment_terms: str | None = Field(
+    payment_terms: PaymentTerms | None = Field(
         default=None,
-        description="verbatim payment terms clause",
+        description="structured payment terms extracted from the contract",
     )
     termination: str | None = Field(
         default=None,
@@ -101,7 +125,7 @@ class ContractExtraction(BaseModel):
         description="liability cap amount as a number",
     )
     # flexible extraction
-    key_terms: list[KeyTerm] = Field(
+    key_terms: list[str] = Field(
         default_factory=list,
         description="significant defined terms, unusual provisions, or contract-type-specific clauses not covered above; use [] if none",
     )

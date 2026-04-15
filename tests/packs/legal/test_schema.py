@@ -68,7 +68,7 @@ def test_exclude_core_field_raises():
 def test_extra_field_duplicates_existing_raises():
     with pytest.raises(ValueError, match="duplicates existing"):
         build_contracts_schema(
-            extra_fields={"party_a": FieldSchema(type=FieldType.STRING, nullable=True)}
+            extra_fields={"parties": FieldSchema(type=FieldType.JSON, nullable=True)}
         )
 
 

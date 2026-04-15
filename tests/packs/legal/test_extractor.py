@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from packs.legal.extractor import ContractExtractor
-from packs.legal.schema import CONTRACTS_COLLECTION, CONTRACTS_SCHEMA, ContractRecord, KeyTerm
+from packs.legal.schema import CONTRACTS_COLLECTION, CONTRACTS_SCHEMA, ContractRecord, Party, PaymentTerms
 
 
 def _make_client(content: str) -> MagicMock:
@@ -30,8 +30,10 @@ def _full_payload(**overrides) -> str:
         "purpose": "Mutual non-disclosure between two technology companies.",
         "effective_date": "2024-03-01",
         "expiry_date": "2026-03-01",
-        "party_a": "Acme Corp",
-        "party_b": "Supplier Ltd",
+        "parties": [
+            {"name": "Acme Corp", "role": "discloser", "jurisdiction": None},
+            {"name": "Supplier Ltd", "role": "recipient", "jurisdiction": None},
+        ],
         "contract_value": None,
         "currency": None,
         "payment_terms": None,
@@ -43,9 +45,7 @@ def _full_payload(**overrides) -> str:
         "dispute_resolution": None,
         "notice_period_days": 30,
         "liability_cap": None,
-        "key_terms": [
-            {"term": "Confidential Information", "description": "Any non-public data shared between parties."}
-        ],
+        "key_terms": ["Confidential Information: Any non-public data shared between parties."],
         "special_conditions": [],
     }
     data.update(overrides)
@@ -103,8 +103,10 @@ async def test_extract_contract_basics():
     assert r.contract_type == "NDA"
     assert r.effective_date == "2024-03-01"
     assert r.expiry_date == "2026-03-01"
-    assert r.party_a == "Acme Corp"
-    assert r.party_b == "Supplier Ltd"
+    assert len(r.parties) == 2
+    assert r.parties[0].name == "Acme Corp"
+    assert r.parties[0].role == "discloser"
+    assert r.parties[1].name == "Supplier Ltd"
 
 
 @pytest.mark.asyncio
@@ -143,8 +145,8 @@ async def test_extract_key_terms():
     r = (await extractor.extract("contract text", doc_id="doc-001"))[0]
 
     assert len(r.key_terms) == 1
-    assert isinstance(r.key_terms[0], KeyTerm)
-    assert r.key_terms[0].term == "Confidential Information"
+    assert isinstance(r.key_terms[0], str)
+    assert "Confidential Information" in r.key_terms[0]
 
 
 @pytest.mark.asyncio
@@ -214,7 +216,7 @@ async def test_extract_missing_fields_default_to_none_or_empty():
     assert len(results) == 1
     r = results[0]
     assert r.contract_type is None
-    assert r.party_a is None
+    assert r.parties == []
     assert r.key_terms == []
     assert r.special_conditions == []
 
@@ -231,11 +233,11 @@ async def test_extract_invalid_numeric_fields_rejects_record():
 
 @pytest.mark.asyncio
 async def test_extract_explicit_null_fields():
-    payload = _full_payload(party_a=None, effective_date=None)
+    payload = _full_payload(parties=[], effective_date=None)
     extractor = ContractExtractor(_make_client(payload), model="test-model")
     r = (await extractor.extract("contract text", doc_id="doc-007"))[0]
 
-    assert r.party_a is None
+    assert r.parties == []
     assert r.effective_date is None
 
 
