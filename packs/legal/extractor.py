@@ -47,16 +47,18 @@ class ContractExtractor(ExtractorBase):
     Each call to ``extract`` produces one ``ContractRecord`` for the document —
     covering contract basics, common clause text, and two flexible JSON fields
     for terms and conditions that vary by contract type — or ``None`` when the
-    text is blank or the LLM returns unparseable output.
+    text is blank or the LLM returns unparseable output after all retries.
 
     Args:
-        client:     Async OpenAI-compatible client
-                    (``openai.AsyncOpenAI``, Anthropic compat endpoint, etc.).
-        model:      Model name (e.g. ``"claude-sonnet-4-6"``).
-        max_tokens: Maximum tokens for the LLM response.
+        client:      Async OpenAI-compatible client
+                     (``openai.AsyncOpenAI``, Anthropic compat endpoint, etc.).
+        model:       Model name (e.g. ``"claude-sonnet-4-6"``).
+        max_tokens:  Maximum tokens for the LLM response.
+        max_retries: Passed to ``ExtractorBase``; retries on unparseable JSON.
     """
 
-    def __init__(self, client: Any, model: str, max_tokens: int = 4096) -> None:
+    def __init__(self, client: Any, model: str, max_tokens: int = 4096, max_retries: int = 2) -> None:
+        super().__init__(max_retries=max_retries)
         self._client = client
         self._model = model
         self._max_tokens = max_tokens
@@ -69,20 +71,8 @@ class ContractExtractor(ExtractorBase):
     def schema(self) -> CollectionSchema:
         return CONTRACTS_SCHEMA
 
-    async def extract(self, text: str, doc_id: str) -> ContractRecord | None:
-        """Extract a contract summary from *text*.
-
-        Args:
-            text:   Full contract text.
-            doc_id: Stable identifier for the source document.
-
-        Returns:
-            A ``ContractRecord``, or ``None`` when *text* is blank or the LLM
-            returns unparseable output.
-        """
-        if not text.strip():
-            return None
-
+    async def _extract_once(self, text: str, doc_id: str) -> ContractRecord | None:
+        """Single LLM call; returns ``None`` when the response is unparseable."""
         response = await self._client.chat.completions.create(
             model=self._model,
             max_tokens=self._max_tokens,

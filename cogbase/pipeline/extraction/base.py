@@ -1,6 +1,7 @@
 """Abstract contract for document extractors."""
 
 import abc
+import asyncio
 
 from pydantic import BaseModel
 
@@ -14,12 +15,23 @@ class ExtractorBase(abc.ABC):
     1. Declaring the **collection name** it writes to (``collection`` property).
     2. Declaring the **schema** of that collection (``schema`` property), so the
        pipeline can call ``create_collection`` idempotently on startup.
-    3. Implementing ``extract`` to turn raw text into a list of Pydantic records.
+    3. Implementing ``_extract_once`` to turn raw text into a single Pydantic record.
+
+    The public ``extract`` method wraps ``_extract_once`` with automatic retries
+    and exponential backoff, so transient LLM JSON failures are handled for all
+    extractors without any per-extractor boilerplate.  A ``None`` return from
+    ``_extract_once`` is treated as a parse failure and triggers a retry; an empty
+    list is treated as a valid (no-data) result and is returned immediately.
 
     The output type is intentionally open — any ``BaseModel`` subclass works:
     ``Fact``, ``Entity``, ``Clause``, ``Event``, ``Relationship``, etc.  Domain
     packs define their own model + extractor pairs and register them in the
     pipeline without touching core CogBase code.
+
+    Args:
+        max_retries: Number of additional attempts after the first failure.
+                     Sleep between attempts is ``2^(attempt-1)`` seconds
+                     (1 s, 2 s, 4 s, …).  Default: 2.
 
     Example::
 
@@ -42,9 +54,12 @@ class ExtractorBase(abc.ABC):
                     },
                 )
 
-            async def extract(self, text: str, doc_id: str) -> BaseModel | None:
+            async def _extract_once(self, text: str, doc_id: str) -> BaseModel | None:
                 ...
     """
+
+    def __init__(self, max_retries: int = 2) -> None:
+        self._max_retries = max_retries
 
     @property
     @abc.abstractmethod
@@ -62,16 +77,41 @@ class ExtractorBase(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def extract(self, text: str, doc_id: str) -> BaseModel | None:
-        """Return an extracted record for *text*, or ``None``.
+    async def _extract_once(self, text: str, doc_id: str) -> BaseModel | None:
+        """Single extraction attempt for *text*.
+
+        Called by ``extract``; do not call directly.  Implement the LLM call (or
+        any other extraction logic) here and return a Pydantic record on success or
+        ``None`` on parse failure.  Return ``None`` only when the output is
+        unparseable — not when the document simply contains no matching data (return
+        an appropriate empty/default record or an empty list instead).
 
         Args:
             text:   Full or chunked document text passed to this extractor.
-            doc_id: Stable identifier of the source document; implementations
-                    should propagate it onto the returned record.
+            doc_id: Stable identifier of the source document; propagate it onto
+                    the returned record.
 
         Returns:
             A single Pydantic record whose fields match ``self.schema``, or
-            ``None`` when *text* is blank or the extractor cannot produce a
-            valid result.
+            ``None`` when the extractor cannot produce a valid result.
         """
+
+    async def extract(self, text: str, doc_id: str) -> BaseModel | None:
+        """Extract a record from *text*, retrying on parse failures.
+
+        Returns ``None`` immediately for blank *text*.  Otherwise calls
+        ``_extract_once`` up to ``max_retries + 1`` times, sleeping
+        ``2^(attempt-1)`` seconds between attempts.  Returns the first non-None
+        result, or ``None`` after all attempts are exhausted.
+        """
+        if not text.strip():
+            return None
+
+        for attempt in range(self._max_retries + 1):
+            if attempt > 0:
+                await asyncio.sleep(2 ** (attempt - 1))
+            result = await self._extract_once(text, doc_id)
+            if result is not None:
+                return result
+
+        return None

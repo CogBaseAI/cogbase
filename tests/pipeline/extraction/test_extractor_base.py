@@ -35,9 +35,10 @@ _NOUN_SCHEMA = CollectionSchema(
 
 
 class StubExtractor(ExtractorBase):
-    """Splits text on whitespace and wraps each token as a NounRecord."""
+    """Returns a single NounRecord containing the full document text."""
 
     def __init__(self) -> None:
+        super().__init__()
         self._calls: list[tuple[str, str]] = []
 
     @property
@@ -48,16 +49,16 @@ class StubExtractor(ExtractorBase):
     def schema(self) -> CollectionSchema:
         return _NOUN_SCHEMA
 
-    async def extract(self, text: str, doc_id: str) -> list[BaseModel]:
+    async def _extract_once(self, text: str, doc_id: str) -> NounRecord:
         self._calls.append((text, doc_id))
-        return [
-            NounRecord(noun_id=f"{doc_id}-{i}", doc_id=doc_id, text=token)
-            for i, token in enumerate(text.split())
-        ]
+        return NounRecord(noun_id=f"{doc_id}-0", doc_id=doc_id, text=text)
 
 
 class EmptyExtractor(ExtractorBase):
-    """Always returns an empty list."""
+    """Always returns None — represents an extractor that finds nothing parseable."""
+
+    def __init__(self) -> None:
+        super().__init__(max_retries=0)
 
     @property
     def collection(self) -> str:
@@ -67,8 +68,8 @@ class EmptyExtractor(ExtractorBase):
     def schema(self) -> CollectionSchema:
         return _NOUN_SCHEMA
 
-    async def extract(self, text: str, doc_id: str) -> list[BaseModel]:
-        return []
+    async def _extract_once(self, text: str, doc_id: str) -> None:
+        return None
 
 
 class StubEmbedder(EmbedderBase):
@@ -163,8 +164,8 @@ class TestIngestWithExtractors:
             structured_store=structured_store,
         )
         rows = await structured_store.query("nouns")
-        assert len(rows) == 3
-        assert {r["text"] for r in rows} == {"alpha", "beta", "gamma"}
+        assert len(rows) == 1
+        assert rows[0]["text"] == text
 
     @pytest.mark.asyncio
     async def test_empty_extractor_saves_nothing(
@@ -210,8 +211,8 @@ class TestIngestWithExtractors:
             def schema(self) -> CollectionSchema:
                 return _tag_schema
 
-            async def extract(self, text: str, doc_id: str) -> list[BaseModel]:
-                return [TagRecord(tag_id=f"{doc_id}-t0", doc_id=doc_id, label="test-tag")]
+            async def _extract_once(self, text: str, doc_id: str) -> TagRecord:
+                return TagRecord(tag_id=f"{doc_id}-t0", doc_id=doc_id, label="test-tag")
 
         extractors = [StubExtractor(), TagExtractor()]
         await setup_extraction(extractors, structured_store)
@@ -225,7 +226,7 @@ class TestIngestWithExtractors:
 
         nouns = await structured_store.query("nouns")
         tags = await structured_store.query("tags")
-        assert len(nouns) == 2
+        assert len(nouns) == 1
         assert len(tags) == 1
         assert tags[0]["label"] == "test-tag"
 
@@ -279,4 +280,4 @@ class TestIngestWithExtractors:
             structured_store=structured_store,
         )
         rows = await structured_store.query("nouns")
-        assert len(rows) == 3
+        assert len(rows) == 1

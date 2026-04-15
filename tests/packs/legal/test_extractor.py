@@ -265,3 +265,82 @@ async def test_extract_unique_contract_ids_per_call():
     r1 = await extractor.extract("text", doc_id="doc-010")
     r2 = await extractor.extract("text", doc_id="doc-010")
     assert r1.contract_id != r2.contract_id
+
+
+# ---------------------------------------------------------------------------
+# extract() — retry behaviour
+# ---------------------------------------------------------------------------
+
+def _make_client_with_responses(*contents: str) -> MagicMock:
+    """Build a mock client that returns each content string in sequence."""
+    responses = [
+        SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=c))])
+        for c in contents
+    ]
+    client = MagicMock()
+    client.chat = MagicMock()
+    client.chat.completions = MagicMock()
+    client.chat.completions.create = AsyncMock(side_effect=responses)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_extract_succeeds_on_retry_after_bad_json(monkeypatch):
+    """First call returns bad JSON; second call returns valid JSON — should succeed."""
+    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    client = _make_client_with_responses("not json", _full_payload())
+    extractor = ContractExtractor(client, model="test-model", max_retries=2)
+    result = await extractor.extract("contract text", doc_id="doc-retry-1")
+
+    assert isinstance(result, ContractRecord)
+    assert client.chat.completions.create.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_extract_returns_none_after_all_retries_exhausted(monkeypatch):
+    """All attempts return bad JSON — should return None."""
+    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    client = _make_client_with_responses("bad", "bad", "bad")
+    extractor = ContractExtractor(client, model="test-model", max_retries=2)
+    result = await extractor.extract("contract text", doc_id="doc-retry-2")
+
+    assert result is None
+    assert client.chat.completions.create.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_extract_no_retry_on_success(monkeypatch):
+    """First call returns valid JSON — should not retry."""
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr("asyncio.sleep", sleep_mock)
+    extractor = ContractExtractor(_make_client(_full_payload()), model="test-model", max_retries=2)
+    result = await extractor.extract("contract text", doc_id="doc-retry-3")
+
+    assert isinstance(result, ContractRecord)
+    sleep_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_extract_retry_uses_exponential_backoff(monkeypatch):
+    """Sleep is called with 1s then 2s for two retries."""
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr("asyncio.sleep", sleep_mock)
+    client = _make_client_with_responses("bad", "bad", _full_payload())
+    extractor = ContractExtractor(client, model="test-model", max_retries=2)
+    await extractor.extract("contract text", doc_id="doc-retry-4")
+
+    assert sleep_mock.call_count == 2
+    assert sleep_mock.call_args_list[0].args[0] == 1   # 2^0
+    assert sleep_mock.call_args_list[1].args[0] == 2   # 2^1
+
+
+@pytest.mark.asyncio
+async def test_extract_max_retries_zero_no_sleep(monkeypatch):
+    """max_retries=0 means one attempt only; no sleep on failure."""
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr("asyncio.sleep", sleep_mock)
+    extractor = ContractExtractor(_make_client("bad json"), model="test-model", max_retries=0)
+    result = await extractor.extract("contract text", doc_id="doc-retry-5")
+
+    assert result is None
+    sleep_mock.assert_not_called()
