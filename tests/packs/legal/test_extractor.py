@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from packs.legal.extractor import ContractExtractor
-from packs.legal.schema import CONTRACTS_COLLECTION, CONTRACTS_SCHEMA, ContractRecord
+from packs.legal.schema import CONTRACTS_COLLECTION, CONTRACTS_SCHEMA, ContractRecord, KeyTerm
 
 
 def _make_client(content: str) -> MagicMock:
@@ -143,7 +143,8 @@ async def test_extract_key_terms():
     r = (await extractor.extract("contract text", doc_id="doc-001"))[0]
 
     assert len(r.key_terms) == 1
-    assert r.key_terms[0]["term"] == "Confidential Information"
+    assert isinstance(r.key_terms[0], KeyTerm)
+    assert r.key_terms[0].term == "Confidential Information"
 
 
 @pytest.mark.asyncio
@@ -219,13 +220,13 @@ async def test_extract_missing_fields_default_to_none_or_empty():
 
 
 @pytest.mark.asyncio
-async def test_extract_invalid_numeric_fields_become_none():
+async def test_extract_invalid_numeric_fields_rejects_record():
+    """Non-numeric strings for int/float fields fail Pydantic validation — whole record is dropped."""
     payload = _full_payload(notice_period_days="thirty", contract_value="one million")
     extractor = ContractExtractor(_make_client(payload), model="test-model")
-    r = (await extractor.extract("contract text", doc_id="doc-006"))[0]
+    results = await extractor.extract("contract text", doc_id="doc-006")
 
-    assert r.notice_period_days is None
-    assert r.contract_value is None
+    assert results == []
 
 
 @pytest.mark.asyncio
@@ -239,21 +240,23 @@ async def test_extract_explicit_null_fields():
 
 
 @pytest.mark.asyncio
-async def test_extract_non_list_key_terms_becomes_empty():
+async def test_extract_non_list_key_terms_rejects_record():
+    """A scalar where a list is expected fails Pydantic validation — whole record is dropped."""
     payload = _full_payload(key_terms="not a list")
     extractor = ContractExtractor(_make_client(payload), model="test-model")
-    r = (await extractor.extract("contract text", doc_id="doc-008"))[0]
+    results = await extractor.extract("contract text", doc_id="doc-008")
 
-    assert r.key_terms == []
+    assert results == []
 
 
 @pytest.mark.asyncio
-async def test_extract_non_list_special_conditions_becomes_empty():
+async def test_extract_non_list_special_conditions_rejects_record():
+    """A dict where a list is expected fails Pydantic validation — whole record is dropped."""
     payload = _full_payload(special_conditions={"key": "value"})
     extractor = ContractExtractor(_make_client(payload), model="test-model")
-    r = (await extractor.extract("contract text", doc_id="doc-009"))[0]
+    results = await extractor.extract("contract text", doc_id="doc-009")
 
-    assert r.special_conditions == []
+    assert results == []
 
 
 @pytest.mark.asyncio

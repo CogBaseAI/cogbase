@@ -18,61 +18,27 @@ Typical usage::
 
 from __future__ import annotations
 
-import json
 import uuid
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.stores.schema import CollectionSchema
-from packs.legal.schema import CONTRACTS_COLLECTION, CONTRACTS_SCHEMA, ContractRecord
+from cogbase.stores.schema_util import cls_json_schema_for_llm
+from packs.legal.schema import CONTRACTS_COLLECTION, CONTRACTS_SCHEMA, ContractExtraction, ContractRecord
 
-_SYSTEM_PROMPT = """\
-You are a legal contract analyst.  Extract structured information from the
-contract provided by the user.
-
-Return a single JSON object with these fields:
-
-Contract basics (use null if not found in the text):
-  - "contract_type":  type of contract, e.g. "NDA", "SaaS subscription",
-                      "employment", "vendor", "lease", "service agreement"
-  - "purpose":        one sentence describing what the contract is for
-  - "effective_date": start date in YYYY-MM-DD format, or null
-  - "expiry_date":    end/expiry date in YYYY-MM-DD format, or null
-  - "party_a":        primary party name (client or buyer), or null
-  - "party_b":        counterparty name (vendor or seller), or null
-  - "contract_value": total monetary value as a number (no currency symbol), or null
-  - "currency":       ISO 4217 code (e.g. "USD"), or null
-
-Common clause text — copy verbatim from the contract; use null if the clause
-is absent:
-  - "payment_terms":      verbatim payment terms clause
-  - "termination":        verbatim termination clause
-  - "liability":          verbatim limitation of liability clause
-  - "governing_law":      verbatim governing law clause
-  - "confidentiality":    verbatim confidentiality clause
-  - "indemnification":    verbatim indemnification clause
-  - "dispute_resolution": verbatim dispute resolution clause
-
-Clause-level numeric (null if not present):
-  - "notice_period_days": integer days required for termination notice, or null
-  - "liability_cap":      liability cap amount as a number, or null
-
-Flexible extraction:
-  - "key_terms": array of {"term": "<name>", "description": "<brief description>"}
-                 for significant defined terms, unusual provisions, or
-                 contract-type-specific clauses not covered by the fields above.
-                 Use [] if none.
-  - "special_conditions": array of verbatim strings for conditions precedent,
-                          carve-outs, custom provisions, or anything unusual.
-                          Use [] if none.
-
-Rules:
-- Copy all clause text verbatim — do not paraphrase or summarise.
-- Do not invent information not present in the contract.
-- Return ONLY the JSON object — no explanation, no markdown fences.
-"""
+_SYSTEM_PROMPT = (
+    "You are a legal contract analyst.  Extract structured information from the\n"
+    "contract provided by the user.\n\n"
+    "Rules:\n"
+    "- Copy all clause text verbatim — do not paraphrase or summarise.\n"
+    "- Do not invent information not present in the contract.\n"
+    "- Use null for any field not found in the contract.\n"
+    "- Return ONLY the JSON object — no explanation, no markdown fences.\n\n"
+    "Return a single JSON object with these fields:\n\n"
+    + cls_json_schema_for_llm(ContractExtraction)
+)
 
 
 class ContractExtractor(ExtractorBase):
@@ -135,75 +101,9 @@ class ContractExtractor(ExtractorBase):
     def _parse(self, raw: str, doc_id: str) -> list[ContractRecord]:
         """Parse the LLM JSON response into a ``ContractRecord``."""
         try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return []
-
-        if not isinstance(data, dict):
+            extraction = ContractExtraction.model_validate_json(raw)
+        except (ValidationError, ValueError):
             return []
 
         contract_id = f"{doc_id}_{uuid.uuid4().hex[:8]}"
-
-        return [
-            ContractRecord(
-                contract_id=contract_id,
-                doc_id=doc_id,
-                # contract basics
-                contract_type=_str_or_none(data.get("contract_type")),
-                purpose=_str_or_none(data.get("purpose")),
-                effective_date=_str_or_none(data.get("effective_date")),
-                expiry_date=_str_or_none(data.get("expiry_date")),
-                party_a=_str_or_none(data.get("party_a")),
-                party_b=_str_or_none(data.get("party_b")),
-                contract_value=_float_or_none(data.get("contract_value")),
-                currency=_str_or_none(data.get("currency")),
-                # common clause text
-                payment_terms=_str_or_none(data.get("payment_terms")),
-                termination=_str_or_none(data.get("termination")),
-                liability=_str_or_none(data.get("liability")),
-                governing_law=_str_or_none(data.get("governing_law")),
-                confidentiality=_str_or_none(data.get("confidentiality")),
-                indemnification=_str_or_none(data.get("indemnification")),
-                dispute_resolution=_str_or_none(data.get("dispute_resolution")),
-                # clause-level numeric
-                notice_period_days=_int_or_none(data.get("notice_period_days")),
-                liability_cap=_float_or_none(data.get("liability_cap")),
-                # flexible extraction
-                key_terms=_list_or_empty(data.get("key_terms")),
-                special_conditions=_list_or_empty(data.get("special_conditions")),
-            )
-        ]
-
-
-# ---------------------------------------------------------------------------
-# Parse helpers
-# ---------------------------------------------------------------------------
-
-def _str_or_none(val: object) -> str | None:
-    if val is None or val == "":
-        return None
-    return str(val)
-
-
-def _float_or_none(val: object) -> float | None:
-    if val is None:
-        return None
-    try:
-        return float(val)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-
-
-def _int_or_none(val: object) -> int | None:
-    if val is None:
-        return None
-    try:
-        return int(val)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-
-
-def _list_or_empty(val: object) -> list:
-    if isinstance(val, list):
-        return val
-    return []
+        return [ContractRecord(contract_id=contract_id, doc_id=doc_id, **extraction.model_dump())]
