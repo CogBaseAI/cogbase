@@ -55,6 +55,21 @@ class StructuredStoreBase(abc.ABC):
         """
 
     @abc.abstractmethod
+    async def update_collection(self, schema: CollectionSchema) -> None:
+        """Migrate an existing collection to a new schema.
+
+        - Fields present in *schema* but absent from the current schema are added
+          (new rows receive ``None``; existing rows receive ``None`` for the new column).
+        - Fields absent from *schema* but present in the current schema are removed
+          and their data is permanently discarded.
+        - The ``id_field`` must remain the same; changing it raises ``ValueError``.
+        - Calling this on a collection that does not exist raises ``KeyError``.
+
+        Use ``create_collection`` for first-time setup; ``update_collection`` for
+        subsequent schema changes.
+        """
+
+    @abc.abstractmethod
     async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         """Delete all records matching every filter.
 

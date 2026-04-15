@@ -50,17 +50,8 @@ class SQLiteStructuredStore(StructuredStoreBase):
 
     async def create_collection(self, schema: CollectionSchema) -> None:
         # 1. Create the table if it does not exist yet.
-        col_defs: list[str] = []
-        for field_name, field in schema.fields.items():
-            sql_type = _SQL_TYPE[field.type]
-            not_null = "" if field.nullable else " NOT NULL"
-            if field_name == schema.id_field:
-                col_defs.append(f'"{field_name}" {sql_type} PRIMARY KEY')
-            else:
-                col_defs.append(f'"{field_name}" {sql_type}{not_null}')
-
         self._conn.execute(
-            f'CREATE TABLE IF NOT EXISTS "{schema.name}" ({", ".join(col_defs)})'
+            f'CREATE TABLE IF NOT EXISTS "{schema.name}" ({", ".join(_col_defs(schema))})'
         )
 
         # 2. Add any columns present in the desired schema but missing from the
@@ -116,6 +107,55 @@ class SQLiteStructuredStore(StructuredStoreBase):
             rows = [r for r in rows if matches(r, py_filters)]
 
         return rows
+
+    async def update_collection(self, schema: CollectionSchema) -> None:
+        old_schema = self._get_schema(schema.name)
+        if schema.id_field != old_schema.id_field:
+            raise ValueError(
+                f"Cannot change id_field from '{old_schema.id_field}' to '{schema.id_field}' — "
+                "update_collection does not support primary-key migration"
+            )
+
+        old_fields = set(old_schema.fields)
+        new_fields = set(schema.fields)
+        added = new_fields - old_fields
+        removed = old_fields - new_fields
+
+        if removed:
+            # Table rebuild: create a temp table with the new schema, copy the
+            # surviving columns, swap the tables.  This is the only portable way
+            # to drop columns in SQLite (DROP COLUMN requires ≥ 3.35).
+            tmp = f"_{schema.name}_upd_tmp"
+            col_defs = _col_defs(schema)
+            carry = sorted(old_fields & new_fields)  # preserve column order determinism
+            carry_sql = ", ".join(f'"{c}"' for c in carry)
+            with self._conn:
+                self._conn.execute(f'CREATE TABLE "{tmp}" ({", ".join(col_defs)})')
+                self._conn.execute(
+                    f'INSERT INTO "{tmp}" ({carry_sql}) '
+                    f'SELECT {carry_sql} FROM "{schema.name}"'
+                )
+                self._conn.execute(f'DROP TABLE "{schema.name}"')
+                self._conn.execute(f'ALTER TABLE "{tmp}" RENAME TO "{schema.name}"')
+        elif added:
+            # Additions only — cheaper path: just ALTER TABLE ADD COLUMN.
+            for field_name in added:
+                field = schema.fields[field_name]
+                sql_type = _SQL_TYPE[field.type]
+                self._conn.execute(
+                    f'ALTER TABLE "{schema.name}" ADD COLUMN "{field_name}" {sql_type}'
+                )
+
+        # Ensure indexes exist for all indexed fields (idempotent).
+        for field_name, field in schema.fields.items():
+            if field.index and field_name != schema.id_field:
+                self._conn.execute(
+                    f'CREATE INDEX IF NOT EXISTS "idx_{schema.name}_{field_name}" '
+                    f'ON "{schema.name}" ("{field_name}")'
+                )
+
+        self._conn.commit()
+        self._schemas[schema.name] = schema
 
     async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         schema = self._get_schema(collection)
@@ -184,3 +224,16 @@ def _from_sql_row(row: dict, schema: CollectionSchema) -> dict:
 
 def _json_fields(schema: CollectionSchema) -> set[str]:
     return {name for name, f in schema.fields.items() if f.type == FieldType.JSON}
+
+
+def _col_defs(schema: CollectionSchema) -> list[str]:
+    """Return a list of SQL column definition strings for *schema*."""
+    defs: list[str] = []
+    for field_name, field in schema.fields.items():
+        sql_type = _SQL_TYPE[field.type]
+        not_null = "" if field.nullable else " NOT NULL"
+        if field_name == schema.id_field:
+            defs.append(f'"{field_name}" {sql_type} PRIMARY KEY')
+        else:
+            defs.append(f'"{field_name}" {sql_type}{not_null}')
+    return defs

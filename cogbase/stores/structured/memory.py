@@ -51,6 +51,30 @@ class InMemoryStructuredStore(StructuredStoreBase):
         self._frames[schema.name] = df
         self._schemas[schema.name] = schema
 
+    async def update_collection(self, schema: CollectionSchema) -> None:
+        old_schema = self._get_schema(schema.name)
+        if schema.id_field != old_schema.id_field:
+            raise ValueError(
+                f"Cannot change id_field from '{old_schema.id_field}' to '{schema.id_field}' — "
+                "update_collection does not support primary-key migration"
+            )
+
+        old_fields = set(old_schema.fields)
+        new_fields = set(schema.fields)
+        df = self._frames[schema.name]
+
+        # Add columns for new fields.
+        for field_name in new_fields - old_fields:
+            df[field_name] = pd.Series(dtype=_PANDAS_DTYPE[schema.fields[field_name].type])
+
+        # Drop columns for removed fields.
+        removed = old_fields - new_fields
+        if removed:
+            df = df.drop(columns=[c for c in removed if c in df.columns])
+
+        self._frames[schema.name] = df
+        self._schemas[schema.name] = schema
+
     async def save(self, collection: str, records: list[BaseModel]) -> None:
         schema = self._get_schema(collection)
         id_field = schema.id_field

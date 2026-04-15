@@ -518,3 +518,133 @@ async def test_migration_is_idempotent(structured_store):
     await structured_store.create_collection(FACTS_SCHEMA)
     await structured_store.save("facts", [make_fact()])
     assert len(await structured_store.query("facts")) == 1
+
+
+# ------------------------------------------------------------------
+# update_collection — explicit schema migration
+# ------------------------------------------------------------------
+
+def _facts_schema_with(**overrides) -> CollectionSchema:
+    """Return a CollectionSchema for 'facts' with fields added/removed."""
+    from tests.stores.conftest import FACTS_SCHEMA
+    base = dict(FACTS_SCHEMA.fields)
+    for name, field in overrides.items():
+        if field is None:
+            base.pop(name, None)
+        else:
+            base[name] = field
+    return CollectionSchema(name="facts", id_field="fact_id", fields=base)
+
+
+async def test_update_collection_add_field_existing_rows_get_null(structured_store):
+    """Rows written before update_collection have None for the new field."""
+    old_fact = make_fact()
+    await structured_store.save("facts", [old_fact])
+
+    new_schema = _facts_schema_with(source=FieldSchema(type=FieldType.STRING, nullable=True))
+    await structured_store.update_collection(new_schema)
+
+    results = await structured_store.query("facts", [Col("fact_id") == old_fact.fact_id])
+    assert results[0]["source"] is None
+
+
+async def test_update_collection_add_field_new_rows_can_populate_it(structured_store):
+    """Rows written after update_collection can store a value in the new field."""
+    class FactWithSource(BaseModel):
+        fact_id: str
+        type: str
+        value: str
+        raw_text: str
+        doc_id: str
+        page: int | None = None
+        confidence: float
+        source: str | None = None
+
+    new_schema = _facts_schema_with(source=FieldSchema(type=FieldType.STRING, nullable=True))
+    await structured_store.update_collection(new_schema)
+
+    record = FactWithSource(
+        fact_id="f-new", type="notice_period", value="30 days",
+        raw_text="thirty days", doc_id="doc-x", confidence=0.9, source="upload",
+    )
+    await structured_store.save("facts", [record])
+
+    results = await structured_store.query("facts", [Col("fact_id") == "f-new"])
+    assert results[0]["source"] == "upload"
+
+
+async def test_update_collection_remove_field_data_is_gone(structured_store):
+    """Rows written before update_collection no longer expose the removed field."""
+    await structured_store.save("facts", [make_fact(value="thirty days")])
+
+    new_schema = _facts_schema_with(value=None)  # drop 'value'
+    await structured_store.update_collection(new_schema)
+
+    results = await structured_store.query("facts")
+    assert len(results) == 1
+    assert "value" not in results[0]
+
+
+async def test_update_collection_add_and_remove_simultaneously(structured_store):
+    """Adding and removing fields in a single update_collection call both take effect."""
+    await structured_store.save("facts", [make_fact()])
+
+    new_schema = _facts_schema_with(
+        value=None,  # remove
+        source=FieldSchema(type=FieldType.STRING, nullable=True),  # add
+    )
+    await structured_store.update_collection(new_schema)
+
+    results = await structured_store.query("facts")
+    assert len(results) == 1
+    assert "value" not in results[0]
+    assert "source" in results[0]
+    assert results[0]["source"] is None
+
+
+async def test_update_collection_surviving_fields_data_preserved(structured_store):
+    """Data in fields that are neither added nor removed is untouched."""
+    fact = make_fact(type="notice_period", doc_id="doc-99", confidence=0.88)
+    await structured_store.save("facts", [fact])
+
+    new_schema = _facts_schema_with(value=None)  # remove 'value', leave everything else
+    await structured_store.update_collection(new_schema)
+
+    results = await structured_store.query("facts", [Col("fact_id") == fact.fact_id])
+    assert results[0]["type"] == "notice_period"
+    assert results[0]["doc_id"] == "doc-99"
+    assert results[0]["confidence"] == pytest.approx(0.88)
+
+
+async def test_update_collection_unknown_collection_raises(structured_store):
+    from tests.stores.conftest import FACTS_SCHEMA
+    with pytest.raises(KeyError):
+        await structured_store.update_collection(
+            CollectionSchema(
+                name="does_not_exist",
+                id_field="fact_id",
+                fields=FACTS_SCHEMA.fields,
+            )
+        )
+
+
+async def test_update_collection_cannot_change_id_field(structured_store):
+    new_schema = CollectionSchema(
+        name="facts",
+        id_field="doc_id",  # different id_field
+        fields={
+            "doc_id":     FieldSchema(type=FieldType.STRING, nullable=False),
+            "type":       FieldSchema(type=FieldType.STRING),
+            "confidence": FieldSchema(type=FieldType.FLOAT),
+        },
+    )
+    with pytest.raises(ValueError, match="id_field"):
+        await structured_store.update_collection(new_schema)
+
+
+async def test_update_collection_no_change_is_noop(structured_store):
+    """Calling update_collection with the identical schema leaves data intact."""
+    from tests.stores.conftest import FACTS_SCHEMA
+    await structured_store.save("facts", [make_fact()])
+    await structured_store.update_collection(FACTS_SCHEMA)
+    assert len(await structured_store.query("facts")) == 1
