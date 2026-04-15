@@ -54,7 +54,7 @@ Structured-only mode (no vector search)::
         structured_store=SQLiteStructuredStore("contracts.db"),
     )
     await app.setup()
-    await app.ingest(contract_text, doc_id="contract-001")
+    await app.ingest(Document(doc_id="contract-001", text=contract_text))
     result = await app.query("list all contracts with Acme Corp")
 """
 
@@ -189,21 +189,20 @@ class LegalContractApp:
         """Create all collections in their respective stores. Idempotent."""
         await self._app.setup()
 
-    async def ingest(self, text: str, doc_id: str) -> None:
+    async def ingest(self, doc: Document) -> None:
         """Ingest a single contract document.
 
         Chunks and embeds the text into the vector store (if configured) and
         extracts a structured ``ContractRecord`` into the structured store.
 
         Args:
-            text:   Full contract text.
-            doc_id: Stable identifier for the source document.
+            doc: Document to ingest.
         """
-        await self._app.ingest(text, doc_id)
+        await self._app.ingest(doc)
 
     async def ingest_many(
         self,
-        contracts: Sequence[Document | tuple[str, str]],
+        contracts: Sequence[Document],
         *,
         concurrency: int = 5,
     ) -> list[IngestResult]:
@@ -216,8 +215,7 @@ class LegalContractApp:
         Results are returned in the same order as *contracts*.
 
         Args:
-            contracts:   Sequence of ``Document`` objects **or**
-                         ``(text, doc_id)`` tuples (both forms are accepted).
+            contracts:   Sequence of ``Document`` objects to ingest.
             concurrency: Maximum number of documents ingested simultaneously.
                          Defaults to ``5`` — a safe limit for LLM API rate caps.
                          Set to ``1`` for strictly sequential ingestion.

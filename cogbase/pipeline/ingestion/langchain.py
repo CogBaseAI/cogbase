@@ -15,12 +15,12 @@ Example::
     chunker = LangChainChunker(
         RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     )
-    await ingest(text, doc_id, chunker=chunker, ...)
+    await ingest(doc, chunker=chunker, ...)
 """
 
 from langchain_text_splitters import TextSplitter
 
-from cogbase.core.models import Chunk
+from cogbase.core.models import Chunk, Document
 from cogbase.pipeline.ingestion.base import ChunkerBase
 
 
@@ -35,15 +35,15 @@ class LangChainChunker(ChunkerBase):
     def __init__(self, splitter: TextSplitter) -> None:
         self._splitter = splitter
 
-    def chunk(self, text: str, doc_id: str) -> list[Chunk]:
-        if not text:
+    def chunk(self, doc: Document) -> list[Chunk]:
+        if not doc.text:
             return []
         return [
             Chunk(
-                doc_id=doc_id,
+                doc_id=doc.doc_id,
                 text=piece,
                 metadata={"chunk_index": str(i)},
             )
-            for i, piece in enumerate(self._splitter.split_text(text))
+            for i, piece in enumerate(self._splitter.split_text(doc.text))
             if piece
         ]

@@ -2,7 +2,7 @@
 
 import pytest
 
-from cogbase.core.models import Chunk
+from cogbase.core.models import Chunk, Document
 from cogbase.pipeline.ingestion.base import ChunkerBase
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 
@@ -13,7 +13,7 @@ from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 
 def assert_chunker_contract(chunker: ChunkerBase, text: str, doc_id: str) -> list[Chunk]:
     """Run invariants every compliant chunker must satisfy."""
-    chunks = chunker.chunk(text, doc_id)
+    chunks = chunker.chunk(Document(doc_id=doc_id, text=text))
     assert isinstance(chunks, list)
     for chunk in chunks:
         assert isinstance(chunk, Chunk)
@@ -60,7 +60,7 @@ class TestFixedSizeChunkerInit:
 
 class TestFixedSizeChunkerChunk:
     def test_empty_text_returns_empty(self):
-        chunks = FixedSizeChunker().chunk("", "doc-1")
+        chunks = FixedSizeChunker().chunk(Document(doc_id="doc-1", text=""))
         assert chunks == []
 
     def test_contract(self):
@@ -69,7 +69,7 @@ class TestFixedSizeChunkerChunk:
 
     def test_single_chunk_when_text_fits(self):
         chunker = FixedSizeChunker(chunk_size=100, overlap=10)
-        chunks = chunker.chunk("short text", "doc-1")
+        chunks = chunker.chunk(Document(doc_id="doc-1", text="short text"))
         assert len(chunks) == 1
         assert chunks[0].text == "short text"
 
@@ -77,33 +77,32 @@ class TestFixedSizeChunkerChunk:
         # text=30 chars, chunk_size=10, overlap=2, stride=8
         # starts: 0, 8, 16, 24  → 4 chunks
         chunker = FixedSizeChunker(chunk_size=10, overlap=2)
-        text = "a" * 30
-        chunks = chunker.chunk(text, "doc-1")
+        chunks = chunker.chunk(Document(doc_id="doc-1", text="a" * 30))
         assert len(chunks) == 4
 
     def test_overlap_content(self):
         chunker = FixedSizeChunker(chunk_size=5, overlap=2)
         text = "abcdefghij"  # 10 chars, stride=3: starts 0,3,6,9
-        chunks = chunker.chunk(text, "doc-1")
+        chunks = chunker.chunk(Document(doc_id="doc-1", text=text))
         # chunk[0] ends at index 5: "abcde"
         # chunk[1] starts at index 3: "defgh"
         assert chunks[0].text[-2:] == chunks[1].text[:2]
 
     def test_chunk_index_metadata(self):
         chunker = FixedSizeChunker(chunk_size=5, overlap=0)
-        chunks = chunker.chunk("abcdeabcde", "doc-1")
+        chunks = chunker.chunk(Document(doc_id="doc-1", text="abcdeabcde"))
         assert [c.metadata["chunk_index"] for c in chunks] == ["0", "1"]
 
     def test_doc_id_propagated(self):
         chunker = FixedSizeChunker(chunk_size=5, overlap=0)
-        chunks = chunker.chunk("hello world", "my-doc")
+        chunks = chunker.chunk(Document(doc_id="my-doc", text="hello world"))
         assert all(c.doc_id == "my-doc" for c in chunks)
 
     def test_all_characters_covered(self):
         # Every position in the original text must appear in at least one chunk.
         chunker = FixedSizeChunker(chunk_size=10, overlap=3)
         text = "the quick brown fox jumps over the lazy dog"
-        chunks = chunker.chunk(text, "doc-1")
+        chunks = chunker.chunk(Document(doc_id="doc-1", text=text))
         stride = chunker.chunk_size - chunker.overlap
         for i, chunk in enumerate(chunks):
             start = i * stride
@@ -118,10 +117,10 @@ class TestFixedSizeChunkerIsChunkerBase:
         """Third-party chunkers only need to extend ChunkerBase."""
 
         class WordChunker(ChunkerBase):
-            def chunk(self, text: str, doc_id: str) -> list[Chunk]:
+            def chunk(self, doc: Document) -> list[Chunk]:
                 return [
-                    Chunk(doc_id=doc_id, text=word, metadata={"chunk_index": str(i)})
-                    for i, word in enumerate(text.split())
+                    Chunk(doc_id=doc.doc_id, text=word, metadata={"chunk_index": str(i)})
+                    for i, word in enumerate(doc.text.split())
                     if word
                 ]
 

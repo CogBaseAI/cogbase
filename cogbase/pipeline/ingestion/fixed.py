@@ -1,6 +1,6 @@
 """Fixed-size sliding-window chunker."""
 
-from cogbase.core.models import Chunk
+from cogbase.core.models import Chunk, Document
 from cogbase.pipeline.ingestion.base import ChunkerBase
 
 
@@ -28,8 +28,8 @@ class FixedSizeChunker(ChunkerBase):
         self.chunk_size = chunk_size
         self.overlap = overlap
 
-    def chunk(self, text: str, doc_id: str) -> list[Chunk]:
-        if not text:
+    def chunk(self, doc: Document) -> list[Chunk]:
+        if not doc.text:
             return []
 
         stride = self.chunk_size - self.overlap
@@ -37,12 +37,12 @@ class FixedSizeChunker(ChunkerBase):
         index = 0
         start = 0
 
-        while start < len(text):
+        while start < len(doc.text):
             end = start + self.chunk_size
             chunks.append(
                 Chunk(
-                    doc_id=doc_id,
-                    text=text[start:end],
+                    doc_id=doc.doc_id,
+                    text=doc.text[start:end],
                     metadata={"chunk_index": str(index)},
                 )
             )

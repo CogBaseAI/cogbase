@@ -5,6 +5,7 @@ import asyncio
 
 from pydantic import BaseModel
 
+from cogbase.core.models import Document
 from cogbase.stores.schema import CollectionSchema
 
 
@@ -54,7 +55,7 @@ class ExtractorBase(abc.ABC):
                     },
                 )
 
-            async def _extract_once(self, text: str, doc_id: str) -> BaseModel | None:
+            async def _extract_once(self, doc: Document) -> BaseModel | None:
                 ...
     """
 
@@ -77,8 +78,8 @@ class ExtractorBase(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def _extract_once(self, text: str, doc_id: str) -> BaseModel | None:
-        """Single extraction attempt for *text*.
+    async def _extract_once(self, doc: Document) -> BaseModel | None:
+        """Single extraction attempt for *doc*.
 
         Called by ``extract``; do not call directly.  Implement the LLM call (or
         any other extraction logic) here and return a Pydantic record on success or
@@ -87,30 +88,29 @@ class ExtractorBase(abc.ABC):
         an appropriate empty/default record or an empty list instead).
 
         Args:
-            text:   Full or chunked document text passed to this extractor.
-            doc_id: Stable identifier of the source document; propagate it onto
-                    the returned record.
+            doc: Source document whose ``text`` is passed to the extractor and
+                 whose ``doc_id`` should be propagated onto the returned record.
 
         Returns:
             A single Pydantic record whose fields match ``self.schema``, or
             ``None`` when the extractor cannot produce a valid result.
         """
 
-    async def extract(self, text: str, doc_id: str) -> BaseModel | None:
-        """Extract a record from *text*, retrying on parse failures.
+    async def extract(self, doc: Document) -> BaseModel | None:
+        """Extract a record from *doc*, retrying on parse failures.
 
-        Returns ``None`` immediately for blank *text*.  Otherwise calls
+        Returns ``None`` immediately for blank ``doc.text``.  Otherwise calls
         ``_extract_once`` up to ``max_retries + 1`` times, sleeping
         ``2^(attempt-1)`` seconds between attempts.  Returns the first non-None
         result, or ``None`` after all attempts are exhausted.
         """
-        if not text.strip():
+        if not doc.text.strip():
             return None
 
         for attempt in range(self._max_retries + 1):
             if attempt > 0:
                 await asyncio.sleep(2 ** (attempt - 1))
-            result = await self._extract_once(text, doc_id)
+            result = await self._extract_once(doc)
             if result is not None:
                 return result
 

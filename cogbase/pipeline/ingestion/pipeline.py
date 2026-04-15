@@ -1,6 +1,6 @@
 """End-to-end ingestion pipeline: text → chunks → embeddings → vector store."""
 
-from cogbase.core.models import Chunk
+from cogbase.core.models import Chunk, Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
 from cogbase.pipeline.ingestion.embedder import EmbedderBase
@@ -25,8 +25,7 @@ async def setup_extraction(
 
 
 async def ingest(
-    text: str,
-    doc_id: str,
+    doc: Document,
     *,
     chunker: ChunkerBase,
     embedder: EmbedderBase,
@@ -39,25 +38,24 @@ async def ingest(
     This is the primary entry point for the ingestion layer.  It wires the
     pipeline steps together in order:
 
-    1. **Chunk** — split *text* into overlapping windows via *chunker*.
+    1. **Chunk** — split ``doc.text`` into overlapping windows via *chunker*.
     2. **Embed** — attach a dense vector to each chunk via *embedder*.
     3. **Store (vector)** — upsert the embedded chunks into *vector_store*.
-    4. **Extract** — run each extractor in *extractors* over *text* and save
+    4. **Extract** — run each extractor in *extractors* over *doc* and save
        results to *structured_store* (skipped when either is ``None``).
 
     Collections must already exist in *structured_store* before calling this
     function — call ``setup_extraction`` once at startup to create them.
 
     Args:
-        text:             Full document text to ingest.
-        doc_id:           Stable identifier for the source document.  Used for
-                          later retrieval and deletion.
-        chunker:          ``ChunkerBase`` implementation that splits *text*.
+        doc:              Document to ingest.  ``doc.doc_id`` is the stable
+                          identifier used for later retrieval and deletion.
+        chunker:          ``ChunkerBase`` implementation that splits the document.
         embedder:         ``EmbedderBase`` implementation that populates embeddings.
         vector_store:     ``VectorStoreBase`` implementation that persists chunks.
         extractors:       Optional list of ``ExtractorBase`` implementations.
                           Each extractor pulls a different record type (facts,
-                          entities, clauses, events, …) from *text*.  Ignored
+                          entities, clauses, events, …) from *doc*.  Ignored
                           when *structured_store* is ``None``.
         structured_store: ``StructuredStoreBase`` implementation that persists
                           extracted records.  Ignored when *extractors* is
@@ -65,10 +63,10 @@ async def ingest(
 
     Returns:
         The embedded ``Chunk`` objects that were upserted, in chunk order.
-        Returns an empty list when *text* is empty or the chunker produces no
-        chunks.
+        Returns an empty list when ``doc.text`` is empty or the chunker produces
+        no chunks.
     """
-    chunks = chunker.chunk(text, doc_id)
+    chunks = chunker.chunk(doc)
     if not chunks:
         return []
 
@@ -77,7 +75,7 @@ async def ingest(
 
     if extractors and structured_store:
         for extractor in extractors:
-            record = await extractor.extract(text, doc_id)
+            record = await extractor.extract(doc)
             if record is not None:
                 await structured_store.save(extractor.collection, [record])
 

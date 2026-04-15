@@ -3,6 +3,7 @@
 import pytest
 from pydantic import BaseModel
 
+from cogbase.core.models import Chunk, Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.embedder import EmbedderBase
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
@@ -10,7 +11,6 @@ from cogbase.pipeline.ingestion.pipeline import ingest, setup_extraction
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
-from cogbase.core.models import Chunk
 
 
 # ---------------------------------------------------------------------------
@@ -49,9 +49,9 @@ class StubExtractor(ExtractorBase):
     def schema(self) -> CollectionSchema:
         return _NOUN_SCHEMA
 
-    async def _extract_once(self, text: str, doc_id: str) -> NounRecord:
-        self._calls.append((text, doc_id))
-        return NounRecord(noun_id=f"{doc_id}-0", doc_id=doc_id, text=text)
+    async def _extract_once(self, doc: Document) -> NounRecord:
+        self._calls.append((doc.text, doc.doc_id))
+        return NounRecord(noun_id=f"{doc.doc_id}-0", doc_id=doc.doc_id, text=doc.text)
 
 
 class EmptyExtractor(ExtractorBase):
@@ -68,7 +68,7 @@ class EmptyExtractor(ExtractorBase):
     def schema(self) -> CollectionSchema:
         return _NOUN_SCHEMA
 
-    async def _extract_once(self, text: str, doc_id: str) -> None:
+    async def _extract_once(self, doc: Document) -> None:
         return None
 
 
@@ -141,7 +141,7 @@ class TestIngestWithExtractors:
         await setup_extraction([extractor], structured_store)
         text = "hello world foo bar"
         await ingest(
-            text, "doc-1",
+            Document(doc_id="doc-1", text=text),
             chunker=chunker, embedder=embedder,
             vector_store=vector_store,
             extractors=[extractor],
@@ -157,7 +157,7 @@ class TestIngestWithExtractors:
         await setup_extraction([extractor], structured_store)
         text = "alpha beta gamma"
         await ingest(
-            text, "doc-2",
+            Document(doc_id="doc-2", text=text),
             chunker=chunker, embedder=embedder,
             vector_store=vector_store,
             extractors=[extractor],
@@ -174,7 +174,7 @@ class TestIngestWithExtractors:
         extractor = EmptyExtractor()
         await setup_extraction([extractor], structured_store)
         await ingest(
-            "some text", "doc-3",
+            Document(doc_id="doc-3", text="some text"),
             chunker=chunker, embedder=embedder,
             vector_store=vector_store,
             extractors=[extractor],
@@ -211,13 +211,13 @@ class TestIngestWithExtractors:
             def schema(self) -> CollectionSchema:
                 return _tag_schema
 
-            async def _extract_once(self, text: str, doc_id: str) -> TagRecord:
-                return TagRecord(tag_id=f"{doc_id}-t0", doc_id=doc_id, label="test-tag")
+            async def _extract_once(self, doc: Document) -> TagRecord:
+                return TagRecord(tag_id=f"{doc.doc_id}-t0", doc_id=doc.doc_id, label="test-tag")
 
         extractors = [StubExtractor(), TagExtractor()]
         await setup_extraction(extractors, structured_store)
         await ingest(
-            "hello world", "doc-4",
+            Document(doc_id="doc-4", text="hello world"),
             chunker=chunker, embedder=embedder,
             vector_store=vector_store,
             extractors=extractors,
@@ -236,7 +236,7 @@ class TestIngestWithExtractors:
     ):
         """ingest() without extractors must not touch a structured store."""
         result = await ingest(
-            "text without extraction", "doc-5",
+            Document(doc_id="doc-5", text="text without extraction"),
             chunker=chunker, embedder=embedder,
             vector_store=vector_store,
         )
@@ -249,7 +249,7 @@ class TestIngestWithExtractors:
         """ingest() does not create collections — caller must call setup_extraction first."""
         with pytest.raises(KeyError):
             await ingest(
-                "one two three", "doc-6",
+                Document(doc_id="doc-6", text="one two three"),
                 chunker=chunker, embedder=embedder,
                 vector_store=vector_store,
                 extractors=[StubExtractor()],
@@ -273,7 +273,7 @@ class TestIngestWithExtractors:
         extractors = [StubExtractor()]
         await setup_extraction(extractors, structured_store)
         await ingest(
-            "one two three", "doc-7",
+            Document(doc_id="doc-7", text="one two three"),
             chunker=chunker, embedder=embedder,
             vector_store=vector_store,
             extractors=extractors,

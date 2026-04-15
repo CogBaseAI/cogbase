@@ -4,7 +4,7 @@ import pytest
 from pydantic import BaseModel
 
 from cogbase.core.application import Application, IngestResult, StructuredCollection, VectorCollection
-from cogbase.core.models import Chunk
+from cogbase.core.models import Chunk, Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
 from cogbase.pipeline.ingestion.embedder import EmbedderBase
@@ -58,10 +58,10 @@ class StubExtractor(ExtractorBase):
     def schema(self) -> CollectionSchema:
         return self._schema
 
-    async def _extract_once(self, text: str, doc_id: str) -> TagRecord | None:
-        if not text.strip():
+    async def _extract_once(self, doc: Document) -> TagRecord | None:
+        if not doc.text.strip():
             return None
-        return TagRecord(tag_id=f"{doc_id}-0", doc_id=doc_id, value=text[:10])
+        return TagRecord(tag_id=f"{doc.doc_id}-0", doc_id=doc.doc_id, value=doc.text[:10])
 
 
 # ---------------------------------------------------------------------------
@@ -214,14 +214,14 @@ class TestApplicationIngest:
     async def test_ingest_populates_vector_store(self):
         app, vector_store, _ = self._make_app()
         await app.setup()
-        await app.ingest("word " * 30, "doc-1")
+        await app.ingest(Document(doc_id="doc-1", text="word " * 30))
         assert vector_store.ntotal > 0
 
     @pytest.mark.asyncio
     async def test_ingest_populates_structured_store(self):
         app, _, structured_store = self._make_app()
         await app.setup()
-        await app.ingest("hello world contract clause", "doc-1")
+        await app.ingest(Document(doc_id="doc-1", text="hello world contract clause"))
         rows = await structured_store.query("tags")
         assert len(rows) == 1
         assert rows[0]["doc_id"] == "doc-1"
@@ -230,14 +230,14 @@ class TestApplicationIngest:
     async def test_ingest_returns_record_count(self):
         app, _, _ = self._make_app()
         await app.setup()
-        count = await app.ingest("hello world contract clause", "doc-1")
+        count = await app.ingest(Document(doc_id="doc-1", text="hello world contract clause"))
         assert count == 1
 
     @pytest.mark.asyncio
     async def test_ingest_empty_text_returns_zero(self):
         app, vector_store, _ = self._make_app()
         await app.setup()
-        count = await app.ingest("", "doc-empty")
+        count = await app.ingest(Document(doc_id="doc-empty", text=""))
         assert count == 0
         assert vector_store.ntotal == 0
 
@@ -245,8 +245,8 @@ class TestApplicationIngest:
     async def test_ingest_multiple_docs_accumulate(self):
         app, vector_store, structured_store = self._make_app()
         await app.setup()
-        await app.ingest("alpha beta gamma delta epsilon " * 3, "doc-a")
-        await app.ingest("one two three four five six seven " * 3, "doc-b")
+        await app.ingest(Document(doc_id="doc-a", text="alpha beta gamma delta epsilon " * 3))
+        await app.ingest(Document(doc_id="doc-b", text="one two three four five six seven " * 3))
         assert vector_store.ntotal > 0
         rows = await structured_store.query("tags")
         assert len(rows) == 2
@@ -262,7 +262,7 @@ class TestApplicationIngest:
         )
         app = Application(name="app", vector_collections=[vc])
         await app.setup()
-        count = await app.ingest("word " * 30, "doc-1")
+        count = await app.ingest(Document(doc_id="doc-1", text="word " * 30))
         assert vector_store.ntotal > 0
         assert count == 0  # no structured collections
 
@@ -276,7 +276,7 @@ class TestApplicationIngest:
         )
         app = Application(name="app", structured_collections=[sc])
         await app.setup()
-        await app.ingest("important clause about termination", "doc-1")
+        await app.ingest(Document(doc_id="doc-1", text="important clause about termination"))
         rows = await structured_store.query("tags")
         assert len(rows) == 1
 
@@ -345,15 +345,6 @@ class TestApplicationIngestMany:
         assert results[1].records_extracted == 1
 
     @pytest.mark.asyncio
-    async def test_accepts_tuples(self):
-        app, _ = self._make_app()
-        await app.setup()
-        results = await app.ingest_many([("text A", "d-001"), ("text B", "d-002")])
-        assert len(results) == 2
-        assert results[0].doc_id == "d-001"
-        assert results[1].doc_id == "d-002"
-
-    @pytest.mark.asyncio
     async def test_failure_captured_not_raised(self):
         """A failing extractor on one doc does not abort the batch."""
         import asyncio
@@ -373,12 +364,12 @@ class TestApplicationIngestMany:
             def schema(self) -> CollectionSchema:
                 return StubExtractor._schema
 
-            async def _extract_once(self, text: str, doc_id: str) -> TagRecord:
+            async def _extract_once(self, doc: Document) -> TagRecord:
                 nonlocal call_count
                 call_count += 1
                 if call_count == 1:
                     raise RuntimeError("extractor failed")
-                return TagRecord(tag_id=f"{doc_id}-0", doc_id=doc_id, value=text[:10])
+                return TagRecord(tag_id=f"{doc.doc_id}-0", doc_id=doc.doc_id, value=doc.text[:10])
 
         structured_store = InMemoryStructuredStore()
         sc = StructuredCollection(

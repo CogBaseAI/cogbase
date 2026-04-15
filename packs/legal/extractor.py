@@ -12,7 +12,7 @@ Typical usage::
     client = openai.AsyncOpenAI(api_key="...")
     extractor = ContractExtractor(client, model="claude-sonnet-4-6")
 
-    record = await extractor.extract(contract_text, doc_id="contract-001")
+    record = await extractor.extract(Document(doc_id="contract-001", text=contract_text))
     # returns a ContractRecord, or None when the text is blank / unparseable
 """
 
@@ -23,6 +23,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
+from cogbase.core.models import Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.stores.schema import CollectionSchema
 from cogbase.stores.schema_util import cls_json_schema_for_llm
@@ -71,19 +72,19 @@ class ContractExtractor(ExtractorBase):
     def schema(self) -> CollectionSchema:
         return CONTRACTS_SCHEMA
 
-    async def _extract_once(self, text: str, doc_id: str) -> ContractRecord | None:
+    async def _extract_once(self, doc: Document) -> ContractRecord | None:
         """Single LLM call; returns ``None`` when the response is unparseable."""
         response = await self._client.chat.completions.create(
             model=self._model,
             max_tokens=self._max_tokens,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": text},
+                {"role": "user", "content": doc.text},
             ],
         )
 
         raw = response.choices[0].message.content.strip()
-        return self._parse(raw, doc_id)
+        return self._parse(raw, doc.doc_id)
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -165,7 +165,7 @@ class TestLegalContractAppLifecycle:
         client = _make_extractor_response(_contract_payload(contract_type="SaaS"))
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
-        await app.ingest("Some contract text.", doc_id="c-001")
+        await app.ingest(Document(doc_id="c-001", text="Some contract text."))
         rows = await store.query(CONTRACTS_COLLECTION)
         assert len(rows) == 1
         assert rows[0]["contract_type"] == "SaaS"
@@ -176,7 +176,7 @@ class TestLegalContractAppLifecycle:
         client = _make_extractor_response("{}")
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
-        await app.ingest("", doc_id="c-empty")
+        await app.ingest(Document(doc_id="c-empty", text=""))
         rows = await store.query(CONTRACTS_COLLECTION)
         assert rows == []
 
@@ -186,8 +186,8 @@ class TestLegalContractAppLifecycle:
         client = _make_extractor_response(_contract_payload())
         app = LegalContractApp(client=client, model="test-model", structured_store=store)
         await app.setup()
-        await app.ingest("contract one text", doc_id="c-001")
-        await app.ingest("contract two text", doc_id="c-002")
+        await app.ingest(Document(doc_id="c-001", text="contract one text"))
+        await app.ingest(Document(doc_id="c-002", text="contract two text"))
         rows = await store.query(CONTRACTS_COLLECTION)
         assert len(rows) == 2
         doc_ids = {r["doc_id"] for r in rows}
@@ -207,7 +207,7 @@ class TestLegalContractAppLifecycle:
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
         await app.setup()
-        await app.ingest("word " * 20, doc_id="c-001")
+        await app.ingest(Document(doc_id="c-001", text="word " * 20))
         assert vector_store.ntotal > 0
 
 
@@ -496,22 +496,6 @@ class TestIngestMany:
         assert results[0].records_extracted == 1
         assert results[1].doc_id == "c-002"
         assert results[1].records_extracted == 1
-
-    @pytest.mark.asyncio
-    async def test_accepts_tuples(self):
-        store = InMemoryStructuredStore()
-        client = _make_extractor_response("{}")
-        app = LegalContractApp(client=client, model="test-model", structured_store=store)
-        await app.setup()
-
-        results = await app.ingest_many([
-            ("contract text A", "c-001"),
-            ("contract text B", "c-002"),
-        ])
-
-        assert len(results) == 2
-        assert results[0].doc_id == "c-001"
-        assert results[1].doc_id == "c-002"
 
     @pytest.mark.asyncio
     async def test_failure_captured_not_raised(self):

@@ -28,7 +28,7 @@ Typical usage::
     )
 
     await app.setup()          # idempotent — safe on every restart
-    await app.ingest(text, doc_id="contract-001")
+    await app.ingest(Document(doc_id="contract-001", text=contract_text))
 
     # Pass schemas to the router so it can target the right collections:
     router = LLMRouter(client, model="...", schema=app.structured_schemas)
@@ -124,8 +124,8 @@ class Application:
     lifecycle methods:
 
     - ``setup()`` — creates all structured collections (idempotent).
-    - ``ingest(text, doc_id)`` — chunks, embeds, and extracts a document into
-      every collection.
+    - ``ingest(doc)`` — chunks, embeds, and extracts a document into every
+      collection.
 
     The ``structured_schemas`` property returns the ``CollectionSchema`` list
     needed by ``LLMRouter`` so the router can reference the correct collections
@@ -187,7 +187,7 @@ class Application:
         for sc in self._structured_collections:
             await sc.store.create_collection(sc.schema)
 
-    async def ingest(self, text: str, doc_id: str) -> int:
+    async def ingest(self, doc: Document) -> int:
         """Ingest a document into all collections.
 
         For each vector collection: chunk → embed → upsert.
@@ -198,21 +198,20 @@ class Application:
         the text is short, depending on the extractor's implementation.
 
         Args:
-            text:   Full document text to ingest.
-            doc_id: Stable identifier for the source document.
+            doc: Document to ingest.
 
         Returns:
             Total number of records written across all structured collections.
         """
         for vc in self._vector_collections:
-            chunks = vc.chunker.chunk(text, doc_id)
+            chunks = vc.chunker.chunk(doc)
             if chunks:
                 embedded = await vc.embedder.embed(chunks)
                 await vc.store.upsert(embedded)
 
         total_records = 0
         for sc in self._structured_collections:
-            record = await sc.extractor.extract(text, doc_id)
+            record = await sc.extractor.extract(doc)
             if record is not None:
                 await sc.store.save(sc.schema.name, [record])
                 total_records += 1
@@ -220,7 +219,7 @@ class Application:
 
     async def ingest_many(
         self,
-        documents: Sequence[Document | tuple[str, str]],
+        documents: Sequence[Document],
         *,
         concurrency: int = 5,
     ) -> list[IngestResult]:
@@ -232,8 +231,7 @@ class Application:
         Results are returned in the same order as *documents*.
 
         Args:
-            documents:   Sequence of ``Document`` objects **or**
-                         ``(text, doc_id)`` tuples (both forms are accepted).
+            documents:   Sequence of ``Document`` objects to ingest.
             concurrency: Maximum number of documents ingested simultaneously.
                          Defaults to ``5`` — a safe limit for LLM API rate caps.
                          Set to ``1`` for strictly sequential ingestion.
@@ -249,21 +247,16 @@ class Application:
 
         semaphore = asyncio.Semaphore(concurrency)
 
-        async def _ingest_one(doc: Document | tuple[str, str]) -> IngestResult:
-            if isinstance(doc, tuple):
-                text, doc_id = doc
-            else:
-                text, doc_id = doc.text, doc.doc_id
-
+        async def _ingest_one(doc: Document) -> IngestResult:
             async with semaphore:
                 try:
-                    records_extracted = await self.ingest(text, doc_id)
+                    records_extracted = await self.ingest(doc)
                     return IngestResult(
-                        doc_id=doc_id,
+                        doc_id=doc.doc_id,
                         success=True,
                         records_extracted=records_extracted,
                     )
                 except Exception as exc:  # noqa: BLE001
-                    return IngestResult(doc_id=doc_id, success=False, error=exc)
+                    return IngestResult(doc_id=doc.doc_id, success=False, error=exc)
 
         return list(await asyncio.gather(*(_ingest_one(d) for d in documents)))

@@ -2,7 +2,7 @@
 
 import abc
 
-from cogbase.core.models import Chunk
+from cogbase.core.models import Chunk, Document
 
 
 class ChunkerBase(abc.ABC):
@@ -15,22 +15,22 @@ class ChunkerBase(abc.ABC):
     Example::
 
         class MyChunker(ChunkerBase):
-            def chunk(self, text: str, doc_id: str) -> list[Chunk]:
+            def chunk(self, doc: Document) -> list[Chunk]:
                 ...
 
-        await ingest(text, doc_id, chunker=MyChunker(), ...)
+        await ingest(doc, chunker=MyChunker(), ...)
 
     ``metadata`` may carry chunker-specific fields (e.g. ``{"chunk_index": "0"}``).
     Embeddings are ``None`` on output — the pipeline fills them in separately.
     """
 
     @abc.abstractmethod
-    def chunk(self, text: str, doc_id: str) -> list[Chunk]:
-        """Return an ordered list of chunks for *text*.
+    def chunk(self, doc: Document) -> list[Chunk]:
+        """Return an ordered list of chunks for *doc*.
 
         Args:
-            text:   Full document text.
-            doc_id: Identifier of the source document; set on every returned chunk.
+            doc: Source document whose ``text`` is split and ``doc_id`` is
+                 propagated onto every returned chunk.
 
         Returns:
             Ordered list of ``Chunk`` objects.  ``embedding`` is always ``None``
