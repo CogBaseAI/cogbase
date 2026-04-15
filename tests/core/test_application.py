@@ -3,7 +3,7 @@
 import pytest
 from pydantic import BaseModel
 
-from cogbase.core.application import Application, StructuredCollection, VectorCollection
+from cogbase.core.application import Application, IngestResult, StructuredCollection, VectorCollection
 from cogbase.core.models import Chunk
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
@@ -227,10 +227,18 @@ class TestApplicationIngest:
         assert rows[0]["doc_id"] == "doc-1"
 
     @pytest.mark.asyncio
-    async def test_ingest_empty_text_is_noop_for_vector(self):
+    async def test_ingest_returns_record_count(self):
+        app, _, _ = self._make_app()
+        await app.setup()
+        count = await app.ingest("hello world contract clause", "doc-1")
+        assert count == 1
+
+    @pytest.mark.asyncio
+    async def test_ingest_empty_text_returns_zero(self):
         app, vector_store, _ = self._make_app()
         await app.setup()
-        await app.ingest("", "doc-empty")
+        count = await app.ingest("", "doc-empty")
+        assert count == 0
         assert vector_store.ntotal == 0
 
     @pytest.mark.asyncio
@@ -244,7 +252,7 @@ class TestApplicationIngest:
         assert len(rows) == 2
 
     @pytest.mark.asyncio
-    async def test_vector_only_app_ingest(self):
+    async def test_vector_only_app_ingest_returns_zero(self):
         vector_store = FAISSVectorStore(dim=4)
         vc = VectorCollection(
             name="docs",
@@ -254,8 +262,9 @@ class TestApplicationIngest:
         )
         app = Application(name="app", vector_collections=[vc])
         await app.setup()
-        await app.ingest("word " * 30, "doc-1")
+        count = await app.ingest("word " * 30, "doc-1")
         assert vector_store.ntotal > 0
+        assert count == 0  # no structured collections
 
     @pytest.mark.asyncio
     async def test_structured_only_app_ingest(self):
@@ -270,3 +279,140 @@ class TestApplicationIngest:
         await app.ingest("important clause about termination", "doc-1")
         rows = await structured_store.query("tags")
         assert len(rows) == 1
+
+
+# ---------------------------------------------------------------------------
+# Application.ingest_many()
+# ---------------------------------------------------------------------------
+
+
+class TestApplicationIngestMany:
+    import asyncio as _asyncio
+
+    def _make_app(self) -> tuple[Application, InMemoryStructuredStore]:
+        structured_store = InMemoryStructuredStore()
+        sc = StructuredCollection(
+            schema=StubExtractor().schema,
+            store=structured_store,
+            extractor=StubExtractor(),
+        )
+        app = Application(name="app", structured_collections=[sc])
+        return app, structured_store
+
+    @pytest.mark.asyncio
+    async def test_returns_one_result_per_document(self):
+        from cogbase.core.models import Document
+        app, _ = self._make_app()
+        await app.setup()
+        docs = [Document(doc_id=f"d-{i}", text=f"text {i}") for i in range(3)]
+        results = await app.ingest_many(docs)
+        assert len(results) == 3
+        assert all(isinstance(r, IngestResult) for r in results)
+
+    @pytest.mark.asyncio
+    async def test_results_in_input_order(self):
+        from cogbase.core.models import Document
+        app, _ = self._make_app()
+        await app.setup()
+        doc_ids = [f"d-{i:03d}" for i in range(8)]
+        docs = [Document(doc_id=d, text=f"text for {d}") for d in doc_ids]
+        results = await app.ingest_many(docs, concurrency=3)
+        assert [r.doc_id for r in results] == doc_ids
+
+    @pytest.mark.asyncio
+    async def test_success_and_records_extracted(self):
+        from cogbase.core.models import Document
+        app, _ = self._make_app()
+        await app.setup()
+        results = await app.ingest_many([Document(doc_id="d-001", text="some text")])
+        assert results[0].success is True
+        assert results[0].records_extracted == 1
+        assert results[0].error is None
+
+    @pytest.mark.asyncio
+    async def test_each_result_reflects_own_records(self):
+        from cogbase.core.models import Document
+        app, _ = self._make_app()
+        await app.setup()
+        results = await app.ingest_many(
+            [
+                Document(doc_id="d-001", text="first"),
+                Document(doc_id="d-002", text="second"),
+            ],
+            concurrency=1,
+        )
+        assert results[0].records_extracted == 1
+        assert results[1].records_extracted == 1
+
+    @pytest.mark.asyncio
+    async def test_accepts_tuples(self):
+        app, _ = self._make_app()
+        await app.setup()
+        results = await app.ingest_many([("text A", "d-001"), ("text B", "d-002")])
+        assert len(results) == 2
+        assert results[0].doc_id == "d-001"
+        assert results[1].doc_id == "d-002"
+
+    @pytest.mark.asyncio
+    async def test_failure_captured_not_raised(self):
+        """A failing extractor on one doc does not abort the batch."""
+        import asyncio
+
+        from cogbase.core.models import Document
+
+        call_count = 0
+
+        class FailFirstExtractor(ExtractorBase):
+            _collection = "tags"
+
+            @property
+            def collection(self) -> str:
+                return self._collection
+
+            @property
+            def schema(self) -> CollectionSchema:
+                return StubExtractor._schema
+
+            async def extract(self, text: str, doc_id: str) -> list:
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    raise RuntimeError("extractor failed")
+                return [TagRecord(tag_id=f"{doc_id}-0", doc_id=doc_id, value=text[:10])]
+
+        structured_store = InMemoryStructuredStore()
+        sc = StructuredCollection(
+            schema=StubExtractor().schema,
+            store=structured_store,
+            extractor=FailFirstExtractor(),
+        )
+        app = Application(name="app", structured_collections=[sc])
+        await app.setup()
+
+        results = await app.ingest_many(
+            [
+                Document(doc_id="d-fail", text="will fail"),
+                Document(doc_id="d-ok",   text="will succeed"),
+            ],
+            concurrency=1,
+        )
+
+        failed    = [r for r in results if not r.success]
+        succeeded = [r for r in results if r.success]
+        assert len(failed) == 1
+        assert failed[0].doc_id == "d-fail"
+        assert isinstance(failed[0].error, RuntimeError)
+        assert len(succeeded) == 1
+        assert succeeded[0].records_extracted == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_list_returns_empty(self):
+        app, _ = self._make_app()
+        await app.setup()
+        assert await app.ingest_many([]) == []
+
+    @pytest.mark.asyncio
+    async def test_invalid_concurrency_raises(self):
+        app, _ = self._make_app()
+        with pytest.raises(ValueError, match="concurrency"):
+            await app.ingest_many([], concurrency=0)

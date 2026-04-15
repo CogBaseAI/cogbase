@@ -60,11 +60,9 @@ Structured-only mode (no vector search)::
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-from cogbase.core.application import Application, StructuredCollection, VectorCollection
+from cogbase.core.application import Application, IngestResult, StructuredCollection, VectorCollection
 from cogbase.core.models import Chunk, Document
 from cogbase.engine.engine import Engine
 from cogbase.engine.generation.base import GenerationResult
@@ -74,34 +72,9 @@ from cogbase.engine.router import LLMRouter
 from cogbase.pipeline.ingestion.base import ChunkerBase
 from cogbase.pipeline.ingestion.embedder import EmbedderBase
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
-from cogbase.stores.filters import Col
 from cogbase.stores.schema import CollectionSchema
 from packs.legal.extractor import ContractExtractor
-from packs.legal.schema import CONTRACTS_COLLECTION, CONTRACTS_SCHEMA
-
-
-# ---------------------------------------------------------------------------
-# Public data types
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class IngestResult:
-    """Outcome of ingesting a single contract.
-
-    Args:
-        doc_id:           Identifier of the document that was processed.
-        success:          ``True`` when ingestion completed without error.
-        records_extracted: Number of records written to the structured store
-                          (always 0 or 1 for a contract — 0 on empty text or
-                          unparseable LLM output, 1 on success).
-        error:            The exception raised, when *success* is ``False``.
-    """
-
-    doc_id: str
-    success: bool
-    records_extracted: int = 0
-    error: Exception | None = field(default=None, repr=False)
+from packs.legal.schema import CONTRACTS_SCHEMA
 
 
 # ---------------------------------------------------------------------------
@@ -217,8 +190,6 @@ class LegalContractApp:
             effective_vector_store = _NullVectorStore()
             effective_embedder = _NullEmbedder()
 
-        self._structured_store = structured_store
-
         self._app = Application(
             name=name,
             vector_collections=vector_collections,
@@ -296,33 +267,7 @@ class LegalContractApp:
             ok     = [r for r in results if r.success]
             failed = [r for r in results if not r.success]
         """
-        if concurrency < 1:
-            raise ValueError(f"concurrency must be at least 1, got {concurrency}")
-
-        semaphore = asyncio.Semaphore(concurrency)
-
-        async def _ingest_one(contract: Document | tuple[str, str]) -> IngestResult:
-            if isinstance(contract, tuple):
-                text, doc_id = contract
-            else:
-                text, doc_id = contract.text, contract.doc_id
-
-            async with semaphore:
-                try:
-                    await self._app.ingest(text, doc_id)
-                    records = await self._structured_store.query(
-                        CONTRACTS_COLLECTION,
-                        [Col("doc_id") == doc_id],
-                    )
-                    return IngestResult(
-                        doc_id=doc_id,
-                        success=True,
-                        records_extracted=len(records),
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    return IngestResult(doc_id=doc_id, success=False, error=exc)
-
-        return list(await asyncio.gather(*(_ingest_one(c) for c in contracts)))
+        return await self._app.ingest_many(contracts, concurrency=concurrency)
 
     async def query(self, text: str) -> GenerationResult:
         """Answer a natural-language query over ingested contracts.
