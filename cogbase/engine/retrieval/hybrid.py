@@ -28,6 +28,7 @@ Example::
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from cogbase.engine.retrieval.base import RetrievalResult, RetrieverBase
 from cogbase.engine.retrieval.structured import StructuredRetriever
@@ -35,6 +36,8 @@ from cogbase.engine.retrieval.vector import VectorRetriever
 from cogbase.engine.router import QueryPattern, RouteResult
 from cogbase.pipeline.ingestion.embedder import EmbedderBase
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
+
+logger = logging.getLogger(__name__)
 
 
 class HybridRetriever(RetrieverBase):
@@ -71,14 +74,30 @@ class HybridRetriever(RetrieverBase):
         )
 
     async def retrieve(self, route: RouteResult) -> RetrievalResult:
+        logger.info("hybrid_retriever.retrieve.start pattern=%s", route.pattern.value)
         match route.pattern:
             case QueryPattern.A:
-                return await self._structured.retrieve(route)
+                result = await self._structured.retrieve(route)
+                logger.debug(
+                    "hybrid_retriever.retrieve.done pattern=%s structured_records=%d chunks=%d",
+                    route.pattern.value,
+                    len(result.structured_records),
+                    len(result.chunks),
+                )
+                return result
 
             case QueryPattern.B:
                 if self._vector is None:
+                    logger.info("hybrid_retriever.retrieve.vector_disabled pattern=%s", route.pattern.value)
                     return RetrievalResult(route=route)
-                return await self._vector.retrieve(route)
+                result = await self._vector.retrieve(route)
+                logger.debug(
+                    "hybrid_retriever.retrieve.done pattern=%s structured_records=%d chunks=%d",
+                    route.pattern.value,
+                    len(result.structured_records),
+                    len(result.chunks),
+                )
+                return result
 
             case QueryPattern.C | QueryPattern.D:
                 # Both stores queried concurrently where possible; merge results.
@@ -92,11 +111,18 @@ class HybridRetriever(RetrieverBase):
                 else:
                     structured_result = await structured_task
                     chunks = []
-                return RetrievalResult(
+                result = RetrievalResult(
                     structured_records=structured_result.structured_records,
                     chunks=chunks,
                     route=route,
                 )
+                logger.debug(
+                    "hybrid_retriever.retrieve.done pattern=%s structured_records=%d chunks=%d",
+                    route.pattern.value,
+                    len(result.structured_records),
+                    len(result.chunks),
+                )
+                return result
 
     async def _structured_safe(self, route: RouteResult) -> RetrievalResult:
         """Query structured store, returning an empty result when no targets are known."""

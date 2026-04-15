@@ -18,6 +18,7 @@ Typical usage::
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -28,6 +29,8 @@ from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.stores.schema import CollectionSchema
 from cogbase.stores.schema_util import cls_json_schema_for_llm
 from packs.legal.schema import CONTRACTS_COLLECTION, CONTRACTS_SCHEMA, ContractExtraction, ContractRecord
+
+logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
     "You are a legal contract analyst.  Extract structured information from the\n"
@@ -95,6 +98,7 @@ class ContractExtractor(ExtractorBase):
         try:
             extraction = ContractExtraction.model_validate_json(raw)
         except (ValidationError, ValueError):
+            logger.exception("contract_extractor.parse_failed doc_id=%s", doc_id)
             return None
 
         contract_id = f"{doc_id}_{uuid.uuid4().hex[:8]}"

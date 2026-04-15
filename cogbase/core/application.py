@@ -37,6 +37,7 @@ Typical usage::
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -46,6 +47,8 @@ from cogbase.pipeline.ingestion.base import ChunkerBase
 from cogbase.pipeline.ingestion.embedder import EmbedderBase
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
 from cogbase.stores.schema import CollectionSchema
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -184,8 +187,15 @@ class Application:
         This is idempotent — safe to call on every application startup.
         ``create_collection`` on each store will not overwrite existing data.
         """
+        logger.info(
+            "application.setup.start app=%s structured_collections=%d",
+            self.name,
+            len(self._structured_collections),
+        )
         for sc in self._structured_collections:
+            logger.debug("application.setup.create_collection app=%s collection=%s", self.name, sc.name)
             await sc.store.create_collection(sc.schema)
+        logger.info("application.setup.done app=%s", self.name)
 
     async def ingest(self, doc: Document) -> int:
         """Ingest a document into all collections.
@@ -203,11 +213,26 @@ class Application:
         Returns:
             Total number of records written across all structured collections.
         """
+        logger.info("application.ingest.start app=%s doc_id=%s", self.name, doc.doc_id)
         for vc in self._vector_collections:
             chunks = vc.chunker.chunk(doc)
+            logger.debug(
+                "application.ingest.vector_chunked app=%s doc_id=%s collection=%s chunks=%d",
+                self.name,
+                doc.doc_id,
+                vc.name,
+                len(chunks),
+            )
             if chunks:
                 embedded = await vc.embedder.embed(chunks)
                 await vc.store.upsert(embedded)
+                logger.debug(
+                    "application.ingest.vector_upserted app=%s doc_id=%s collection=%s embedded=%d",
+                    self.name,
+                    doc.doc_id,
+                    vc.name,
+                    len(embedded),
+                )
 
         total_records = 0
         for sc in self._structured_collections:
@@ -215,6 +240,18 @@ class Application:
             if record is not None:
                 await sc.store.save(sc.schema.name, [record])
                 total_records += 1
+                logger.debug(
+                    "application.ingest.structured_saved app=%s doc_id=%s collection=%s",
+                    self.name,
+                    doc.doc_id,
+                    sc.name,
+                )
+        logger.info(
+            "application.ingest.done app=%s doc_id=%s records_extracted=%d",
+            self.name,
+            doc.doc_id,
+            total_records,
+        )
         return total_records
 
     async def ingest_many(
@@ -257,6 +294,11 @@ class Application:
                         records_extracted=records_extracted,
                     )
                 except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        "application.ingest_many.failed app=%s doc_id=%s",
+                        self.name,
+                        doc.doc_id,
+                    )
                     return IngestResult(doc_id=doc.doc_id, success=False, error=exc)
 
         return list(await asyncio.gather(*(_ingest_one(d) for d in documents)))

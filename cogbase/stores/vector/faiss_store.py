@@ -13,15 +13,19 @@ data is lost when the process exits unless you call ``save`` / ``load``.
 from __future__ import annotations
 
 from pathlib import Path
+import logging
 
 import numpy as np
 
 from cogbase.core.models import Chunk
 from cogbase.stores.base import VectorStoreBase
 
+logger = logging.getLogger(__name__)
+
 try:
     import faiss
 except ImportError as exc:  # pragma: no cover
+    logger.exception("faiss_import_failed")
     raise ImportError(
         "faiss-cpu is required for FAISSVectorStore. "
         'Install it with: pip install "cogbase[faiss]"'

@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import abc
 import json
+import logging
 import re
 from enum import Enum
 from typing import Any
@@ -72,6 +73,8 @@ from pydantic import BaseModel
 
 from cogbase.stores.filters import Filter, Op
 from cogbase.stores.schema import CollectionSchema, FieldType
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +335,7 @@ class LLMRouter(QueryRouter):
     async def route(self, query: str) -> RouteResult:
         last_exc: Exception | None = None
         for attempt in range(self._max_retries + 1):
+            logger.debug("router.route.attempt attempt=%d query_len=%d", attempt + 1, len(query))
             response = await self._client.chat.completions.create(
                 model=self._model,
                 max_tokens=self._max_tokens,
@@ -342,9 +346,25 @@ class LLMRouter(QueryRouter):
             )
             raw: str = response.choices[0].message.content
             try:
-                return _parse_llm_response(raw, query)
+                result = _parse_llm_response(raw, query)
+                logger.info(
+                    "router.route.success pattern=%s structured_targets=%d",
+                    result.pattern.value,
+                    len(result.structured_targets),
+                )
+                return result
             except (ValueError, KeyError, json.JSONDecodeError) as exc:
                 last_exc = exc
+                logger.exception(
+                    "router.route.parse_failed attempt=%d/%d",
+                    attempt + 1,
+                    self._max_retries + 1,
+                )
+        logger.error(
+            "router.route.exhausted_retries attempts=%d",
+            self._max_retries + 1,
+            exc_info=last_exc,
+        )
         raise last_exc  # type: ignore[misc]
 
 

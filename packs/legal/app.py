@@ -60,6 +60,7 @@ Structured-only mode (no vector search)::
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Sequence
 
 from cogbase.core.application import Application, IngestResult, StructuredCollection, VectorCollection
@@ -75,6 +76,8 @@ from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
 from cogbase.stores.schema import CollectionSchema
 from packs.legal.extractor import ContractExtractor
 from packs.legal.schema import CONTRACTS_SCHEMA
+
+logger = logging.getLogger(__name__)
 
 # Patterns available when no vector store is configured (B and C require a vector store).
 _STRUCTURED_ONLY_PATTERNS = [QueryPattern.A, QueryPattern.D]
@@ -187,7 +190,9 @@ class LegalContractApp:
 
     async def setup(self) -> None:
         """Create all collections in their respective stores. Idempotent."""
+        logger.info("legal_app.setup.start")
         await self._app.setup()
+        logger.info("legal_app.setup.done")
 
     async def ingest(self, doc: Document) -> None:
         """Ingest a single contract document.
@@ -198,7 +203,9 @@ class LegalContractApp:
         Args:
             doc: Document to ingest.
         """
+        logger.info("legal_app.ingest.start doc_id=%s", doc.doc_id)
         await self._app.ingest(doc)
+        logger.info("legal_app.ingest.done doc_id=%s", doc.doc_id)
 
     async def ingest_many(
         self,
@@ -235,7 +242,19 @@ class LegalContractApp:
             ok     = [r for r in results if r.success]
             failed = [r for r in results if not r.success]
         """
-        return await self._app.ingest_many(contracts, concurrency=concurrency)
+        logger.info(
+            "legal_app.ingest_many.start documents=%d concurrency=%d",
+            len(contracts),
+            concurrency,
+        )
+        results = await self._app.ingest_many(contracts, concurrency=concurrency)
+        failures = sum(1 for r in results if not r.success)
+        logger.info(
+            "legal_app.ingest_many.done documents=%d failures=%d",
+            len(results),
+            failures,
+        )
+        return results
 
     async def query(self, text: str) -> GenerationResult:
         """Answer a natural-language query over ingested contracts.
@@ -254,7 +273,10 @@ class LegalContractApp:
             ``GenerationResult`` with at minimum an ``answer`` string.
             Pattern D results also populate ``findings`` and ``supporting_quotes``.
         """
-        return await self._engine.query(text)
+        logger.info("legal_app.query.start query_len=%d", len(text))
+        result = await self._engine.query(text)
+        logger.info("legal_app.query.done answer_len=%d", len(result.answer))
+        return result
 
     # ------------------------------------------------------------------
     # Accessors (advanced use)

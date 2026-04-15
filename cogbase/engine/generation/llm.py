@@ -36,12 +36,15 @@ Usage::
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 from cogbase.engine.generation.base import GenerationResult, GeneratorBase
 from cogbase.engine.retrieval.base import RetrievalResult
 from cogbase.engine.router import QueryPattern
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -192,9 +195,18 @@ class LLMGenerator(GeneratorBase):
 
     async def generate(self, query: str, retrieval: RetrievalResult) -> GenerationResult:
         pattern = retrieval.route.pattern
+        logger.info(
+            "generator.generate.start pattern=%s query_len=%d structured_records=%d chunks=%d",
+            pattern.value,
+            len(query),
+            len(retrieval.structured_records),
+            len(retrieval.chunks),
+        )
 
         if pattern == QueryPattern.A:
-            return self._generate_pattern_a(retrieval)
+            result = self._generate_pattern_a(retrieval)
+            logger.info("generator.generate.done pattern=%s answer_len=%d", pattern.value, len(result.answer))
+            return result
 
         system_prompt, user_content = self._build_prompt(query, retrieval, pattern)
 
@@ -213,13 +225,21 @@ class LLMGenerator(GeneratorBase):
         if pattern == QueryPattern.D:
             findings, supporting_quotes = _parse_pattern_d(answer)
 
-        return GenerationResult(
+        result = GenerationResult(
             answer=answer,
             pattern=pattern,
             findings=findings,
             supporting_quotes=supporting_quotes,
             retrieval=retrieval,
         )
+        logger.info(
+            "generator.generate.done pattern=%s answer_len=%d findings=%s quotes=%d",
+            pattern.value,
+            len(result.answer),
+            "yes" if result.findings else "no",
+            len(result.supporting_quotes),
+        )
+        return result
 
     # ------------------------------------------------------------------
     # Internal helpers

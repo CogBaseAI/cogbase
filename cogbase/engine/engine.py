@@ -37,9 +37,13 @@ Typical usage::
 
 from __future__ import annotations
 
+import logging
+
 from cogbase.engine.generation.base import GenerationResult, GeneratorBase
 from cogbase.engine.retrieval.base import RetrieverBase
 from cogbase.engine.router import QueryRouter
+
+logger = logging.getLogger(__name__)
 
 
 class Engine:
@@ -80,6 +84,20 @@ class Engine:
         Raises:
             Any router, retriever, or generator error propagates to the caller.
         """
+        logger.info("engine.query.start query_len=%d", len(text))
         route = await self._router.route(text)
+        logger.info(
+            "engine.query.routed pattern=%s structured_targets=%d",
+            route.pattern.value,
+            len(route.structured_targets),
+        )
         retrieval = await self._retriever.retrieve(route)
-        return await self._generator.generate(text, retrieval)
+        logger.debug(
+            "engine.query.retrieved pattern=%s structured_records=%d chunks=%d",
+            route.pattern.value,
+            len(retrieval.structured_records),
+            len(retrieval.chunks),
+        )
+        result = await self._generator.generate(text, retrieval)
+        logger.info("engine.query.done pattern=%s answer_len=%d", route.pattern.value, len(result.answer))
+        return result

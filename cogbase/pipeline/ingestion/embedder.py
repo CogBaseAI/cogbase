@@ -3,8 +3,11 @@
 import abc
 import asyncio
 import functools
+import logging
 
 from cogbase.core.models import Chunk
+
+logger = logging.getLogger(__name__)
 
 
 class EmbedderBase(abc.ABC):
@@ -63,6 +66,7 @@ class SentenceTransformersEmbedder(EmbedderBase):
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:  # pragma: no cover
+            logger.exception("sentence_transformers_import_failed")
             raise ImportError(
                 "sentence-transformers is required for SentenceTransformersEmbedder. "
                 'Install it with: pip install "cogbase[sentence-transformers]"'
