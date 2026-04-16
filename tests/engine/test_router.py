@@ -48,7 +48,7 @@ def _make_openai_client(
 
 _SAMPLE_SCHEMA = [
     CollectionSchema(
-        name="contracts", id_field="doc_id",
+        name="contracts", primary_fields=["doc_id"],
         fields={
             "doc_id":         FieldSchema(type=FieldType.STRING),
             "party_a":        FieldSchema(type=FieldType.STRING),
@@ -56,7 +56,7 @@ _SAMPLE_SCHEMA = [
         },
     ),
     CollectionSchema(
-        name="facts", id_field="fact_id",
+        name="facts", primary_fields=["fact_id"],
         fields={
             "fact_id":    FieldSchema(type=FieldType.STRING),
             "type":       FieldSchema(type=FieldType.STRING),

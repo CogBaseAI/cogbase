@@ -71,7 +71,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
 
         # 3. Ensure indexes exist (idempotent).
         for field_name, field in schema.fields.items():
-            if field.index and field_name != schema.id_field:
+            if field.index and field_name not in schema.primary_fields:
                 self._conn.execute(
                     f'CREATE INDEX IF NOT EXISTS "idx_{schema.name}_{field_name}" '
                     f'ON "{schema.name}" ("{field_name}")'
@@ -110,9 +110,10 @@ class SQLiteStructuredStore(StructuredStoreBase):
 
     async def update_collection(self, schema: CollectionSchema) -> None:
         old_schema = self._get_schema(schema.name)
-        if schema.id_field != old_schema.id_field:
+        if schema.primary_fields != old_schema.primary_fields:
             raise ValueError(
-                f"Cannot change id_field from '{old_schema.id_field}' to '{schema.id_field}' — "
+                f"Cannot change primary_fields from {old_schema.primary_fields!r} "
+                f"to {schema.primary_fields!r} — "
                 "update_collection does not support primary-key migration"
             )
 
@@ -148,7 +149,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
 
         # Ensure indexes exist for all indexed fields (idempotent).
         for field_name, field in schema.fields.items():
-            if field.index and field_name != schema.id_field:
+            if field.index and field_name not in schema.primary_fields:
                 self._conn.execute(
                     f'CREATE INDEX IF NOT EXISTS "idx_{schema.name}_{field_name}" '
                     f'ON "{schema.name}" ("{field_name}")'
@@ -171,11 +172,16 @@ class SQLiteStructuredStore(StructuredStoreBase):
         if not matching:
             return
 
-        id_field = schema.id_field
-        ids = [r[id_field] for r in matching]
-        placeholders = ", ".join(["?"] * len(ids))
+        key_clauses: list[str] = []
+        params: list[object] = []
+        for row in matching:
+            key_clauses.append(
+                "(" + " AND ".join(f'"{field}" = ?' for field in schema.primary_fields) + ")"
+            )
+            params.extend(row[field] for field in schema.primary_fields)
         self._conn.execute(
-            f'DELETE FROM "{collection}" WHERE "{id_field}" IN ({placeholders})', ids
+            f'DELETE FROM "{collection}" WHERE ' + " OR ".join(key_clauses),
+            params,
         )
         self._conn.commit()
 
@@ -231,9 +237,9 @@ def _col_defs(schema: CollectionSchema) -> list[str]:
     defs: list[str] = []
     for field_name, field in schema.fields.items():
         sql_type = _SQL_TYPE[field.type]
-        not_null = "" if field.nullable else " NOT NULL"
-        if field_name == schema.id_field:
-            defs.append(f'"{field_name}" {sql_type} PRIMARY KEY')
-        else:
-            defs.append(f'"{field_name}" {sql_type}{not_null}')
+        is_primary = field_name in schema.primary_fields
+        not_null = " NOT NULL" if (is_primary or not field.nullable) else ""
+        defs.append(f'"{field_name}" {sql_type}{not_null}')
+    pk_cols = ", ".join(f'"{field}"' for field in schema.primary_fields)
+    defs.append(f"PRIMARY KEY ({pk_cols})")
     return defs

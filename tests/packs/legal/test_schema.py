@@ -12,7 +12,7 @@ def test_no_args_returns_equivalent_schema():
     schema = build_contracts_schema()
     assert schema.fields.keys() == CONTRACTS_SCHEMA.fields.keys()
     assert schema.name == CONTRACTS_SCHEMA.name
-    assert schema.id_field == CONTRACTS_SCHEMA.id_field
+    assert schema.primary_fields == CONTRACTS_SCHEMA.primary_fields
 
 
 def test_does_not_mutate_default_schema():
@@ -73,12 +73,12 @@ def test_extra_field_duplicates_existing_raises():
 
 
 def test_returned_schema_is_valid():
-    """CollectionSchema validation passes — name, id_field, and fields are consistent."""
+    """CollectionSchema validation passes — name, primary_fields, and fields are consistent."""
     schema = build_contracts_schema(
         extra_fields={"score": FieldSchema(type=FieldType.FLOAT, nullable=True)},
         exclude={"currency"},
     )
-    assert schema.id_field in schema.fields
+    assert all(field in schema.fields for field in schema.primary_fields)
 
 
 def test_payment_terms_field_carries_nested_json_schema():

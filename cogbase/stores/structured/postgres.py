@@ -123,7 +123,7 @@ class PostgresStructuredStore(StructuredStoreBase):
 
             # Ensure indexes exist (idempotent via IF NOT EXISTS).
             for field_name, field in schema.fields.items():
-                if field.index and field_name != schema.id_field:
+                if field.index and field_name not in schema.primary_fields:
                     idx_name = f"idx_{schema.name}_{field_name}"
                     await conn.execute(
                         f'CREATE INDEX IF NOT EXISTS "{idx_name}" '
@@ -139,15 +139,16 @@ class PostgresStructuredStore(StructuredStoreBase):
         col_list = ", ".join(f'"{c}"' for c in cols)
 
         # Build the ON CONFLICT … DO UPDATE SET … clause (upsert).
-        update_cols = [c for c in cols if c != schema.id_field]
+        update_cols = [c for c in cols if c not in schema.primary_fields]
+        conflict_target = ", ".join(f'"{field}"' for field in schema.primary_fields)
         if update_cols:
             update_set = ", ".join(f'"{c}" = EXCLUDED."{c}"' for c in update_cols)
             conflict_clause = (
-                f'ON CONFLICT ("{schema.id_field}") DO UPDATE SET {update_set}'
+                f"ON CONFLICT ({conflict_target}) DO UPDATE SET {update_set}"
             )
         else:
             # Only the PK column exists — nothing to update on conflict.
-            conflict_clause = f'ON CONFLICT ("{schema.id_field}") DO NOTHING'
+            conflict_clause = f"ON CONFLICT ({conflict_target}) DO NOTHING"
 
         placeholders = ", ".join(f"${i + 1}" for i in range(len(cols)))
         sql = (
@@ -174,10 +175,10 @@ class PostgresStructuredStore(StructuredStoreBase):
 
     async def update_collection(self, schema: CollectionSchema) -> None:
         old_schema = self._get_schema(schema.name)
-        if schema.id_field != old_schema.id_field:
+        if schema.primary_fields != old_schema.primary_fields:
             raise ValueError(
-                f"Cannot change id_field from '{old_schema.id_field}' to "
-                f"'{schema.id_field}' — update_collection does not support "
+                f"Cannot change primary_fields from {old_schema.primary_fields!r} "
+                f"to {schema.primary_fields!r} — update_collection does not support "
                 "primary-key migration"
             )
 
@@ -201,7 +202,7 @@ class PostgresStructuredStore(StructuredStoreBase):
 
                 # Ensure indexes exist for all indexed fields.
                 for field_name, field in schema.fields.items():
-                    if field.index and field_name != schema.id_field:
+                    if field.index and field_name not in schema.primary_fields:
                         idx_name = f"idx_{schema.name}_{field_name}"
                         await conn.execute(
                             f'CREATE INDEX IF NOT EXISTS "{idx_name}" '
@@ -272,11 +273,11 @@ def _col_defs(schema: CollectionSchema) -> list[str]:
     defs: list[str] = []
     for field_name, field in schema.fields.items():
         pg_type = _PG_TYPE[field.type]
-        not_null = "" if field.nullable else " NOT NULL"
-        if field_name == schema.id_field:
-            defs.append(f'"{field_name}" {pg_type} PRIMARY KEY')
-        else:
-            defs.append(f'"{field_name}" {pg_type}{not_null}')
+        is_primary = field_name in schema.primary_fields
+        not_null = " NOT NULL" if (is_primary or not field.nullable) else ""
+        defs.append(f'"{field_name}" {pg_type}{not_null}')
+    pk_cols = ", ".join(f'"{field}"' for field in schema.primary_fields)
+    defs.append(f"PRIMARY KEY ({pk_cols})")
     return defs
 
 

@@ -144,7 +144,7 @@ class ContractRecord(ContractExtraction):
 
 CONTRACTS_SCHEMA = CollectionSchema(
     name=CONTRACTS_COLLECTION,
-    id_field="contract_id",
+    primary_fields=["contract_id"],
     fields=cls_generate_schema(ContractRecord),
 )
 
@@ -215,6 +215,6 @@ def build_contracts_schema(
 
     return CollectionSchema(
         name=CONTRACTS_SCHEMA.name,
-        id_field=CONTRACTS_SCHEMA.id_field,
+        primary_fields=CONTRACTS_SCHEMA.primary_fields,
         fields=fields,
     )

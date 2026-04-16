@@ -43,16 +43,16 @@ def test_create_collection_invalid_name():
     with pytest.raises(Exception, match="invalid"):
         CollectionSchema(
             name="bad name!",
-            id_field="id",
+            primary_fields=["id"],
             fields={"id": FieldSchema(type=FieldType.STRING)},
         )
 
 
-def test_create_collection_id_field_must_be_in_fields():
-    with pytest.raises(Exception, match="id_field"):
+def test_create_collection_primary_fields_must_be_in_fields():
+    with pytest.raises(Exception, match="primary_fields"):
         CollectionSchema(
             name="things",
-            id_field="missing_field",
+            primary_fields=["missing_field"],
             fields={"id": FieldSchema(type=FieldType.STRING)},
         )
 
@@ -379,7 +379,7 @@ async def test_custom_collection_with_rich_filters(structured_store):
 
     schema = CollectionSchema(
         name="risk_flags",
-        id_field="flag_id",
+        primary_fields=["flag_id"],
         fields={
             "flag_id":     FieldSchema(type=FieldType.STRING,  nullable=False),
             "severity":    FieldSchema(type=FieldType.STRING,  index=True),
@@ -430,7 +430,7 @@ async def test_add_field_to_existing_collection(structured_store):
 
     schema_v2 = CollectionSchema(
         name="facts",
-        id_field="fact_id",
+        primary_fields=["fact_id"],
         fields={
             "fact_id":    FieldSchema(type=FieldType.STRING,  nullable=False),
             "type":       FieldSchema(type=FieldType.STRING,  index=True),
@@ -468,7 +468,7 @@ async def test_existing_rows_get_null_for_added_field(structured_store):
 
     schema_v2 = CollectionSchema(
         name="facts",
-        id_field="fact_id",
+        primary_fields=["fact_id"],
         fields={
             "fact_id":    FieldSchema(type=FieldType.STRING, nullable=False),
             "type":       FieldSchema(type=FieldType.STRING, index=True),
@@ -494,7 +494,7 @@ async def test_remove_field_from_schema_is_ignored_on_read(structured_store):
     # New schema without the 'value' field
     schema_no_value = CollectionSchema(
         name="facts",
-        id_field="fact_id",
+        primary_fields=["fact_id"],
         fields={
             "fact_id":    FieldSchema(type=FieldType.STRING, nullable=False),
             "type":       FieldSchema(type=FieldType.STRING, index=True),
@@ -533,7 +533,7 @@ def _facts_schema_with(**overrides) -> CollectionSchema:
             base.pop(name, None)
         else:
             base[name] = field
-    return CollectionSchema(name="facts", id_field="fact_id", fields=base)
+    return CollectionSchema(name="facts", primary_fields=["fact_id"], fields=base)
 
 
 async def test_update_collection_add_field_existing_rows_get_null(structured_store):
@@ -622,24 +622,58 @@ async def test_update_collection_unknown_collection_raises(structured_store):
         await structured_store.update_collection(
             CollectionSchema(
                 name="does_not_exist",
-                id_field="fact_id",
+                primary_fields=["fact_id"],
                 fields=FACTS_SCHEMA.fields,
             )
         )
 
 
-async def test_update_collection_cannot_change_id_field(structured_store):
+async def test_update_collection_cannot_change_primary_fields(structured_store):
     new_schema = CollectionSchema(
         name="facts",
-        id_field="doc_id",  # different id_field
+        primary_fields=["doc_id"],  # different primary key
         fields={
             "doc_id":     FieldSchema(type=FieldType.STRING, nullable=False),
             "type":       FieldSchema(type=FieldType.STRING),
             "confidence": FieldSchema(type=FieldType.FLOAT),
         },
     )
-    with pytest.raises(ValueError, match="id_field"):
+    with pytest.raises(ValueError, match="primary_fields"):
         await structured_store.update_collection(new_schema)
+
+
+async def test_save_upserts_by_composite_primary_key(structured_store):
+    class VersionedFact(BaseModel):
+        doc_id: str
+        type: str
+        value: str
+        confidence: float
+
+    schema = CollectionSchema(
+        name="versioned_facts",
+        primary_fields=["doc_id", "type"],
+        fields={
+            "doc_id":     FieldSchema(type=FieldType.STRING, nullable=False),
+            "type":       FieldSchema(type=FieldType.STRING, nullable=False),
+            "value":      FieldSchema(type=FieldType.STRING),
+            "confidence": FieldSchema(type=FieldType.FLOAT),
+        },
+    )
+    await structured_store.create_collection(schema)
+
+    await structured_store.save("versioned_facts", [
+        VersionedFact(doc_id="doc-1", type="notice_period", value="30 days", confidence=0.8),
+        VersionedFact(doc_id="doc-1", type="termination", value="2026-01-01", confidence=0.6),
+    ])
+    await structured_store.save("versioned_facts", [
+        VersionedFact(doc_id="doc-1", type="notice_period", value="60 days", confidence=0.9),
+    ])
+
+    results = await structured_store.query("versioned_facts")
+    assert len(results) == 2
+    by_key = {(row["doc_id"], row["type"]): row for row in results}
+    assert by_key[("doc-1", "notice_period")]["value"] == "60 days"
+    assert by_key[("doc-1", "termination")]["value"] == "2026-01-01"
 
 
 async def test_update_collection_no_change_is_noop(structured_store):

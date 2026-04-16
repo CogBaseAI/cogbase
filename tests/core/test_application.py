@@ -43,7 +43,7 @@ class StubExtractor(ExtractorBase):
     _collection = "tags"
     _schema = CollectionSchema(
         name="tags",
-        id_field="tag_id",
+        primary_fields=["tag_id"],
         fields={
             "tag_id": FieldSchema(type=FieldType.STRING),
             "doc_id": FieldSchema(type=FieldType.STRING),
@@ -75,7 +75,7 @@ class TestStructuredCollection:
         extractor = StubExtractor()
         schema = extractor.schema if collection_name == "tags" else CollectionSchema(
             name=collection_name,
-            id_field="tag_id",
+            primary_fields=["tag_id"],
             fields={"tag_id": FieldSchema(type=FieldType.STRING)},
         )
         return StructuredCollection(
@@ -91,7 +91,7 @@ class TestStructuredCollection:
     def test_mismatched_extractor_raises(self):
         wrong_schema = CollectionSchema(
             name="other",
-            id_field="tag_id",
+            primary_fields=["tag_id"],
             fields={"tag_id": FieldSchema(type=FieldType.STRING)},
         )
         with pytest.raises(ValueError, match="does not match schema.name"):

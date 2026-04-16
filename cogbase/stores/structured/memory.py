@@ -53,9 +53,10 @@ class InMemoryStructuredStore(StructuredStoreBase):
 
     async def update_collection(self, schema: CollectionSchema) -> None:
         old_schema = self._get_schema(schema.name)
-        if schema.id_field != old_schema.id_field:
+        if schema.primary_fields != old_schema.primary_fields:
             raise ValueError(
-                f"Cannot change id_field from '{old_schema.id_field}' to '{schema.id_field}' — "
+                f"Cannot change primary_fields from {old_schema.primary_fields!r} "
+                f"to {schema.primary_fields!r} — "
                 "update_collection does not support primary-key migration"
             )
 
@@ -77,12 +78,15 @@ class InMemoryStructuredStore(StructuredStoreBase):
 
     async def save(self, collection: str, records: list[BaseModel]) -> None:
         schema = self._get_schema(collection)
-        id_field = schema.id_field
         rows = [_serialize(r, schema) for r in records]
         new_df = _to_frame(rows, schema)
-        # Upsert: drop existing rows whose id appears in the incoming batch, then append.
         df = self._frames[collection]
-        df = df[~df[id_field].isin(new_df[id_field])]
+        # Upsert: drop existing rows whose primary-key tuple appears in the
+        # incoming batch, then append the new rows.
+        if not df.empty and not new_df.empty:
+            existing_keys = pd.Series(list(df[schema.primary_fields].itertuples(index=False, name=None)))
+            incoming_keys = set(new_df[schema.primary_fields].itertuples(index=False, name=None))
+            df = df[~existing_keys.isin(incoming_keys).to_numpy()]
         self._frames[collection] = pd.concat([df, new_df], ignore_index=True)
 
     async def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:

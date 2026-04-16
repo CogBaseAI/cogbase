@@ -16,8 +16,8 @@ class StructuredStoreBase(abc.ABC):
     """Generic contract for any structured store backend.
 
     Collections must be declared with ``create_collection`` before use.
-    The schema controls column types, indexing, and which field is the primary key
-    (used for upsert semantics in ``save``).
+    The schema controls column types, indexing, and which fields make up the
+    primary key (used for upsert semantics in ``save``).
 
     Filters are ``Filter`` objects built with ``Col``::
 
@@ -43,7 +43,7 @@ class StructuredStoreBase(abc.ABC):
     async def save(self, collection: str, records: list[BaseModel]) -> None:
         """Upsert records into ``collection``.
 
-        Fields not declared in the schema are dropped; the ``id_field`` drives
+        Fields not declared in the schema are dropped; ``primary_fields`` drive
         the upsert key.
         """
 
@@ -62,7 +62,8 @@ class StructuredStoreBase(abc.ABC):
           (new rows receive ``None``; existing rows receive ``None`` for the new column).
         - Fields absent from *schema* but present in the current schema are removed
           and their data is permanently discarded.
-        - The ``id_field`` must remain the same; changing it raises ``ValueError``.
+        - The ``primary_fields`` must remain the same; changing them raises
+          ``ValueError``.
         - Calling this on a collection that does not exist raises ``KeyError``.
 
         Use ``create_collection`` for first-time setup; ``update_collection`` for

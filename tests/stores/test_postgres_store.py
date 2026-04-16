@@ -55,7 +55,7 @@ from tests.stores.test_structured_store import (
     test_update_collection_add_and_remove_simultaneously,
     test_update_collection_surviving_fields_data_preserved,
     test_update_collection_unknown_collection_raises,
-    test_update_collection_cannot_change_id_field,
+    test_update_collection_cannot_change_primary_fields,
     test_update_collection_no_change_is_noop,
 )
 

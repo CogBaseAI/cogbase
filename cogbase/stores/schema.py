@@ -2,7 +2,7 @@
 
 from enum import Enum
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class FieldType(str, Enum):
@@ -30,15 +30,41 @@ class CollectionSchema(BaseModel):
     """Schema for a structured store collection (table).
 
     Args:
-        name:     Collection name — must be a valid identifier (``[a-zA-Z_][a-zA-Z0-9_]*``).
-        id_field: Name of the primary key field; must be present in ``fields``.
-        fields:   Ordered mapping of field name → field schema.
-                  Fields not listed here are silently dropped on save.
+        name:           Collection name — must be a valid identifier
+                        (``[a-zA-Z_][a-zA-Z0-9_]*``).
+        primary_fields: Ordered list of primary-key field names; each must be
+                        present in ``fields``.
+        fields:         Ordered mapping of field name → field schema.
+                        Fields not listed here are silently dropped on save.
     """
 
     name: str
-    id_field: str
+    primary_fields: list[str] = Field(min_length=1)
     fields: dict[str, FieldSchema]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise_primary_fields(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+
+        primary_fields = data.get("primary_fields")
+        id_field = data.get("id_field")
+
+        if primary_fields is None and id_field is not None:
+            data = dict(data)
+            data["primary_fields"] = [id_field]
+            return data
+
+        if primary_fields is not None and id_field is not None:
+            expected = [id_field]
+            if primary_fields != expected:
+                raise ValueError(
+                    "Provide either primary_fields or id_field; if both are set, "
+                    "primary_fields must equal [id_field]"
+                )
+
+        return data
 
     @field_validator("name")
     @classmethod
@@ -50,10 +76,27 @@ class CollectionSchema(BaseModel):
             )
         return v
 
+    @field_validator("primary_fields")
+    @classmethod
+    def _valid_primary_fields(cls, values: list[str]) -> list[str]:
+        if len(set(values)) != len(values):
+            raise ValueError("primary_fields must not contain duplicates")
+        return values
+
     @model_validator(mode="after")
-    def _id_field_in_fields(self) -> "CollectionSchema":
-        if self.id_field not in self.fields:
+    def _primary_fields_in_fields(self) -> "CollectionSchema":
+        missing = [field for field in self.primary_fields if field not in self.fields]
+        if missing:
             raise ValueError(
-                f"id_field '{self.id_field}' must be present in fields"
+                f"primary_fields {missing!r} must be present in fields"
             )
         return self
+
+    @property
+    def id_field(self) -> str:
+        """Backward-compatible accessor for legacy single-column primary keys."""
+        if len(self.primary_fields) != 1:
+            raise AttributeError(
+                "CollectionSchema has a composite primary key; use primary_fields instead of id_field"
+            )
+        return self.primary_fields[0]

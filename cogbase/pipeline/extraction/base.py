@@ -45,7 +45,7 @@ class ExtractorBase(abc.ABC):
             def schema(self) -> CollectionSchema:
                 return CollectionSchema(
                     name="clauses",
-                    id_field="clause_id",
+                    primary_fields=["clause_id"],
                     fields={
                         "clause_id": FieldSchema(type=FieldType.STRING),
                         "doc_id":    FieldSchema(type=FieldType.STRING, index=True),

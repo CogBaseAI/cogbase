@@ -25,7 +25,7 @@ class NounRecord(BaseModel):
 
 _NOUN_SCHEMA = CollectionSchema(
     name="nouns",
-    id_field="noun_id",
+    primary_fields=["noun_id"],
     fields={
         "noun_id": FieldSchema(type=FieldType.STRING),
         "doc_id":  FieldSchema(type=FieldType.STRING, index=True),
@@ -105,7 +105,7 @@ class TestExtractorBase:
         e = StubExtractor()
         assert e.collection == "nouns"
         assert e.schema.name == "nouns"
-        assert e.schema.id_field == "noun_id"
+        assert e.schema.primary_fields == ["noun_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +194,7 @@ class TestIngestWithExtractors:
 
         _tag_schema = CollectionSchema(
             name="tags",
-            id_field="tag_id",
+            primary_fields=["tag_id"],
             fields={
                 "tag_id": FieldSchema(type=FieldType.STRING),
                 "doc_id": FieldSchema(type=FieldType.STRING),
