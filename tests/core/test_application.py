@@ -1,6 +1,7 @@
 """Tests for Application, VectorCollection, and StructuredCollection."""
 
 import pytest
+from pydantic import ValidationError
 from pydantic import BaseModel
 
 from cogbase.core.application import Application, IngestResult, StructuredCollection, VectorCollection
@@ -99,6 +100,11 @@ class TestStructuredCollection:
                 store=InMemoryStructuredStore(),
                 extractor=StubExtractor(),
             )
+
+
+def test_field_schema_rejects_json_schema_on_non_json_type():
+    with pytest.raises(ValidationError, match="json_schema is only valid for FieldType.JSON fields"):
+        FieldSchema(type=FieldType.STRING, json_schema='{"status": "string"}')
 
 
 # ---------------------------------------------------------------------------

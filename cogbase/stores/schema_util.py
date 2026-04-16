@@ -1,9 +1,8 @@
-import json
 import types as _types
 from pydantic import BaseModel
 from typing import List, Union, get_origin, get_args, Type, Dict
 
-from cogbase.stores.schema import FieldType
+from cogbase.stores.schema import FieldSchema, FieldType
 
 
 def _unwrap_optional(t):
@@ -22,11 +21,27 @@ def _unwrap_optional(t):
     return t
 
 
-def cls_generate_schema(cls: Type[BaseModel]) -> Dict[str, FieldType]:
+def _json_schema_for_type(t) -> str | None:
+    origin = get_origin(t)
+
+    if origin in (list, List):
+        inner = _unwrap_optional(get_args(t)[0])
+        if isinstance(inner, type) and issubclass(inner, BaseModel):
+            return f"[{cls_json_schema_for_llm(inner)}]"
+        return None
+
+    if isinstance(t, type) and issubclass(t, BaseModel):
+        return cls_json_schema_for_llm(t)
+
+    return None
+
+
+def cls_generate_schema(cls: Type[BaseModel]) -> Dict[str, FieldSchema]:
     """
     Automatically generate a schema for a Pydantic model.
     str -> FieldType.STRING, list or nested BaseModel -> FieldType.JSON.
     Optional[X] / X | None is unwrapped to X before type matching.
+    Nested BaseModel JSON fields carry LLM-facing ``json_schema`` metadata.
     """
     schema = {}
     for field_name, field_info in cls.model_fields.items():
@@ -35,17 +50,20 @@ def cls_generate_schema(cls: Type[BaseModel]) -> Dict[str, FieldType]:
 
         # Primitive types
         if field_type is int:
-            schema[field_name] = FieldType.INTEGER
+            schema[field_name] = FieldSchema(type=FieldType.INTEGER)
         elif field_type is float:
-            schema[field_name] = FieldType.FLOAT
+            schema[field_name] = FieldSchema(type=FieldType.FLOAT)
         elif field_type is bool:
-            schema[field_name] = FieldType.BOOLEAN
+            schema[field_name] = FieldSchema(type=FieldType.BOOLEAN)
         elif field_type is str:
-            schema[field_name] = FieldType.STRING
+            schema[field_name] = FieldSchema(type=FieldType.STRING)
         elif origin in (list, List) or (isinstance(field_type, type) and issubclass(field_type, BaseModel)):
-            schema[field_name] = FieldType.JSON
+            schema[field_name] = FieldSchema(
+                type=FieldType.JSON,
+                json_schema=_json_schema_for_type(field_type),
+            )
         else:
-            schema[field_name] = FieldType.STRING
+            schema[field_name] = FieldSchema(type=FieldType.STRING)
     return schema
 
 

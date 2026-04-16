@@ -130,9 +130,18 @@ class Col:
 # ---------------------------------------------------------------------------
 
 def matches(record: dict, filters: list[Filter]) -> bool:
-    """Return True if ``record`` satisfies all filters."""
+    """Return True if ``record`` satisfies all filters.
+
+    Supports dot-notation for JSON sub-keys: ``"metadata.status"`` traverses
+    into the ``metadata`` dict and extracts the ``status`` key.
+    """
     for f in filters:
-        val = record.get(f.field)
+        if "." in f.field:
+            col, key = f.field.split(".", 1)
+            container = record.get(col)
+            val = container.get(key) if isinstance(container, dict) else None
+        else:
+            val = record.get(f.field)
         if not _eval(val, f):
             return False
     return True
@@ -204,8 +213,9 @@ def to_sql_where(
     params: list[Any] = []
 
     for f in filters:
-        if f.field in json_fields:
-            continue  # handled in Python
+        base_field = f.field.split(".", 1)[0] if "." in f.field else f.field
+        if base_field in json_fields:
+            continue  # handled in Python (or by a DB-specific JSON translator)
 
         match f.op:
             case Op.EQ:

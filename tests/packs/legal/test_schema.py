@@ -79,3 +79,13 @@ def test_returned_schema_is_valid():
         exclude={"currency"},
     )
     assert schema.id_field in schema.fields
+
+
+def test_payment_terms_field_carries_nested_json_schema():
+    field = CONTRACTS_SCHEMA.fields["payment_terms"]
+    assert field.type == FieldType.JSON
+    assert field.json_schema is not None
+    assert '"schedule"' in field.json_schema
+    assert '"due_date"' in field.json_schema
+    assert '"late_penalty"' in field.json_schema
+    assert '"verbatim"' in field.json_schema

@@ -145,10 +145,7 @@ class ContractRecord(ContractExtraction):
 CONTRACTS_SCHEMA = CollectionSchema(
     name=CONTRACTS_COLLECTION,
     id_field="contract_id",
-    fields={
-        name: FieldSchema(type=ft)
-        for name, ft in cls_generate_schema(ContractRecord).items()
-    },
+    fields=cls_generate_schema(ContractRecord),
 )
 
 

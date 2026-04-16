@@ -61,7 +61,10 @@ _SAMPLE_SCHEMA = [
             "fact_id":    FieldSchema(type=FieldType.STRING),
             "type":       FieldSchema(type=FieldType.STRING),
             "confidence": FieldSchema(type=FieldType.FLOAT),
-            "metadata":   FieldSchema(type=FieldType.JSON),
+            "metadata":   FieldSchema(
+                type=FieldType.JSON,
+                json_schema='{"status": "string", "priority": "int"}',
+            ),
         },
     ),
 ]
@@ -138,9 +141,10 @@ async def test_llm_router_schema_injected_into_system_prompt() -> None:
     assert "facts" in system_content
     assert "party_a" in system_content
     # field types and their valid operators should be present
-    assert "float" in system_content          # confidence field type
-    assert "json" in system_content           # metadata field type
-    assert "not filterable" in system_content # json fields excluded from filtering
+    assert "float" in system_content           # confidence field type
+    assert "json" in system_content            # metadata field type
+    assert "dot notation" in system_content   # json fields filterable via field.subkey
+    assert 'subkeys={"status": "string", "priority": "int"}' in system_content
 
 
 @pytest.mark.asyncio

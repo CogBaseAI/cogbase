@@ -290,65 +290,62 @@ def _to_pg_where(
 ) -> tuple[str, list[Any]]:
     """Translate filters to a parameterised PostgreSQL WHERE clause.
 
-    JSON fields use the ``->>`` text-extraction operator so comparisons work
-    correctly for equality and ordering.  All operators are pushed to the DB.
+    Dot-notation fields (``"metadata.key"``) are translated to JSONB
+    text-extraction: ``"metadata"->>'key'``.  All operators are pushed to the DB.
     """
-    json_fields = {name for name, f in schema.fields.items() if f.type == FieldType.JSON}
     clauses: list[str] = []
     params: list[Any] = []
-
-    def _col(field: str) -> str:
-        """Return the SQL column reference, using ->> for JSONB top-level keys."""
-        if field in json_fields:
-            # For simple top-level key access; nested paths would need jsonb_path_query.
-            # The key is the field name itself (the whole column is one JSON value).
-            # We treat the JSONB column as a scalar blob — comparisons use the text cast.
-            return f'"{field}"::text'
-        return f'"{field}"'
 
     for f in filters:
         idx = len(params)
 
+        # Build the SQL column expression.
+        # Dot-notation (e.g. "metadata.status") → JSONB text extraction: "metadata"->>'status'
+        # The key is embedded directly (not parameterised) because asyncpg does not support
+        # parameterising JSON key names, and the key comes from the schema/LLM — not raw
+        # user input that could contain SQL.
+        if "." in f.field:
+            col_name, key = f.field.split(".", 1)
+            col_expr = f'"{col_name}"->>\'{key}\''
+            is_json_subkey = True
+        else:
+            col_expr = f'"{f.field}"'
+            is_json_subkey = False
+
         match f.op:
             case Op.EQ:
-                clauses.append(f"{_col(f.field)} = ${idx + 1}")
-                params.append(_pg_value(f.value, f.field, json_fields))
+                clauses.append(f"{col_expr} = ${idx + 1}")
+                params.append(str(f.value) if is_json_subkey else f.value)
             case Op.NE:
-                clauses.append(f"{_col(f.field)} != ${idx + 1}")
-                params.append(_pg_value(f.value, f.field, json_fields))
+                clauses.append(f"{col_expr} != ${idx + 1}")
+                params.append(str(f.value) if is_json_subkey else f.value)
             case Op.LT:
-                clauses.append(f"{_col(f.field)} < ${idx + 1}")
-                params.append(f.value)
+                clauses.append(f"{col_expr} < ${idx + 1}")
+                params.append(str(f.value) if is_json_subkey else f.value)
             case Op.GT:
-                clauses.append(f"{_col(f.field)} > ${idx + 1}")
-                params.append(f.value)
+                clauses.append(f"{col_expr} > ${idx + 1}")
+                params.append(str(f.value) if is_json_subkey else f.value)
             case Op.LTE:
-                clauses.append(f"{_col(f.field)} <= ${idx + 1}")
-                params.append(f.value)
+                clauses.append(f"{col_expr} <= ${idx + 1}")
+                params.append(str(f.value) if is_json_subkey else f.value)
             case Op.GTE:
-                clauses.append(f"{_col(f.field)} >= ${idx + 1}")
-                params.append(f.value)
+                clauses.append(f"{col_expr} >= ${idx + 1}")
+                params.append(str(f.value) if is_json_subkey else f.value)
             case Op.IN:
                 placeholders = ", ".join(f"${idx + i + 1}" for i in range(len(f.value)))
-                clauses.append(f'"{f.field}" IN ({placeholders})')
-                params.extend(f.value)
+                clauses.append(f"{col_expr} IN ({placeholders})")
+                params.extend(str(v) for v in f.value) if is_json_subkey else params.extend(f.value)
             case Op.NOT_IN:
                 placeholders = ", ".join(f"${idx + i + 1}" for i in range(len(f.value)))
-                clauses.append(f'"{f.field}" NOT IN ({placeholders})')
-                params.extend(f.value)
+                clauses.append(f"{col_expr} NOT IN ({placeholders})")
+                params.extend(str(v) for v in f.value) if is_json_subkey else params.extend(f.value)
             case Op.LIKE:
-                clauses.append(f'"{f.field}" ILIKE ${idx + 1}')
+                clauses.append(f"{col_expr} ILIKE ${idx + 1}")
                 params.append(f.value)
             case Op.IS_NULL:
-                clauses.append(f'"{f.field}" IS NULL')
+                # ->> returns NULL when the key is absent or the value is JSON null.
+                clauses.append(f"{col_expr} IS NULL")
             case Op.IS_NOT_NULL:
-                clauses.append(f'"{f.field}" IS NOT NULL')
+                clauses.append(f"{col_expr} IS NOT NULL")
 
     return (" AND ".join(clauses), params)
-
-
-def _pg_value(value: Any, field: str, json_fields: set[str]) -> Any:
-    """Serialise a value for comparison against a JSONB column (as text)."""
-    if field in json_fields and value is not None:
-        return json.dumps(value)
-    return value

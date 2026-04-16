@@ -10,13 +10,20 @@ class FieldType(str, Enum):
     INTEGER = "integer"
     FLOAT = "float"
     BOOLEAN = "boolean"
-    JSON = "json"  # serialised as a JSON blob; filtered in Python, not SQL
+    JSON = "json"  # JSONB in Postgres (sub-key filters via dot notation); TEXT blob in SQLite (Python post-filter)
 
 
 class FieldSchema(BaseModel):
     type: FieldType
     nullable: bool = True
     index: bool = False  # create a DB index on this column (ignored by in-memory store)
+    json_schema: str | None = None
+
+    @model_validator(mode="after")
+    def _json_schema_only_on_json_fields(self) -> "FieldSchema":
+        if self.json_schema is not None and self.type != FieldType.JSON:
+            raise ValueError("json_schema is only valid for FieldType.JSON fields")
+        return self
 
 
 class CollectionSchema(BaseModel):

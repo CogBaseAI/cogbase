@@ -57,19 +57,19 @@ class _Mixed(BaseModel):
 # ---------------------------------------------------------------------------
 
 def test_str_maps_to_string():
-    assert cls_generate_schema(_Primitives)["s"] == FieldType.STRING
+    assert cls_generate_schema(_Primitives)["s"].type == FieldType.STRING
 
 
 def test_int_maps_to_integer():
-    assert cls_generate_schema(_Primitives)["i"] == FieldType.INTEGER
+    assert cls_generate_schema(_Primitives)["i"].type == FieldType.INTEGER
 
 
 def test_float_maps_to_float():
-    assert cls_generate_schema(_Primitives)["f"] == FieldType.FLOAT
+    assert cls_generate_schema(_Primitives)["f"].type == FieldType.FLOAT
 
 
 def test_bool_maps_to_boolean():
-    assert cls_generate_schema(_Primitives)["b"] == FieldType.BOOLEAN
+    assert cls_generate_schema(_Primitives)["b"].type == FieldType.BOOLEAN
 
 
 # ---------------------------------------------------------------------------
@@ -77,31 +77,31 @@ def test_bool_maps_to_boolean():
 # ---------------------------------------------------------------------------
 
 def test_optional_str_maps_to_string():
-    assert cls_generate_schema(_Optionals)["s"] == FieldType.STRING
+    assert cls_generate_schema(_Optionals)["s"].type == FieldType.STRING
 
 
 def test_optional_int_maps_to_integer():
-    assert cls_generate_schema(_Optionals)["i"] == FieldType.INTEGER
+    assert cls_generate_schema(_Optionals)["i"].type == FieldType.INTEGER
 
 
 def test_optional_float_maps_to_float():
-    assert cls_generate_schema(_Optionals)["f"] == FieldType.FLOAT
+    assert cls_generate_schema(_Optionals)["f"].type == FieldType.FLOAT
 
 
 def test_optional_bool_maps_to_boolean():
-    assert cls_generate_schema(_Optionals)["b"] == FieldType.BOOLEAN
+    assert cls_generate_schema(_Optionals)["b"].type == FieldType.BOOLEAN
 
 
 def test_typing_optional_str_maps_to_string():
     class M(BaseModel):
         v: Optional[str] = None
-    assert cls_generate_schema(M)["v"] == FieldType.STRING
+    assert cls_generate_schema(M)["v"].type == FieldType.STRING
 
 
 def test_typing_optional_float_maps_to_float():
     class M(BaseModel):
         v: Optional[float] = None
-    assert cls_generate_schema(M)["v"] == FieldType.FLOAT
+    assert cls_generate_schema(M)["v"].type == FieldType.FLOAT
 
 
 # ---------------------------------------------------------------------------
@@ -109,15 +109,21 @@ def test_typing_optional_float_maps_to_float():
 # ---------------------------------------------------------------------------
 
 def test_list_of_str_maps_to_json():
-    assert cls_generate_schema(_Lists)["tags"] == FieldType.JSON
+    assert cls_generate_schema(_Lists)["tags"].type == FieldType.JSON
 
 
 def test_list_of_basemodel_maps_to_json():
-    assert cls_generate_schema(_Lists)["items"] == FieldType.JSON
+    assert cls_generate_schema(_Lists)["items"].type == FieldType.JSON
 
 
 def test_nested_basemodel_maps_to_json():
-    assert cls_generate_schema(_Nested)["inner"] == FieldType.JSON
+    assert cls_generate_schema(_Nested)["inner"].type == FieldType.JSON
+
+
+def test_nested_basemodel_json_schema_is_included():
+    schema = cls_generate_schema(_Nested)
+    assert schema["inner"].json_schema is not None
+    assert '"x": "string, inner x"' in schema["inner"].json_schema
 
 
 # ---------------------------------------------------------------------------
@@ -131,12 +137,12 @@ def test_mixed_model_all_fields_present():
 
 def test_mixed_model_types():
     result = cls_generate_schema(_Mixed)
-    assert result["title"] == FieldType.STRING
-    assert result["score"] == FieldType.FLOAT
-    assert result["count"] == FieldType.INTEGER
-    assert result["tags"] == FieldType.JSON
-    assert result["children"] == FieldType.JSON
-    assert result["child"] == FieldType.JSON
+    assert result["title"].type == FieldType.STRING
+    assert result["score"].type == FieldType.FLOAT
+    assert result["count"].type == FieldType.INTEGER
+    assert result["tags"].type == FieldType.JSON
+    assert result["children"].type == FieldType.JSON
+    assert result["child"].type == FieldType.JSON
 
 
 # ---------------------------------------------------------------------------

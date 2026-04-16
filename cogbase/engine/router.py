@@ -72,7 +72,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from cogbase.stores.filters import Filter, Op
-from cogbase.stores.schema import CollectionSchema, FieldType
+from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +196,7 @@ Filter operator notes:
   in, not_in             value must be a JSON array
   like                   SQL LIKE pattern (% matches any sequence)
   is_null, is_not_null   no "value" key required
-  json fields            never include in filters
+  json sub-key filters   use "field.subkey" as the field name; value must be a string
 
 Return ONLY valid JSON, no prose:
 {{
@@ -227,7 +227,9 @@ Field type → valid filter operators:
   integer: =, !=, <, >, <=, >=, in, not_in, is_null, is_not_null
   float:   =, !=, <, >, <=, >=, in, not_in, is_null, is_not_null
   boolean: =, !=, is_null, is_not_null
-  json:    (not filterable — never include in filters)
+  json:    filter on sub-keys using dot notation — "field.subkey"
+           operators: =, !=, like, in, not_in, is_null, is_not_null
+           values are always compared as strings (e.g. "1.5" not 1.5)
 """
 
 
@@ -250,7 +252,7 @@ def _build_system_prompt(
         lines = [_TYPE_OPERATORS_LEGEND, "Available collections (use these names exactly):\n"]
         for c in schema:
             fields_str = ", ".join(
-                f"{fname} ({fschema.type.value})"
+                _format_field_for_prompt(fname, fschema)
                 for fname, fschema in c.fields.items()
             )
             lines.append(f"  {c.name}: {fields_str}\n")
@@ -263,6 +265,14 @@ def _build_system_prompt(
         pattern_ids=pattern_ids,
         schema_section=schema_section,
     )
+
+
+def _format_field_for_prompt(field_name: str, field_schema: FieldSchema) -> str:
+    rendered = f"{field_name} ({field_schema.type.value})"
+    if field_schema.type == FieldType.JSON and field_schema.json_schema:
+        compact = " ".join(field_schema.json_schema.split())
+        rendered += f" subkeys={compact}"
+    return rendered
 
 
 # ---------------------------------------------------------------------------
