@@ -273,9 +273,13 @@ class LegalContractApp:
             ``GenerationResult`` with at minimum an ``answer`` string.
             Pattern D results also populate ``findings`` and ``supporting_quotes``.
         """
-        logger.info("legal_app.query.start query_len=%d", len(text))
+        logger.info("legal_app.query.start query_len=%d query=%s", len(text), text[:200])
         result = await self._engine.query(text)
-        logger.info("legal_app.query.done answer_len=%d", len(result.answer))
+        logger.info(
+            "legal_app.query.done answer_len=%d answer=%s",
+            len(result.answer),
+            result.answer[:200]
+        )
         return result
 
     # ------------------------------------------------------------------

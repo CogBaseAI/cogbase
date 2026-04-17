@@ -79,7 +79,7 @@ class ContractExtractor(ExtractorBase):
         """Single LLM call; returns ``None`` when the response is unparseable."""
         response = await self._client.chat.completions.create(
             model=self._model,
-            max_tokens=self._max_tokens,
+            max_completion_tokens=self._max_tokens,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": doc.text},

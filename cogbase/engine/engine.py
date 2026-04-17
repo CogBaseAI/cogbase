@@ -92,7 +92,7 @@ class Engine:
             len(route.structured_targets),
         )
         retrieval = await self._retriever.retrieve(route)
-        logger.debug(
+        logger.info(
             "engine.query.retrieved pattern=%s structured_records=%d chunks=%d",
             route.pattern.value,
             len(retrieval.structured_records),

@@ -348,13 +348,14 @@ class LLMRouter(QueryRouter):
             logger.debug("router.route.attempt attempt=%d query_len=%d", attempt + 1, len(query))
             response = await self._client.chat.completions.create(
                 model=self._model,
-                max_tokens=self._max_tokens,
+                max_completion_tokens=self._max_tokens,
                 messages=[
                     {"role": "system", "content": self._system_prompt},
                     {"role": "user", "content": query.strip()},
                 ],
             )
             raw: str = response.choices[0].message.content
+            logger.debug("router.route.raw query=%s, result raw=%s", query, raw)
             try:
                 result = _parse_llm_response(raw, query)
                 logger.info(
@@ -366,10 +367,14 @@ class LLMRouter(QueryRouter):
             except (ValueError, KeyError, json.JSONDecodeError) as exc:
                 last_exc = exc
                 logger.exception(
-                    "router.route.parse_failed attempt=%d/%d",
+                    "router.route.parse_failed attempt=%d/%d, query=%s, prompt=%s, response raw=%s",
                     attempt + 1,
                     self._max_retries + 1,
+                    query,
+                    self._system_prompt,
+                    raw,
                 )
+
         logger.error(
             "router.route.exhausted_retries attempts=%d",
             self._max_retries + 1,

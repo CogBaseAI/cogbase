@@ -212,7 +212,7 @@ class LLMGenerator(GeneratorBase):
 
         response = await self._client.chat.completions.create(
             model=self._model,
-            max_tokens=self._max_tokens,
+            max_completion_tokens=self._max_tokens,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
