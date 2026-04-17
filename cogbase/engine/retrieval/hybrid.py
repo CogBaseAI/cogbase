@@ -34,7 +34,7 @@ from cogbase.engine.retrieval.base import RetrievalResult, RetrieverBase
 from cogbase.engine.retrieval.structured import StructuredRetriever
 from cogbase.engine.retrieval.vector import VectorRetriever
 from cogbase.engine.router import QueryPattern, RouteResult
-from cogbase.pipeline.ingestion.embedder import EmbedderBase
+from cogbase.embeddings import EmbeddingBase
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class HybridRetriever(RetrieverBase):
         vector_store:     Any ``VectorStoreBase`` implementation.  ``None``
                           disables vector retrieval — patterns B, C, and D
                           return empty chunks rather than raising.
-        embedder:         Any ``EmbedderBase`` implementation. Required when
+        embedder:         Any ``EmbeddingBase`` implementation. Required when
                           *vector_store* is provided; ignored otherwise.
         top_k:            Number of vector-search results to return. Defaults to 10.
     """
@@ -63,7 +63,7 @@ class HybridRetriever(RetrieverBase):
         self,
         structured_store: StructuredStoreBase,
         vector_store: VectorStoreBase | None = None,
-        embedder: EmbedderBase | None = None,
+        embedder: EmbeddingBase | None = None,
         top_k: int = 10,
     ) -> None:
         self._structured = StructuredRetriever(structured_store)

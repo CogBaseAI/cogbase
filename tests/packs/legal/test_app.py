@@ -13,7 +13,7 @@ from cogbase.core.models import Chunk, Document
 from cogbase.engine.generation.base import GenerationResult
 from cogbase.engine.router import QueryPattern
 from cogbase.pipeline.ingestion.base import ChunkerBase
-from cogbase.pipeline.ingestion.embedder import EmbedderBase
+from cogbase.embeddings import EmbeddingBase
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
@@ -65,7 +65,7 @@ def _contract_payload(**overrides) -> str:
     return json.dumps(data)
 
 
-class StubEmbedder(EmbedderBase):
+class StubEmbedding(EmbeddingBase):
     def __init__(self, dim: int = 4) -> None:
         self._dim = dim
 
@@ -97,7 +97,7 @@ class TestLegalContractAppConstruction:
             model="test-model",
             structured_store=InMemoryStructuredStore(),
             vector_store=FAISSVectorStore(dim=4),
-            embedder=StubEmbedder(dim=4),
+            embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=64, overlap=0),
         )
         assert len(app.application.vector_collections) == 1
@@ -203,7 +203,7 @@ class TestLegalContractAppLifecycle:
             model="test-model",
             structured_store=store,
             vector_store=vector_store,
-            embedder=StubEmbedder(dim=4),
+            embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
         await app.setup()
@@ -368,7 +368,7 @@ class TestStructuredOnlyPatternRestriction:
             model="test-model",
             structured_store=InMemoryStructuredStore(),
             vector_store=FAISSVectorStore(dim=4),
-            embedder=StubEmbedder(dim=4),
+            embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=64, overlap=0),
         )
         prompt = self._capture_system_prompt(app)

@@ -1,4 +1,4 @@
-"""Tests for EmbedderBase contract and SentenceTransformersEmbedder."""
+"""Tests for EmbeddingBase contract and SentenceTransformersEmbedding."""
 
 import os
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from cogbase.core.models import Chunk
-from cogbase.pipeline.ingestion.embedder import EmbedderBase, OpenAIEmbedder, SentenceTransformersEmbedder
+from cogbase.embeddings import EmbeddingBase, OpenAIEmbedding, SentenceTransformersEmbedding
 
 # Load .env from the repo root so OPENAI_API_KEY is available when present.
 try:
@@ -27,7 +27,7 @@ def make_chunks(texts: list[str], doc_id: str = "doc-1") -> list[Chunk]:
     ]
 
 
-async def assert_embedder_contract(embedder: EmbedderBase, chunks: list[Chunk]) -> list[Chunk]:
+async def assert_embedder_contract(embedder: EmbeddingBase, chunks: list[Chunk]) -> list[Chunk]:
     """Invariants every compliant embedder must satisfy."""
     result = await embedder.embed(chunks)
     assert isinstance(result, list)
@@ -48,36 +48,36 @@ async def assert_embedder_contract(embedder: EmbedderBase, chunks: list[Chunk]) 
 
 
 # ---------------------------------------------------------------------------
-# EmbedderBase — abstract interface
+# EmbeddingBase — abstract interface
 # ---------------------------------------------------------------------------
 
-class TestEmbedderBaseIsAbstract:
+class TestEmbeddingBaseIsAbstract:
     def test_cannot_instantiate_directly(self):
         with pytest.raises(TypeError):
-            EmbedderBase()  # type: ignore[abstract]
+            EmbeddingBase()  # type: ignore[abstract]
 
     @pytest.mark.asyncio
     async def test_custom_embedder_satisfies_contract(self):
-        """Any EmbedderBase subclass that sets a fixed vector passes the contract."""
+        """Any EmbeddingBase subclass that sets a fixed vector passes the contract."""
 
-        class ConstantEmbedder(EmbedderBase):
+        class ConstantEmbedding(EmbeddingBase):
             async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
                 return [c.model_copy(update={"embedding": [0.1, 0.2, 0.3]}) for c in chunks]
 
         chunks = make_chunks(["hello world", "foo bar"])
-        await assert_embedder_contract(ConstantEmbedder(), chunks)
+        await assert_embedder_contract(ConstantEmbedding(), chunks)
 
     @pytest.mark.asyncio
     async def test_empty_input_returns_empty(self):
-        class ConstantEmbedder(EmbedderBase):
+        class ConstantEmbedding(EmbeddingBase):
             async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
                 return [c.model_copy(update={"embedding": [1.0]}) for c in chunks]
 
-        assert await ConstantEmbedder().embed([]) == []
+        assert await ConstantEmbedding().embed([]) == []
 
 
 # ---------------------------------------------------------------------------
-# SentenceTransformersEmbedder — requires the sentence-transformers package
+# SentenceTransformersEmbedding — requires the sentence-transformers package
 # ---------------------------------------------------------------------------
 
 sentence_transformers = pytest.importorskip(
@@ -86,10 +86,10 @@ sentence_transformers = pytest.importorskip(
 )
 
 
-class TestSentenceTransformersEmbedder:
+class TestSentenceTransformersEmbedding:
     @pytest.fixture(scope="class")
     def embedder(self):
-        return SentenceTransformersEmbedder("all-MiniLM-L6-v2")
+        return SentenceTransformersEmbedding("all-MiniLM-L6-v2")
 
     @pytest.mark.asyncio
     async def test_contract(self, embedder):
@@ -115,7 +115,7 @@ class TestSentenceTransformersEmbedder:
         assert result[0].embedding is not None
 
     def test_is_subclass(self):
-        assert issubclass(SentenceTransformersEmbedder, EmbedderBase)
+        assert issubclass(SentenceTransformersEmbedding, EmbeddingBase)
 
     @pytest.mark.asyncio
     async def test_input_not_mutated(self, embedder):
@@ -139,7 +139,7 @@ class TestSentenceTransformersEmbedder:
 
 
 # ---------------------------------------------------------------------------
-# OpenAIEmbedder — requires openai package and OPENAI_API_KEY in .env
+# OpenAIEmbedding — requires openai package and OPENAI_API_KEY in .env
 # ---------------------------------------------------------------------------
 
 openai = pytest.importorskip("openai", reason="openai package not installed")
@@ -152,16 +152,16 @@ pytestmark_openai = pytest.mark.skipif(
 
 
 @pytestmark_openai
-class TestOpenAIEmbedder:
+class TestOpenAIEmbedding:
     @pytest.fixture(scope="class")
     def embedder(self):
         client = openai.AsyncOpenAI(api_key=_openai_api_key)
-        return OpenAIEmbedder(client, model="text-embedding-3-small")
+        return OpenAIEmbedding(client, model="text-embedding-3-small")
 
     @pytest.fixture(scope="class")
     def embedder_with_dimensions(self):
         client = openai.AsyncOpenAI(api_key=_openai_api_key)
-        return OpenAIEmbedder(client, model="text-embedding-3-small", dimensions=256)
+        return OpenAIEmbedding(client, model="text-embedding-3-small", dimensions=256)
 
     @pytest.mark.asyncio
     async def test_contract(self, embedder):
@@ -205,4 +205,4 @@ class TestOpenAIEmbedder:
         assert result[0].embedding != result[1].embedding
 
     def test_is_subclass(self):
-        assert issubclass(OpenAIEmbedder, EmbedderBase)
+        assert issubclass(OpenAIEmbedding, EmbeddingBase)

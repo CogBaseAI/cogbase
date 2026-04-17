@@ -4,7 +4,7 @@ import pytest
 
 from cogbase.core.models import Chunk, Document
 from cogbase.pipeline.ingestion.base import ChunkerBase
-from cogbase.pipeline.ingestion.embedder import EmbedderBase
+from cogbase.embeddings import EmbeddingBase
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 from cogbase.pipeline.ingestion.pipeline import ingest
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
@@ -14,7 +14,7 @@ from cogbase.stores.vector.faiss_store import FAISSVectorStore
 # Test doubles
 # ---------------------------------------------------------------------------
 
-class StubEmbedder(EmbedderBase):
+class StubEmbedding(EmbeddingBase):
     """Returns a fixed-dimension embedding for every chunk."""
 
     def __init__(self, dim: int = 4) -> None:
@@ -38,7 +38,7 @@ class TestIngest:
 
     @pytest.fixture
     def embedder(self):
-        return StubEmbedder(dim=4)
+        return StubEmbedding(dim=4)
 
     @pytest.fixture
     def vector_store(self):
@@ -96,7 +96,7 @@ class TestIngest:
 
         seen_chunks: list[list[Chunk]] = []
 
-        class RecordingEmbedder(EmbedderBase):
+        class RecordingEmbedding(EmbeddingBase):
             async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
                 seen_chunks.append(list(chunks))
                 return [c.model_copy(update={"embedding": [1.0, 0.0]}) for c in chunks]
@@ -105,7 +105,7 @@ class TestIngest:
         chunker = FixedSizeChunker(chunk_size=20, overlap=0)
         text = "x" * 60  # exactly 3 chunks of 20 chars
 
-        await ingest(Document(doc_id="doc-rec", text=text), chunker=chunker, embedder=RecordingEmbedder(), vector_store=store)
+        await ingest(Document(doc_id="doc-rec", text=text), chunker=chunker, embedder=RecordingEmbedding(), vector_store=store)
 
         assert len(seen_chunks) == 1
         assert len(seen_chunks[0]) == 3

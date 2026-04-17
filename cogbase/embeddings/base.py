@@ -11,19 +11,19 @@ from cogbase.core.models import Chunk
 logger = logging.getLogger(__name__)
 
 
-class EmbedderBase(abc.ABC):
+class EmbeddingBase(abc.ABC):
     """Attach embeddings to a list of ``Chunk`` objects.
 
     Implement this class to plug in a custom embedding backend.  The pipeline
-    accepts any ``EmbedderBase`` instance via dependency injection.
+    accepts any ``EmbeddingBase`` instance via dependency injection.
 
     Example::
 
-        class MyEmbedder(EmbedderBase):
+        class MyEmbedding(EmbeddingBase):
             async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
                 ...
 
-        await ingest(text, doc_id, chunker=..., embedder=MyEmbedder(), ...)
+        await ingest(text, doc_id, chunker=..., embedder=MyEmbedding(), ...)
 
     The interface is async because production embedders typically make HTTP
     calls (OpenAI, Cohere, etc.).  CPU-bound local models should offload to a
@@ -46,7 +46,7 @@ class EmbedderBase(abc.ABC):
         """
 
 
-class SentenceTransformersEmbedder(EmbedderBase):
+class SentenceTransformersEmbedding(EmbeddingBase):
     """Embedder backed by a ``sentence-transformers`` model.
 
     Vectors are L2-normalised before being attached to chunks, which makes
@@ -69,7 +69,7 @@ class SentenceTransformersEmbedder(EmbedderBase):
         except ImportError as exc:  # pragma: no cover
             logger.exception("sentence_transformers_import_failed")
             raise ImportError(
-                "sentence-transformers is required for SentenceTransformersEmbedder. "
+                "sentence-transformers is required for SentenceTransformersEmbedding. "
                 'Install it with: pip install "cogbase[sentence-transformers]"'
             ) from exc
 
@@ -93,7 +93,7 @@ class SentenceTransformersEmbedder(EmbedderBase):
         ]
 
 
-class OpenAIEmbedder(EmbedderBase):
+class OpenAIEmbedding(EmbeddingBase):
     """Embedder backed by the OpenAI Embeddings API.
 
     Sends all chunk texts in a single batched API call and attaches the
@@ -117,10 +117,10 @@ class OpenAIEmbedder(EmbedderBase):
     Example::
 
         import openai
-        from cogbase.pipeline.ingestion.embedder import OpenAIEmbedder
+        from cogbase.embeddings import OpenAIEmbedding
 
         client = openai.AsyncOpenAI(api_key="...")
-        embedder = OpenAIEmbedder(client, model="text-embedding-3-small")
+        embedder = OpenAIEmbedding(client, model="text-embedding-3-small")
         chunks = await embedder.embed(chunks)
     """
 

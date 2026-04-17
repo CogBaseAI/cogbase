@@ -10,7 +10,7 @@ from packs.legal.contract_analyst import LegalContractApp, IngestResult
 from cogbase.core.models import Document
 from cogbase.stores.structured.sqlite import SQLiteStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
-from cogbase.pipeline.ingestion.embedder import SentenceTransformersEmbedder
+from cogbase.embeddings import SentenceTransformersEmbedding
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 
 client = openai.AsyncOpenAI(api_key="...")
@@ -20,7 +20,7 @@ app = LegalContractApp(
     model="claude-sonnet-4-6",
     structured_store=SQLiteStructuredStore("contracts.db"),
     vector_store=FAISSVectorStore(dim=384),
-    embedder=SentenceTransformersEmbedder(),
+    embedder=SentenceTransformersEmbedding(),
     chunker=FixedSizeChunker(chunk_size=512, overlap=64),
 )
 
@@ -200,7 +200,7 @@ print(result.supporting_quotes)  # list[str] — verbatim excerpts
 | `model` | `str` | yes | Model name for extraction, routing, and generation |
 | `structured_store` | `StructuredStoreBase` | yes | Persistent store for extracted contract records |
 | `vector_store` | `VectorStoreBase` | no | Vector store for raw contract text |
-| `embedder` | `EmbedderBase` | no | Embedder for contract text chunks |
+| `embedder` | `EmbeddingBase` | no | Embedder for contract text chunks |
 | `chunker` | `ChunkerBase` | no | Chunker for splitting contract text |
 | `name` | `str` | no | Logical application name (default: `"legal"`) |
 | `extractor_max_tokens` | `int` | no | Max tokens for contract extraction (default: `4096`) |

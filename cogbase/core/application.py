@@ -14,7 +14,7 @@ Typical usage::
             VectorCollection(
                 name="documents",
                 store=FAISSVectorStore(dim=384),
-                embedder=SentenceTransformersEmbedder(),
+                embedder=SentenceTransformersEmbedding(),
                 chunker=FixedSizeChunker(chunk_size=512, overlap=64),
             )
         ],
@@ -44,7 +44,7 @@ from typing import Sequence
 from cogbase.core.models import Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
-from cogbase.pipeline.ingestion.embedder import EmbedderBase
+from cogbase.embeddings import EmbeddingBase
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
 from cogbase.stores.schema import CollectionSchema
 
@@ -77,13 +77,13 @@ class VectorCollection:
     Args:
         name:     Logical name for this collection (used for lookup and logging).
         store:    ``VectorStoreBase`` implementation that persists chunks.
-        embedder: ``EmbedderBase`` implementation that produces dense vectors.
+        embedder: ``EmbeddingBase`` implementation that produces dense vectors.
         chunker:  ``ChunkerBase`` implementation that splits document text.
     """
 
     name: str
     store: VectorStoreBase
-    embedder: EmbedderBase
+    embedder: EmbeddingBase
     chunker: ChunkerBase
 
 

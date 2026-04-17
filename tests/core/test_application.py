@@ -8,7 +8,7 @@ from cogbase.core.application import Application, IngestResult, StructuredCollec
 from cogbase.core.models import Chunk, Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
-from cogbase.pipeline.ingestion.embedder import EmbedderBase
+from cogbase.embeddings import EmbeddingBase
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
@@ -22,7 +22,7 @@ from cogbase.stores.filters import Filter
 # ---------------------------------------------------------------------------
 
 
-class StubEmbedder(EmbedderBase):
+class StubEmbedding(EmbeddingBase):
     def __init__(self, dim: int = 4) -> None:
         self._dim = dim
 
@@ -124,7 +124,7 @@ class TestApplicationConstruction:
         vc = VectorCollection(
             name="docs",
             store=FAISSVectorStore(dim=4),
-            embedder=StubEmbedder(dim=4),
+            embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
         app = Application(name="app", vector_collections=[vc])
@@ -205,7 +205,7 @@ class TestApplicationIngest:
         vc = VectorCollection(
             name="docs",
             store=vector_store,
-            embedder=StubEmbedder(dim=4),
+            embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
         sc = StructuredCollection(
@@ -263,7 +263,7 @@ class TestApplicationIngest:
         vc = VectorCollection(
             name="docs",
             store=vector_store,
-            embedder=StubEmbedder(dim=4),
+            embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
         app = Application(name="app", vector_collections=[vc])

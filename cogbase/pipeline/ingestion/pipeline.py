@@ -3,7 +3,7 @@
 from cogbase.core.models import Chunk, Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
-from cogbase.pipeline.ingestion.embedder import EmbedderBase
+from cogbase.embeddings import EmbeddingBase
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
 
 
@@ -28,7 +28,7 @@ async def ingest(
     doc: Document,
     *,
     chunker: ChunkerBase,
-    embedder: EmbedderBase,
+    embedder: EmbeddingBase,
     vector_store: VectorStoreBase,
     extractors: list[ExtractorBase] | None = None,
     structured_store: StructuredStoreBase | None = None,
@@ -51,7 +51,7 @@ async def ingest(
         doc:              Document to ingest.  ``doc.doc_id`` is the stable
                           identifier used for later retrieval and deletion.
         chunker:          ``ChunkerBase`` implementation that splits the document.
-        embedder:         ``EmbedderBase`` implementation that populates embeddings.
+        embedder:         ``EmbeddingBase`` implementation that populates embeddings.
         vector_store:     ``VectorStoreBase`` implementation that persists chunks.
         extractors:       Optional list of ``ExtractorBase`` implementations.
                           Each extractor pulls a different record type (facts,

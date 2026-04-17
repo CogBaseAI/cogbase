@@ -19,7 +19,7 @@ Typical usage (full mode)::
     from cogbase.core.models import Document
     from cogbase.stores.structured.sqlite import SQLiteStructuredStore
     from cogbase.stores.vector.faiss_store import FAISSVectorStore
-    from cogbase.pipeline.ingestion.embedder import SentenceTransformersEmbedder
+    from cogbase.pipeline.ingestion.embedder import SentenceTransformersEmbedding
     from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 
     client = openai.AsyncOpenAI(api_key="...")
@@ -28,7 +28,7 @@ Typical usage (full mode)::
         model="claude-sonnet-4-6",
         structured_store=SQLiteStructuredStore("contracts.db"),
         vector_store=FAISSVectorStore(dim=384),
-        embedder=SentenceTransformersEmbedder(),
+        embedder=SentenceTransformersEmbedding(),
         chunker=FixedSizeChunker(chunk_size=512, overlap=64),
     )
     await app.setup()
@@ -71,7 +71,7 @@ from cogbase.engine.generation.llm import LLMGenerator
 from cogbase.engine.retrieval.hybrid import HybridRetriever
 from cogbase.engine.router import LLMRouter, QueryPattern
 from cogbase.pipeline.ingestion.base import ChunkerBase
-from cogbase.pipeline.ingestion.embedder import EmbedderBase
+from cogbase.embeddings import EmbeddingBase
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
 from cogbase.stores.schema import CollectionSchema
 from packs.legal.contract_analyst.extractor import ContractExtractor
@@ -125,7 +125,7 @@ class LegalContractApp:
         structured_store: StructuredStoreBase,
         *,
         vector_store: VectorStoreBase | None = None,
-        embedder: EmbedderBase | None = None,
+        embedder: EmbeddingBase | None = None,
         chunker: ChunkerBase | None = None,
         name: str = "legal",
         extractor_max_tokens: int = 4096,

@@ -18,7 +18,7 @@ from __future__ import annotations
 from cogbase.core.models import Chunk
 from cogbase.engine.retrieval.base import RetrievalResult, RetrieverBase
 from cogbase.engine.router import RouteResult
-from cogbase.pipeline.ingestion.embedder import EmbedderBase
+from cogbase.embeddings import EmbeddingBase
 from cogbase.stores.base import VectorStoreBase
 
 
@@ -27,7 +27,7 @@ class VectorRetriever(RetrieverBase):
 
     Args:
         store:    Any ``VectorStoreBase`` implementation.
-        embedder: Any ``EmbedderBase`` implementation.  The same embedder used
+        embedder: Any ``EmbeddingBase`` implementation.  The same embedder used
                   at ingest time must be used here so the vector spaces match.
         top_k:    Number of nearest neighbours to return. Defaults to 10.
     """
@@ -35,7 +35,7 @@ class VectorRetriever(RetrieverBase):
     def __init__(
         self,
         store: VectorStoreBase,
-        embedder: EmbedderBase,
+        embedder: EmbeddingBase,
         top_k: int = 10,
     ) -> None:
         self._store = store

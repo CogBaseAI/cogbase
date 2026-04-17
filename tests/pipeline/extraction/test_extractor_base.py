@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from cogbase.core.models import Chunk, Document
 from cogbase.pipeline.extraction.base import ExtractorBase
-from cogbase.pipeline.ingestion.embedder import EmbedderBase
+from cogbase.embeddings import EmbeddingBase
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 from cogbase.pipeline.ingestion.pipeline import ingest, setup_extraction
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
@@ -72,7 +72,7 @@ class EmptyExtractor(ExtractorBase):
         return None
 
 
-class StubEmbedder(EmbedderBase):
+class StubEmbedding(EmbeddingBase):
     async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
         return [c.model_copy(update={"embedding": [1.0, 0.0]}) for c in chunks]
 
@@ -129,7 +129,7 @@ def chunker():
 
 @pytest.fixture
 def embedder():
-    return StubEmbedder()
+    return StubEmbedding()
 
 
 class TestIngestWithExtractors:
