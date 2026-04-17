@@ -160,11 +160,23 @@ class PostgresStructuredStore(StructuredStoreBase):
         async with pool.acquire() as conn:
             await conn.executemany(sql, rows)
 
-    async def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
+    async def query(
+        self,
+        collection: str,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
+    ) -> list[dict]:
         schema = self._get_schema(collection)
         pool = self._get_pool()
         where, params = _to_pg_where(filters or [], schema)
-        sql = f'SELECT * FROM "{collection}"'
+
+        if fields:
+            fetch_cols = [c for c in fields if c in schema.fields]
+            col_list = ", ".join(f'"{c}"' for c in fetch_cols) if fetch_cols else "*"
+        else:
+            col_list = "*"
+
+        sql = f'SELECT {col_list} FROM "{collection}"'
         if where:
             sql += f" WHERE {where}"
 

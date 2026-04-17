@@ -49,7 +49,8 @@ Usage::
     router = LLMRouter(client, model="gpt-5.4", schema=schema)
     result = await router.route("does the review contradict the termination reason?")
     # result.pattern              == QueryPattern.C
-    # result.structured_targets   — list of CollectionTarget (collection + filters)
+    # result.structured_targets   — list of CollectionTarget (collection + filters + fields)
+    # target.fields               — field names to project; [] means all fields
 
     # Without a schema the router still classifies patterns but cannot populate
     # structured_targets.
@@ -98,18 +99,22 @@ class QueryPattern(str, Enum):
 
 
 class CollectionTarget(BaseModel):
-    """A single structured-store collection to query, with optional filters.
+    """A single structured-store collection to query, with optional filters and field projection.
 
     One ``RouteResult`` may contain several targets (e.g. Pattern C spanning
     both a *contracts* and a *facts* collection).
 
     Args:
         collection: Collection name.
-        filters:    Filter expressions to apply. Empty list means "return all".
+        filters:    Filter expressions to apply. Empty list means "return all rows".
+        fields:     Field names to retrieve. Empty list means "return all fields".
+                    Callers should pass this to the store's projection parameter to
+                    avoid fetching wide rows when only a few fields are needed.
     """
 
     collection: str
     filters: list[Filter] = []
+    fields: list[str] = []
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -208,7 +213,8 @@ Return ONLY valid JSON, no prose:
       "collection": "<collection name>",
       "filters": [
         {{"field": "<field>", "op": "<op>", "value": <value>}}
-      ]
+      ],
+      "fields": ["<field1>", "<field2>"]
     }}
   ]
 }}
@@ -218,6 +224,9 @@ Rules for structured_targets:
 - A single query may target multiple collections — include one entry per collection.
 - Leave as [] for pattern B or when no collection can be determined.
 - Omit the "value" key for is_null / is_not_null operators.
+- "fields": list only the field names the query actually needs from that collection.
+  Omit fields that are irrelevant to answering the query. Use [] only when all fields
+  are genuinely needed (e.g. the query asks to return full records).
 """
 
 
@@ -406,8 +415,9 @@ def _parse_llm_response(raw: str, original_query: str) -> RouteResult:
     structured_targets: list[CollectionTarget] = []
     for t in data.get("structured_targets", []) or []:
         filters = [_parse_filter(f) for f in t.get("filters", []) or []]
+        fields = [str(f) for f in t.get("fields", []) or []]
         structured_targets.append(
-            CollectionTarget(collection=str(t["collection"]), filters=filters)
+            CollectionTarget(collection=str(t["collection"]), filters=filters, fields=fields)
         )
 
     return RouteResult(

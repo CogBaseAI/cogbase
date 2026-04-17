@@ -89,22 +89,46 @@ class SQLiteStructuredStore(StructuredStoreBase):
         self._conn.executemany(sql, [_to_sql_row(r, schema) for r in records])
         self._conn.commit()
 
-    async def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
+    async def query(
+        self,
+        collection: str,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
+    ) -> list[dict]:
         schema = self._get_schema(collection)
         fs = filters or []
         json_fields = _json_fields(schema)
 
         where, params = to_sql_where(fs, json_fields)
-        sql = f'SELECT * FROM "{collection}"'
+
+        # Determine which columns to SELECT.  When a projection is requested we
+        # still need to fetch any JSON columns that will be post-filtered in
+        # Python; those extra columns are stripped from the final results.
+        if fields:
+            projection = {c for c in fields if c in schema.fields}
+            # JSON columns needed for Python post-filtering but not in the projection.
+            py_filter_fields = {f.field.split(".")[0] for f in fs if f.field.split(".")[0] in json_fields}
+            extra_fetch = py_filter_fields - projection
+            fetch_cols = sorted(projection | extra_fetch)  # sorted for determinism
+        else:
+            fetch_cols = list(schema.fields.keys())
+            extra_fetch = set()
+
+        col_list = ", ".join(f'"{c}"' for c in fetch_cols)
+        sql = f'SELECT {col_list} FROM "{collection}"'
         if where:
             sql += f" WHERE {where}"
 
         rows = [_from_sql_row(dict(r), schema) for r in self._conn.execute(sql, params).fetchall()]
 
-        # Post-filter JSON-column conditions in Python
-        py_filters = [f for f in fs if f.field in json_fields]
+        # Post-filter JSON-column conditions in Python.
+        py_filters = [f for f in fs if f.field.split(".")[0] in json_fields]
         if py_filters:
             rows = [r for r in rows if matches(r, py_filters)]
+
+        # Strip columns that were fetched only for post-filtering.
+        if extra_fetch:
+            rows = [{k: v for k, v in row.items() if k not in extra_fetch} for row in rows]
 
         return rows
 
@@ -214,9 +238,16 @@ def _to_sql_row(record: BaseModel, schema: CollectionSchema) -> tuple:
 
 
 def _from_sql_row(row: dict, schema: CollectionSchema) -> dict:
+    """Deserialise a fetched SQL row dict into plain Python types.
+
+    Only the fields present in *row* are included in the result — callers that
+    SELECT a subset of columns will get back only those columns.
+    """
     result: dict = {}
-    for field_name, field in schema.fields.items():
-        val = row.get(field_name)
+    for field_name, val in row.items():
+        field = schema.fields.get(field_name)
+        if field is None:
+            continue  # column not in schema (e.g. old column not yet migrated away)
         if val is None:
             result[field_name] = None
         elif field.type == FieldType.JSON:

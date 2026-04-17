@@ -48,8 +48,20 @@ class StructuredStoreBase(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
+    async def query(
+        self,
+        collection: str,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
+    ) -> list[dict]:
         """Return all records matching every filter as plain dicts.
+
+        Args:
+            collection: Target collection name.
+            filters:    AND-combined filter expressions.  ``None`` / ``[]`` means no filter.
+            fields:     Field names to include in each returned dict.  ``None`` / ``[]``
+                        returns all fields (default behaviour, backward-compatible).
+                        Unknown field names are silently ignored.
 
         Use ``query_as`` to deserialise into a Pydantic model.
         """
@@ -86,9 +98,13 @@ class StructuredStoreBase(abc.ABC):
         collection: str,
         filters: list[Filter] | None,
         model: type[M],
+        fields: list[str] | None = None,
     ) -> list[M]:
         """Typed wrapper around ``query`` — deserialises results into ``model``."""
-        return [model.model_validate(row) for row in await self.query(collection, filters)]
+        return [
+            model.model_validate(row)
+            for row in await self.query(collection, filters, fields)
+        ]
 
 
 class VectorStoreBase(abc.ABC):

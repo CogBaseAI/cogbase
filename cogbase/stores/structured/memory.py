@@ -93,16 +93,23 @@ class InMemoryStructuredStore(StructuredStoreBase):
             df = df[~existing_keys.isin(incoming_keys).to_numpy()]
         self._frames[collection] = pd.concat([df, new_df], ignore_index=True)
 
-    async def query(self, collection: str, filters: list[Filter] | None = None) -> list[dict]:
+    async def query(
+        self,
+        collection: str,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
+    ) -> list[dict]:
         schema = self._get_schema(collection)
         df = self._frames[collection]
         if filters:
             mask = _build_mask(df, filters)
             df = df[mask]
-        # Project to schema fields only — columns removed from the schema are
-        # silently dropped from results; columns not yet in the DataFrame
-        # (e.g. race between add-column and query) are skipped safely.
+        # Determine which columns to return.  Start from schema fields (drops
+        # any columns removed from the schema), then narrow to the requested
+        # projection when one is provided.
         schema_cols = [c for c in schema.fields if c in df.columns]
+        if fields:
+            schema_cols = [c for c in schema_cols if c in fields]
         return _to_records(df[schema_cols])
 
     async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:

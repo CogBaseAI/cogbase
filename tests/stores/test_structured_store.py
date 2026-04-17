@@ -798,3 +798,60 @@ async def test_persist_empty_collection_restored_as_empty(tmp_path):
     restored = InMemoryStructuredStore()
     await restored.load(tmp_path / "store")
     assert await restored.query("facts") == []
+
+
+# ------------------------------------------------------------------
+# Field projection (fields parameter)
+# ------------------------------------------------------------------
+
+async def test_query_fields_returns_only_requested_columns(structured_store):
+    await structured_store.save("facts", [make_fact(type="notice_period", confidence=0.9)])
+    results = await structured_store.query("facts", fields=["type", "doc_id"])
+    assert len(results) == 1
+    assert set(results[0].keys()) == {"type", "doc_id"}
+
+
+async def test_query_fields_unknown_field_silently_ignored(structured_store):
+    await structured_store.save("facts", [make_fact()])
+    results = await structured_store.query("facts", fields=["type", "nonexistent_field"])
+    assert len(results) == 1
+    assert "type" in results[0]
+    assert "nonexistent_field" not in results[0]
+
+
+async def test_query_fields_none_returns_all_columns(structured_store):
+    fact = make_fact()
+    await structured_store.save("facts", [fact])
+    results_all = await structured_store.query("facts")
+    results_none = await structured_store.query("facts", fields=None)
+    assert results_all == results_none
+
+
+async def test_query_fields_with_filter(structured_store):
+    await structured_store.save("facts", [
+        make_fact(type="notice_period", doc_id="doc-1", confidence=0.9),
+        make_fact(type="termination_date", doc_id="doc-2", confidence=0.5),
+    ])
+    results = await structured_store.query(
+        "facts",
+        filters=[Col("type") == "notice_period"],
+        fields=["doc_id", "confidence"],
+    )
+    assert len(results) == 1
+    assert results[0] == {"doc_id": "doc-1", "confidence": pytest.approx(0.9)}
+
+
+async def test_query_fields_with_json_filter_strips_json_col_from_result(memory_store):
+    """When a JSON column is used only for filtering it must not appear in results."""
+    await memory_store.save("events", [
+        make_event(session_id="s1", payload={"kind": "query"}),
+        make_event(session_id="s2", payload={"kind": "ingest"}),
+    ])
+    results = await memory_store.query(
+        "events",
+        filters=[Col("payload.kind") == "query"],
+        fields=["session_id"],
+    )
+    assert len(results) == 1
+    assert set(results[0].keys()) == {"session_id"}
+    assert results[0]["session_id"] == "s1"

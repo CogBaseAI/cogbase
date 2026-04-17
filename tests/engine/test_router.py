@@ -390,6 +390,33 @@ def test_parse_in_filter_with_array_value() -> None:
     assert f.value == ["date", "numeric"]
 
 
+def test_parse_fields_in_structured_target() -> None:
+    raw = json.dumps({
+        "pattern": "A",
+        "semantic_query": "get party names",
+        "structured_targets": [
+            {
+                "collection": "contracts",
+                "filters": [],
+                "fields": ["party_a", "party_b", "effective_date"],
+            }
+        ],
+    })
+    result = _parse_llm_response(raw, "original")
+    t = result.structured_targets[0]
+    assert t.fields == ["party_a", "party_b", "effective_date"]
+
+
+def test_parse_missing_fields_defaults_to_empty() -> None:
+    raw = json.dumps({
+        "pattern": "A",
+        "semantic_query": "list all",
+        "structured_targets": [{"collection": "facts", "filters": []}],
+    })
+    result = _parse_llm_response(raw, "original")
+    assert result.structured_targets[0].fields == []
+
+
 # ---------------------------------------------------------------------------
 # available_patterns — system prompt restriction
 # ---------------------------------------------------------------------------
