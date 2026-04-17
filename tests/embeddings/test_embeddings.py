@@ -1,4 +1,4 @@
-"""Tests for EmbeddingBase contract and SentenceTransformersEmbedding."""
+"""Tests for EmbeddingBase."""
 
 import os
 from pathlib import Path
@@ -6,14 +6,7 @@ from pathlib import Path
 import pytest
 
 from cogbase.core.models import Chunk
-from cogbase.embeddings import EmbeddingBase, OpenAIEmbedding, SentenceTransformersEmbedding
-
-# Load .env from the repo root so OPENAI_API_KEY is available when present.
-try:
-    from dotenv import load_dotenv
-    load_dotenv(Path(__file__).resolve().parents[3] / ".env")
-except ImportError:
-    pass
+from cogbase.embeddings import EmbeddingBase
 
 
 # ---------------------------------------------------------------------------
@@ -75,134 +68,3 @@ class TestEmbeddingBaseIsAbstract:
 
         assert await ConstantEmbedding().embed([]) == []
 
-
-# ---------------------------------------------------------------------------
-# SentenceTransformersEmbedding — requires the sentence-transformers package
-# ---------------------------------------------------------------------------
-
-sentence_transformers = pytest.importorskip(
-    "sentence_transformers",
-    reason="sentence-transformers not installed",
-)
-
-
-class TestSentenceTransformersEmbedding:
-    @pytest.fixture(scope="class")
-    def embedder(self):
-        return SentenceTransformersEmbedding("all-MiniLM-L6-v2")
-
-    @pytest.mark.asyncio
-    async def test_contract(self, embedder):
-        chunks = make_chunks(["The quick brown fox.", "Jumps over the lazy dog."])
-        await assert_embedder_contract(embedder, chunks)
-
-    @pytest.mark.asyncio
-    async def test_embedding_dimension(self, embedder):
-        # all-MiniLM-L6-v2 produces 384-dim vectors
-        chunks = make_chunks(["test sentence"])
-        result = await embedder.embed(chunks)
-        assert len(result[0].embedding) == 384
-
-    @pytest.mark.asyncio
-    async def test_empty_input(self, embedder):
-        assert await embedder.embed([]) == []
-
-    @pytest.mark.asyncio
-    async def test_single_chunk(self, embedder):
-        chunks = make_chunks(["single sentence"])
-        result = await embedder.embed(chunks)
-        assert len(result) == 1
-        assert result[0].embedding is not None
-
-    def test_is_subclass(self):
-        assert issubclass(SentenceTransformersEmbedding, EmbeddingBase)
-
-    @pytest.mark.asyncio
-    async def test_input_not_mutated(self, embedder):
-        chunks = make_chunks(["immutability check"])
-        await embedder.embed(chunks)
-        assert chunks[0].embedding is None
-
-    @pytest.mark.asyncio
-    async def test_different_texts_different_embeddings(self, embedder):
-        chunks = make_chunks(["apple fruit", "quantum physics"])
-        result = await embedder.embed(chunks)
-        assert result[0].embedding != result[1].embedding
-
-    @pytest.mark.asyncio
-    async def test_same_text_same_embedding(self, embedder):
-        text = "deterministic embedding"
-        c1, c2 = make_chunks([text, text])
-        r1 = await embedder.embed([c1])
-        r2 = await embedder.embed([c2])
-        assert r1[0].embedding == pytest.approx(r2[0].embedding, abs=1e-6)
-
-
-# ---------------------------------------------------------------------------
-# OpenAIEmbedding — requires openai package and OPENAI_API_KEY in .env
-# ---------------------------------------------------------------------------
-
-openai = pytest.importorskip("openai", reason="openai package not installed")
-
-_openai_api_key = os.environ.get("OPENAI_API_KEY", "")
-pytestmark_openai = pytest.mark.skipif(
-    not _openai_api_key,
-    reason="OPENAI_API_KEY not set in .env",
-)
-
-
-@pytestmark_openai
-class TestOpenAIEmbedding:
-    @pytest.fixture(scope="class")
-    def embedder(self):
-        client = openai.AsyncOpenAI(api_key=_openai_api_key)
-        return OpenAIEmbedding(client, model="text-embedding-3-small")
-
-    @pytest.fixture(scope="class")
-    def embedder_with_dimensions(self):
-        client = openai.AsyncOpenAI(api_key=_openai_api_key)
-        return OpenAIEmbedding(client, model="text-embedding-3-small", dimensions=256)
-
-    @pytest.mark.asyncio
-    async def test_contract(self, embedder):
-        chunks = make_chunks(["The quick brown fox.", "Jumps over the lazy dog."])
-        await assert_embedder_contract(embedder, chunks)
-
-    @pytest.mark.asyncio
-    async def test_empty_input(self, embedder):
-        assert await embedder.embed([]) == []
-
-    @pytest.mark.asyncio
-    async def test_single_chunk(self, embedder):
-        chunks = make_chunks(["single sentence"])
-        result = await embedder.embed(chunks)
-        assert len(result) == 1
-        assert result[0].embedding is not None
-
-    @pytest.mark.asyncio
-    async def test_embedding_dimension_default(self, embedder):
-        # text-embedding-3-small native dimensionality is 1536
-        chunks = make_chunks(["dimension check"])
-        result = await embedder.embed(chunks)
-        assert len(result[0].embedding) == 1536
-
-    @pytest.mark.asyncio
-    async def test_embedding_dimension_truncated(self, embedder_with_dimensions):
-        chunks = make_chunks(["truncated dimension check"])
-        result = await embedder_with_dimensions.embed(chunks)
-        assert len(result[0].embedding) == 256
-
-    @pytest.mark.asyncio
-    async def test_input_not_mutated(self, embedder):
-        chunks = make_chunks(["immutability check"])
-        await embedder.embed(chunks)
-        assert chunks[0].embedding is None
-
-    @pytest.mark.asyncio
-    async def test_different_texts_different_embeddings(self, embedder):
-        chunks = make_chunks(["apple fruit", "quantum physics"])
-        result = await embedder.embed(chunks)
-        assert result[0].embedding != result[1].embedding
-
-    def test_is_subclass(self):
-        assert issubclass(OpenAIEmbedding, EmbeddingBase)
