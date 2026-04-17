@@ -108,6 +108,13 @@ class PGVectorStore(VectorStoreBase):
         A no-op if a pool was passed at construction.
         """
         if self._pool is None:
+            # register_vector introspects the vector type at pool-init time, so
+            # the extension must exist before the pool is created.
+            conn = await asyncpg.connect(self._dsn)
+            try:
+                await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            finally:
+                await conn.close()
             self._pool = await asyncpg.create_pool(
                 self._dsn,
                 init=register_vector,

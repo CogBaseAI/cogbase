@@ -109,11 +109,17 @@ def postgres_container():
         text=True,
     ).strip()
 
-    # Wait until Postgres is ready (up to 30 s).
+    # Wait until Postgres is truly ready (up to 30 s).
+    # pg_isready only checks TCP-level availability; the actual database and
+    # auth may not be set up yet.  Running a real query via psql confirms that
+    # the specific test database is fully accessible before we yield.
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         result = subprocess.run(
-            ["docker", "exec", container_name, "pg_isready", "-U", db_user],
+            [
+                "docker", "exec", container_name,
+                "psql", "-U", db_user, "-d", db_name, "-c", "SELECT 1",
+            ],
             capture_output=True,
         )
         if result.returncode == 0:
@@ -123,7 +129,7 @@ def postgres_container():
         subprocess.run(["docker", "stop", container_name], capture_output=True)
         raise RuntimeError("Postgres container did not become ready within 30 s")
 
-    dsn = f"postgresql://{db_user}:{db_password}@localhost:{port}/{db_name}"
+    dsn = f"postgresql://{db_user}:{db_password}@localhost:{port}/{db_name}?sslmode=disable"
     yield dsn
 
     subprocess.run(["docker", "stop", container_name], capture_output=True)
