@@ -180,3 +180,106 @@ async def test_explicit_dim_constructor():
     assert store.ntotal == 0
     await store.upsert([make_chunk(embedding=[1.0, 0.0, 0.0])])
     assert store.ntotal == 1
+
+
+# ------------------------------------------------------------------
+# Persistence (save / load)
+# ------------------------------------------------------------------
+
+async def test_save_and_load_roundtrip(tmp_path):
+    store = FAISSVectorStore()
+    chunk = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0])
+    await store.upsert([chunk])
+    await store.save(tmp_path / "faiss_store")
+
+    loaded = FAISSVectorStore()
+    await loaded.load(tmp_path / "faiss_store")
+    results = await loaded.search([1.0, 0.0, 0.0], top_k=1)
+    assert len(results) == 1
+    assert results[0].chunk_id == chunk.chunk_id
+    assert results[0].doc_id == chunk.doc_id
+    assert results[0].text == chunk.text
+
+
+async def test_save_and_load_preserves_ntotal(tmp_path):
+    store = FAISSVectorStore()
+    await store.upsert([
+        make_chunk(doc_id="doc-1", embedding=[1.0, 0.0]),
+        make_chunk(doc_id="doc-2", embedding=[0.0, 1.0]),
+    ])
+    await store.save(tmp_path / "store")
+
+    loaded = FAISSVectorStore()
+    await loaded.load(tmp_path / "store")
+    assert loaded.ntotal == 2
+
+
+async def test_save_creates_nested_directory(tmp_path):
+    store = FAISSVectorStore()
+    await store.upsert([make_chunk(embedding=[1.0, 0.0])])
+    nested = tmp_path / "a" / "b" / "store"
+    await store.save(nested)
+    assert (nested / "index.faiss").exists()
+    assert (nested / "meta.json").exists()
+
+
+async def test_save_empty_store_raises(tmp_path):
+    store = FAISSVectorStore()
+    with pytest.raises(RuntimeError, match="empty"):
+        await store.save(tmp_path / "store")
+
+
+async def test_load_restores_search_order(tmp_path):
+    store = FAISSVectorStore()
+    a = make_chunk(doc_id="a", embedding=unit([0.9, 0.1]))
+    b = make_chunk(doc_id="b", embedding=unit([0.1, 0.9]))
+    await store.upsert([a, b])
+    await store.save(tmp_path / "store")
+
+    loaded = FAISSVectorStore()
+    await loaded.load(tmp_path / "store")
+    results = await loaded.search([1.0, 0.0], top_k=2)
+    assert results[0].doc_id == "a"
+    assert results[1].doc_id == "b"
+
+
+async def test_delete_after_load(tmp_path):
+    store = FAISSVectorStore()
+    await store.upsert([
+        make_chunk(doc_id="doc-1", embedding=[1.0, 0.0]),
+        make_chunk(doc_id="doc-2", embedding=[0.0, 1.0]),
+    ])
+    await store.save(tmp_path / "store")
+
+    loaded = FAISSVectorStore()
+    await loaded.load(tmp_path / "store")
+    await loaded.delete("doc-1")
+    assert loaded.ntotal == 1
+    results = await loaded.search([0.0, 1.0], top_k=1)
+    assert results[0].doc_id == "doc-2"
+
+
+async def test_upsert_after_load(tmp_path):
+    store = FAISSVectorStore()
+    await store.upsert([make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])])
+    await store.save(tmp_path / "store")
+
+    loaded = FAISSVectorStore()
+    await loaded.load(tmp_path / "store")
+    new_chunk = make_chunk(doc_id="doc-2", embedding=[0.0, 1.0])
+    await loaded.upsert([new_chunk])
+    assert loaded.ntotal == 2
+    results = await loaded.search([0.0, 1.0], top_k=1)
+    assert results[0].chunk_id == new_chunk.chunk_id
+
+
+async def test_save_preserves_chunk_metadata(tmp_path):
+    store = FAISSVectorStore()
+    chunk = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0], metadata={"source": "upload", "page": 3})
+    await store.upsert([chunk])
+    await store.save(tmp_path / "store")
+
+    loaded = FAISSVectorStore()
+    await loaded.load(tmp_path / "store")
+    results = await loaded.search([1.0, 0.0], top_k=1)
+    assert results[0].metadata == {"source": "upload", "page": 3}

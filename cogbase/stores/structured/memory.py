@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import pickle
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -109,6 +113,50 @@ class InMemoryStructuredStore(StructuredStoreBase):
         df = self._frames[collection]
         mask = _build_mask(df, filters)
         self._frames[collection] = df[~mask].reset_index(drop=True)
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    async def persist(self, path: str | Path) -> None:
+        """Persist all collections to *path*.
+
+        *path* is a directory that will be created if it does not exist.  Two
+        kinds of files are written inside it:
+
+        * ``_schemas.json``       — all ``CollectionSchema`` definitions as JSON
+        * ``{collection}.pkl``    — one pickle file per collection (DataFrame)
+        """
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._persist_sync, Path(path))
+
+    def _persist_sync(self, path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        schemas_data = {name: schema.model_dump() for name, schema in self._schemas.items()}
+        (path / "_schemas.json").write_text(json.dumps(schemas_data), encoding="utf-8")
+        for name, df in self._frames.items():
+            with open(path / f"{name}.pkl", "wb") as fh:
+                pickle.dump(df, fh)
+
+    async def load(self, path: str | Path) -> None:
+        """Load a previously persisted store from *path* (a directory written by ``persist``).
+
+        Replaces the current in-memory state entirely.
+        """
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._load_sync, Path(path))
+
+    def _load_sync(self, path: Path) -> None:
+        schemas_data: dict = json.loads((path / "_schemas.json").read_text(encoding="utf-8"))
+        self._schemas = {name: CollectionSchema(**data) for name, data in schemas_data.items()}
+        self._frames = {}
+        for name, schema in self._schemas.items():
+            pkl_path = path / f"{name}.pkl"
+            if pkl_path.exists():
+                with open(pkl_path, "rb") as fh:
+                    self._frames[name] = pickle.load(fh)
+            else:
+                self._frames[name] = _empty_frame(schema)
 
     def _get_schema(self, collection: str) -> CollectionSchema:
         if collection not in self._schemas:

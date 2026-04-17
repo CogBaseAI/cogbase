@@ -12,6 +12,8 @@ data is lost when the process exits unless you call ``save`` / ``load``.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 import logging
 
@@ -128,19 +130,49 @@ class FAISSVectorStore(VectorStoreBase):
         self._rebuild()
 
     # ------------------------------------------------------------------
-    # Persistence (optional)
+    # Persistence
     # ------------------------------------------------------------------
 
-    def save(self, path: str | Path) -> None:
-        """Persist the FAISS index to disk. Chunk metadata is not saved here —
-        you are responsible for storing the ``Chunk`` objects separately if needed."""
+    async def save(self, path: str | Path) -> None:
+        """Persist the full store (FAISS index + chunk metadata) to *path*.
+
+        *path* is a directory that will be created if it does not exist.  Two
+        files are written inside it:
+
+        * ``index.faiss`` — the FAISS index binary
+        * ``meta.json``   — chunk objects, ID mappings, and index metadata
+        """
         if self._index is None:
             raise RuntimeError("Nothing to save — index is empty.")
-        faiss.write_index(self._index, str(path))
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._save_sync, Path(path))
 
-    def load(self, path: str | Path) -> None:
-        """Load a previously saved FAISS index from disk."""
-        self._index = faiss.read_index(str(path))
+    def _save_sync(self, path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        faiss.write_index(self._index, str(path / "index.faiss"))
+        meta: dict = {
+            "dim": self._dim,
+            "next_id": self._next_id,
+            "id_map": self._id_map,
+            # JSON requires string keys; int keys are restored on load
+            "id_rev": {str(k): v for k, v in self._id_rev.items()},
+            "chunks": {cid: chunk.model_dump() for cid, chunk in self._chunks.items()},
+        }
+        (path / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    async def load(self, path: str | Path) -> None:
+        """Load a previously saved store from *path* (a directory written by ``save``)."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._load_sync, Path(path))
+
+    def _load_sync(self, path: Path) -> None:
+        self._index = faiss.read_index(str(path / "index.faiss"))
+        meta: dict = json.loads((path / "meta.json").read_text(encoding="utf-8"))
+        self._dim = meta["dim"]
+        self._next_id = meta["next_id"]
+        self._id_map = meta["id_map"]
+        self._id_rev = {int(k): v for k, v in meta["id_rev"].items()}
+        self._chunks = {cid: Chunk(**data) for cid, data in meta["chunks"].items()}
 
     # ------------------------------------------------------------------
     # Properties

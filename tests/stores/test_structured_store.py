@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from cogbase.core.models import Contradiction, Event, Fact
 from cogbase.stores.filters import Col
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
+from cogbase.stores.structured import InMemoryStructuredStore
 
 
 # ------------------------------------------------------------------
@@ -682,3 +683,118 @@ async def test_update_collection_no_change_is_noop(structured_store):
     await structured_store.save("facts", [make_fact()])
     await structured_store.update_collection(FACTS_SCHEMA)
     assert len(await structured_store.query("facts")) == 1
+
+
+# ------------------------------------------------------------------
+# InMemoryStructuredStore — persist / load
+# ------------------------------------------------------------------
+
+async def test_persist_and_load_roundtrip(tmp_path):
+    from tests.stores.conftest import FACTS_SCHEMA
+    store = InMemoryStructuredStore()
+    await store.create_collection(FACTS_SCHEMA)
+    fact = make_fact()
+    await store.save("facts", [fact])
+    await store.persist(tmp_path / "store")
+
+    restored = InMemoryStructuredStore()
+    await restored.load(tmp_path / "store")
+    results = await restored.query("facts")
+    assert len(results) == 1
+    assert results[0]["fact_id"] == fact.fact_id
+
+
+async def test_persist_restores_all_collections(tmp_path):
+    from tests.stores.conftest import FACTS_SCHEMA, EVENTS_SCHEMA
+    store = InMemoryStructuredStore()
+    await store.create_collection(FACTS_SCHEMA)
+    await store.create_collection(EVENTS_SCHEMA)
+    await store.save("facts", [make_fact()])
+    await store.save("events", [make_event()])
+    await store.persist(tmp_path / "store")
+
+    restored = InMemoryStructuredStore()
+    await restored.load(tmp_path / "store")
+    assert len(await restored.query("facts")) == 1
+    assert len(await restored.query("events")) == 1
+
+
+async def test_persist_creates_nested_directory(tmp_path):
+    from tests.stores.conftest import FACTS_SCHEMA
+    store = InMemoryStructuredStore()
+    await store.create_collection(FACTS_SCHEMA)
+    await store.save("facts", [make_fact()])
+    nested = tmp_path / "a" / "b" / "store"
+    await store.persist(nested)
+    assert (nested / "_schemas.json").exists()
+    assert (nested / "facts.pkl").exists()
+
+
+async def test_load_replaces_existing_state(tmp_path):
+    from tests.stores.conftest import FACTS_SCHEMA
+    store_a = InMemoryStructuredStore()
+    await store_a.create_collection(FACTS_SCHEMA)
+    await store_a.save("facts", [make_fact()])
+    await store_a.persist(tmp_path / "store")
+
+    store_b = InMemoryStructuredStore()
+    await store_b.create_collection(FACTS_SCHEMA)
+    await store_b.save("facts", [make_fact(), make_fact()])  # 2 facts
+    await store_b.load(tmp_path / "store")
+
+    assert len(await store_b.query("facts")) == 1
+
+
+async def test_persist_roundtrip_all_field_types(tmp_path):
+    from tests.stores.conftest import FACTS_SCHEMA, EVENTS_SCHEMA, CONTRADICTIONS_SCHEMA
+    store = InMemoryStructuredStore()
+    await store.create_collection(FACTS_SCHEMA)
+    await store.create_collection(EVENTS_SCHEMA)
+    await store.create_collection(CONTRADICTIONS_SCHEMA)
+
+    fact = make_fact(page=5, confidence=0.75)
+    event = make_event(payload={"query": "test", "count": 2})
+    fa, fb = make_fact(), make_fact()
+    contradiction = make_contradiction(fa, fb, resolved=True, resolution_note="agreed")
+    await store.save("facts", [fact])
+    await store.save("events", [event])
+    await store.save("contradictions", [contradiction])
+    await store.persist(tmp_path / "store")
+
+    restored = InMemoryStructuredStore()
+    await restored.load(tmp_path / "store")
+
+    facts = await restored.query("facts")
+    assert facts[0]["page"] == 5
+    assert facts[0]["confidence"] == pytest.approx(0.75)
+
+    events = await restored.query("events")
+    assert events[0]["payload"] == {"query": "test", "count": 2}
+
+    contradictions = await restored.query("contradictions")
+    assert contradictions[0]["resolved"] is True
+    assert contradictions[0]["resolution_note"] == "agreed"
+
+
+async def test_load_restores_schema_so_save_works_without_create(tmp_path):
+    """After load, collections are usable without calling create_collection again."""
+    from tests.stores.conftest import FACTS_SCHEMA
+    store = InMemoryStructuredStore()
+    await store.create_collection(FACTS_SCHEMA)
+    await store.persist(tmp_path / "store")
+
+    restored = InMemoryStructuredStore()
+    await restored.load(tmp_path / "store")
+    await restored.save("facts", [make_fact()])
+    assert len(await restored.query("facts")) == 1
+
+
+async def test_persist_empty_collection_restored_as_empty(tmp_path):
+    from tests.stores.conftest import FACTS_SCHEMA
+    store = InMemoryStructuredStore()
+    await store.create_collection(FACTS_SCHEMA)
+    await store.persist(tmp_path / "store")
+
+    restored = InMemoryStructuredStore()
+    await restored.load(tmp_path / "store")
+    assert await restored.query("facts") == []
