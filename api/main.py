@@ -3,26 +3,50 @@
 from __future__ import annotations
 
 import logging
-import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
 
 from api.config import AppConfig
-from api.factory import build_app
+from api.factory import build_app, build_structured_store
 from api.registry import AppRegistry
 from api.routers.applications import router as applications_router
+from api.system_config import SystemConfig
 from api.system_store import SystemStore
 
 logger = logging.getLogger(__name__)
 
 
+async def _close_store(store: object) -> None:
+    """Close a store that may have a sync or async ``close`` method."""
+    closer = getattr(store, "close", None)
+    if closer is None:
+        return
+    result = closer()
+    if result is not None:
+        import inspect
+        if inspect.isawaitable(result):
+            await result
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    db_path = os.environ.get("COGBASE_SYSTEM_DB", "./cogbase_system.db")
-    system_store = SystemStore(db_path=db_path)
+    # Load system config from file / env vars / defaults.
+    system_cfg = SystemConfig.load()
+    logger.info("system_config loaded system_db=%s", system_cfg.system_db)
+
+    system_db_store = build_structured_store(system_cfg.system_db)
+    system_store = SystemStore(store=system_db_store)
     await system_store.setup()
+
+    # Build the shared structured store (None when not configured).
+    system_structured_store = None
+    if system_cfg.structured_store is not None:
+        system_structured_store = build_structured_store(system_cfg.structured_store)
+        logger.info(
+            "system_structured_store type=%s", system_cfg.structured_store.type
+        )
 
     registry = AppRegistry()
 
@@ -33,7 +57,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             continue
         try:
             config = AppConfig.from_yaml(record.config_yaml)
-            instance = build_app(config)
+            instance = build_app(
+                config,
+                system_structured_store=system_structured_store,
+                system_vector_store_cfg=system_cfg.vector_store,
+                app_namespace=record.name,
+            )
             await instance.setup()
             registry.add(record.app_id, instance)
             logger.info("restored app name=%s app_id=%s", record.name, record.app_id)
@@ -45,12 +74,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 exc,
             )
 
+    app.state.system_config = system_cfg
+    app.state.system_structured_store = system_structured_store
     app.state.system_store = system_store
     app.state.registry = registry
 
     yield
 
-    system_store.close()
+    await _close_store(system_db_store)
+    if system_structured_store is not None:
+        await _close_store(system_structured_store)
 
 
 app = FastAPI(

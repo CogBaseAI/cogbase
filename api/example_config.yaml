@@ -2,7 +2,11 @@
 # POST this file to /applications to create an application.
 #
 # Required: name, llm
-# Optional: embedding + vector_store + chunker (all three or none)
+# Optional: embedding + chunker (both or neither)
+#
+# Store backends (structured_store, vector_store) are not set here —
+# the service automatically uses the stores defined in cogbase_system.yaml.
+# The application's collections are namespaced under its name automatically.
 
 name: my-contract-analyzer
 
@@ -15,14 +19,6 @@ embedding:                   # remove this section for structured-only mode
   provider: openai
   model: text-embedding-3-small
   # dimensions: 512          # optional: truncate to smaller vectors
-
-structured_store:
-  type: sqlite               # sqlite | postgres | memory
-  path: ./data/contracts.db  # required for sqlite
-
-vector_store:                # remove this section for structured-only mode
-  type: faiss                # faiss | pgvector
-  dim: 1536                  # must match the embedding model's output dim
 
 chunker:                     # remove this section for structured-only mode
   type: fixed                # fixed | langchain

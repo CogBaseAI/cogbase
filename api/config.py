@@ -65,17 +65,21 @@ class AppConfig(BaseModel):
     name: str
     llm: LLMConfig
     embedding: EmbeddingConfig | None = None
-    structured_store: StructuredStoreConfig = StructuredStoreConfig(type="memory")
+    structured_store: StructuredStoreConfig | None = None
     vector_store: VectorStoreConfig | None = None
     chunker: ChunkerConfig | None = None
     pack: PackConfig | None = None
 
     @model_validator(mode="after")
-    def _validate_vector_triple(self) -> "AppConfig":
-        provided = sum(x is not None for x in (self.vector_store, self.embedding, self.chunker))
-        if 0 < provided < 3:
+    def _validate_vector_config(self) -> "AppConfig":
+        # embedding and chunker must be provided together.
+        emb_chk = sum(x is not None for x in (self.embedding, self.chunker))
+        if 0 < emb_chk < 2:
+            raise ValueError("embedding and chunker must both be provided or both omitted")
+        # An explicit vector_store requires embedding + chunker in the same config.
+        if self.vector_store is not None and emb_chk == 0:
             raise ValueError(
-                "vector_store, embedding, and chunker must all be provided together or all omitted"
+                "vector_store requires embedding and chunker to also be provided"
             )
         return self
 

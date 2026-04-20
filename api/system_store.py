@@ -1,12 +1,12 @@
-"""System store — persists application metadata using SQLiteStructuredStore."""
+"""System store — persists application metadata in a configurable structured store."""
 
 from __future__ import annotations
 
 from pydantic import BaseModel
 
+from cogbase.stores.base import StructuredStoreBase
 from cogbase.stores.filters import Col
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
-from cogbase.stores.structured.sqlite import SQLiteStructuredStore
 
 APP_RECORDS_SCHEMA = CollectionSchema(
     name="app_records",
@@ -34,17 +34,20 @@ class AppRecord(BaseModel):
 
 
 class SystemStore:
-    """Thin persistence layer over a dedicated SQLite database.
+    """Thin persistence layer for application metadata.
+
+    Accepts any ``StructuredStoreBase`` backend — SQLite, Postgres, or
+    in-memory — configured via ``system_db`` in ``cogbase_system.yaml``.
 
     Args:
-        db_path: Path to the SQLite file.  Defaults to ``./cogbase_system.db``.
+        store: A ready-to-use structured store instance.
     """
 
-    def __init__(self, db_path: str = "./cogbase_system.db") -> None:
-        self._store = SQLiteStructuredStore(db_path)
+    def __init__(self, store: StructuredStoreBase) -> None:
+        self._store = store
 
     async def setup(self) -> None:
-        """Create the app_records table if it does not exist. Idempotent."""
+        """Create the app_records collection if it does not exist. Idempotent."""
         await self._store.create_collection(APP_RECORDS_SCHEMA)
 
     async def save_app(self, record: AppRecord) -> None:
@@ -74,6 +77,3 @@ class SystemStore:
             "app_records",
             filters=[Col("app_id") == app_id],
         )
-
-    def close(self) -> None:
-        self._store.close()

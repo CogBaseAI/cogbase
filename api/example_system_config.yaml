@@ -1,0 +1,35 @@
+# CogBase system configuration
+#
+# Place this file at ./cogbase_system.yaml or point to it with:
+#   COGBASE_CONFIG=/path/to/cogbase_system.yaml
+#
+# All fields are optional.  When omitted, in-memory stores are used and
+# data is lost when the service restarts.
+
+# Store backend for the application registry (CogBase's own metadata).
+# Supports the same backends as application stores: sqlite, postgres, or memory.
+# When absent, falls back to the COGBASE_SYSTEM_DB env var (SQLite path) or
+# ./cogbase_system.db.
+system_db:
+  type: sqlite                       # sqlite | postgres | memory
+  path: ./data/cogbase_system.db     # required for sqlite
+  # type: postgres
+  # url: postgresql://user:pass@localhost:5432/cogbase   # required for postgres
+
+# Shared structured store — all applications write their collections here.
+# Each application gets its own namespace (prefix) so collections never
+# collide, even when multiple applications share this backend.
+structured_store:
+  type: sqlite                  # sqlite | postgres | memory
+  path: ./data/cogbase.db       # required for sqlite
+  # type: postgres
+  # url: postgresql://user:pass@localhost:5432/cogbase   # required for postgres
+
+# Vector store settings — a fresh instance of this type is created for each
+# application that has embedding + chunker configured.
+# Remove this section to run all applications in structured-only mode.
+vector_store:
+  type: faiss                   # faiss | pgvector
+  dim: 1536                     # must match the embedding model's output dimension
+  # type: pgvector
+  # url: postgresql://user:pass@localhost:5432/cogbase   # required for pgvector

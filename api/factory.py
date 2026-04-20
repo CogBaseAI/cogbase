@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 from api.config import AppConfig, ChunkerConfig, EmbeddingConfig, StructuredStoreConfig, VectorStoreConfig
+from cogbase.stores.base import StructuredStoreBase
 
 
 def _build_llm_client(config: AppConfig) -> Any:
@@ -19,7 +20,8 @@ def _build_llm_client(config: AppConfig) -> Any:
     raise ValueError(f"Unsupported LLM provider: {config.llm.provider!r}")
 
 
-def _build_structured_store(cfg: StructuredStoreConfig) -> Any:
+def build_structured_store(cfg: StructuredStoreConfig) -> Any:
+    """Instantiate a structured store from its config."""
     if cfg.type == "memory":
         from cogbase.stores.structured.memory import InMemoryStructuredStore
         return InMemoryStructuredStore()
@@ -72,26 +74,60 @@ def _build_chunker(cfg: ChunkerConfig) -> Any:
     raise ValueError(f"Unknown chunker type: {cfg.type!r}")
 
 
-def build_app(config: AppConfig) -> Any:
+def build_app(
+    config: AppConfig,
+    *,
+    system_structured_store: StructuredStoreBase | None = None,
+    system_vector_store_cfg: VectorStoreConfig | None = None,
+    app_namespace: str | None = None,
+) -> Any:
     """Instantiate a pack application from *config*.
+
+    Store backends are resolved in priority order:
+
+    1. Values declared explicitly in *config* (``structured_store``,
+       ``vector_store``) — full per-application isolation.
+    2. System-level stores supplied via the keyword arguments — the structured
+       store is shared with other applications using collection-name namespacing;
+       the vector store type is used to create a fresh per-application instance.
+    3. Built-in fallback — an isolated in-memory structured store; no vector store.
 
     The returned object has ``setup()``, ``ingest()``, ``ingest_many()``, and
     ``query()`` methods but is not yet set up — call ``await app.setup()``
     before use.
+
+    Args:
+        config:                   Parsed application config.
+        system_structured_store:  Shared structured store from system config.
+        system_vector_store_cfg:  Vector store type/settings from system config;
+                                  a new instance is created per application.
+        app_namespace:            Prefix applied to all collection names when
+                                  using *system_structured_store*.  Defaults to
+                                  ``config.name``.
     """
     llm_client = _build_llm_client(config)
 
-    structured_store = _build_structured_store(config.structured_store)
+    # --- Structured store ---------------------------------------------------
+    # Priority: app config > system shared store (namespaced) > in-memory
+    if config.structured_store is not None:
+        structured_store = build_structured_store(config.structured_store)
+    elif system_structured_store is not None:
+        from api.namespaced_store import NamespacedStructuredStore
+        ns = app_namespace or config.name
+        structured_store: Any = NamespacedStructuredStore(system_structured_store, ns)
+    else:
+        from cogbase.stores.structured.memory import InMemoryStructuredStore
+        structured_store = InMemoryStructuredStore()
 
-    vector_store = None
-    embedder = None
-    chunker = None
-    if config.vector_store is not None:
-        vector_store = _build_vector_store(config.vector_store)
-    if config.embedding is not None:
-        embedder = _build_embedder(config.embedding, llm_client)
-    if config.chunker is not None:
-        chunker = _build_chunker(config.chunker)
+    # --- Vector store -------------------------------------------------------
+    # Priority: app config > system config (new instance per app) > None
+    vector_store_cfg = config.vector_store or (
+        system_vector_store_cfg if config.embedding is not None else None
+    )
+    vector_store = _build_vector_store(vector_store_cfg) if vector_store_cfg else None
+
+    embedder = _build_embedder(config.embedding, llm_client) if config.embedding else None
+    chunker = _build_chunker(config.chunker) if config.chunker else None
 
     pack_name = config.pack.name if config.pack else "legal.contract_analyst"
 

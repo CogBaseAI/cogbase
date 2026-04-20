@@ -9,7 +9,7 @@ import yaml
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from api.config import AppConfig
-from api.dependencies import RegistryDep, SystemStoreDep
+from api.dependencies import RegistryDep, SystemConfigDep, SystemStoreDep, SystemStructuredStoreDep
 from api.factory import build_app
 from api.models import ApplicationListResponse, ApplicationResponse
 from api.system_store import AppRecord
@@ -50,14 +50,20 @@ def _parse_config(raw: bytes) -> tuple[str, AppConfig]:
 async def create_application(
     system_store: SystemStoreDep,
     registry: RegistryDep,
+    system_config: SystemConfigDep,
+    system_structured_store: SystemStructuredStoreDep,
     config_file: UploadFile = File(..., description="YAML config file"),
 ) -> ApplicationResponse:
     """Create a new CogBase application from a YAML config file.
 
-    The YAML must contain at minimum ``name`` and ``llm`` sections.  The
-    application is set up immediately; its status is ``active`` on success or
-    ``error`` if setup fails (the record is still persisted so you can inspect
-    the error and update the config).
+    The YAML must contain at minimum ``name`` and ``llm`` sections.  Store
+    backends (``structured_store``, ``vector_store``) are optional — when
+    omitted the service automatically uses the system-configured stores defined
+    in ``cogbase_system.yaml``.
+
+    The application is set up immediately; its status is ``active`` on success
+    or ``error`` if setup fails (the record is still persisted so you can
+    inspect the error and update the config).
     """
     yaml_text, config = _parse_config(await config_file.read())
 
@@ -81,7 +87,12 @@ async def create_application(
     await system_store.save_app(record)
 
     try:
-        app = build_app(config)
+        app = build_app(
+            config,
+            system_structured_store=system_structured_store,
+            system_vector_store_cfg=system_config.vector_store,
+            app_namespace=config.name,
+        )
         await app.setup()
         registry.add(app_id, app)
         record = record.model_copy(update={"status": "active", "updated_at": _now()})
@@ -119,6 +130,8 @@ async def update_application(
     app_id: str,
     system_store: SystemStoreDep,
     registry: RegistryDep,
+    system_config: SystemConfigDep,
+    system_structured_store: SystemStructuredStoreDep,
     config_file: UploadFile = File(..., description="Updated YAML config file"),
 ) -> ApplicationResponse:
     """Replace an application's config and restart it.
@@ -155,7 +168,12 @@ async def update_application(
     await system_store.save_app(updated)
 
     try:
-        app = build_app(config)
+        app = build_app(
+            config,
+            system_structured_store=system_structured_store,
+            system_vector_store_cfg=system_config.vector_store,
+            app_namespace=config.name,
+        )
         await app.setup()
         registry.add(app_id, app)
         updated = updated.model_copy(update={"status": "active", "updated_at": _now()})
