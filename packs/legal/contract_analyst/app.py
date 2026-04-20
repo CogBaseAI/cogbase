@@ -128,8 +128,8 @@ class LegalContractApp:
         embedder: EmbeddingBase | None = None,
         chunker: ChunkerBase | None = None,
         name: str = "legal",
-        extractor_max_tokens: int = 4096,
-        generator_max_tokens: int = 1024,
+        extractor_max_tokens: int = 16384,
+        generator_max_tokens: int = 4096,
         retriever_top_k: int = 10,
     ) -> None:
         vector_params = (vector_store, embedder, chunker)

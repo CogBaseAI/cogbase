@@ -1,0 +1,33 @@
+# Example CogBase application config
+# POST this file to /applications to create an application.
+#
+# Required: name, llm
+# Optional: embedding + vector_store + chunker (all three or none)
+
+name: my-contract-analyzer
+
+llm:
+  provider: openai           # only "openai" supported today
+  model: gpt-5-mini
+  # api_key: sk-...          # omit to use OPENAI_API_KEY env var
+
+embedding:                   # remove this section for structured-only mode
+  provider: openai
+  model: text-embedding-3-small
+  # dimensions: 512          # optional: truncate to smaller vectors
+
+structured_store:
+  type: sqlite               # sqlite | postgres | memory
+  path: ./data/contracts.db  # required for sqlite
+
+vector_store:                # remove this section for structured-only mode
+  type: faiss                # faiss | pgvector
+  dim: 1536                  # must match the embedding model's output dim
+
+chunker:                     # remove this section for structured-only mode
+  type: fixed                # fixed | langchain
+  chunk_size: 512
+  overlap: 64
+
+pack:
+  name: legal.contract_analyst
