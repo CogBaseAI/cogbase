@@ -21,6 +21,14 @@ def _unwrap_optional(t):
     return t
 
 
+_PRIMITIVE_TYPE_NAMES: dict = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+}
+
+
 def _json_schema_for_type(t) -> str | None:
     origin = get_origin(t)
 
@@ -28,7 +36,9 @@ def _json_schema_for_type(t) -> str | None:
         inner = _unwrap_optional(get_args(t)[0])
         if isinstance(inner, type) and issubclass(inner, BaseModel):
             return f"[{cls_json_schema_for_llm(inner)}]"
-        return None
+        # Primitive array — emit a typed hint so LLM knows to use @> containment
+        type_name = _PRIMITIVE_TYPE_NAMES.get(inner, "string")
+        return f'["{type_name}"]'
 
     if isinstance(t, type) and issubclass(t, BaseModel):
         return cls_json_schema_for_llm(t)

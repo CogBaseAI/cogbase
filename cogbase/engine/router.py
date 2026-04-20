@@ -342,7 +342,7 @@ class LLMRouter(QueryRouter):
         model: str,
         schema: list[CollectionSchema] | None = None,
         available_patterns: list[QueryPattern] | None = None,
-        max_tokens: int = 512,
+        max_tokens: int = 4096,
         max_retries: int = 2,
     ) -> None:
         self._client = client

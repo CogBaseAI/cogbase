@@ -179,7 +179,7 @@ class LLMGenerator(GeneratorBase):
         from cogbase.engine.generation.llm import LLMGenerator
 
         client = openai.AsyncOpenAI(api_key="sk-...")
-        generator = LLMGenerator(client, model="gpt-4o")
+        generator = LLMGenerator(client, model="gpt-5")
         result = await generator.generate("summarise the key clauses", retrieval)
     """
 
@@ -187,7 +187,7 @@ class LLMGenerator(GeneratorBase):
         self,
         client: Any,
         model: str,
-        max_tokens: int = 1024,
+        max_tokens: int = 16384,
     ) -> None:
         self._client = client
         self._model = model

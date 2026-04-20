@@ -61,7 +61,7 @@ class ContractExtractor(ExtractorBase):
         max_retries: Passed to ``ExtractorBase``; retries on unparseable JSON.
     """
 
-    def __init__(self, client: Any, model: str, max_tokens: int = 4096, max_retries: int = 2) -> None:
+    def __init__(self, client: Any, model: str, max_tokens: int = 16384, max_retries: int = 2) -> None:
         super().__init__(max_retries=max_retries)
         self._client = client
         self._model = model

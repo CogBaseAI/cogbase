@@ -1,5 +1,4 @@
 """Tests for cogbase.stores.schema_util."""
-
 from __future__ import annotations
 
 from typing import Optional
@@ -124,6 +123,18 @@ def test_nested_basemodel_json_schema_is_included():
     schema = cls_generate_schema(_Nested)
     assert schema["inner"].json_schema is not None
     assert '"x": "string, inner x"' in schema["inner"].json_schema
+
+
+def test_list_of_str_json_schema_is_string_array():
+    schema = cls_generate_schema(_Lists)
+    assert schema["tags"].json_schema == '["string"]'
+
+
+def test_list_of_int_json_schema_is_integer_array():
+    class M(BaseModel):
+        counts: list[int]
+    schema = cls_generate_schema(M)
+    assert schema["counts"].json_schema == '["integer"]'
 
 
 # ---------------------------------------------------------------------------
