@@ -69,6 +69,7 @@ class AppConfig(BaseModel):
     vector_store: VectorStoreConfig | None = None
     chunker: ChunkerConfig | None = None
     pack: PackConfig | None = None
+    extraction_schema: str | None = None  # JSON Schema string (draft-07)
 
     @model_validator(mode="after")
     def _validate_vector_config(self) -> "AppConfig":

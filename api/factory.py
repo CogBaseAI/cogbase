@@ -133,6 +133,14 @@ def build_app(
 
     if pack_name == "legal.contract_analyst":
         from packs.legal.contract_analyst import LegalContractApp
+
+        extraction_model = None
+        if config.extraction_schema is not None:
+            from cogbase.core.json_schema import build_model_from_json_schema
+            extraction_model = build_model_from_json_schema(
+                config.extraction_schema, model_name="DynamicContractExtraction"
+            )
+
         return LegalContractApp(
             client=llm_client,
             model=config.llm.model,
@@ -140,6 +148,7 @@ def build_app(
             vector_store=vector_store,
             embedder=embedder,
             chunker=chunker,
+            extraction_model=extraction_model,
         )
 
     raise ValueError(f"Unknown pack: {pack_name!r}")

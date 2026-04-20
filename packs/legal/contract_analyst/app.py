@@ -61,7 +61,9 @@ Structured-only mode (no vector search)::
 from __future__ import annotations
 
 import logging
-from typing import Any, Sequence
+from typing import Any, Sequence, Type
+
+from pydantic import BaseModel
 
 from cogbase.core.application import Application, IngestResult, StructuredCollection, VectorCollection
 from cogbase.core.models import Document
@@ -75,7 +77,6 @@ from cogbase.embeddings import EmbeddingBase
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
 from cogbase.stores.schema import CollectionSchema
 from packs.legal.contract_analyst.extractor import ContractExtractor
-from packs.legal.contract_analyst.schema import CONTRACTS_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,7 @@ class LegalContractApp:
         embedder: EmbeddingBase | None = None,
         chunker: ChunkerBase | None = None,
         name: str = "legal",
+        extraction_model: Type[BaseModel] | None = None,
         extractor_max_tokens: int = 16384,
         generator_max_tokens: int = 4096,
         retriever_top_k: int = 10,
@@ -140,11 +142,16 @@ class LegalContractApp:
                 "or all omitted. Received a partial set."
             )
 
-        extractor = ContractExtractor(client, model, max_tokens=extractor_max_tokens)
+        extractor = ContractExtractor(
+            client,
+            model,
+            extraction_model=extraction_model,
+            max_tokens=extractor_max_tokens,
+        )
 
         structured_collections = [
             StructuredCollection(
-                schema=CONTRACTS_SCHEMA,
+                schema=extractor.schema,
                 store=structured_store,
                 extractor=extractor,
             )
