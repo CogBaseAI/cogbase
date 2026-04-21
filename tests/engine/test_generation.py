@@ -356,4 +356,4 @@ async def test_generator_passes_model_and_max_tokens() -> None:
     call_kwargs = client.chat.completions.create.call_args
     kwargs = call_kwargs.kwargs if call_kwargs.kwargs else call_kwargs[1]
     assert kwargs["model"] == "my-model"
-    assert kwargs["max_tokens"] == 512
+    assert kwargs["max_completion_tokens"] == 512

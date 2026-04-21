@@ -1,6 +1,6 @@
 """Generic CogBase application — bundles ingestion and query under one object.
 
-``CogBaseApp`` wires together an ``Application`` (ingestion layer) and an
+``CogBaseApp`` wires together an ``IngestionPipeline`` (ingestion layer) and an
 ``Engine`` (query layer) behind a small interface: ``setup`` → ``ingest`` /
 ``ingest_many`` → ``query``.
 
@@ -44,7 +44,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Sequence
 
-from cogbase.core.application import Application, IngestResult, StructuredCollection, VectorCollection
+from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult, StructuredCollection, VectorCollection
 from cogbase.core.models import Document
 from cogbase.engine.engine import Engine
 from cogbase.engine.generation.base import GenerationResult
@@ -130,7 +130,7 @@ class CogBaseApp:
                 )
             )
 
-        self._app = Application(
+        self._ingest_pipeline = IngestionPipeline(
             name=name,
             vector_collections=vector_collections,
             structured_collections=structured_collections,
@@ -140,7 +140,7 @@ class CogBaseApp:
             router=LLMRouter(
                 client,
                 model,
-                schema=self._app.structured_schemas,
+                schema=self._ingest_pipeline.structured_schemas,
                 available_patterns=None if vector_store else _STRUCTURED_ONLY_PATTERNS,
             ),
             retriever=HybridRetriever(
@@ -158,9 +158,9 @@ class CogBaseApp:
 
     async def setup(self) -> None:
         """Create all collections in their respective stores. Idempotent."""
-        logger.info("app.setup.start name=%s", self._app.name)
-        await self._app.setup()
-        logger.info("app.setup.done name=%s", self._app.name)
+        logger.info("app.setup.start name=%s", self._ingest_pipeline.name)
+        await self._ingest_pipeline.setup()
+        logger.info("app.setup.done name=%s", self._ingest_pipeline.name)
 
     async def ingest(self, doc: Document) -> None:
         """Ingest a single document.
@@ -169,7 +169,7 @@ class CogBaseApp:
         runs structured extraction into the structured store.
         """
         logger.info("app.ingest.start doc_id=%s", doc.doc_id)
-        await self._app.ingest(doc)
+        await self._ingest_pipeline.ingest(doc)
         logger.info("app.ingest.done doc_id=%s", doc.doc_id)
 
     async def ingest_many(
@@ -185,7 +185,7 @@ class CogBaseApp:
         in the same order as *documents*.
         """
         logger.info("app.ingest_many.start documents=%d concurrency=%d", len(documents), concurrency)
-        results = await self._app.ingest_many(documents, concurrency=concurrency)
+        results = await self._ingest_pipeline.ingest_many(documents, concurrency=concurrency)
         failures = sum(1 for r in results if not r.success)
         logger.info("app.ingest_many.done documents=%d failures=%d", len(results), failures)
         return results
@@ -210,9 +210,9 @@ class CogBaseApp:
     # ------------------------------------------------------------------
 
     @property
-    def application(self) -> Application:
-        """The underlying ``Application`` (ingestion layer)."""
-        return self._app
+    def ingestion_pipeline(self) -> IngestionPipeline:
+        """The underlying ``IngestionPipeline`` (ingestion layer)."""
+        return self._ingest_pipeline
 
     @property
     def engine(self) -> Engine:
@@ -222,4 +222,4 @@ class CogBaseApp:
     @property
     def structured_schemas(self) -> list[CollectionSchema]:
         """Schemas for all structured collections (convenience proxy)."""
-        return self._app.structured_schemas
+        return self._ingest_pipeline.structured_schemas

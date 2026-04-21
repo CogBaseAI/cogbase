@@ -81,8 +81,8 @@ class TestBuildAppStructuredStoreResolution:
         mock_llm.return_value = _mock_openai_client()
         cfg = AppConfig.from_yaml(_MINIMAL_CONFIG_YAML)
         app = build_app(cfg)
-        # LegalContractApp wraps an Application; check the structured store type
-        structured_store = app._app._structured_collections[0].store
+        # LegalContractApp wraps an IngestionPipeline; check the structured store type
+        structured_store = app._ingest_pipeline._structured_collections[0].store
         assert isinstance(structured_store, InMemoryStructuredStore)
 
     @patch("api.factory._build_llm_client")
@@ -91,7 +91,7 @@ class TestBuildAppStructuredStoreResolution:
         cfg = AppConfig.from_yaml(_MINIMAL_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
         app = build_app(cfg, system_structured_store=system_store, app_namespace="test-app")
-        structured_store = app._app._structured_collections[0].store
+        structured_store = app._ingest_pipeline._structured_collections[0].store
         assert isinstance(structured_store, NamespacedStructuredStore)
         assert structured_store._prefix == "test_app"
 
@@ -104,7 +104,7 @@ class TestBuildAppStructuredStoreResolution:
         cfg = AppConfig.from_yaml(cfg_yaml)
         system_store = InMemoryStructuredStore()
         app = build_app(cfg, system_structured_store=system_store)
-        structured_store = app._app._structured_collections[0].store
+        structured_store = app._ingest_pipeline._structured_collections[0].store
         # App-level config overrides system store
         assert isinstance(structured_store, SQLiteStructuredStore)
 
@@ -114,7 +114,7 @@ class TestBuildAppStructuredStoreResolution:
         cfg = AppConfig.from_yaml(_MINIMAL_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
         app = build_app(cfg, system_structured_store=system_store)
-        ns_store = app._app._structured_collections[0].store
+        ns_store = app._ingest_pipeline._structured_collections[0].store
         assert isinstance(ns_store, NamespacedStructuredStore)
         assert ns_store._prefix == "test_app"
 
@@ -125,7 +125,7 @@ class TestBuildAppVectorStoreResolution:
         mock_llm.return_value = _mock_openai_client()
         cfg = AppConfig.from_yaml(_MINIMAL_CONFIG_YAML)
         app = build_app(cfg)
-        assert app._app._vector_collections == []
+        assert app._ingest_pipeline._vector_collections == []
 
     @patch("api.factory._build_llm_client")
     def test_system_vector_store_cfg_used_when_embedding_present(self, mock_llm):
@@ -137,7 +137,7 @@ class TestBuildAppVectorStoreResolution:
             mock_emb.return_value = MagicMock()
             app = build_app(cfg, system_vector_store_cfg=sys_vs_cfg)
 
-        assert len(app._app._vector_collections) == 1
+        assert len(app._ingest_pipeline._vector_collections) == 1
 
     @patch("api.factory._build_llm_client")
     def test_no_vector_store_when_no_embedding_even_with_system_cfg(self, mock_llm):
@@ -146,7 +146,7 @@ class TestBuildAppVectorStoreResolution:
         cfg = AppConfig.from_yaml(_MINIMAL_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
         app = build_app(cfg, system_vector_store_cfg=sys_vs_cfg)
-        assert app._app._vector_collections == []
+        assert app._ingest_pipeline._vector_collections == []
 
 
 class TestBuildAppUnknownPack:

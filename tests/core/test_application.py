@@ -1,10 +1,10 @@
-"""Tests for Application, VectorCollection, and StructuredCollection."""
+"""Tests for IngestionPipeline, VectorCollection, and StructuredCollection."""
 
 import pytest
 from pydantic import ValidationError
 from pydantic import BaseModel
 
-from cogbase.core.application import Application, IngestResult, StructuredCollection, VectorCollection
+from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult, StructuredCollection, VectorCollection
 from cogbase.core.models import Chunk, Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
@@ -108,13 +108,13 @@ def test_field_schema_rejects_json_schema_on_non_json_type():
 
 
 # ---------------------------------------------------------------------------
-# Application construction
+# IngestionPipeline construction
 # ---------------------------------------------------------------------------
 
 
-class TestApplicationConstruction:
+class TestIngestionPipelineConstruction:
     def test_empty_application(self):
-        app = Application(name="empty")
+        app = IngestionPipeline(name="empty")
         assert app.name == "empty"
         assert app.vector_collections == []
         assert app.structured_collections == []
@@ -127,7 +127,7 @@ class TestApplicationConstruction:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
-        app = Application(name="app", vector_collections=[vc])
+        app = IngestionPipeline(name="app", vector_collections=[vc])
         assert len(app.vector_collections) == 1
         assert app.structured_collections == []
 
@@ -137,7 +137,7 @@ class TestApplicationConstruction:
             store=InMemoryStructuredStore(),
             extractor=StubExtractor(),
         )
-        app = Application(name="app", structured_collections=[sc])
+        app = IngestionPipeline(name="app", structured_collections=[sc])
         assert app.vector_collections == []
         assert len(app.structured_collections) == 1
 
@@ -147,24 +147,24 @@ class TestApplicationConstruction:
             store=InMemoryStructuredStore(),
             extractor=StubExtractor(),
         )
-        app = Application(name="app", structured_collections=[sc])
+        app = IngestionPipeline(name="app", structured_collections=[sc])
         schemas = app.structured_schemas
         assert len(schemas) == 1
         assert schemas[0].name == "tags"
 
     def test_collections_views_are_copies(self):
         """Mutating the returned list does not affect the application."""
-        app = Application(name="app")
+        app = IngestionPipeline(name="app")
         app.vector_collections.append(object())  # type: ignore[arg-type]
         assert app.vector_collections == []
 
 
 # ---------------------------------------------------------------------------
-# Application.setup()
+# IngestionPipeline.setup()
 # ---------------------------------------------------------------------------
 
 
-class TestApplicationSetup:
+class TestIngestionPipelineSetup:
     @pytest.mark.asyncio
     async def test_setup_creates_structured_collections(self):
         store = InMemoryStructuredStore()
@@ -173,7 +173,7 @@ class TestApplicationSetup:
             store=store,
             extractor=StubExtractor(),
         )
-        app = Application(name="app", structured_collections=[sc])
+        app = IngestionPipeline(name="app", structured_collections=[sc])
         await app.setup()
 
         # Collection now exists — querying it must not raise
@@ -188,18 +188,18 @@ class TestApplicationSetup:
             store=store,
             extractor=StubExtractor(),
         )
-        app = Application(name="app", structured_collections=[sc])
+        app = IngestionPipeline(name="app", structured_collections=[sc])
         await app.setup()
         await app.setup()  # must not raise
 
 
 # ---------------------------------------------------------------------------
-# Application.ingest()
+# IngestionPipeline.ingest()
 # ---------------------------------------------------------------------------
 
 
-class TestApplicationIngest:
-    def _make_app(self) -> tuple[Application, FAISSVectorStore, InMemoryStructuredStore]:
+class TestIngestionPipelineIngest:
+    def _make_app(self) -> tuple[IngestionPipeline, FAISSVectorStore, InMemoryStructuredStore]:
         vector_store = FAISSVectorStore(dim=4)
         structured_store = InMemoryStructuredStore()
         vc = VectorCollection(
@@ -213,7 +213,7 @@ class TestApplicationIngest:
             store=structured_store,
             extractor=StubExtractor(),
         )
-        app = Application(name="app", vector_collections=[vc], structured_collections=[sc])
+        app = IngestionPipeline(name="app", vector_collections=[vc], structured_collections=[sc])
         return app, vector_store, structured_store
 
     @pytest.mark.asyncio
@@ -266,7 +266,7 @@ class TestApplicationIngest:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
-        app = Application(name="app", vector_collections=[vc])
+        app = IngestionPipeline(name="app", vector_collections=[vc])
         await app.setup()
         count = await app.ingest(Document(doc_id="doc-1", text="word " * 30))
         assert vector_store.ntotal > 0
@@ -280,7 +280,7 @@ class TestApplicationIngest:
             store=structured_store,
             extractor=StubExtractor(),
         )
-        app = Application(name="app", structured_collections=[sc])
+        app = IngestionPipeline(name="app", structured_collections=[sc])
         await app.setup()
         await app.ingest(Document(doc_id="doc-1", text="important clause about termination"))
         rows = await structured_store.query("tags")
@@ -288,21 +288,21 @@ class TestApplicationIngest:
 
 
 # ---------------------------------------------------------------------------
-# Application.ingest_many()
+# IngestionPipeline.ingest_many()
 # ---------------------------------------------------------------------------
 
 
-class TestApplicationIngestMany:
+class TestIngestionPipelineIngestMany:
     import asyncio as _asyncio
 
-    def _make_app(self) -> tuple[Application, InMemoryStructuredStore]:
+    def _make_app(self) -> tuple[IngestionPipeline, InMemoryStructuredStore]:
         structured_store = InMemoryStructuredStore()
         sc = StructuredCollection(
             schema=StubExtractor().schema,
             store=structured_store,
             extractor=StubExtractor(),
         )
-        app = Application(name="app", structured_collections=[sc])
+        app = IngestionPipeline(name="app", structured_collections=[sc])
         return app, structured_store
 
     @pytest.mark.asyncio
@@ -383,7 +383,7 @@ class TestApplicationIngestMany:
             store=structured_store,
             extractor=FailFirstExtractor(),
         )
-        app = Application(name="app", structured_collections=[sc])
+        app = IngestionPipeline(name="app", structured_collections=[sc])
         await app.setup()
 
         results = await app.ingest_many(

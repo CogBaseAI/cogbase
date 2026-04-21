@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from cogbase.core.app import CogBaseApp
-from cogbase.core.application import Application, IngestResult
+from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
 from cogbase.core.models import Chunk, Document
 from cogbase.embeddings import EmbeddingBase
 from cogbase.engine.engine import Engine
@@ -119,10 +119,10 @@ class TestCogBaseAppConstruction:
     def test_structured_only_builds(self):
         client = _make_client("{}")
         app = _make_app(client, InMemoryStructuredStore())
-        assert app.application.name == "legal"
-        assert len(app.application.structured_collections) == 1
-        assert app.application.structured_collections[0].name == CONTRACTS_COLLECTION
-        assert app.application.vector_collections == []
+        assert app._ingest_pipeline.name == "legal"
+        assert len(app._ingest_pipeline.structured_collections) == 1
+        assert app._ingest_pipeline.structured_collections[0].name == CONTRACTS_COLLECTION
+        assert app._ingest_pipeline.vector_collections == []
 
     def test_full_mode_builds(self):
         client = _make_client("{}")
@@ -133,8 +133,8 @@ class TestCogBaseAppConstruction:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=64, overlap=0),
         )
-        assert len(app.application.vector_collections) == 1
-        assert app.application.vector_collections[0].name == "documents"
+        assert len(app._ingest_pipeline.vector_collections) == 1
+        assert app._ingest_pipeline.vector_collections[0].name == "documents"
 
     def test_partial_vector_params_raises(self):
         client = _make_client("{}")
@@ -152,7 +152,7 @@ class TestCogBaseAppConstruction:
     def test_custom_name(self):
         client = _make_client("{}")
         app = _make_app(client, InMemoryStructuredStore(), name="my-legal-app")
-        assert app.application.name == "my-legal-app"
+        assert app._ingest_pipeline.name == "my-legal-app"
 
     def test_structured_schemas_exposed(self):
         client = _make_client("{}")
@@ -161,10 +161,10 @@ class TestCogBaseAppConstruction:
         assert len(schemas) == 1
         assert schemas[0].name == CONTRACTS_COLLECTION
 
-    def test_application_and_engine_accessible(self):
+    def test_ingestion_pipeline_and_engine_accessible(self):
         client = _make_client("{}")
         app = _make_app(client, InMemoryStructuredStore())
-        assert isinstance(app.application, Application)
+        assert isinstance(app.ingestion_pipeline, IngestionPipeline)
         assert isinstance(app.engine, Engine)
 
 
