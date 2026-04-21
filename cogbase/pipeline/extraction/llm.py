@@ -7,16 +7,18 @@ adds an identity field (``record_id`` by default, or a custom name via
 
 Typical usage::
 
+    import json
     import openai
+    from cogbase.core.json_schema import build_model_from_json_schema
     from cogbase.pipeline.extraction.llm import LLMExtractor
-    from examples.contract_analyst_demo.schema import ContractExtraction, CONTRACTS_COLLECTION
 
+    extraction_model = build_model_from_json_schema(extraction_schema_json_str)
     client = openai.AsyncOpenAI(api_key="...")
     extractor = LLMExtractor(
         client=client,
         model="gpt-4o-mini",
-        extraction_model=ContractExtraction,
-        collection_name=CONTRACTS_COLLECTION,
+        extraction_model=extraction_model,
+        collection_name='your_collection_name',
         id_field="contract_id",
     )
     record = await extractor.extract(doc)

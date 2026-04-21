@@ -14,14 +14,16 @@ Typical usage::
     from cogbase.stores.vector.faiss_store import FAISSVectorStore
     from cogbase.embeddings.huggingface import SentenceTransformersEmbedding
     from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
-    from examples.contract_analyst_demo.schema import ContractExtraction, CONTRACTS_COLLECTION
+    import json
+    from cogbase.core.json_schema import build_model_from_json_schema
 
+    extraction_model = build_model_from_json_schema(extraction_json_schema_str)
     client = openai.AsyncOpenAI(api_key="...")
     extractor = LLMExtractor(
         client=client,
         model="gpt-4o-mini",
-        extraction_model=ContractExtraction,
-        collection_name=CONTRACTS_COLLECTION,
+        extraction_model=extraction_model,
+        collection_name='your_collection_name',
         id_field="contract_id",
     )
     app = CogBaseApp(

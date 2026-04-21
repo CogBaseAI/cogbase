@@ -53,6 +53,12 @@ def _parse_config(raw: bytes) -> tuple[str, AppConfig]:
         config = AppConfig.from_yaml(yaml_text)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Invalid config YAML: {exc}") from exc
+    if config.extraction_schema is None:
+        import json
+        from examples.contract_analyst_demo.schema import ContractExtraction
+        config = config.model_copy(
+            update={"extraction_schema": json.dumps(ContractExtraction.model_json_schema())}
+        )
     return yaml_text, config
 
 

@@ -51,7 +51,7 @@ def build_model_from_json_schema(
 
     Example::
 
-        from packs.legal.contract_analyst.schema import ContractExtraction
+        from example.contract_analyst_demo.schema import ContractExtraction
         schema = ContractExtraction.model_json_schema()
         DynModel = build_model_from_json_schema(schema, model_name="ContractExtraction")
         record = DynModel.model_validate_json(llm_output)
