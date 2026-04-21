@@ -220,14 +220,14 @@ class TestIngestionPipelineIngest:
     async def test_ingest_populates_vector_store(self):
         app, vector_store, _ = self._make_app()
         await app.setup()
-        await app.ingest(Document(doc_id="doc-1", text="word " * 30))
+        await app._ingest(Document(doc_id="doc-1", text="word " * 30))
         assert vector_store.ntotal > 0
 
     @pytest.mark.asyncio
     async def test_ingest_populates_structured_store(self):
         app, _, structured_store = self._make_app()
         await app.setup()
-        await app.ingest(Document(doc_id="doc-1", text="hello world contract clause"))
+        await app._ingest(Document(doc_id="doc-1", text="hello world contract clause"))
         rows = await structured_store.query("tags")
         assert len(rows) == 1
         assert rows[0]["doc_id"] == "doc-1"
@@ -236,14 +236,14 @@ class TestIngestionPipelineIngest:
     async def test_ingest_returns_record_count(self):
         app, _, _ = self._make_app()
         await app.setup()
-        count = await app.ingest(Document(doc_id="doc-1", text="hello world contract clause"))
+        count = await app._ingest(Document(doc_id="doc-1", text="hello world contract clause"))
         assert count == 1
 
     @pytest.mark.asyncio
     async def test_ingest_empty_text_returns_zero(self):
         app, vector_store, _ = self._make_app()
         await app.setup()
-        count = await app.ingest(Document(doc_id="doc-empty", text=""))
+        count = await app._ingest(Document(doc_id="doc-empty", text=""))
         assert count == 0
         assert vector_store.ntotal == 0
 
@@ -251,8 +251,8 @@ class TestIngestionPipelineIngest:
     async def test_ingest_multiple_docs_accumulate(self):
         app, vector_store, structured_store = self._make_app()
         await app.setup()
-        await app.ingest(Document(doc_id="doc-a", text="alpha beta gamma delta epsilon " * 3))
-        await app.ingest(Document(doc_id="doc-b", text="one two three four five six seven " * 3))
+        await app._ingest(Document(doc_id="doc-a", text="alpha beta gamma delta epsilon " * 3))
+        await app._ingest(Document(doc_id="doc-b", text="one two three four five six seven " * 3))
         assert vector_store.ntotal > 0
         rows = await structured_store.query("tags")
         assert len(rows) == 2
@@ -268,7 +268,7 @@ class TestIngestionPipelineIngest:
         )
         app = IngestionPipeline(name="app", vector_collections=[vc])
         await app.setup()
-        count = await app.ingest(Document(doc_id="doc-1", text="word " * 30))
+        count = await app._ingest(Document(doc_id="doc-1", text="word " * 30))
         assert vector_store.ntotal > 0
         assert count == 0  # no structured collections
 
@@ -282,7 +282,7 @@ class TestIngestionPipelineIngest:
         )
         app = IngestionPipeline(name="app", structured_collections=[sc])
         await app.setup()
-        await app.ingest(Document(doc_id="doc-1", text="important clause about termination"))
+        await app._ingest(Document(doc_id="doc-1", text="important clause about termination"))
         rows = await structured_store.query("tags")
         assert len(rows) == 1
 

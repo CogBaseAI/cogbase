@@ -169,7 +169,7 @@ class TestCogBaseAppConstruction:
 
 
 # ---------------------------------------------------------------------------
-# setup() / ingest()
+# setup() / ingest_many()
 # ---------------------------------------------------------------------------
 
 class TestCogBaseAppLifecycle:
@@ -193,7 +193,7 @@ class TestCogBaseAppLifecycle:
         store = InMemoryStructuredStore()
         app = _make_app(_make_client(_contract_payload(contract_type="SaaS")), store)
         await app.setup()
-        await app.ingest(Document(doc_id="c-001", text="Some contract text."))
+        await app.ingest_many([Document(doc_id="c-001", text="Some contract text.")])
         rows = await store.query(CONTRACTS_COLLECTION)
         assert len(rows) == 1
         assert rows[0]["contract_type"] == "SaaS"
@@ -203,7 +203,7 @@ class TestCogBaseAppLifecycle:
         store = InMemoryStructuredStore()
         app = _make_app(_make_client("{}"), store)
         await app.setup()
-        await app.ingest(Document(doc_id="c-empty", text=""))
+        await app.ingest_many([Document(doc_id="c-empty", text="")])
         rows = await store.query(CONTRACTS_COLLECTION)
         assert rows == []
 
@@ -212,8 +212,10 @@ class TestCogBaseAppLifecycle:
         store = InMemoryStructuredStore()
         app = _make_app(_make_client(_contract_payload()), store)
         await app.setup()
-        await app.ingest(Document(doc_id="c-001", text="contract one text"))
-        await app.ingest(Document(doc_id="c-002", text="contract two text"))
+        await app.ingest_many([
+            Document(doc_id="c-001", text="contract one text"),
+            Document(doc_id="c-002", text="contract two text"),
+        ])
         rows = await store.query(CONTRACTS_COLLECTION)
         assert len(rows) == 2
         doc_ids = {r["doc_id"] for r in rows}
@@ -231,7 +233,7 @@ class TestCogBaseAppLifecycle:
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
         await app.setup()
-        await app.ingest(Document(doc_id="c-001", text="word " * 20))
+        await app.ingest_many([Document(doc_id="c-001", text="word " * 20)])
         assert vector_store.ntotal > 0
 
 

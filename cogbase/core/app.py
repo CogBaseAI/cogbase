@@ -157,20 +157,8 @@ class CogBaseApp:
     # ------------------------------------------------------------------
 
     async def setup(self) -> None:
-        """Create all collections in their respective stores. Idempotent."""
-        logger.info("app.setup.start name=%s", self._ingest_pipeline.name)
+        """Create all structured collections in their respective stores. Idempotent."""
         await self._ingest_pipeline.setup()
-        logger.info("app.setup.done name=%s", self._ingest_pipeline.name)
-
-    async def ingest(self, doc: Document) -> None:
-        """Ingest a single document.
-
-        Chunks and embeds the text into the vector store (if configured) and
-        runs structured extraction into the structured store.
-        """
-        logger.info("app.ingest.start doc_id=%s", doc.doc_id)
-        await self._ingest_pipeline.ingest(doc)
-        logger.info("app.ingest.done doc_id=%s", doc.doc_id)
 
     async def ingest_many(
         self,

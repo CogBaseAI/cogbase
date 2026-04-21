@@ -17,7 +17,6 @@ from api.models import (
     ApplicationResponse,
     IngestManyRequest,
     IngestManyResponse,
-    IngestRequest,
     IngestResultResponse,
     QueryRequest,
     QueryResponse,
@@ -216,22 +215,6 @@ def _get_active_app(app_id: str, registry: AppRegistry) -> object:
     if app is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found or not active")
     return app
-
-
-@router.post("/{app_id}/ingest", status_code=status.HTTP_200_OK)
-async def ingest_document(
-    app_id: str,
-    body: IngestRequest,
-    registry: RegistryDep,
-) -> None:
-    """Ingest a single document into an active application.
-
-    The document is chunked and embedded (if the application has a vector store
-    configured) and extracted into structured storage.
-    """
-    app = _get_active_app(app_id, registry)
-    doc = Document(doc_id=body.document.doc_id, text=body.document.text, metadata=body.document.metadata)
-    await app.ingest(doc)
 
 
 @router.post("/{app_id}/ingest_many", response_model=IngestManyResponse)

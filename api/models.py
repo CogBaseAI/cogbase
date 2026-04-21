@@ -33,10 +33,6 @@ class DocumentRequest(BaseModel):
     metadata: dict[str, Any] = {}
 
 
-class IngestRequest(BaseModel):
-    document: DocumentRequest
-
-
 class IngestManyRequest(BaseModel):
     documents: list[DocumentRequest]
     concurrency: int = 5
