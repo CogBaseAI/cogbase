@@ -11,6 +11,17 @@ from cogbase.stores.schema_util import cls_generate_schema
 # excluded from a customised schema without breaking extraction.
 _CORE_FIELDS = frozenset({"contract_id", "doc_id"})
 
+CONTRACTS_SYSTEM_PROMPT_PREFIX = (
+    "You are a legal contract analyst.  Extract structured information from the\n"
+    "contract provided by the user.\n\n"
+    "Rules:\n"
+    "- Copy all clause text verbatim — do not paraphrase or summarise.\n"
+    "- Do not invent information not present in the contract.\n"
+    "- Use null for any field not found in the contract.\n"
+    "- Return ONLY the JSON object — no explanation, no markdown fences.\n\n"
+    "Return a single JSON object with these fields:\n\n"
+)
+
 CONTRACTS_COLLECTION = "contracts"
 
 

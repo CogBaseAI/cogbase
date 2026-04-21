@@ -85,7 +85,14 @@ from cogbase.embeddings import OpenAIEmbedding  # noqa: E402
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker  # noqa: E402
 from cogbase.stores.structured.memory import InMemoryStructuredStore  # noqa: E402
 from cogbase.stores.vector.faiss_store import FAISSVectorStore  # noqa: E402
-from packs.legal.contract_analyst import LegalContractApp  # noqa: E402
+from cogbase.core.app import CogBaseApp  # noqa: E402
+from cogbase.pipeline.extraction.llm import LLMExtractor  # noqa: E402
+from cogbase.stores.schema_util import cls_json_schema_for_llm  # noqa: E402
+from examples.contract_analyst_demo.schema import (  # noqa: E402
+    CONTRACTS_COLLECTION,
+    CONTRACTS_SYSTEM_PROMPT_PREFIX,
+    ContractExtraction,
+)
 from tests.packs.legal.saas_contracts import CONTRACTS  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -121,12 +128,21 @@ def _build_app(
     client: openai.AsyncOpenAI,
     store: InMemoryStructuredStore,
     vector_store: FAISSVectorStore,
-) -> LegalContractApp:
+) -> CogBaseApp:
     embedder = OpenAIEmbedding(client, model=_EMBED_MODEL)
     chunker = FixedSizeChunker(chunk_size=512, overlap=64)
-    return LegalContractApp(
+    extractor = LLMExtractor(
+        client,
+        model=_CHAT_MODEL,
+        extraction_model=ContractExtraction,
+        collection_name=CONTRACTS_COLLECTION,
+        id_field="contract_id",
+        system_prompt=CONTRACTS_SYSTEM_PROMPT_PREFIX + cls_json_schema_for_llm(ContractExtraction),
+    )
+    return CogBaseApp(
         client=client,
         model=_CHAT_MODEL,
+        extractors=[extractor],
         structured_store=store,
         vector_store=vector_store,
         embedder=embedder,

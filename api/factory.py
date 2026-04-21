@@ -81,7 +81,7 @@ def build_app(
     system_vector_store_cfg: VectorStoreConfig | None = None,
     app_namespace: str | None = None,
 ) -> Any:
-    """Instantiate a pack application from *config*.
+    """Instantiate a CogBase application from *config*.
 
     Store backends are resolved in priority order:
 
@@ -132,23 +132,46 @@ def build_app(
     pack_name = config.pack.name if config.pack else "legal.contract_analyst"
 
     if pack_name == "legal.contract_analyst":
-        from packs.legal.contract_analyst import LegalContractApp
+        from cogbase.core.app import CogBaseApp
+        from cogbase.pipeline.extraction.llm import LLMExtractor
+        from cogbase.stores.schema_util import cls_json_schema_for_llm
+        from examples.contract_analyst_demo.schema import (
+            CONTRACTS_COLLECTION,
+            CONTRACTS_SYSTEM_PROMPT_PREFIX,
+            ContractExtraction,
+        )
 
-        extraction_model = None
         if config.extraction_schema is not None:
             from cogbase.core.json_schema import build_model_from_json_schema
             extraction_model = build_model_from_json_schema(
                 config.extraction_schema, model_name="DynamicContractExtraction"
             )
+            collection_name = CONTRACTS_COLLECTION
+            id_field = "contract_id"
+            system_prompt = CONTRACTS_SYSTEM_PROMPT_PREFIX + cls_json_schema_for_llm(extraction_model)
+        else:
+            extraction_model = ContractExtraction
+            collection_name = CONTRACTS_COLLECTION
+            id_field = "contract_id"
+            system_prompt = CONTRACTS_SYSTEM_PROMPT_PREFIX + cls_json_schema_for_llm(ContractExtraction)
 
-        return LegalContractApp(
+        extractor = LLMExtractor(
+            llm_client,
+            config.llm.model,
+            extraction_model=extraction_model,
+            collection_name=collection_name,
+            id_field=id_field,
+            system_prompt=system_prompt,
+        )
+
+        return CogBaseApp(
             client=llm_client,
             model=config.llm.model,
+            extractors=[extractor],
             structured_store=structured_store,
             vector_store=vector_store,
             embedder=embedder,
             chunker=chunker,
-            extraction_model=extraction_model,
         )
 
     raise ValueError(f"Unknown pack: {pack_name!r}")

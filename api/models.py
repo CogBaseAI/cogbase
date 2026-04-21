@@ -20,3 +20,50 @@ class ApplicationResponse(BaseModel):
 class ApplicationListResponse(BaseModel):
     applications: list[ApplicationResponse]
     total: int
+
+
+# ---------------------------------------------------------------------------
+# Ingest models
+# ---------------------------------------------------------------------------
+
+
+class DocumentRequest(BaseModel):
+    doc_id: str
+    text: str
+    metadata: dict[str, Any] = {}
+
+
+class IngestRequest(BaseModel):
+    document: DocumentRequest
+
+
+class IngestManyRequest(BaseModel):
+    documents: list[DocumentRequest]
+    concurrency: int = 5
+
+
+class IngestResultResponse(BaseModel):
+    doc_id: str
+    success: bool
+    records_extracted: int
+    error: str | None
+
+
+class IngestManyResponse(BaseModel):
+    results: list[IngestResultResponse]
+
+
+# ---------------------------------------------------------------------------
+# Query models
+# ---------------------------------------------------------------------------
+
+
+class QueryRequest(BaseModel):
+    text: str
+
+
+class QueryResponse(BaseModel):
+    answer: str
+    pattern: str
+    findings: str | None = None
+    supporting_quotes: list[str] = []

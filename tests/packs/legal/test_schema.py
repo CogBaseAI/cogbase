@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from cogbase.stores.schema import FieldSchema, FieldType
-from packs.legal.contract_analyst.schema import CONTRACTS_SCHEMA, build_contracts_schema
+from examples.contract_analyst_demo.schema import CONTRACTS_SCHEMA, build_contracts_schema
 
 
 def test_no_args_returns_equivalent_schema():

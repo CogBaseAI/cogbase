@@ -343,11 +343,11 @@ class TestContractExtractionRoundTrip:
 
     @pytest.fixture(scope="class")
     def DynModel(self):
-        from packs.legal.contract_analyst.schema import ContractExtraction
+        from examples.contract_analyst_demo.schema import ContractExtraction
         return build_model_from_json_schema(ContractExtraction.model_json_schema())
 
     def test_field_names_match(self, DynModel):
-        from packs.legal.contract_analyst.schema import ContractExtraction
+        from examples.contract_analyst_demo.schema import ContractExtraction
         assert set(DynModel.model_fields) == set(ContractExtraction.model_fields)
 
     def test_scalar_nullable_fields_default_to_none(self, DynModel):

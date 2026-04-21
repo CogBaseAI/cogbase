@@ -10,9 +10,20 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from api.config import AppConfig
 from api.dependencies import RegistryDep, SystemConfigDep, SystemStoreDep, SystemStructuredStoreDep
+from api.registry import AppRegistry
 from api.factory import build_app
-from api.models import ApplicationListResponse, ApplicationResponse
+from api.models import (
+    ApplicationListResponse,
+    ApplicationResponse,
+    IngestManyRequest,
+    IngestManyResponse,
+    IngestRequest,
+    IngestResultResponse,
+    QueryRequest,
+    QueryResponse,
+)
 from api.system_store import AppRecord
+from cogbase.core.models import Document
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 
@@ -198,3 +209,75 @@ async def delete_application(
         raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
     registry.remove(app_id)
     await system_store.delete_app(app_id)
+
+
+def _get_active_app(app_id: str, registry: AppRegistry) -> object:
+    app = registry.get(app_id)
+    if app is None:
+        raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found or not active")
+    return app
+
+
+@router.post("/{app_id}/ingest", status_code=status.HTTP_200_OK)
+async def ingest_document(
+    app_id: str,
+    body: IngestRequest,
+    registry: RegistryDep,
+) -> None:
+    """Ingest a single document into an active application.
+
+    The document is chunked and embedded (if the application has a vector store
+    configured) and extracted into structured storage.
+    """
+    app = _get_active_app(app_id, registry)
+    doc = Document(doc_id=body.document.doc_id, text=body.document.text, metadata=body.document.metadata)
+    await app.ingest(doc)
+
+
+@router.post("/{app_id}/ingest_many", response_model=IngestManyResponse)
+async def ingest_documents(
+    app_id: str,
+    body: IngestManyRequest,
+    registry: RegistryDep,
+) -> IngestManyResponse:
+    """Ingest a batch of documents into an active application.
+
+    Documents are processed concurrently up to *concurrency* at a time.  A
+    failure on one document does not abort the others — each result carries
+    ``success`` and ``error`` for per-document reporting.
+    """
+    app = _get_active_app(app_id, registry)
+    documents = [Document(doc_id=d.doc_id, text=d.text, metadata=d.metadata) for d in body.documents]
+    results = await app.ingest_many(documents, concurrency=body.concurrency)
+    return IngestManyResponse(
+        results=[
+            IngestResultResponse(
+                doc_id=r.doc_id,
+                success=r.success,
+                records_extracted=r.records_extracted,
+                error=str(r.error) if r.error is not None else None,
+            )
+            for r in results
+        ]
+    )
+
+
+@router.post("/{app_id}/query", response_model=QueryResponse)
+async def query_application(
+    app_id: str,
+    body: QueryRequest,
+    registry: RegistryDep,
+) -> QueryResponse:
+    """Answer a natural-language query over an active application's ingested documents.
+
+    The query is automatically routed to the appropriate retrieval pattern
+    (A — structured lookup, B — semantic search, C — hybrid, D — grounded report).
+    """
+    app = _get_active_app(app_id, registry)
+    result = await app.query(body.text)
+    return QueryResponse(
+        answer=result.answer,
+        pattern=result.pattern.value,
+        findings=result.findings,
+        supporting_quotes=result.supporting_quotes,
+    )
