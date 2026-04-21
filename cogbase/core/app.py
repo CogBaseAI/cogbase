@@ -66,6 +66,8 @@ logger = logging.getLogger(__name__)
 
 # Patterns available when no vector store is configured (B and C require one).
 _STRUCTURED_ONLY_PATTERNS = [QueryPattern.A, QueryPattern.D]
+# Patterns available when no structured store is configured (A requires one).
+_VECTOR_ONLY_PATTERNS = [QueryPattern.B, QueryPattern.C, QueryPattern.D]
 
 
 class CogBaseApp:
@@ -97,7 +99,7 @@ class CogBaseApp:
         client: Any,
         model: str,
         extractors: list[ExtractorBase],
-        structured_store: StructuredStoreBase,
+        structured_store: StructuredStoreBase | None,
         *,
         vector_store: VectorStoreBase | None = None,
         embedder: EmbeddingBase | None = None,
@@ -114,14 +116,16 @@ class CogBaseApp:
                 "or all omitted. Received a partial set."
             )
 
-        structured_collections = [
-            StructuredCollection(
-                schema=extractor.schema,
-                store=structured_store,
-                extractor=extractor,
-            )
-            for extractor in extractors
-        ]
+        structured_collections: list[StructuredCollection] = []
+        if structured_store is not None:
+            structured_collections = [
+                StructuredCollection(
+                    schema=extractor.schema,
+                    store=structured_store,
+                    extractor=extractor,
+                )
+                for extractor in extractors
+            ]
 
         vector_collections: list[VectorCollection] = []
         if vector_store is not None:
@@ -141,12 +145,17 @@ class CogBaseApp:
             structured_collections=structured_collections,
         )
 
+        if structured_store is None:
+            available_patterns = _VECTOR_ONLY_PATTERNS if vector_store else None
+        else:
+            available_patterns = None if vector_store else _STRUCTURED_ONLY_PATTERNS
+
         self._engine = Engine(
             router=LLMRouter(
                 client,
                 model,
                 schema=self._ingest_pipeline.structured_schemas,
-                available_patterns=None if vector_store else _STRUCTURED_ONLY_PATTERNS,
+                available_patterns=available_patterns,
             ),
             retriever=HybridRetriever(
                 structured_store=structured_store,

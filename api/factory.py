@@ -108,15 +108,6 @@ def build_app(
     """
     llm_client = _build_llm_client(config)
 
-    # --- Structured store ---------------------------------------------------
-    # Priority: app config > system shared store (namespaced) > in-memory
-    if config.structured_store is not None:
-        structured_store = build_structured_store(config.structured_store)
-    elif system_structured_store is not None:
-        structured_store: Any = system_structured_store
-    else:
-        raise ValueError("Custom or system structured store is required")
-
     # --- Vector store -------------------------------------------------------
     # Priority: app config > system config (new instance per app) > None
     vector_store_cfg = config.vector_store or (
@@ -128,7 +119,25 @@ def build_app(
     chunker = _build_chunker(config.chunker) if config.chunker else None
 
     if config.extraction_schema is None:
-        raise ValueError("extraction_schema is required")
+        return CogBaseApp(
+            client=llm_client,
+            model=config.llm.model,
+            extractors=[],
+            structured_store=None,
+            vector_store=vector_store,
+            embedder=embedder,
+            chunker=chunker,
+        )
+
+    # --- Structured store ---------------------------------------------------
+    # Priority: app config > system shared store (namespaced) > error
+    if config.structured_store is not None:
+        structured_store = build_structured_store(config.structured_store)
+    elif system_structured_store is not None:
+        structured_store: Any = system_structured_store
+    else:
+        raise ValueError("Custom or system structured store is required")
+
     extraction_model = build_model_from_json_schema(
         config.extraction_schema, model_name="DynamicContractExtraction"
     )

@@ -424,6 +424,79 @@ class TestStructuredOnlyPatternRestriction:
 
 
 # ---------------------------------------------------------------------------
+# Vector-only mode (structured_store=None)
+# ---------------------------------------------------------------------------
+
+class TestVectorOnlyMode:
+    """CogBaseApp with structured_store=None skips extraction entirely."""
+
+    def _make_vector_only_app(self, client: MagicMock) -> CogBaseApp:
+        return CogBaseApp(
+            client=client,
+            model="test-model",
+            extractors=[],
+            structured_store=None,
+            vector_store=FAISSVectorStore(dim=4),
+            embedder=StubEmbedding(dim=4),
+            chunker=FixedSizeChunker(chunk_size=20, overlap=0),
+            name="vector-only",
+        )
+
+    def test_no_structured_collections(self):
+        app = self._make_vector_only_app(_make_client("{}"))
+        assert app._ingest_pipeline.structured_collections == []
+
+    def test_vector_collection_present(self):
+        app = self._make_vector_only_app(_make_client("{}"))
+        assert len(app._ingest_pipeline.vector_collections) == 1
+
+    def test_structured_schemas_empty(self):
+        app = self._make_vector_only_app(_make_client("{}"))
+        assert app.structured_schemas == []
+
+    def test_prompt_excludes_pattern_a(self):
+        app = self._make_vector_only_app(_make_client("{}"))
+        prompt = app.engine._router._system_prompt
+        assert "A —" not in prompt
+
+    def test_prompt_includes_patterns_b_c_d(self):
+        app = self._make_vector_only_app(_make_client("{}"))
+        prompt = app.engine._router._system_prompt
+        for label in ("B —", "C —", "D —"):
+            assert label in prompt
+
+    @pytest.mark.asyncio
+    async def test_setup_is_noop(self):
+        app = self._make_vector_only_app(_make_client("{}"))
+        await app.setup()  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_ingest_populates_vector_store_not_structured(self):
+        vector_store = FAISSVectorStore(dim=4)
+        app = CogBaseApp(
+            client=_make_client("{}"),
+            model="test-model",
+            extractors=[],
+            structured_store=None,
+            vector_store=vector_store,
+            embedder=StubEmbedding(dim=4),
+            chunker=FixedSizeChunker(chunk_size=20, overlap=0),
+        )
+        await app.setup()
+        results = await app.ingest_documents([Document(doc_id="d-001", text="word " * 20)])
+        assert results[0].success is True
+        assert results[0].records_extracted == 0
+        assert vector_store.ntotal > 0
+
+    @pytest.mark.asyncio
+    async def test_ingest_records_extracted_is_zero(self):
+        app = self._make_vector_only_app(_make_client("{}"))
+        await app.setup()
+        results = await app.ingest_documents([Document(doc_id="d-001", text="some text " * 5)])
+        assert results[0].records_extracted == 0
+
+
+# ---------------------------------------------------------------------------
 # ingest_documents()
 # ---------------------------------------------------------------------------
 

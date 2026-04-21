@@ -89,6 +89,16 @@ async def client():
 # POST /applications
 # ---------------------------------------------------------------------------
 
+_YAML_NO_SCHEMA = textwrap.dedent("""\
+    name: vector-only-app
+    llm:
+      provider: openai
+      model: gpt-4o-mini
+    pack:
+      name: legal.contract_analyst
+""").encode()
+
+
 class TestCreateApplication:
     @pytest.mark.asyncio
     async def test_create_returns_201(self, client):
@@ -158,6 +168,56 @@ class TestCreateApplication:
             files={"config_file": ("config.yaml", b"- item1\n- item2\n", "application/yaml")},
         )
         assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# POST /applications — extraction_schema=None
+# ---------------------------------------------------------------------------
+
+class TestCreateApplicationWithoutExtractionSchema:
+    @pytest.mark.asyncio
+    async def test_create_without_schema_returns_201(self, client):
+        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()) as mock_build:
+            resp = await client.post(
+                "/applications",
+                files={"config_file": ("config.yaml", _YAML_NO_SCHEMA, "application/yaml")},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["status"] == "active"
+
+    @pytest.mark.asyncio
+    async def test_build_app_receives_none_extraction_schema(self, client):
+        captured: list = []
+
+        def _capture_build(config, **kwargs):
+            captured.append(config)
+            return _mock_app_instance()
+
+        with patch("api.routers.applications.build_app", side_effect=_capture_build):
+            await client.post(
+                "/applications",
+                files={"config_file": ("config.yaml", _YAML_NO_SCHEMA, "application/yaml")},
+            )
+
+        assert len(captured) == 1
+        assert captured[0].extraction_schema is None
+
+    @pytest.mark.asyncio
+    async def test_no_default_schema_injected(self, client):
+        """_parse_config must not silently inject ContractExtraction when schema is absent."""
+        captured: list = []
+
+        def _capture_build(config, **kwargs):
+            captured.append(config)
+            return _mock_app_instance()
+
+        with patch("api.routers.applications.build_app", side_effect=_capture_build):
+            await client.post(
+                "/applications",
+                files={"config_file": ("config.yaml", _YAML_NO_SCHEMA, "application/yaml")},
+            )
+
+        assert captured[0].extraction_schema is None
 
 
 # ---------------------------------------------------------------------------

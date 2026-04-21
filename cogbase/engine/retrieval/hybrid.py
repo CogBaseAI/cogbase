@@ -61,12 +61,12 @@ class HybridRetriever(RetrieverBase):
 
     def __init__(
         self,
-        structured_store: StructuredStoreBase,
+        structured_store: StructuredStoreBase | None = None,
         vector_store: VectorStoreBase | None = None,
         embedder: EmbeddingBase | None = None,
         top_k: int = 10,
     ) -> None:
-        self._structured = StructuredRetriever(structured_store)
+        self._structured = StructuredRetriever(structured_store) if structured_store is not None else None
         self._vector = (
             VectorRetriever(vector_store, embedder, top_k)
             if vector_store is not None and embedder is not None
@@ -77,6 +77,9 @@ class HybridRetriever(RetrieverBase):
         logger.info("hybrid_retriever.retrieve.start pattern=%s", route.pattern.value)
         match route.pattern:
             case QueryPattern.A:
+                if self._structured is None:
+                    logger.info("hybrid_retriever.retrieve.structured_disabled pattern=%s", route.pattern.value)
+                    return RetrievalResult(route=route)
                 result = await self._structured.retrieve(route)
                 logger.debug(
                     "hybrid_retriever.retrieve.done pattern=%s structured_records=%d chunks=%d",
@@ -101,16 +104,18 @@ class HybridRetriever(RetrieverBase):
 
             case QueryPattern.C | QueryPattern.D:
                 # Both stores queried concurrently where possible; merge results.
-                structured_task = asyncio.create_task(self._structured_safe(route))
                 if self._vector is not None:
+                    structured_task = asyncio.create_task(self._structured_safe(route))
                     vector_task = asyncio.create_task(self._vector.retrieve(route))
                     structured_result, vector_result = await asyncio.gather(
                         structured_task, vector_task
                     )
                     chunks = vector_result.chunks
-                else:
-                    structured_result = await structured_task
+                elif self._structured is not None:
+                    structured_result = await self._structured_safe(route)
                     chunks = []
+                else:
+                    return RetrievalResult(route=route)
                 result = RetrievalResult(
                     structured_records=structured_result.structured_records,
                     chunks=chunks,
@@ -126,6 +131,6 @@ class HybridRetriever(RetrieverBase):
 
     async def _structured_safe(self, route: RouteResult) -> RetrievalResult:
         """Query structured store, returning an empty result when no targets are known."""
-        if not route.structured_targets:
+        if self._structured is None or not route.structured_targets:
             return RetrievalResult(route=route)
         return await self._structured.retrieve(route)
