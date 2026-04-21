@@ -2,8 +2,7 @@
 
 ``LLMExtractor`` calls an OpenAI-compatible LLM to extract structured data
 from a document according to a caller-supplied Pydantic model.  It automatically
-adds an identity field (``record_id`` by default, or a custom name via
-*id_field*) and a ``doc_id`` field to each extracted record.
+adds a ``doc_id`` identity field to each extracted record.
 
 Typical usage::
 
@@ -19,7 +18,6 @@ Typical usage::
         model="gpt-4o-mini",
         extraction_model=extraction_model,
         collection_name='your_collection_name',
-        id_field="contract_id",
     )
     record = await extractor.extract(doc)
 """
@@ -27,7 +25,6 @@ Typical usage::
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Any, Type
 
 from pydantic import BaseModel, ValidationError, create_model
@@ -50,11 +47,11 @@ _DEFAULT_SYSTEM_PROMPT_PREFIX = (
 )
 
 
-def _build_record_model(extraction_model: Type[BaseModel], id_field: str) -> Type[BaseModel]:
-    """Extend *extraction_model* with *id_field* and ``doc_id`` identity fields."""
+def _build_record_model(extraction_model: Type[BaseModel]) -> Type[BaseModel]:
+    """Extend *extraction_model* with a ``doc_id`` identity field."""
     return create_model(
         "_RecordModel",
-        **{id_field: (str, ...), "doc_id": (str, ...)},
+        doc_id=(str, ...),
         __base__=extraction_model,
     )
 
@@ -62,12 +59,11 @@ def _build_record_model(extraction_model: Type[BaseModel], id_field: str) -> Typ
 def _build_collection_schema(
     record_model: Type[BaseModel],
     collection_name: str,
-    id_field: str,
 ) -> CollectionSchema:
     """Derive a ``CollectionSchema`` from *record_model*'s fields."""
     return CollectionSchema(
         name=collection_name,
-        primary_fields=[id_field],
+        primary_fields=["doc_id"],
         fields=cls_generate_schema(record_model),
     )
 
@@ -79,9 +75,8 @@ class LLMExtractor(ExtractorBase):
     when the text is blank or the LLM returns unparseable output after all
     retries.
 
-    The returned record type extends *extraction_model* with two identity
-    fields: *id_field* (a UUID-based per-record identifier) and ``doc_id``
-    (the document identifier passed in).
+    The returned record type extends *extraction_model* with a ``doc_id``
+    identity field (the document identifier passed in).
 
     Args:
         client:           Async OpenAI-compatible client.
@@ -90,8 +85,6 @@ class LLMExtractor(ExtractorBase):
                           extract.  Its field descriptions are included in the
                           LLM prompt.
         collection_name:  Name of the structured store collection to write to.
-        id_field:         Name of the auto-generated identity field added to
-                          each record.  Defaults to ``"record_id"``.
         system_prompt:    Full system prompt for the LLM.  When ``None`` a
                           generic prompt is built from *extraction_model*'s
                           JSON schema.
@@ -107,7 +100,6 @@ class LLMExtractor(ExtractorBase):
         extraction_model: Type[BaseModel],
         collection_name: str,
         *,
-        id_field: str = "record_id",
         system_prompt: str | None = None,
         max_tokens: int = 16384,
         max_retries: int = 2,
@@ -117,10 +109,9 @@ class LLMExtractor(ExtractorBase):
         self._model = model
         self._max_tokens = max_tokens
         self._collection_name = collection_name
-        self._id_field = id_field
         self._extraction_model = extraction_model
-        self._record_model = _build_record_model(extraction_model, id_field)
-        self._schema = _build_collection_schema(self._record_model, collection_name, id_field)
+        self._record_model = _build_record_model(extraction_model)
+        self._schema = _build_collection_schema(self._record_model, collection_name)
         self._system_prompt = system_prompt or (
             _DEFAULT_SYSTEM_PROMPT_PREFIX + cls_json_schema_for_llm(extraction_model)
         )
@@ -154,8 +145,7 @@ class LLMExtractor(ExtractorBase):
             logger.exception("llm_extractor.parse_failed doc_id=%s", doc_id)
             return None
 
-        record_id = f"{doc_id}_{uuid.uuid4().hex[:8]}"
         return self._record_model(
-            **{self._id_field: record_id, "doc_id": doc_id},
+            doc_id=doc_id,
             **extraction.model_dump(),
         )

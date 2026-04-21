@@ -136,26 +136,23 @@ def build_app(
         from cogbase.core.json_schema import build_model_from_json_schema
         from cogbase.pipeline.extraction.llm import LLMExtractor
         from cogbase.stores.schema_util import cls_json_schema_for_llm
-        from examples.contract_analyst_demo.schema import (
-            CONTRACTS_COLLECTION,
-            CONTRACTS_SYSTEM_PROMPT_PREFIX,
-        )
 
         if config.extraction_schema is None:
             raise ValueError("extraction_schema is required for the legal.contract_analyst pack")
         extraction_model = build_model_from_json_schema(
             config.extraction_schema, model_name="DynamicContractExtraction"
         )
-        collection_name = CONTRACTS_COLLECTION
-        id_field = "contract_id"
-        system_prompt = CONTRACTS_SYSTEM_PROMPT_PREFIX + cls_json_schema_for_llm(extraction_model)
+        collection_name = config.name
+
+        system_prompt = None
+        if config.extract_system_prompt_prefix is not None:
+            system_prompt = config.extract_system_prompt_prefix + cls_json_schema_for_llm(extraction_model)
 
         extractor = LLMExtractor(
             llm_client,
             config.llm.model,
             extraction_model=extraction_model,
             collection_name=collection_name,
-            id_field=id_field,
             system_prompt=system_prompt,
         )
 

@@ -70,6 +70,7 @@ class AppConfig(BaseModel):
     chunker: ChunkerConfig | None = None
     pack: PackConfig | None = None
     extraction_schema: str | None = None  # JSON Schema string (draft-07)
+    extract_system_prompt_prefix: str | None = None
 
     @model_validator(mode="after")
     def _validate_vector_config(self) -> "AppConfig":

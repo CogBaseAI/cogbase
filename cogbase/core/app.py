@@ -24,7 +24,6 @@ Typical usage::
         model="gpt-4o-mini",
         extraction_model=extraction_model,
         collection_name='your_collection_name',
-        id_field="contract_id",
     )
     app = CogBaseApp(
         client=client,
