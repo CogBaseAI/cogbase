@@ -3,7 +3,7 @@
 import abc
 from typing import TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from cogbase.core.models import Chunk
 from cogbase.stores.filters import Filter
@@ -83,6 +83,10 @@ class StructuredStoreBase(abc.ABC):
         """
 
     @abc.abstractmethod
+    async def delete_collection(self, collection: str) -> None:
+        """Drop ``collection`` and all its records permanently."""
+
+    @abc.abstractmethod
     async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         """Delete all records matching every filter.
 
@@ -107,14 +111,82 @@ class StructuredStoreBase(abc.ABC):
         ]
 
 
+class VectorCollectionSchema(BaseModel):
+    """Schema for a vector store collection (namespace/index).
+
+    Args:
+        name:       Collection name — must be a valid identifier
+                    (``[a-zA-Z_][a-zA-Z0-9_]*``).
+        dimensions: Embedding vector dimensionality. All chunks upserted into
+                    this collection must carry embeddings of exactly this length.
+        metadata:   Optional free-form str→str metadata stored at the
+                    collection level (e.g. embedding model name, distance
+                    metric).
+    """
+
+    name: str
+    dimensions: int
+    metadata: dict[str, str] = {}
+
+    @field_validator("name")
+    @classmethod
+    def _valid_name(cls, v: str) -> str:
+        import re
+        if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", v):
+            raise ValueError(
+                f"Collection name '{v}' is invalid — use letters, digits, and underscores only"
+            )
+        return v
+
+    @field_validator("dimensions")
+    @classmethod
+    def _positive_dimensions(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f"dimensions must be positive, got {v}")
+        return v
+
+
 class VectorStoreBase(abc.ABC):
-    """Contract for any vector store backend."""
+    """Contract for any vector store backend.
+
+    Collections must be declared with ``create_collection`` before use.
+    Each collection is an isolated namespace — chunks in different collections
+    never mix during search or delete.
+
+    Example::
+
+        schema = VectorCollectionSchema(name="legal_chunks", dimensions=1536)
+        await store.create_collection(schema)
+        await store.upsert("legal_chunks", chunks)
+        results = await store.search("legal_chunks", query_embedding, top_k=5)
+        await store.delete("legal_chunks", doc_id="doc-42")
+    """
 
     @abc.abstractmethod
-    async def upsert(self, chunks: list[Chunk]) -> None: ...
+    async def create_collection(self, schema: VectorCollectionSchema) -> None:
+        """Declare a vector collection. Idempotent — safe to call on every startup."""
 
     @abc.abstractmethod
-    async def search(self, query_embedding: list[float], top_k: int) -> list[Chunk]: ...
+    async def upsert(self, collection: str, chunks: list[Chunk]) -> None:
+        """Insert or update chunks in ``collection``.
+
+        Each chunk must carry an ``embedding`` whose length matches the
+        collection's declared ``dimensions``.
+        """
 
     @abc.abstractmethod
-    async def delete(self, doc_id: str) -> None: ...
+    async def search(
+        self,
+        collection: str,
+        query_embedding: list[float],
+        top_k: int,
+    ) -> list[Chunk]:
+        """Return the ``top_k`` nearest chunks from ``collection``."""
+
+    @abc.abstractmethod
+    async def delete_collection(self, collection: str) -> None:
+        """Drop ``collection`` and all its chunks permanently."""
+
+    @abc.abstractmethod
+    async def delete(self, collection: str, doc_id: str) -> None:
+        """Delete all chunks for ``doc_id`` from ``collection``."""

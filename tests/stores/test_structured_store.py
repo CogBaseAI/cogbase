@@ -367,6 +367,31 @@ async def test_delete_no_match_is_noop(structured_store):
 
 
 # ------------------------------------------------------------------
+# delete_collection
+# ------------------------------------------------------------------
+
+async def test_delete_collection_removes_collection_and_data(structured_store):
+    await structured_store.save("facts", [make_fact(), make_fact()])
+    await structured_store.delete_collection("facts")
+    with pytest.raises(KeyError):
+        await structured_store.query("facts")
+
+
+async def test_delete_collection_unknown_raises(structured_store):
+    with pytest.raises(KeyError):
+        await structured_store.delete_collection("nonexistent")
+
+
+async def test_delete_collection_leaves_other_collections_intact(structured_store):
+    await structured_store.save("facts", [make_fact()])
+    await structured_store.save("events", [make_event()])
+    await structured_store.delete_collection("facts")
+    # "events" must still be queryable and contain its data
+    results = await structured_store.query("events")
+    assert len(results) == 1
+
+
+# ------------------------------------------------------------------
 # Custom collection (domain pack use case)
 # ------------------------------------------------------------------
 

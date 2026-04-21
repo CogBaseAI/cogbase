@@ -164,6 +164,27 @@ async def test_upsert_after_delete_works():
     assert results[0].chunk_id == new_chunk.chunk_id
 
 
+async def test_delete_collection_clears_store():
+    store = FAISSVectorStore()
+    await store.upsert([
+        make_chunk(doc_id="doc-1", embedding=[1.0, 0.0]),
+        make_chunk(doc_id="doc-2", embedding=[0.0, 1.0]),
+    ])
+    await store.delete_collection("chunks")
+    assert store.ntotal == 0
+    assert await store.search([1.0, 0.0], top_k=5) == []
+
+
+async def test_delete_collection_then_upsert_works():
+    store = FAISSVectorStore()
+    await store.upsert([make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])])
+    await store.delete_collection("chunks")
+    new_chunk = make_chunk(doc_id="doc-2", embedding=[0.0, 1.0])
+    await store.upsert([new_chunk])
+    results = await store.search([0.0, 1.0], top_k=1)
+    assert results[0].chunk_id == new_chunk.chunk_id
+
+
 # ------------------------------------------------------------------
 # Dimension mismatch
 # ------------------------------------------------------------------

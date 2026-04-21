@@ -182,6 +182,12 @@ class SQLiteStructuredStore(StructuredStoreBase):
         self._conn.commit()
         self._schemas[schema.name] = schema
 
+    async def delete_collection(self, collection: str) -> None:
+        self._get_schema(collection)  # raises KeyError if unknown
+        self._conn.execute(f'DROP TABLE "{collection}"')
+        self._conn.commit()
+        del self._schemas[collection]
+
     async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         schema = self._get_schema(collection)
         fs = filters or []

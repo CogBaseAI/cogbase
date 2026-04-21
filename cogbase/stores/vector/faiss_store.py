@@ -20,7 +20,7 @@ import logging
 import numpy as np
 
 from cogbase.core.models import Chunk
-from cogbase.stores.base import VectorStoreBase
+from cogbase.stores.base import VectorCollectionSchema, VectorStoreBase
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,18 @@ class FAISSVectorStore(VectorStoreBase):
     # ------------------------------------------------------------------
     # VectorStoreBase interface
     # ------------------------------------------------------------------
+
+    async def create_collection(self, schema: VectorCollectionSchema) -> None:
+        """No-op — FAISS is schema-free; the index is created lazily on first upsert."""
+
+    async def delete_collection(self, collection: str) -> None:
+        """Reset the store, discarding all chunks and the FAISS index."""
+        self._dim = None
+        self._index = None
+        self._chunks.clear()
+        self._id_map.clear()
+        self._id_rev.clear()
+        self._next_id = 0
 
     async def upsert(self, chunks: list[Chunk]) -> None:
         """Add or replace chunks. Chunks without an embedding are skipped."""
