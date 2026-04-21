@@ -10,7 +10,7 @@ from fastapi import FastAPI
 
 from api.config import AppConfig
 from api.factory import build_app, build_structured_store
-from api.registry import AppRegistry
+from api.app_cache import AppCache
 from api.routers.applications import router as applications_router
 from api.system_config import SystemConfig
 from api.system_store import SystemStore
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "system_structured_store type=%s", system_cfg.structured_store.type
         )
 
-    registry = AppRegistry()
+    app_cache = AppCache()
 
     # Re-instantiate all previously active applications so they are immediately
     # usable without a POST /applications round-trip.
@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 system_vector_store_cfg=system_cfg.vector_store,
             )
             await instance.setup()
-            registry.add(record.name, instance)
+            app_cache.add(record.name, instance)
             logger.info("restored app name=%s", record.name)
         except Exception as exc:
             logger.warning("failed to restore app name=%s: %s", record.name, exc)
@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.system_config = system_cfg
     app.state.system_structured_store = system_structured_store
     app.state.system_store = system_store
-    app.state.registry = registry
+    app.state.app_cache = app_cache
 
     yield
 

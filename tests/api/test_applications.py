@@ -15,13 +15,13 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from api.dependencies import (
-    get_registry,
+    get_app_cache,
     get_system_config,
     get_system_store,
     get_system_structured_store,
 )
 from api.main import app
-from api.registry import AppRegistry
+from api.app_cache import AppCache
 from api.system_config import SystemConfig
 from api.system_store import SystemStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -36,8 +36,8 @@ def _make_system_store() -> SystemStore:
     return SystemStore(store=backend)
 
 
-def _make_registry() -> AppRegistry:
-    return AppRegistry()
+def _make_app_cache() -> AppCache:
+    return AppCache()
 
 
 def _system_config() -> SystemConfig:
@@ -66,11 +66,11 @@ async def client():
     """AsyncClient with all external dependencies swapped out."""
     system_store = _make_system_store()
     await system_store.setup()
-    registry = _make_registry()
+    app_cache = _make_app_cache()
     system_structured_store = InMemoryStructuredStore()
 
     app.dependency_overrides[get_system_store] = lambda: system_store
-    app.dependency_overrides[get_registry] = lambda: registry
+    app.dependency_overrides[get_app_cache] = lambda: app_cache
     app.dependency_overrides[get_system_config] = lambda: _system_config()
     app.dependency_overrides[get_system_structured_store] = lambda: system_structured_store
 
@@ -306,16 +306,16 @@ class TestDeleteApplication:
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_delete_removes_from_registry(self, client):
-        registry = _make_registry()
-        app.dependency_overrides[get_registry] = lambda: registry
+    async def test_delete_removes_from_app_cache(self, client):
+        app_cache = _make_app_cache()
+        app.dependency_overrides[get_app_cache] = lambda: app_cache
 
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
                 files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
             )
-        assert registry.get("my-contract-analyzer") is not None
+        assert app_cache.get("my-contract-analyzer") is not None
 
         await client.delete("/applications/my-contract-analyzer")
-        assert registry.get("my-contract-analyzer") is None
+        assert app_cache.get("my-contract-analyzer") is None

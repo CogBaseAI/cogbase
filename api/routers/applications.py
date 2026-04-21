@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 import yaml
+
+logger = logging.getLogger(__name__)
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from api.config import AppConfig
-from api.dependencies import RegistryDep, SystemConfigDep, SystemStoreDep, SystemStructuredStoreDep
-from api.registry import AppRegistry
+from api.dependencies import AppCacheDep, SystemConfigDep, SystemStoreDep, SystemStructuredStoreDep
 from api.factory import build_app
+from api.app_cache import AppCache
 from api.models import (
     ApplicationListResponse,
     ApplicationResponse,
@@ -20,7 +23,8 @@ from api.models import (
     QueryRequest,
     QueryResponse,
 )
-from api.system_store import AppRecord
+from api.system_config import SystemConfig
+from api.system_store import AppRecord, SystemStore
 from cogbase.core.models import Document
 
 router = APIRouter(prefix="/applications", tags=["applications"])
@@ -63,7 +67,7 @@ def _parse_config(raw: bytes) -> tuple[str, AppConfig]:
 @router.post("", response_model=ApplicationResponse, status_code=status.HTTP_201_CREATED)
 async def create_application(
     system_store: SystemStoreDep,
-    registry: RegistryDep,
+    app_cache: AppCacheDep,
     system_config: SystemConfigDep,
     system_structured_store: SystemStructuredStoreDep,
     config_file: UploadFile = File(..., description="YAML config file"),
@@ -96,6 +100,7 @@ async def create_application(
         updated_at=now,
     )
     await system_store.save_app(record)
+    logger.info("Creating application '%s'", config.name)
 
     try:
         app = build_app(
@@ -104,9 +109,11 @@ async def create_application(
             system_vector_store_cfg=system_config.vector_store,
         )
         await app.setup()
-        registry.add(config.name, app)
+        app_cache.add(config.name, app)
         record = record.model_copy(update={"status": "active", "updated_at": _now()})
+        logger.info("Application '%s' created successfully", config.name)
     except Exception as exc:
+        logger.exception("Failed to create application '%s'", config.name)
         record = record.model_copy(
             update={"status": "error", "error": str(exc), "updated_at": _now()}
         )
@@ -139,7 +146,7 @@ async def get_application(
 async def update_application(
     app_name: str,
     system_store: SystemStoreDep,
-    registry: RegistryDep,
+    app_cache: AppCacheDep,
     system_config: SystemConfigDep,
     system_structured_store: SystemStructuredStoreDep,
     config_file: UploadFile = File(..., description="Updated YAML config file"),
@@ -162,7 +169,7 @@ async def update_application(
             detail=f"Application '{config.name}' already exists",
         )
 
-    registry.remove(app_name)
+    app_cache.remove(app_name)
 
     if config.name != app_name:
         await system_store.delete_app(app_name)
@@ -177,6 +184,7 @@ async def update_application(
         }
     )
     await system_store.save_app(updated)
+    logger.info("Updating application '%s'", app_name)
 
     try:
         app = build_app(
@@ -185,9 +193,11 @@ async def update_application(
             system_vector_store_cfg=system_config.vector_store,
         )
         await app.setup()
-        registry.add(config.name, app)
+        app_cache.add(config.name, app)
         updated = updated.model_copy(update={"status": "active", "updated_at": _now()})
+        logger.info("Application '%s' updated successfully", config.name)
     except Exception as exc:
+        logger.exception("Failed to update application '%s'", app_name)
         updated = updated.model_copy(
             update={"status": "error", "error": str(exc), "updated_at": _now()}
         )
@@ -200,20 +210,43 @@ async def update_application(
 async def delete_application(
     app_name: str,
     system_store: SystemStoreDep,
-    registry: RegistryDep,
+    app_cache: AppCacheDep,
 ) -> None:
     """Permanently remove an application and its metadata."""
     record = await system_store.get_app(app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
-    registry.remove(app_name)
+    app_cache.remove(app_name)
     await system_store.delete_app(app_name)
+    logger.info("Application '%s' deleted", app_name)
 
 
-def _get_active_app(app_name: str, registry: AppRegistry) -> object:
-    app = registry.get(app_name)
-    if app is None:
+async def _get_active_app(
+    app_name: str,
+    app_cache: AppCache,
+    system_store: SystemStore,
+    system_config: SystemConfig,
+    system_structured_store: object,
+    *,
+    force_refresh: bool = False,
+) -> object:
+    if not force_refresh:
+        app = app_cache.get(app_name)
+        if app is not None:
+            return app
+    else:
+        app_cache.remove(app_name)
+    record = await system_store.get_app(app_name)
+    if record is None or record.status != "active":
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found or not active")
+    config = AppConfig.from_yaml(record.config_yaml)
+    app = build_app(
+        config,
+        system_structured_store=system_structured_store,
+        system_vector_store_cfg=system_config.vector_store,
+    )
+    await app.setup()
+    app_cache.add(app_name, app)
     return app
 
 
@@ -221,7 +254,10 @@ def _get_active_app(app_name: str, registry: AppRegistry) -> object:
 async def ingest_documents(
     app_name: str,
     body: IngestDocumentsRequest,
-    registry: RegistryDep,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_config: SystemConfigDep,
+    system_structured_store: SystemStructuredStoreDep,
 ) -> IngestDocumentsResponse:
     """Ingest a batch of documents into an active application.
 
@@ -229,9 +265,16 @@ async def ingest_documents(
     failure on one document does not abort the others — each result carries
     ``success`` and ``error`` for per-document reporting.
     """
-    app = _get_active_app(app_name, registry)
+    app = await _get_active_app(app_name, app_cache, system_store, system_config, system_structured_store)
     documents = [Document(doc_id=d.doc_id, text=d.text, metadata=d.metadata) for d in body.documents]
-    results = await app.ingest_documents(documents, concurrency=body.concurrency)
+    try:
+        results = await app.ingest_documents(documents, concurrency=body.concurrency)
+    except Exception:
+        logger.exception("ingest_documents failed for app '%s', retrying with fresh app", app_name)
+        app = await _get_active_app(
+            app_name, app_cache, system_store, system_config, system_structured_store, force_refresh=True
+        )
+        results = await app.ingest_documents(documents, concurrency=body.concurrency)
     return IngestDocumentsResponse(
         results=[
             IngestResultResponse(
@@ -249,15 +292,25 @@ async def ingest_documents(
 async def query_application(
     app_name: str,
     body: QueryRequest,
-    registry: RegistryDep,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_config: SystemConfigDep,
+    system_structured_store: SystemStructuredStoreDep,
 ) -> QueryResponse:
     """Answer a natural-language query over an active application's ingested documents.
 
     The query is automatically routed to the appropriate retrieval pattern
     (A — structured lookup, B — semantic search, C — hybrid, D — grounded report).
     """
-    app = _get_active_app(app_name, registry)
-    result = await app.query(body.text)
+    app = await _get_active_app(app_name, app_cache, system_store, system_config, system_structured_store)
+    try:
+        result = await app.query(body.text)
+    except Exception:
+        logger.exception("query failed for app '%s', retrying with fresh app", app_name)
+        app = await _get_active_app(
+            app_name, app_cache, system_store, system_config, system_structured_store, force_refresh=True
+        )
+        result = await app.query(body.text)
     return QueryResponse(
         answer=result.answer,
         pattern=result.pattern.value,

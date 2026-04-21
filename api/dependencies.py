@@ -6,7 +6,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, Request
 
-from api.registry import AppRegistry
+from api.app_cache import AppCache
 from api.system_config import SystemConfig
 from api.system_store import SystemStore
 
@@ -15,8 +15,8 @@ def get_system_store(request: Request) -> SystemStore:
     return request.app.state.system_store  # type: ignore[no-any-return]
 
 
-def get_registry(request: Request) -> AppRegistry:
-    return request.app.state.registry  # type: ignore[no-any-return]
+def get_app_cache(request: Request) -> AppCache:
+    return request.app.state.app_cache  # type: ignore[no-any-return]
 
 
 def get_system_config(request: Request) -> SystemConfig:
@@ -28,6 +28,6 @@ def get_system_structured_store(request: Request) -> Any:
 
 
 SystemStoreDep = Annotated[SystemStore, Depends(get_system_store)]
-RegistryDep = Annotated[AppRegistry, Depends(get_registry)]
+AppCacheDep = Annotated[AppCache, Depends(get_app_cache)]
 SystemConfigDep = Annotated[SystemConfig, Depends(get_system_config)]
 SystemStructuredStoreDep = Annotated[Any, Depends(get_system_structured_store)]
