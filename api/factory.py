@@ -92,7 +92,7 @@ def build_app(
        the vector store type is used to create a fresh per-application instance.
     3. Built-in fallback — an isolated in-memory structured store; no vector store.
 
-    The returned object has ``setup()``, ``ingest()``, ``ingest_many()``, and
+    The returned object has ``setup()``, ``ingest_documents()``, and
     ``query()`` methods but is not yet set up — call ``await app.setup()``
     before use.
 

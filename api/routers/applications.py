@@ -15,8 +15,8 @@ from api.factory import build_app
 from api.models import (
     ApplicationListResponse,
     ApplicationResponse,
-    IngestManyRequest,
-    IngestManyResponse,
+    IngestDocumentsRequest,
+    IngestDocumentsResponse,
     IngestResultResponse,
     QueryRequest,
     QueryResponse,
@@ -217,12 +217,12 @@ def _get_active_app(app_id: str, registry: AppRegistry) -> object:
     return app
 
 
-@router.post("/{app_id}/ingest_many", response_model=IngestManyResponse)
+@router.post("/{app_id}/ingest_documents", response_model=IngestDocumentsResponse)
 async def ingest_documents(
     app_id: str,
-    body: IngestManyRequest,
+    body: IngestDocumentsRequest,
     registry: RegistryDep,
-) -> IngestManyResponse:
+) -> IngestDocumentsResponse:
     """Ingest a batch of documents into an active application.
 
     Documents are processed concurrently up to *concurrency* at a time.  A
@@ -231,8 +231,8 @@ async def ingest_documents(
     """
     app = _get_active_app(app_id, registry)
     documents = [Document(doc_id=d.doc_id, text=d.text, metadata=d.metadata) for d in body.documents]
-    results = await app.ingest_many(documents, concurrency=body.concurrency)
-    return IngestManyResponse(
+    results = await app.ingest_documents(documents, concurrency=body.concurrency)
+    return IngestDocumentsResponse(
         results=[
             IngestResultResponse(
                 doc_id=r.doc_id,

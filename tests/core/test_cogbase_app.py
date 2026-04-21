@@ -169,7 +169,7 @@ class TestCogBaseAppConstruction:
 
 
 # ---------------------------------------------------------------------------
-# setup() / ingest_many()
+# setup() / ingest_documents()
 # ---------------------------------------------------------------------------
 
 class TestCogBaseAppLifecycle:
@@ -193,7 +193,7 @@ class TestCogBaseAppLifecycle:
         store = InMemoryStructuredStore()
         app = _make_app(_make_client(_contract_payload(contract_type="SaaS")), store)
         await app.setup()
-        await app.ingest_many([Document(doc_id="c-001", text="Some contract text.")])
+        await app.ingest_documents([Document(doc_id="c-001", text="Some contract text.")])
         rows = await store.query(CONTRACTS_COLLECTION)
         assert len(rows) == 1
         assert rows[0]["contract_type"] == "SaaS"
@@ -203,7 +203,7 @@ class TestCogBaseAppLifecycle:
         store = InMemoryStructuredStore()
         app = _make_app(_make_client("{}"), store)
         await app.setup()
-        await app.ingest_many([Document(doc_id="c-empty", text="")])
+        await app.ingest_documents([Document(doc_id="c-empty", text="")])
         rows = await store.query(CONTRACTS_COLLECTION)
         assert rows == []
 
@@ -212,7 +212,7 @@ class TestCogBaseAppLifecycle:
         store = InMemoryStructuredStore()
         app = _make_app(_make_client(_contract_payload()), store)
         await app.setup()
-        await app.ingest_many([
+        await app.ingest_documents([
             Document(doc_id="c-001", text="contract one text"),
             Document(doc_id="c-002", text="contract two text"),
         ])
@@ -233,7 +233,7 @@ class TestCogBaseAppLifecycle:
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
         await app.setup()
-        await app.ingest_many([Document(doc_id="c-001", text="word " * 20)])
+        await app.ingest_documents([Document(doc_id="c-001", text="word " * 20)])
         assert vector_store.ntotal > 0
 
 
@@ -401,7 +401,7 @@ class TestStructuredOnlyPatternRestriction:
 
 
 # ---------------------------------------------------------------------------
-# ingest_many()
+# ingest_documents()
 # ---------------------------------------------------------------------------
 
 class TestIngestMany:
@@ -416,7 +416,7 @@ class TestIngestMany:
             Document(doc_id="c-002", text="contract two"),
             Document(doc_id="c-003", text="contract three"),
         ]
-        results = await app.ingest_many(documents)
+        results = await app.ingest_documents(documents)
 
         assert len(results) == 3
         assert all(isinstance(r, IngestResult) for r in results)
@@ -429,7 +429,7 @@ class TestIngestMany:
 
         doc_ids = [f"c-{i:03d}" for i in range(8)]
         documents = [Document(doc_id=d, text=f"text for {d}") for d in doc_ids]
-        results = await app.ingest_many(documents, concurrency=3)
+        results = await app.ingest_documents(documents, concurrency=3)
 
         assert [r.doc_id for r in results] == doc_ids
 
@@ -439,7 +439,7 @@ class TestIngestMany:
         app = _make_app(_make_client(_contract_payload()), store)
         await app.setup()
 
-        results = await app.ingest_many([Document(doc_id="c-001", text="some text")])
+        results = await app.ingest_documents([Document(doc_id="c-001", text="some text")])
 
         assert results[0].success is True
         assert results[0].error is None
@@ -450,7 +450,7 @@ class TestIngestMany:
         app = _make_app(_make_client(_contract_payload()), store)
         await app.setup()
 
-        results = await app.ingest_many([Document(doc_id="c-001", text="contract text")])
+        results = await app.ingest_documents([Document(doc_id="c-001", text="contract text")])
 
         assert results[0].records_extracted == 1
 
@@ -475,7 +475,7 @@ class TestIngestMany:
         app = _make_app(client, store)
         await app.setup()
 
-        results = await app.ingest_many(
+        results = await app.ingest_documents(
             [
                 Document(doc_id="c-fail", text="will fail"),
                 Document(doc_id="c-ok",   text="will succeed"),
@@ -500,7 +500,7 @@ class TestIngestMany:
         app = _make_app(_make_client("{}"), store)
         await app.setup()
 
-        results = await app.ingest_many([])
+        results = await app.ingest_documents([])
         assert results == []
 
     @pytest.mark.asyncio
@@ -510,7 +510,7 @@ class TestIngestMany:
         await app.setup()
 
         with pytest.raises(ValueError, match="concurrency"):
-            await app.ingest_many([], concurrency=0)
+            await app.ingest_documents([], concurrency=0)
 
     @pytest.mark.asyncio
     async def test_concurrency_limit_respected(self):
@@ -540,6 +540,6 @@ class TestIngestMany:
         await app.setup()
 
         documents = [Document(doc_id=f"c-{i}", text="text") for i in range(10)]
-        await app.ingest_many(documents, concurrency=3)
+        await app.ingest_documents(documents, concurrency=3)
 
         assert peak <= 3

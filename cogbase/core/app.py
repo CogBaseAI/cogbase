@@ -2,7 +2,7 @@
 
 ``CogBaseApp`` wires together an ``IngestionPipeline`` (ingestion layer) and an
 ``Engine`` (query layer) behind a small interface: ``setup`` → ``ingest`` /
-``ingest_many`` → ``query``.
+``ingest_documents`` → ``query``.
 
 Typical usage::
 
@@ -34,7 +34,7 @@ Typical usage::
         chunker=FixedSizeChunker(chunk_size=512, overlap=64),
     )
     await app.setup()
-    results = await app.ingest_many([Document(doc_id="c-001", text=contract_text)])
+    results = await app.ingest_documents([Document(doc_id="c-001", text=contract_text)])
     result = await app.query("which contracts expire before 2026-01-01?")
     print(result.answer)
 """
@@ -160,7 +160,7 @@ class CogBaseApp:
         """Create all structured collections in their respective stores. Idempotent."""
         await self._ingest_pipeline.setup()
 
-    async def ingest_many(
+    async def ingest_documents(
         self,
         documents: Sequence[Document],
         *,
@@ -172,10 +172,10 @@ class CogBaseApp:
         captured in the corresponding ``IngestResult``.  Results are returned
         in the same order as *documents*.
         """
-        logger.info("app.ingest_many.start documents=%d concurrency=%d", len(documents), concurrency)
-        results = await self._ingest_pipeline.ingest_many(documents, concurrency=concurrency)
+        logger.info("app.ingest_documents.start documents=%d concurrency=%d", len(documents), concurrency)
+        results = await self._ingest_pipeline.ingest_documents(documents, concurrency=concurrency)
         failures = sum(1 for r in results if not r.success)
-        logger.info("app.ingest_many.done documents=%d failures=%d", len(results), failures)
+        logger.info("app.ingest_documents.done documents=%d failures=%d", len(results), failures)
         return results
 
     async def query(self, text: str) -> GenerationResult:

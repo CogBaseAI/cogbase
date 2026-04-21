@@ -288,7 +288,7 @@ class TestIngestionPipelineIngest:
 
 
 # ---------------------------------------------------------------------------
-# IngestionPipeline.ingest_many()
+# IngestionPipeline.ingest_documents()
 # ---------------------------------------------------------------------------
 
 
@@ -311,7 +311,7 @@ class TestIngestionPipelineIngestMany:
         app, _ = self._make_app()
         await app.setup()
         docs = [Document(doc_id=f"d-{i}", text=f"text {i}") for i in range(3)]
-        results = await app.ingest_many(docs)
+        results = await app.ingest_documents(docs)
         assert len(results) == 3
         assert all(isinstance(r, IngestResult) for r in results)
 
@@ -322,7 +322,7 @@ class TestIngestionPipelineIngestMany:
         await app.setup()
         doc_ids = [f"d-{i:03d}" for i in range(8)]
         docs = [Document(doc_id=d, text=f"text for {d}") for d in doc_ids]
-        results = await app.ingest_many(docs, concurrency=3)
+        results = await app.ingest_documents(docs, concurrency=3)
         assert [r.doc_id for r in results] == doc_ids
 
     @pytest.mark.asyncio
@@ -330,7 +330,7 @@ class TestIngestionPipelineIngestMany:
         from cogbase.core.models import Document
         app, _ = self._make_app()
         await app.setup()
-        results = await app.ingest_many([Document(doc_id="d-001", text="some text")])
+        results = await app.ingest_documents([Document(doc_id="d-001", text="some text")])
         assert results[0].success is True
         assert results[0].records_extracted == 1
         assert results[0].error is None
@@ -340,7 +340,7 @@ class TestIngestionPipelineIngestMany:
         from cogbase.core.models import Document
         app, _ = self._make_app()
         await app.setup()
-        results = await app.ingest_many(
+        results = await app.ingest_documents(
             [
                 Document(doc_id="d-001", text="first"),
                 Document(doc_id="d-002", text="second"),
@@ -386,7 +386,7 @@ class TestIngestionPipelineIngestMany:
         app = IngestionPipeline(name="app", structured_collections=[sc])
         await app.setup()
 
-        results = await app.ingest_many(
+        results = await app.ingest_documents(
             [
                 Document(doc_id="d-fail", text="will fail"),
                 Document(doc_id="d-ok",   text="will succeed"),
@@ -406,10 +406,10 @@ class TestIngestionPipelineIngestMany:
     async def test_empty_list_returns_empty(self):
         app, _ = self._make_app()
         await app.setup()
-        assert await app.ingest_many([]) == []
+        assert await app.ingest_documents([]) == []
 
     @pytest.mark.asyncio
     async def test_invalid_concurrency_raises(self):
         app, _ = self._make_app()
         with pytest.raises(ValueError, match="concurrency"):
-            await app.ingest_many([], concurrency=0)
+            await app.ingest_documents([], concurrency=0)

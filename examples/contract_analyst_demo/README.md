@@ -27,7 +27,7 @@ app = LegalContractApp(
 await app.setup()
 
 # Ingest a batch of contracts
-results = await app.ingest_many([
+results = await app.ingest_documents([
     Document(doc_id="vendor-001", text=vendor_text),
     Document(doc_id="nda-002",    text=nda_text),
     Document(doc_id="lease-003",  text=lease_text),
@@ -209,12 +209,12 @@ print(result.supporting_quotes)  # list[str] — verbatim excerpts
 
 `vector_store`, `embedder`, and `chunker` must all be provided together or all omitted.
 
-### `ingest_many(contracts, *, concurrency=5)`
+### `ingest_documents(contracts, *, concurrency=5)`
 
 Ingests a list of documents concurrently. Never raises on individual failures — errors are captured per document.
 
 ```python
-results: list[IngestResult] = await app.ingest_many(contracts, concurrency=5)
+results: list[IngestResult] = await app.ingest_documents(contracts, concurrency=5)
 ```
 
 Accepts `Document` objects.

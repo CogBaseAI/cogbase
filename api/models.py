@@ -33,7 +33,7 @@ class DocumentRequest(BaseModel):
     metadata: dict[str, Any] = {}
 
 
-class IngestManyRequest(BaseModel):
+class IngestDocumentsRequest(BaseModel):
     documents: list[DocumentRequest]
     concurrency: int = 5
 
@@ -45,7 +45,7 @@ class IngestResultResponse(BaseModel):
     error: str | None
 
 
-class IngestManyResponse(BaseModel):
+class IngestDocumentsResponse(BaseModel):
     results: list[IngestResultResponse]
 
 

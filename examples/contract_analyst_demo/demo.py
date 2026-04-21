@@ -271,7 +271,7 @@ async def main() -> None:
                 Document(doc_id=doc_id, text=text)
                 for doc_id, text in CONTRACTS.items()
             ]
-            results = await app.ingest_many(documents, concurrency=3)
+            results = await app.ingest_documents(documents, concurrency=3)
             for r in results:
                 if r.success:
                     print(f"  {r.doc_id:<12}  OK  ({r.records_extracted} record extracted)")

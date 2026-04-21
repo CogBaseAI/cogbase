@@ -248,7 +248,7 @@ class IngestionPipeline:
         )
         return total_records
 
-    async def ingest_many(
+    async def ingest_documents(
         self,
         documents: Sequence[Document],
         *,
@@ -276,23 +276,25 @@ class IngestionPipeline:
         if concurrency < 1:
             raise ValueError(f"concurrency must be at least 1, got {concurrency}")
 
+        async def _ingest_one(doc: Document) -> IngestResult:
+            try:
+                records_extracted = await self._ingest(doc)
+                return IngestResult(doc_id=doc.doc_id, success=True, records_extracted=records_extracted)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "ingestion_pipeline.ingest_documents.failed name=%s doc_id=%s",
+                    self.name,
+                    doc.doc_id,
+                )
+                return IngestResult(doc_id=doc.doc_id, success=False, error=exc)
+
+        if len(documents) == 1:
+            return [await _ingest_one(documents[0])]
+
         semaphore = asyncio.Semaphore(concurrency)
 
-        async def _ingest_one(doc: Document) -> IngestResult:
+        async def _ingest_one_gated(doc: Document) -> IngestResult:
             async with semaphore:
-                try:
-                    records_extracted = await self._ingest(doc)
-                    return IngestResult(
-                        doc_id=doc.doc_id,
-                        success=True,
-                        records_extracted=records_extracted,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.exception(
-                        "ingestion_pipeline.ingest_many.failed name=%s doc_id=%s",
-                        self.name,
-                        doc.doc_id,
-                    )
-                    return IngestResult(doc_id=doc.doc_id, success=False, error=exc)
+                return await _ingest_one(doc)
 
-        return list(await asyncio.gather(*(_ingest_one(d) for d in documents)))
+        return list(await asyncio.gather(*(_ingest_one_gated(d) for d in documents)))
