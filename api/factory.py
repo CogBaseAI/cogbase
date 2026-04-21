@@ -7,6 +7,10 @@ from typing import Any
 
 from api.config import AppConfig, ChunkerConfig, EmbeddingConfig, StructuredStoreConfig, VectorStoreConfig
 from cogbase.stores.base import StructuredStoreBase
+from cogbase.core.app import CogBaseApp
+from cogbase.core.json_schema import build_model_from_json_schema
+from cogbase.pipeline.extraction.llm import LLMExtractor
+from cogbase.stores.schema_util import cls_json_schema_for_llm
 
 
 def _build_llm_client(config: AppConfig) -> Any:
@@ -79,7 +83,6 @@ def build_app(
     *,
     system_structured_store: StructuredStoreBase | None = None,
     system_vector_store_cfg: VectorStoreConfig | None = None,
-    app_namespace: str | None = None,
 ) -> Any:
     """Instantiate a CogBase application from *config*.
 
@@ -88,9 +91,10 @@ def build_app(
     1. Values declared explicitly in *config* (``structured_store``,
        ``vector_store``) — full per-application isolation.
     2. System-level stores supplied via the keyword arguments — the structured
-       store is shared with other applications using collection-name namespacing;
-       the vector store type is used to create a fresh per-application instance.
-    3. Built-in fallback — an isolated in-memory structured store; no vector store.
+       store is shared; collection names are already scoped to the app name so
+       no additional namespacing is required.
+    3. No fallback — raises ``ValueError`` when neither config store nor system
+       store is provided.
 
     The returned object has ``setup()``, ``ingest_documents()``, and
     ``query()`` methods but is not yet set up — call ``await app.setup()``
@@ -101,9 +105,6 @@ def build_app(
         system_structured_store:  Shared structured store from system config.
         system_vector_store_cfg:  Vector store type/settings from system config;
                                   a new instance is created per application.
-        app_namespace:            Prefix applied to all collection names when
-                                  using *system_structured_store*.  Defaults to
-                                  ``config.name``.
     """
     llm_client = _build_llm_client(config)
 
@@ -112,12 +113,9 @@ def build_app(
     if config.structured_store is not None:
         structured_store = build_structured_store(config.structured_store)
     elif system_structured_store is not None:
-        from api.namespaced_store import NamespacedStructuredStore
-        ns = app_namespace or config.name
-        structured_store: Any = NamespacedStructuredStore(system_structured_store, ns)
+        structured_store: Any = system_structured_store
     else:
-        from cogbase.stores.structured.memory import InMemoryStructuredStore
-        structured_store = InMemoryStructuredStore()
+        raise ValueError("Custom or system structured store is required")
 
     # --- Vector store -------------------------------------------------------
     # Priority: app config > system config (new instance per app) > None
@@ -129,41 +127,30 @@ def build_app(
     embedder = _build_embedder(config.embedding, llm_client) if config.embedding else None
     chunker = _build_chunker(config.chunker) if config.chunker else None
 
-    pack_name = config.pack.name if config.pack else "legal.contract_analyst"
+    if config.extraction_schema is None:
+        raise ValueError("extraction_schema is required")
+    extraction_model = build_model_from_json_schema(
+        config.extraction_schema, model_name="DynamicContractExtraction"
+    )
 
-    if pack_name == "legal.contract_analyst":
-        from cogbase.core.app import CogBaseApp
-        from cogbase.core.json_schema import build_model_from_json_schema
-        from cogbase.pipeline.extraction.llm import LLMExtractor
-        from cogbase.stores.schema_util import cls_json_schema_for_llm
+    system_prompt = None
+    if config.extract_system_prompt_prefix is not None:
+        system_prompt = config.extract_system_prompt_prefix + cls_json_schema_for_llm(extraction_model)
 
-        if config.extraction_schema is None:
-            raise ValueError("extraction_schema is required for the legal.contract_analyst pack")
-        extraction_model = build_model_from_json_schema(
-            config.extraction_schema, model_name="DynamicContractExtraction"
-        )
-        collection_name = config.name
+    extractor = LLMExtractor(
+        llm_client,
+        config.llm.model,
+        extraction_model=extraction_model,
+        collection_name=config.name,
+        system_prompt=system_prompt,
+    )
 
-        system_prompt = None
-        if config.extract_system_prompt_prefix is not None:
-            system_prompt = config.extract_system_prompt_prefix + cls_json_schema_for_llm(extraction_model)
-
-        extractor = LLMExtractor(
-            llm_client,
-            config.llm.model,
-            extraction_model=extraction_model,
-            collection_name=collection_name,
-            system_prompt=system_prompt,
-        )
-
-        return CogBaseApp(
-            client=llm_client,
-            model=config.llm.model,
-            extractors=[extractor],
-            structured_store=structured_store,
-            vector_store=vector_store,
-            embedder=embedder,
-            chunker=chunker,
-        )
-
-    raise ValueError(f"Unknown pack: {pack_name!r}")
+    return CogBaseApp(
+        client=llm_client,
+        model=config.llm.model,
+        extractors=[extractor],
+        structured_store=structured_store,
+        vector_store=vector_store,
+        embedder=embedder,
+        chunker=chunker,
+    )

@@ -12,7 +12,6 @@ from api.config import (
     ChunkerConfig,
     EmbeddingConfig,
     LLMConfig,
-    PackConfig,
     StructuredStoreConfig,
     VectorStoreConfig,
 )
@@ -156,8 +155,6 @@ _FULL_YAML = textwrap.dedent("""\
       type: fixed
       chunk_size: 256
       overlap: 32
-    pack:
-      name: legal.contract_analyst
 """)
 
 
@@ -177,7 +174,6 @@ class TestAppConfig:
         assert cfg.embedding is not None
         assert cfg.chunker is not None
         assert cfg.chunker.chunk_size == 256
-        assert cfg.pack.name == "legal.contract_analyst"
 
     def test_from_yaml_with_explicit_store(self):
         yaml_text = textwrap.dedent("""\
@@ -244,6 +240,3 @@ class TestAppConfig:
         with pytest.raises(ValueError, match="mapping"):
             AppConfig.from_yaml("- item1\n- item2\n")
 
-    def test_pack_config_optional(self):
-        cfg = AppConfig.from_yaml(_MINIMAL_YAML)
-        assert cfg.pack is None

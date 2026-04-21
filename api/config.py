@@ -57,10 +57,6 @@ class ChunkerConfig(BaseModel):
     overlap: int = 64
 
 
-class PackConfig(BaseModel):
-    name: str  # e.g. "legal.contract_analyst"
-
-
 class AppConfig(BaseModel):
     name: str
     llm: LLMConfig
@@ -68,7 +64,6 @@ class AppConfig(BaseModel):
     structured_store: StructuredStoreConfig | None = None
     vector_store: VectorStoreConfig | None = None
     chunker: ChunkerConfig | None = None
-    pack: PackConfig | None = None
     extraction_schema: str | None = None  # JSON Schema string (draft-07)
     extract_system_prompt_prefix: str | None = None
 

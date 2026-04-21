@@ -107,7 +107,6 @@ async def create_application(
             config,
             system_structured_store=system_structured_store,
             system_vector_store_cfg=system_config.vector_store,
-            app_namespace=config.name,
         )
         await app.setup()
         registry.add(app_id, app)
@@ -188,7 +187,6 @@ async def update_application(
             config,
             system_structured_store=system_structured_store,
             system_vector_store_cfg=system_config.vector_store,
-            app_namespace=config.name,
         )
         await app.setup()
         registry.add(app_id, app)

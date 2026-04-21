@@ -61,7 +61,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 config,
                 system_structured_store=system_structured_store,
                 system_vector_store_cfg=system_cfg.vector_store,
-                app_namespace=record.name,
             )
             await instance.setup()
             registry.add(record.app_id, instance)

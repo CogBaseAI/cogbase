@@ -8,7 +8,6 @@ import pytest
 
 from api.config import AppConfig, StructuredStoreConfig, VectorStoreConfig
 from api.factory import build_structured_store, build_app
-from api.namespaced_store import NamespacedStructuredStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.structured.sqlite import SQLiteStructuredStore
 
@@ -40,17 +39,18 @@ class TestBuildStructuredStore:
 # build_app — structured store resolution
 # ---------------------------------------------------------------------------
 
-_MINIMAL_CONFIG_YAML = """\
-name: test-app
+_SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
+
+_MINIMAL_CONFIG_YAML = f"""\
+name: test_app
 llm:
   provider: openai
   model: gpt-4o-mini
-pack:
-  name: legal.contract_analyst
+extraction_schema: '{_SCHEMA}'
 """
 
-_FULL_CONFIG_YAML = """\
-name: test-app
+_FULL_CONFIG_YAML = f"""\
+name: test_app
 llm:
   provider: openai
   model: gpt-4o-mini
@@ -61,8 +61,7 @@ chunker:
   type: fixed
   chunk_size: 512
   overlap: 64
-pack:
-  name: legal.contract_analyst
+extraction_schema: '{_SCHEMA}'
 """
 
 
@@ -77,23 +76,20 @@ def _mock_openai_client():
 
 class TestBuildAppStructuredStoreResolution:
     @patch("api.factory._build_llm_client")
-    def test_falls_back_to_in_memory_when_no_stores(self, mock_llm):
+    def test_raises_when_no_stores(self, mock_llm):
         mock_llm.return_value = _mock_openai_client()
         cfg = AppConfig.from_yaml(_MINIMAL_CONFIG_YAML)
-        app = build_app(cfg)
-        # LegalContractApp wraps an IngestionPipeline; check the structured store type
-        structured_store = app._ingest_pipeline._structured_collections[0].store
-        assert isinstance(structured_store, InMemoryStructuredStore)
+        with pytest.raises(ValueError, match="structured store is required"):
+            build_app(cfg)
 
     @patch("api.factory._build_llm_client")
     def test_uses_system_store_when_no_app_store(self, mock_llm):
         mock_llm.return_value = _mock_openai_client()
         cfg = AppConfig.from_yaml(_MINIMAL_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = build_app(cfg, system_structured_store=system_store, app_namespace="test-app")
+        app = build_app(cfg, system_structured_store=system_store)
         structured_store = app._ingest_pipeline._structured_collections[0].store
-        assert isinstance(structured_store, NamespacedStructuredStore)
-        assert structured_store._prefix == "test_app"
+        assert structured_store is system_store
 
     @patch("api.factory._build_llm_client")
     def test_app_config_store_overrides_system_store(self, mock_llm, tmp_path):
@@ -105,18 +101,7 @@ class TestBuildAppStructuredStoreResolution:
         system_store = InMemoryStructuredStore()
         app = build_app(cfg, system_structured_store=system_store)
         structured_store = app._ingest_pipeline._structured_collections[0].store
-        # App-level config overrides system store
         assert isinstance(structured_store, SQLiteStructuredStore)
-
-    @patch("api.factory._build_llm_client")
-    def test_namespace_defaults_to_config_name(self, mock_llm):
-        mock_llm.return_value = _mock_openai_client()
-        cfg = AppConfig.from_yaml(_MINIMAL_CONFIG_YAML)
-        system_store = InMemoryStructuredStore()
-        app = build_app(cfg, system_structured_store=system_store)
-        ns_store = app._ingest_pipeline._structured_collections[0].store
-        assert isinstance(ns_store, NamespacedStructuredStore)
-        assert ns_store._prefix == "test_app"
 
 
 class TestBuildAppVectorStoreResolution:
@@ -124,7 +109,8 @@ class TestBuildAppVectorStoreResolution:
     def test_no_vector_store_when_no_embedding(self, mock_llm):
         mock_llm.return_value = _mock_openai_client()
         cfg = AppConfig.from_yaml(_MINIMAL_CONFIG_YAML)
-        app = build_app(cfg)
+        system_store = InMemoryStructuredStore()
+        app = build_app(cfg, system_structured_store=system_store)
         assert app._ingest_pipeline._vector_collections == []
 
     @patch("api.factory._build_llm_client")
@@ -132,10 +118,15 @@ class TestBuildAppVectorStoreResolution:
         mock_llm.return_value = _mock_openai_client()
         cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+        system_store = InMemoryStructuredStore()
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
-            app = build_app(cfg, system_vector_store_cfg=sys_vs_cfg)
+            app = build_app(
+                cfg,
+                system_structured_store=system_store,
+                system_vector_store_cfg=sys_vs_cfg,
+            )
 
         assert len(app._ingest_pipeline._vector_collections) == 1
 
@@ -145,16 +136,10 @@ class TestBuildAppVectorStoreResolution:
         mock_llm.return_value = _mock_openai_client()
         cfg = AppConfig.from_yaml(_MINIMAL_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
-        app = build_app(cfg, system_vector_store_cfg=sys_vs_cfg)
-        assert app._ingest_pipeline._vector_collections == []
-
-
-class TestBuildAppUnknownPack:
-    @patch("api.factory._build_llm_client")
-    def test_unknown_pack_raises(self, mock_llm):
-        mock_llm.return_value = _mock_openai_client()
-        cfg = AppConfig.from_yaml(
-            "name: x\nllm:\n  model: gpt-4o-mini\npack:\n  name: nonexistent.pack\n"
+        system_store = InMemoryStructuredStore()
+        app = build_app(
+            cfg,
+            system_structured_store=system_store,
+            system_vector_store_cfg=sys_vs_cfg,
         )
-        with pytest.raises(ValueError, match="Unknown pack"):
-            build_app(cfg)
+        assert app._ingest_pipeline._vector_collections == []
