@@ -8,7 +8,6 @@ from pydantic import BaseModel
 
 
 class ApplicationResponse(BaseModel):
-    app_id: str
     name: str
     status: str   # "initializing" | "active" | "error"
     config: dict[str, Any]

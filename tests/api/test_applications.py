@@ -97,7 +97,6 @@ class TestCreateApplication:
         data = resp.json()
         assert data["name"] == "my-contract-analyzer"
         assert data["status"] == "active"
-        assert "app_id" in data
         assert data["error"] is None
 
     @pytest.mark.asyncio
@@ -186,21 +185,20 @@ class TestListApplications:
 
 
 # ---------------------------------------------------------------------------
-# GET /applications/{app_id}
+# GET /applications/{app_name}
 # ---------------------------------------------------------------------------
 
 class TestGetApplication:
     @pytest.mark.asyncio
     async def test_get_existing(self, client):
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
-            create_resp = await client.post(
+            await client.post(
                 "/applications",
                 files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
             )
-        app_id = create_resp.json()["app_id"]
-        resp = await client.get(f"/applications/{app_id}")
+        resp = await client.get("/applications/my-contract-analyzer")
         assert resp.status_code == 200
-        assert resp.json()["app_id"] == app_id
+        assert resp.json()["name"] == "my-contract-analyzer"
 
     @pytest.mark.asyncio
     async def test_get_nonexistent_returns_404(self, client):
@@ -210,23 +208,22 @@ class TestGetApplication:
 
 
 # ---------------------------------------------------------------------------
-# PATCH /applications/{app_id}
+# PATCH /applications/{app_name}
 # ---------------------------------------------------------------------------
 
 class TestUpdateApplication:
     @pytest.mark.asyncio
     async def test_update_success(self, client):
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
-            create_resp = await client.post(
+            await client.post(
                 "/applications",
                 files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
             )
-        app_id = create_resp.json()["app_id"]
 
         updated_yaml = _VALID_YAML.replace(b"gpt-4o-mini", b"gpt-4o")
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             resp = await client.patch(
-                f"/applications/{app_id}",
+                "/applications/my-contract-analyzer",
                 files={"config_file": ("config.yaml", updated_yaml, "application/yaml")},
             )
         assert resp.status_code == 200
@@ -245,14 +242,13 @@ class TestUpdateApplication:
         yaml_a = b"name: app-a\nllm:\n  model: gpt-4o-mini\npack:\n  name: legal.contract_analyst\n"
         yaml_b = b"name: app-b\nllm:\n  model: gpt-4o-mini\npack:\n  name: legal.contract_analyst\n"
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
-            resp_a = await client.post("/applications", files={"config_file": ("a.yaml", yaml_a, "application/yaml")})
+            await client.post("/applications", files={"config_file": ("a.yaml", yaml_a, "application/yaml")})
             await client.post("/applications", files={"config_file": ("b.yaml", yaml_b, "application/yaml")})
 
-        app_id_a = resp_a.json()["app_id"]
         # Try to rename app-a to app-b (already taken)
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             resp = await client.patch(
-                f"/applications/{app_id_a}",
+                "/applications/app-a",
                 files={"config_file": ("config.yaml", yaml_b, "application/yaml")},
             )
         assert resp.status_code == 409
@@ -260,17 +256,16 @@ class TestUpdateApplication:
     @pytest.mark.asyncio
     async def test_update_records_error_when_setup_fails(self, client):
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
-            create_resp = await client.post(
+            await client.post(
                 "/applications",
                 files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
             )
-        app_id = create_resp.json()["app_id"]
 
         failing_app = MagicMock()
         failing_app.setup = AsyncMock(side_effect=RuntimeError("update boom"))
         with patch("api.routers.applications.build_app", return_value=failing_app):
             resp = await client.patch(
-                f"/applications/{app_id}",
+                "/applications/my-contract-analyzer",
                 files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
             )
         assert resp.status_code == 200
@@ -280,30 +275,28 @@ class TestUpdateApplication:
 
 
 # ---------------------------------------------------------------------------
-# DELETE /applications/{app_id}
+# DELETE /applications/{app_name}
 # ---------------------------------------------------------------------------
 
 class TestDeleteApplication:
     @pytest.mark.asyncio
     async def test_delete_returns_204(self, client):
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
-            create_resp = await client.post(
+            await client.post(
                 "/applications",
                 files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
             )
-        app_id = create_resp.json()["app_id"]
-        resp = await client.delete(f"/applications/{app_id}")
+        resp = await client.delete("/applications/my-contract-analyzer")
         assert resp.status_code == 204
 
     @pytest.mark.asyncio
     async def test_delete_removes_from_list(self, client):
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
-            create_resp = await client.post(
+            await client.post(
                 "/applications",
                 files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
             )
-        app_id = create_resp.json()["app_id"]
-        await client.delete(f"/applications/{app_id}")
+        await client.delete("/applications/my-contract-analyzer")
         resp = await client.get("/applications")
         assert resp.json()["total"] == 0
 
@@ -318,12 +311,11 @@ class TestDeleteApplication:
         app.dependency_overrides[get_registry] = lambda: registry
 
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
-            create_resp = await client.post(
+            await client.post(
                 "/applications",
                 files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
             )
-        app_id = create_resp.json()["app_id"]
-        assert registry.get(app_id) is not None
+        assert registry.get("my-contract-analyzer") is not None
 
-        await client.delete(f"/applications/{app_id}")
-        assert registry.get(app_id) is None
+        await client.delete("/applications/my-contract-analyzer")
+        assert registry.get("my-contract-analyzer") is None

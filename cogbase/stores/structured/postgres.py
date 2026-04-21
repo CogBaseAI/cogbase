@@ -123,7 +123,15 @@ class PostgresStructuredStore(StructuredStoreBase):
 
             # Ensure indexes exist (idempotent via IF NOT EXISTS).
             for field_name, field in schema.fields.items():
-                if field.index and field_name not in schema.primary_fields:
+                if field_name in schema.primary_fields:
+                    continue
+                if field.unique:
+                    idx_name = f"uq_{schema.name}_{field_name}"
+                    await conn.execute(
+                        f'CREATE UNIQUE INDEX IF NOT EXISTS "{idx_name}" '
+                        f'ON "{schema.name}" ("{field_name}")'
+                    )
+                elif field.index:
                     idx_name = f"idx_{schema.name}_{field_name}"
                     await conn.execute(
                         f'CREATE INDEX IF NOT EXISTS "{idx_name}" '
@@ -214,7 +222,15 @@ class PostgresStructuredStore(StructuredStoreBase):
 
                 # Ensure indexes exist for all indexed fields.
                 for field_name, field in schema.fields.items():
-                    if field.index and field_name not in schema.primary_fields:
+                    if field_name in schema.primary_fields:
+                        continue
+                    if field.unique:
+                        idx_name = f"uq_{schema.name}_{field_name}"
+                        await conn.execute(
+                            f'CREATE UNIQUE INDEX IF NOT EXISTS "{idx_name}" '
+                            f'ON "{schema.name}" ("{field_name}")'
+                        )
+                    elif field.index:
                         idx_name = f"idx_{schema.name}_{field_name}"
                         await conn.execute(
                             f'CREATE INDEX IF NOT EXISTS "{idx_name}" '

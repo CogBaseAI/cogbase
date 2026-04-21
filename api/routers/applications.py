@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 
 import yaml
@@ -37,7 +36,6 @@ def _to_response(record: AppRecord) -> ApplicationResponse:
     except Exception:
         config_dict = {}
     return ApplicationResponse(
-        app_id=record.app_id,
         name=record.name,
         status=record.status,
         config=config_dict,
@@ -83,17 +81,14 @@ async def create_application(
     """
     yaml_text, config = _parse_config(await config_file.read())
 
-    existing = await system_store.get_app_by_name(config.name)
-    if existing is not None:
+    if await system_store.get_app(config.name) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Application '{config.name}' already exists (app_id={existing.app_id})",
+            detail=f"Application '{config.name}' already exists",
         )
 
-    app_id = str(uuid.uuid4())
     now = _now()
     record = AppRecord(
-        app_id=app_id,
         name=config.name,
         config_yaml=yaml_text,
         status="initializing",
@@ -109,7 +104,7 @@ async def create_application(
             system_vector_store_cfg=system_config.vector_store,
         )
         await app.setup()
-        registry.add(app_id, app)
+        registry.add(config.name, app)
         record = record.model_copy(update={"status": "active", "updated_at": _now()})
     except Exception as exc:
         record = record.model_copy(
@@ -128,21 +123,21 @@ async def list_applications(system_store: SystemStoreDep) -> ApplicationListResp
     return ApplicationListResponse(applications=items, total=len(items))
 
 
-@router.get("/{app_id}", response_model=ApplicationResponse)
+@router.get("/{app_name}", response_model=ApplicationResponse)
 async def get_application(
-    app_id: str,
+    app_name: str,
     system_store: SystemStoreDep,
 ) -> ApplicationResponse:
     """Return metadata for a single application."""
-    record = await system_store.get_app(app_id)
+    record = await system_store.get_app(app_name)
     if record is None:
-        raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
     return _to_response(record)
 
 
-@router.patch("/{app_id}", response_model=ApplicationResponse)
+@router.patch("/{app_name}", response_model=ApplicationResponse)
 async def update_application(
-    app_id: str,
+    app_name: str,
     system_store: SystemStoreDep,
     registry: RegistryDep,
     system_config: SystemConfigDep,
@@ -155,26 +150,27 @@ async def update_application(
     config fails to initialise the application, the record is kept with
     ``status=error`` so you can inspect and fix the config.
     """
-    record = await system_store.get_app(app_id)
+    record = await system_store.get_app(app_name)
     if record is None:
-        raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
     yaml_text, config = _parse_config(await config_file.read())
 
-    if config.name != record.name:
-        conflict = await system_store.get_app_by_name(config.name)
-        if conflict is not None and conflict.app_id != app_id:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Application '{config.name}' already exists (app_id={conflict.app_id})",
-            )
+    if config.name != app_name and await system_store.get_app(config.name) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Application '{config.name}' already exists",
+        )
 
-    registry.remove(app_id)
+    registry.remove(app_name)
+
+    if config.name != app_name:
+        await system_store.delete_app(app_name)
 
     updated = record.model_copy(
         update={
-            "config_yaml": yaml_text,
             "name": config.name,
+            "config_yaml": yaml_text,
             "status": "initializing",
             "error": None,
             "updated_at": _now(),
@@ -189,7 +185,7 @@ async def update_application(
             system_vector_store_cfg=system_config.vector_store,
         )
         await app.setup()
-        registry.add(app_id, app)
+        registry.add(config.name, app)
         updated = updated.model_copy(update={"status": "active", "updated_at": _now()})
     except Exception as exc:
         updated = updated.model_copy(
@@ -200,30 +196,30 @@ async def update_application(
     return _to_response(updated)
 
 
-@router.delete("/{app_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@router.delete("/{app_name}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_application(
-    app_id: str,
+    app_name: str,
     system_store: SystemStoreDep,
     registry: RegistryDep,
 ) -> None:
     """Permanently remove an application and its metadata."""
-    record = await system_store.get_app(app_id)
+    record = await system_store.get_app(app_name)
     if record is None:
-        raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
-    registry.remove(app_id)
-    await system_store.delete_app(app_id)
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
+    registry.remove(app_name)
+    await system_store.delete_app(app_name)
 
 
-def _get_active_app(app_id: str, registry: AppRegistry) -> object:
-    app = registry.get(app_id)
+def _get_active_app(app_name: str, registry: AppRegistry) -> object:
+    app = registry.get(app_name)
     if app is None:
-        raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found or not active")
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found or not active")
     return app
 
 
-@router.post("/{app_id}/ingest_documents", response_model=IngestDocumentsResponse)
+@router.post("/{app_name}/ingest_documents", response_model=IngestDocumentsResponse)
 async def ingest_documents(
-    app_id: str,
+    app_name: str,
     body: IngestDocumentsRequest,
     registry: RegistryDep,
 ) -> IngestDocumentsResponse:
@@ -233,7 +229,7 @@ async def ingest_documents(
     failure on one document does not abort the others — each result carries
     ``success`` and ``error`` for per-document reporting.
     """
-    app = _get_active_app(app_id, registry)
+    app = _get_active_app(app_name, registry)
     documents = [Document(doc_id=d.doc_id, text=d.text, metadata=d.metadata) for d in body.documents]
     results = await app.ingest_documents(documents, concurrency=body.concurrency)
     return IngestDocumentsResponse(
@@ -249,9 +245,9 @@ async def ingest_documents(
     )
 
 
-@router.post("/{app_id}/query", response_model=QueryResponse)
+@router.post("/{app_name}/query", response_model=QueryResponse)
 async def query_application(
-    app_id: str,
+    app_name: str,
     body: QueryRequest,
     registry: RegistryDep,
 ) -> QueryResponse:
@@ -260,7 +256,7 @@ async def query_application(
     The query is automatically routed to the appropriate retrieval pattern
     (A — structured lookup, B — semantic search, C — hybrid, D — grounded report).
     """
-    app = _get_active_app(app_id, registry)
+    app = _get_active_app(app_name, registry)
     result = await app.query(body.text)
     return QueryResponse(
         answer=result.answer,

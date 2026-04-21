@@ -63,15 +63,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 system_vector_store_cfg=system_cfg.vector_store,
             )
             await instance.setup()
-            registry.add(record.app_id, instance)
-            logger.info("restored app name=%s app_id=%s", record.name, record.app_id)
+            registry.add(record.name, instance)
+            logger.info("restored app name=%s", record.name)
         except Exception as exc:
-            logger.warning(
-                "failed to restore app name=%s app_id=%s: %s",
-                record.name,
-                record.app_id,
-                exc,
-            )
+            logger.warning("failed to restore app name=%s: %s", record.name, exc)
 
     app.state.system_config = system_cfg
     app.state.system_structured_store = system_structured_store

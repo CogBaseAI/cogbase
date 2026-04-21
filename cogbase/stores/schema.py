@@ -17,6 +17,7 @@ class FieldSchema(BaseModel):
     type: FieldType
     nullable: bool = True
     index: bool = False  # create a DB index on this column (ignored by in-memory store)
+    unique: bool = False  # enforce a unique constraint on this column across all backends
     json_schema: str | None = None
 
     @model_validator(mode="after")

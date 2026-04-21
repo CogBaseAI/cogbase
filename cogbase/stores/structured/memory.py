@@ -85,13 +85,30 @@ class InMemoryStructuredStore(StructuredStoreBase):
         rows = [_serialize(r, schema) for r in records]
         new_df = _to_frame(rows, schema)
         df = self._frames[collection]
-        # Upsert: drop existing rows whose primary-key tuple appears in the
-        # incoming batch, then append the new rows.
+        # Compute surviving rows: drop those whose PK appears in the incoming batch.
         if not df.empty and not new_df.empty:
             existing_keys = pd.Series(list(df[schema.primary_fields].itertuples(index=False, name=None)))
             incoming_keys = set(new_df[schema.primary_fields].itertuples(index=False, name=None))
-            df = df[~existing_keys.isin(incoming_keys).to_numpy()]
-        self._frames[collection] = pd.concat([df, new_df], ignore_index=True)
+            surviving = df[~existing_keys.isin(incoming_keys).to_numpy()]
+        else:
+            surviving = df
+        # Enforce unique constraints against surviving rows.
+        for field_name, field in schema.fields.items():
+            if not field.unique or field_name in schema.primary_fields:
+                continue
+            if surviving.empty:
+                continue
+            incoming_vals = new_df[field_name].dropna()
+            if incoming_vals.empty:
+                continue
+            conflicts = surviving[field_name].isin(incoming_vals)
+            if conflicts.any():
+                conflict_val = surviving.loc[conflicts, field_name].iloc[0]
+                raise ValueError(
+                    f"Unique constraint violation on '{collection}.{field_name}': "
+                    f"value {conflict_val!r} already exists"
+                )
+        self._frames[collection] = pd.concat([surviving, new_df], ignore_index=True)
 
     async def query(
         self,

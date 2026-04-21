@@ -10,7 +10,7 @@ from api.registry import AppRegistry
 class TestAppRegistry:
     def test_empty_on_creation(self):
         reg = AppRegistry()
-        assert reg.all_ids() == []
+        assert reg.all_names() == []
 
     def test_add_and_get(self):
         reg = AppRegistry()
@@ -27,7 +27,7 @@ class TestAppRegistry:
         a, b = object(), object()
         reg.add("app-1", a)
         reg.add("app-2", b)
-        assert set(reg.all_ids()) == {"app-1", "app-2"}
+        assert set(reg.all_names()) == {"app-1", "app-2"}
         assert reg.get("app-1") is a
         assert reg.get("app-2") is b
 
@@ -37,14 +37,14 @@ class TestAppRegistry:
         reg.add("app-1", old)
         reg.add("app-1", new)
         assert reg.get("app-1") is new
-        assert len(reg.all_ids()) == 1
+        assert len(reg.all_names()) == 1
 
     def test_remove_known(self):
         reg = AppRegistry()
         reg.add("app-1", object())
         reg.remove("app-1")
         assert reg.get("app-1") is None
-        assert "app-1" not in reg.all_ids()
+        assert "app-1" not in reg.all_names()
 
     def test_remove_unknown_is_noop(self):
         reg = AppRegistry()
@@ -54,7 +54,7 @@ class TestAppRegistry:
         reg = AppRegistry()
         reg.add("x", object())
         reg.add("y", object())
-        ids = reg.all_ids()
+        ids = reg.all_names()
         assert isinstance(ids, list)
         assert set(ids) == {"x", "y"}
 
@@ -64,4 +64,4 @@ class TestAppRegistry:
         reg.add("app-2", object())
         reg.remove("app-1")
         assert reg.get("app-2") is not None
-        assert len(reg.all_ids()) == 1
+        assert len(reg.all_names()) == 1

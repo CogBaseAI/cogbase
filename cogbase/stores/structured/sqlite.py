@@ -71,7 +71,14 @@ class SQLiteStructuredStore(StructuredStoreBase):
 
         # 3. Ensure indexes exist (idempotent).
         for field_name, field in schema.fields.items():
-            if field.index and field_name not in schema.primary_fields:
+            if field_name in schema.primary_fields:
+                continue
+            if field.unique:
+                self._conn.execute(
+                    f'CREATE UNIQUE INDEX IF NOT EXISTS "uq_{schema.name}_{field_name}" '
+                    f'ON "{schema.name}" ("{field_name}")'
+                )
+            elif field.index:
                 self._conn.execute(
                     f'CREATE INDEX IF NOT EXISTS "idx_{schema.name}_{field_name}" '
                     f'ON "{schema.name}" ("{field_name}")'
@@ -85,7 +92,14 @@ class SQLiteStructuredStore(StructuredStoreBase):
         cols = list(schema.fields.keys())
         col_list = ", ".join(f'"{c}"' for c in cols)
         placeholders = ", ".join(["?"] * len(cols))
-        sql = f'INSERT OR REPLACE INTO "{collection}" ({col_list}) VALUES ({placeholders})'
+        update_cols = [c for c in cols if c not in schema.primary_fields]
+        conflict_target = ", ".join(f'"{f}"' for f in schema.primary_fields)
+        if update_cols:
+            update_set = ", ".join(f'"{c}" = excluded."{c}"' for c in update_cols)
+            conflict_clause = f"ON CONFLICT ({conflict_target}) DO UPDATE SET {update_set}"
+        else:
+            conflict_clause = f"ON CONFLICT ({conflict_target}) DO NOTHING"
+        sql = f'INSERT INTO "{collection}" ({col_list}) VALUES ({placeholders}) {conflict_clause}'
         self._conn.executemany(sql, [_to_sql_row(r, schema) for r in records])
         self._conn.commit()
 
@@ -173,7 +187,14 @@ class SQLiteStructuredStore(StructuredStoreBase):
 
         # Ensure indexes exist for all indexed fields (idempotent).
         for field_name, field in schema.fields.items():
-            if field.index and field_name not in schema.primary_fields:
+            if field_name in schema.primary_fields:
+                continue
+            if field.unique:
+                self._conn.execute(
+                    f'CREATE UNIQUE INDEX IF NOT EXISTS "uq_{schema.name}_{field_name}" '
+                    f'ON "{schema.name}" ("{field_name}")'
+                )
+            elif field.index:
                 self._conn.execute(
                     f'CREATE INDEX IF NOT EXISTS "idx_{schema.name}_{field_name}" '
                     f'ON "{schema.name}" ("{field_name}")'
