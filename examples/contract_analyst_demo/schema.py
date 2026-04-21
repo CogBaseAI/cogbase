@@ -5,7 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
-from cogbase.stores.schema_util import cls_generate_schema
+from cogbase.core.basemodel_to_schema import cls_generate_schema
 
 # Fields that ContractExtractor._parse always populates — they cannot be
 # excluded from a customised schema without breaking extraction.

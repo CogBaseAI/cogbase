@@ -8,7 +8,7 @@ Typical usage::
 
     import json
     import openai
-    from cogbase.core.json_schema import build_model_from_json_schema
+    from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
     from cogbase.pipeline.extraction.llm import LLMExtractor
 
     extraction_model = build_model_from_json_schema(extraction_schema_json_str)
@@ -32,7 +32,7 @@ from pydantic import BaseModel, ValidationError, create_model
 from cogbase.core.models import Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.stores.schema import CollectionSchema
-from cogbase.stores.schema_util import cls_generate_schema, cls_json_schema_for_llm
+from cogbase.core.basemodel_to_schema import cls_generate_schema, cls_json_schema_for_llm
 
 logger = logging.getLogger(__name__)
 

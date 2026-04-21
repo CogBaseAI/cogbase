@@ -8,9 +8,9 @@ from typing import Any
 from api.config import AppConfig, ChunkerConfig, EmbeddingConfig, StructuredStoreConfig, VectorStoreConfig
 from cogbase.stores.base import StructuredStoreBase
 from cogbase.core.app import CogBaseApp
-from cogbase.core.json_schema import build_model_from_json_schema
+from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
 from cogbase.pipeline.extraction.llm import LLMExtractor
-from cogbase.stores.schema_util import cls_json_schema_for_llm
+from cogbase.core.basemodel_to_schema import cls_json_schema_for_llm
 
 
 def _build_llm_client(config: AppConfig) -> Any:

@@ -87,7 +87,7 @@ from cogbase.stores.structured.memory import InMemoryStructuredStore  # noqa: E4
 from cogbase.stores.vector.faiss_store import FAISSVectorStore  # noqa: E402
 from cogbase.core.app import CogBaseApp  # noqa: E402
 from cogbase.pipeline.extraction.llm import LLMExtractor  # noqa: E402
-from cogbase.stores.schema_util import cls_json_schema_for_llm  # noqa: E402
+from cogbase.core.basemodel_to_schema import cls_json_schema_for_llm  # noqa: E402
 from examples.contract_analyst_demo.schema import (  # noqa: E402
     CONTRACTS_COLLECTION,
     CONTRACTS_SYSTEM_PROMPT_PREFIX,

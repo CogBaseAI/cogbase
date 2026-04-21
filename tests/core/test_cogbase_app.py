@@ -85,7 +85,6 @@ def _make_extractor(client: MagicMock) -> LLMExtractor:
         model="test-model",
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
-        id_field="contract_id",
     )
 
 

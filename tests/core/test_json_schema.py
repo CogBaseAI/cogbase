@@ -1,10 +1,10 @@
-"""Unit tests for cogbase/core/json_schema.py."""
+"""Unit tests for cogbase/core/json_schema_to_basemodel.py."""
 
 import json
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from cogbase.core.json_schema import build_model_from_json_schema
+from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
 
 
 # ---------------------------------------------------------------------------

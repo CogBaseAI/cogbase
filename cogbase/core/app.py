@@ -15,7 +15,7 @@ Typical usage::
     from cogbase.embeddings.huggingface import SentenceTransformersEmbedding
     from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
     import json
-    from cogbase.core.json_schema import build_model_from_json_schema
+    from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
 
     extraction_model = build_model_from_json_schema(extraction_json_schema_str)
     client = openai.AsyncOpenAI(api_key="...")

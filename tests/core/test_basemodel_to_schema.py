@@ -1,4 +1,4 @@
-"""Tests for cogbase.stores.schema_util."""
+"""Tests for cogbase.core.basemodel_to_schema."""
 from __future__ import annotations
 
 from typing import Optional
@@ -6,7 +6,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from cogbase.stores.schema import FieldType
-from cogbase.stores.schema_util import cls_generate_schema, cls_json_schema_for_llm
+from cogbase.core.basemodel_to_schema import cls_generate_schema, cls_json_schema_for_llm
 
 
 # ---------------------------------------------------------------------------
