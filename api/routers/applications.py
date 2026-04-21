@@ -5,10 +5,13 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+import json
+
 import yaml
 
 logger = logging.getLogger(__name__)
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 
 from api.config import AppConfig
 from api.dependencies import AppCacheDep, SystemConfigDep, SystemStoreDep, SystemStructuredStoreDep
@@ -288,6 +291,14 @@ async def ingest_documents(
     )
 
 
+async def _drain_query(app, text: str):
+    """Drain app.query_stream and return the final GenerationResult."""
+    async for item in app.query_stream(text):
+        if not isinstance(item, str):
+            return item
+    raise RuntimeError("query_stream did not yield a GenerationResult")
+
+
 @router.post("/{app_name}/query", response_model=QueryResponse)
 async def query_application(
     app_name: str,
@@ -304,16 +315,56 @@ async def query_application(
     """
     app = await _get_active_app(app_name, app_cache, system_store, system_config, system_structured_store)
     try:
-        result = await app.query(body.text)
+        result = await _drain_query(app, body.text)
     except Exception:
         logger.exception("query failed for app '%s', retrying with fresh app", app_name)
         app = await _get_active_app(
             app_name, app_cache, system_store, system_config, system_structured_store, force_refresh=True
         )
-        result = await app.query(body.text)
+        result = await _drain_query(app, body.text)
     return QueryResponse(
         answer=result.answer,
         pattern=result.pattern.value,
         findings=result.findings,
         supporting_quotes=result.supporting_quotes,
     )
+
+
+@router.post("/{app_name}/query/stream")
+async def query_application_stream(
+    app_name: str,
+    body: QueryRequest,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_config: SystemConfigDep,
+    system_structured_store: SystemStructuredStoreDep,
+) -> StreamingResponse:
+    """Stream a natural-language query response as Server-Sent Events.
+
+    Token events: ``{"token": "<text>"}``
+    Final event:  ``{"result": {answer, pattern, findings, supporting_quotes}}``
+    Sentinel:     ``data: [DONE]``
+    """
+    app = await _get_active_app(app_name, app_cache, system_store, system_config, system_structured_store)
+
+    async def event_stream():
+        try:
+            async for item in app.query_stream(body.text):
+                if isinstance(item, str):
+                    yield f"data: {json.dumps({'token': item})}\n\n"
+                else:
+                    payload = {
+                        "result": {
+                            "answer": item.answer,
+                            "pattern": item.pattern.value,
+                            "findings": item.findings,
+                            "supporting_quotes": item.supporting_quotes,
+                        }
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
+        except Exception:
+            logger.exception("query_stream failed for app '%s'", app_name)
+            yield f"data: {json.dumps({'error': 'stream failed'})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

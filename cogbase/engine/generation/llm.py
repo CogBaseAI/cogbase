@@ -25,12 +25,16 @@ Usage::
     client = openai.AsyncOpenAI(api_key="...")
     generator = LLMGenerator(client, model="claude-sonnet-4-6")
 
-    result = await generator.generate(query, retrieval_result)
-    print(result.answer)
+    async for item in generator.generate_stream(query, retrieval_result):
+        if isinstance(item, str):
+            print(item, end="", flush=True)
+        else:
+            print()
+            print("answer:", item.answer)
 
-    # For Pattern D:
-    print(result.findings)          # str — the [FINDINGS] block
-    print(result.supporting_quotes) # list[str] — individual verbatim quotes
+            # For Pattern D:
+            print("findings:", item.findings)
+            print("supporting_quotes:", item.supporting_quotes)
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import AsyncGenerator
 from typing import Any
 
 from cogbase.engine.generation.base import GenerationResult, GeneratorBase
@@ -172,15 +177,6 @@ class LLMGenerator(GeneratorBase):
         client:     Async OpenAI-compatible client.
         model:      Model name (e.g. ``"claude-sonnet-4-6"``, ``"gpt-4o"``).
         max_tokens: Maximum tokens to generate.  Defaults to 1024.
-
-    Example::
-
-        import openai
-        from cogbase.engine.generation.llm import LLMGenerator
-
-        client = openai.AsyncOpenAI(api_key="sk-...")
-        generator = LLMGenerator(client, model="gpt-5")
-        result = await generator.generate("summarise the key clauses", retrieval)
     """
 
     def __init__(
@@ -193,53 +189,62 @@ class LLMGenerator(GeneratorBase):
         self._model = model
         self._max_tokens = max_tokens
 
-    async def generate(self, query: str, retrieval: RetrievalResult) -> GenerationResult:
+    async def generate_stream(
+        self, query: str, retrieval: RetrievalResult
+    ) -> AsyncGenerator[str | GenerationResult, None]:
+        """Stream the LLM answer token-by-token, then yield the final GenerationResult.
+
+        Pattern A yields the formatted text then a GenerationResult immediately
+        (no LLM call).  Patterns B, C, D stream incremental ``str`` tokens as
+        they arrive, accumulate them, then yield a ``GenerationResult`` as the
+        last item with all structured fields populated (including Pattern D
+        findings and supporting_quotes).
+        """
         pattern = retrieval.route.pattern
         logger.info(
-            "generator.generate.start pattern=%s query_len=%d structured_records=%d chunks=%d",
+            "generator.generate_stream.start pattern=%s query_len=%d",
             pattern.value,
             len(query),
-            len(retrieval.structured_records),
-            len(retrieval.chunks),
         )
 
         if pattern == QueryPattern.A:
             result = self._generate_pattern_a(retrieval)
-            logger.info("generator.generate.done pattern=%s answer_len=%d", pattern.value, len(result.answer))
-            return result
+            yield result.answer
+            yield result
+            return
 
         system_prompt, user_content = self._build_prompt(query, retrieval, pattern)
 
-        response = await self._client.chat.completions.create(
+        stream = await self._client.chat.completions.create(
             model=self._model,
             max_completion_tokens=self._max_tokens,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
+            stream=True,
         )
-        answer: str = response.choices[0].message.content.strip()
 
+        chunks: list[str] = []
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                chunks.append(delta)
+                yield delta
+
+        answer = "".join(chunks).strip()
         findings: str | None = None
         supporting_quotes: list[str] = []
         if pattern == QueryPattern.D:
             findings, supporting_quotes = _parse_pattern_d(answer)
 
-        result = GenerationResult(
+        yield GenerationResult(
             answer=answer,
             pattern=pattern,
             findings=findings,
             supporting_quotes=supporting_quotes,
             retrieval=retrieval,
         )
-        logger.info(
-            "generator.generate.done pattern=%s answer_len=%d findings=%s quotes=%d",
-            pattern.value,
-            len(result.answer),
-            "yes" if result.findings else "no",
-            len(result.supporting_quotes),
-        )
-        return result
 
     # ------------------------------------------------------------------
     # Internal helpers

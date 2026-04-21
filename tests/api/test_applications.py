@@ -6,6 +6,7 @@ overrides injected — no real LLM calls or file I/O happens.
 
 from __future__ import annotations
 
+import json
 import textwrap
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -24,6 +25,9 @@ from api.main import app
 from api.app_cache import AppCache
 from api.system_config import SystemConfig
 from api.system_store import SystemStore
+from cogbase.engine.generation.base import GenerationResult
+from cogbase.engine.retrieval.base import RetrievalResult
+from cogbase.engine.router import QueryPattern, RouteResult
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 
 
@@ -319,3 +323,468 @@ class TestDeleteApplication:
 
         await client.delete("/applications/my-contract-analyzer")
         assert app_cache.get("my-contract-analyzer") is None
+
+
+# ---------------------------------------------------------------------------
+# POST /applications/{app_name}/ingest_documents
+# ---------------------------------------------------------------------------
+
+def _mock_ingest_app(results: list[dict] | None = None) -> MagicMock:
+    """Build a mock CogBaseApp whose ingest_documents returns IngestResult-like objects."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _FakeIngestResult:
+        doc_id: str
+        success: bool
+        records_extracted: int
+        error: Exception | None
+
+    if results is None:
+        results = [{"doc_id": "doc-1", "success": True, "records_extracted": 3, "error": None}]
+
+    fake_results = [_FakeIngestResult(**r) for r in results]
+
+    inst = MagicMock()
+    inst.setup = AsyncMock()
+    inst.ingest_documents = AsyncMock(return_value=fake_results)
+    return inst
+
+
+class TestIngestDocuments:
+    @pytest.mark.asyncio
+    async def test_ingest_returns_200_with_results(self, client):
+        mock_app = _mock_ingest_app()
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/ingest_documents",
+            json={"documents": [{"doc_id": "doc-1", "text": "Contract text here."}]},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["results"]) == 1
+        assert data["results"][0]["doc_id"] == "doc-1"
+        assert data["results"][0]["success"] is True
+        assert data["results"][0]["records_extracted"] == 3
+        assert data["results"][0]["error"] is None
+
+    @pytest.mark.asyncio
+    async def test_ingest_multiple_documents(self, client):
+        results = [
+            {"doc_id": "doc-1", "success": True, "records_extracted": 2, "error": None},
+            {"doc_id": "doc-2", "success": True, "records_extracted": 5, "error": None},
+        ]
+        mock_app = _mock_ingest_app(results)
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/ingest_documents",
+            json={
+                "documents": [
+                    {"doc_id": "doc-1", "text": "First contract."},
+                    {"doc_id": "doc-2", "text": "Second contract."},
+                ]
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["results"]) == 2
+        doc_ids = {r["doc_id"] for r in data["results"]}
+        assert doc_ids == {"doc-1", "doc-2"}
+
+    @pytest.mark.asyncio
+    async def test_ingest_partial_failure_reported_per_document(self, client):
+        results = [
+            {"doc_id": "doc-ok", "success": True, "records_extracted": 1, "error": None},
+            {"doc_id": "doc-bad", "success": False, "records_extracted": 0, "error": ValueError("parse error")},
+        ]
+        mock_app = _mock_ingest_app(results)
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/ingest_documents",
+            json={
+                "documents": [
+                    {"doc_id": "doc-ok", "text": "Good doc."},
+                    {"doc_id": "doc-bad", "text": "Bad doc."},
+                ]
+            },
+        )
+
+        assert resp.status_code == 200
+        by_id = {r["doc_id"]: r for r in resp.json()["results"]}
+        assert by_id["doc-ok"]["success"] is True
+        assert by_id["doc-bad"]["success"] is False
+        assert "parse error" in by_id["doc-bad"]["error"]
+
+    @pytest.mark.asyncio
+    async def test_ingest_404_when_app_not_found(self, client):
+        resp = await client.post(
+            "/applications/nonexistent/ingest_documents",
+            json={"documents": [{"doc_id": "doc-1", "text": "text"}]},
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_ingest_404_when_app_not_active(self, client):
+        failing = MagicMock()
+        failing.setup = AsyncMock(side_effect=RuntimeError("setup boom"))
+        with patch("api.routers.applications.build_app", return_value=failing):
+            await client.post(
+                "/applications",
+                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+            )
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/ingest_documents",
+            json={"documents": [{"doc_id": "doc-1", "text": "text"}]},
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_ingest_passes_concurrency(self, client):
+        mock_app = _mock_ingest_app()
+        await _create_app(client, mock_app)
+
+        await client.post(
+            "/applications/my-contract-analyzer/ingest_documents",
+            json={
+                "documents": [{"doc_id": "doc-1", "text": "text"}],
+                "concurrency": 10,
+            },
+        )
+
+        _, kwargs = mock_app.ingest_documents.call_args
+        assert kwargs.get("concurrency") == 10
+
+    @pytest.mark.asyncio
+    async def test_ingest_retries_on_first_failure(self, client):
+        from dataclasses import dataclass
+
+        @dataclass
+        class _FakeResult:
+            doc_id: str
+            success: bool
+            records_extracted: int
+            error: Exception | None
+
+        good_result = [_FakeResult(doc_id="doc-1", success=True, records_extracted=1, error=None)]
+        call_count = 0
+
+        async def _flaky_ingest(documents, *, concurrency=5):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("transient ingest failure")
+            return good_result
+
+        mock_app = _mock_ingest_app()
+        mock_app.ingest_documents = _flaky_ingest
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.build_app", return_value=mock_app):
+            resp = await client.post(
+                "/applications/my-contract-analyzer/ingest_documents",
+                json={"documents": [{"doc_id": "doc-1", "text": "text"}]},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["results"][0]["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_ingest_with_metadata(self, client):
+        mock_app = _mock_ingest_app()
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/ingest_documents",
+            json={
+                "documents": [
+                    {
+                        "doc_id": "doc-meta",
+                        "text": "Contract with metadata.",
+                        "metadata": {"source": "upload", "version": "1"},
+                    }
+                ]
+            },
+        )
+
+        assert resp.status_code == 200
+        call_args = mock_app.ingest_documents.call_args[0][0]
+        assert call_args[0].metadata == {"source": "upload", "version": "1"}
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared by query tests
+# ---------------------------------------------------------------------------
+
+def _make_generation(
+    answer: str = "The notice period is 60 days.",
+    pattern: QueryPattern = QueryPattern.B,
+    findings: str | None = None,
+    supporting_quotes: list[str] | None = None,
+) -> GenerationResult:
+    route = RouteResult(pattern=pattern, semantic_query="q", structured_targets=[])
+    retrieval = RetrievalResult(route=route)
+    return GenerationResult(
+        answer=answer,
+        pattern=pattern,
+        findings=findings,
+        supporting_quotes=supporting_quotes or [],
+        retrieval=retrieval,
+    )
+
+
+def _mock_query_app(generation: GenerationResult) -> MagicMock:
+    """Build a mock CogBaseApp whose query_stream yields tokens then a GenerationResult."""
+    inst = MagicMock()
+    inst.setup = AsyncMock()
+
+    async def _query_stream(text: str):
+        for token in generation.answer.split():
+            yield token + " "
+        yield generation
+
+    inst.query_stream = _query_stream
+    return inst
+
+
+def _parse_sse(body: str) -> list[str]:
+    """Return the data payload of each SSE event (excluding blank separators)."""
+    return [
+        line[len("data: "):]
+        for line in body.splitlines()
+        if line.startswith("data: ")
+    ]
+
+
+async def _create_app(client, mock_app: MagicMock) -> None:
+    with patch("api.routers.applications.build_app", return_value=mock_app):
+        resp = await client.post(
+            "/applications",
+            files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+        )
+    assert resp.status_code == 201
+
+
+# ---------------------------------------------------------------------------
+# POST /applications/{app_name}/query
+# ---------------------------------------------------------------------------
+
+class TestQueryApplication:
+    @pytest.mark.asyncio
+    async def test_returns_200_with_answer(self, client):
+        gen = _make_generation("The notice period is 60 days.")
+        await _create_app(client, _mock_query_app(gen))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query",
+            json={"text": "what is the notice period?"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["answer"] == gen.answer
+
+    @pytest.mark.asyncio
+    async def test_returns_correct_pattern(self, client):
+        gen = _make_generation(pattern=QueryPattern.C)
+        await _create_app(client, _mock_query_app(gen))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query",
+            json={"text": "q"},
+        )
+
+        assert resp.json()["pattern"] == "C"
+
+    @pytest.mark.asyncio
+    async def test_pattern_d_returns_findings_and_quotes(self, client):
+        gen = _make_generation(
+            answer="[FINDINGS]\nFound it.\n[SUPPORTING_QUOTES]\n- quote",
+            pattern=QueryPattern.D,
+            findings="Found it.",
+            supporting_quotes=["quote"],
+        )
+        await _create_app(client, _mock_query_app(gen))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query",
+            json={"text": "summarise"},
+        )
+
+        data = resp.json()
+        assert data["findings"] == "Found it."
+        assert data["supporting_quotes"] == ["quote"]
+
+    @pytest.mark.asyncio
+    async def test_404_when_app_not_found(self, client):
+        resp = await client.post(
+            "/applications/nonexistent/query",
+            json={"text": "q"},
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_404_when_app_not_active(self, client):
+        failing = MagicMock()
+        failing.setup = AsyncMock(side_effect=RuntimeError("setup boom"))
+        with patch("api.routers.applications.build_app", return_value=failing):
+            await client.post(
+                "/applications",
+                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+            )
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query",
+            json={"text": "q"},
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_retries_on_first_failure(self, client):
+        gen = _make_generation("Retry worked.")
+        good_app = _mock_query_app(gen)
+
+        call_count = 0
+
+        async def _flaky_stream(text: str):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("transient failure")
+            yield gen.answer
+            yield gen
+
+        failing_then_good = _mock_query_app(gen)
+        failing_then_good.query_stream = _flaky_stream
+
+        await _create_app(client, failing_then_good)
+
+        with patch("api.routers.applications.build_app", return_value=failing_then_good):
+            resp = await client.post(
+                "/applications/my-contract-analyzer/query",
+                json={"text": "q"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["answer"] == "Retry worked."
+
+
+# ---------------------------------------------------------------------------
+# POST /applications/{app_name}/query/stream
+# ---------------------------------------------------------------------------
+
+class TestQueryApplicationStream:
+    @pytest.mark.asyncio
+    async def test_returns_event_stream_content_type(self, client):
+        gen = _make_generation()
+        await _create_app(client, _mock_query_app(gen))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query/stream",
+            json={"text": "q"},
+        )
+
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+
+    @pytest.mark.asyncio
+    async def test_streams_token_events(self, client):
+        gen = _make_generation("Hello world.")
+        await _create_app(client, _mock_query_app(gen))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query/stream",
+            json={"text": "q"},
+        )
+
+        events = _parse_sse(resp.text)
+        token_events = [e for e in events if e != "[DONE]"]
+        tokens = [json.loads(e) for e in token_events if "token" in json.loads(e)]
+        assert len(tokens) > 0
+        assembled = "".join(t["token"] for t in tokens)
+        assert assembled.strip() == gen.answer
+
+    @pytest.mark.asyncio
+    async def test_final_result_event_contains_answer_and_pattern(self, client):
+        gen = _make_generation("The answer.", pattern=QueryPattern.C)
+        await _create_app(client, _mock_query_app(gen))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query/stream",
+            json={"text": "q"},
+        )
+
+        events = _parse_sse(resp.text)
+        result_events = [json.loads(e) for e in events if e != "[DONE]" and "result" in json.loads(e)]
+        assert len(result_events) == 1
+        result = result_events[0]["result"]
+        assert result["answer"] == "The answer."
+        assert result["pattern"] == "C"
+
+    @pytest.mark.asyncio
+    async def test_ends_with_done_sentinel(self, client):
+        gen = _make_generation()
+        await _create_app(client, _mock_query_app(gen))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query/stream",
+            json={"text": "q"},
+        )
+
+        events = _parse_sse(resp.text)
+        assert events[-1] == "[DONE]"
+
+    @pytest.mark.asyncio
+    async def test_pattern_d_result_includes_findings_and_quotes(self, client):
+        gen = _make_generation(
+            pattern=QueryPattern.D,
+            findings="Key finding.",
+            supporting_quotes=["verbatim excerpt"],
+        )
+        await _create_app(client, _mock_query_app(gen))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query/stream",
+            json={"text": "q"},
+        )
+
+        events = _parse_sse(resp.text)
+        result_events = [json.loads(e) for e in events if e != "[DONE]" and "result" in json.loads(e)]
+        result = result_events[0]["result"]
+        assert result["findings"] == "Key finding."
+        assert result["supporting_quotes"] == ["verbatim excerpt"]
+
+    @pytest.mark.asyncio
+    async def test_404_when_app_not_found(self, client):
+        resp = await client.post(
+            "/applications/nonexistent/query/stream",
+            json={"text": "q"},
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_error_event_on_stream_failure(self, client):
+        inst = MagicMock()
+        inst.setup = AsyncMock()
+
+        async def _failing_stream(text: str):
+            raise RuntimeError("boom")
+            yield  # make it an async generator
+
+        inst.query_stream = _failing_stream
+        await _create_app(client, inst)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query/stream",
+            json={"text": "q"},
+        )
+
+        assert resp.status_code == 200
+        events = _parse_sse(resp.text)
+        error_events = [json.loads(e) for e in events if e != "[DONE]" and "error" in json.loads(e)]
+        assert len(error_events) == 1
+        assert events[-1] == "[DONE]"

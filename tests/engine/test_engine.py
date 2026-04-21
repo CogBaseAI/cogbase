@@ -35,6 +35,14 @@ def _mock_generation(retrieval: RetrievalResult, answer: str = "answer") -> Gene
     )
 
 
+def _mock_generate_stream(generation: GenerationResult):
+    """Return an async generator that yields one token then the GenerationResult."""
+    async def _gen(*args, **kwargs):
+        yield generation.answer
+        yield generation
+    return _gen
+
+
 def _build_engine(
     route: RouteResult | None = None,
     answer: str = "the answer",
@@ -50,10 +58,17 @@ def _build_engine(
     retriever.retrieve = AsyncMock(return_value=retrieval)
 
     generator = MagicMock()
-    generator.generate = AsyncMock(return_value=generation)
+    generator.generate_stream = _mock_generate_stream(generation)
 
     engine = Engine(router=router, retriever=retriever, generator=generator)
     return engine, router, retriever, generator
+
+
+async def _collect(stream) -> GenerationResult:
+    async for item in stream:
+        if isinstance(item, GenerationResult):
+            return item
+    raise AssertionError("stream did not yield a GenerationResult")
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +80,7 @@ def _build_engine(
 async def test_engine_returns_generation_result() -> None:
     engine, *_ = _build_engine(answer="hello")
 
-    result = await engine.query("what is the notice period?")
+    result = await _collect(engine.query_stream("what is the notice period?"))
 
     assert isinstance(result, GenerationResult)
     assert result.answer == "hello"
@@ -75,7 +90,7 @@ async def test_engine_returns_generation_result() -> None:
 async def test_engine_calls_router_with_query_text() -> None:
     engine, router, retriever, generator = _build_engine()
 
-    await engine.query("find all clauses")
+    await _collect(engine.query_stream("find all clauses"))
 
     router.route.assert_called_once_with("find all clauses")
 
@@ -85,7 +100,7 @@ async def test_engine_passes_route_to_retriever() -> None:
     route = _mock_route(QueryPattern.C)
     engine, router, retriever, generator = _build_engine(route=route)
 
-    await engine.query("query")
+    await _collect(engine.query_stream("query"))
 
     retriever.retrieve.assert_called_once_with(route)
 
@@ -94,6 +109,7 @@ async def test_engine_passes_route_to_retriever() -> None:
 async def test_engine_passes_query_and_retrieval_to_generator() -> None:
     route = _mock_route()
     retrieval = _mock_retrieval(route)
+    generation = _mock_generation(retrieval)
 
     router = MagicMock()
     router.route = AsyncMock(return_value=route)
@@ -101,14 +117,21 @@ async def test_engine_passes_query_and_retrieval_to_generator() -> None:
     retriever = MagicMock()
     retriever.retrieve = AsyncMock(return_value=retrieval)
 
-    generation = _mock_generation(retrieval)
+    calls: list[tuple] = []
+
+    async def _tracking_stream(query, ret):
+        calls.append((query, ret))
+        yield generation.answer
+        yield generation
+
     generator = MagicMock()
-    generator.generate = AsyncMock(return_value=generation)
+    generator.generate_stream = _tracking_stream
 
     engine = Engine(router=router, retriever=retriever, generator=generator)
-    await engine.query("my query text")
+    await _collect(engine.query_stream("my query text"))
 
-    generator.generate.assert_called_once_with("my query text", retrieval)
+    assert len(calls) == 1
+    assert calls[0] == ("my query text", retrieval)
 
 
 @pytest.mark.asyncio
@@ -116,7 +139,7 @@ async def test_engine_preserves_pattern_in_result() -> None:
     route = _mock_route(QueryPattern.D)
     engine, *_ = _build_engine(route=route)
 
-    result = await engine.query("generate a report")
+    result = await _collect(engine.query_stream("generate a report"))
 
     assert result.pattern == QueryPattern.D
 
@@ -130,7 +153,7 @@ async def test_engine_router_error_propagates() -> None:
     engine = Engine(router=router, retriever=retriever, generator=generator)
 
     with pytest.raises(RuntimeError, match="router failed"):
-        await engine.query("query")
+        await _collect(engine.query_stream("query"))
 
 
 @pytest.mark.asyncio
@@ -146,7 +169,7 @@ async def test_engine_retriever_error_propagates() -> None:
     engine = Engine(router=router, retriever=retriever, generator=generator)
 
     with pytest.raises(RuntimeError, match="retriever failed"):
-        await engine.query("query")
+        await _collect(engine.query_stream("query"))
 
 
 @pytest.mark.asyncio
@@ -160,10 +183,14 @@ async def test_engine_generator_error_propagates() -> None:
     retriever = MagicMock()
     retriever.retrieve = AsyncMock(return_value=retrieval)
 
+    async def _failing_stream(*args, **kwargs):
+        raise RuntimeError("generator failed")
+        yield  # make it an async generator
+
     generator = MagicMock()
-    generator.generate = AsyncMock(side_effect=RuntimeError("generator failed"))
+    generator.generate_stream = _failing_stream
 
     engine = Engine(router=router, retriever=retriever, generator=generator)
 
     with pytest.raises(RuntimeError, match="generator failed"):
-        await engine.query("query")
+        await _collect(engine.query_stream("query"))

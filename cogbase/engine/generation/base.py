@@ -18,6 +18,7 @@ Pattern mapping mirrors the retrieval layer:
 from __future__ import annotations
 
 import abc
+from collections.abc import AsyncGenerator
 
 from pydantic import BaseModel
 
@@ -56,19 +57,21 @@ class GeneratorBase(abc.ABC):
     """Abstract generator — turns retrieval evidence into a final answer."""
 
     @abc.abstractmethod
-    async def generate(self, query: str, retrieval: RetrievalResult) -> GenerationResult:
-        """Produce an answer from *query* and *retrieval* evidence.
+    async def generate_stream(
+        self, query: str, retrieval: RetrievalResult
+    ) -> AsyncGenerator[str | GenerationResult, None]:
+        """Stream the answer token-by-token, then yield the final GenerationResult.
 
-        Args:
-            query:     The original natural-language query.
-            retrieval: Evidence gathered by a retriever for this query.
-
-        Returns:
-            ``GenerationResult`` with at minimum ``answer`` and ``pattern``
-            populated.  Pattern D implementations also populate ``findings``
-            and ``supporting_quotes``.
-
-        Raises:
-            Any LLM API error propagates to the caller — there is no silent
-            fallback.
+        Yields ``str`` chunks as tokens arrive, followed by one ``GenerationResult``
+        as the last item.  Subclasses must implement this method.
         """
+
+    async def generate(self, query: str, retrieval: RetrievalResult) -> GenerationResult:
+        """Produce an answer, blocking until complete.
+
+        Drains ``generate_stream`` and returns the final ``GenerationResult``.
+        """
+        async for item in self.generate_stream(query, retrieval):
+            if isinstance(item, GenerationResult):
+                return item
+        raise RuntimeError("generate_stream did not yield a GenerationResult")

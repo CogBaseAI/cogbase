@@ -36,8 +36,12 @@ Typical usage::
     )
     await app.setup()
     results = await app.ingest_documents([Document(doc_id="c-001", text=contract_text)])
-    result = await app.query("which contracts expire before 2026-01-01?")
-    print(result.answer)
+    async for item in app.query_stream("which contracts expire before 2026-01-01?"):
+        if isinstance(item, str):
+            print(item, end="", flush=True)
+        else:
+            print()
+            print("answer:", item.answer)
 """
 
 from __future__ import annotations
@@ -179,20 +183,15 @@ class CogBaseApp:
         logger.info("app.ingest_documents.done documents=%d failures=%d", len(results), failures)
         return results
 
-    async def query(self, text: str) -> GenerationResult:
-        """Answer a natural-language query over ingested documents.
+    async def query_stream(self, text: str):
+        """Stream the answer token-by-token.
 
-        Automatically routes to the correct retrieval pattern:
-
-        - Pattern A — structured lookup (no LLM call needed)
-        - Pattern B — semantic search over raw text
-        - Pattern C — hybrid reasoning across structured records and text
-        - Pattern D — grounded report with ``[FINDINGS]`` / ``[SUPPORTING_QUOTES]``
+        Routing and retrieval complete before the first token is yielded;
+        only the LLM generation phase is streamed.
         """
-        logger.info("app.query.start query=%s", text[:200])
-        result = await self._engine.query(text)
-        logger.info("app.query.done answer=%s", result.answer[:200])
-        return result
+        logger.info("app.query_stream.start query=%s", text[:200])
+        async for chunk in self._engine.query_stream(text):
+            yield chunk
 
     # ------------------------------------------------------------------
     # Accessors (advanced use)

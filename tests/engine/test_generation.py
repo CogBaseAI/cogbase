@@ -49,19 +49,26 @@ def _make_chunk(text: str, doc_id: str = "doc-1") -> Chunk:
     return Chunk(doc_id=doc_id, text=text)
 
 
-def _mock_llm_client(answer: str) -> MagicMock:
-    """Mock OpenAI-compatible async client returning *answer*."""
-    message = MagicMock()
-    message.content = answer
+async def _stream_chunks(content: str):
+    """Async generator yielding *content* as a single streaming delta."""
+    delta = MagicMock()
+    delta.content = content
     choice = MagicMock()
-    choice.message = message
-    response = MagicMock()
-    response.choices = [choice]
+    choice.delta = delta
+    chunk = MagicMock()
+    chunk.choices = [choice]
+    yield chunk
+
+
+def _mock_llm_client(answer: str) -> MagicMock:
+    """Mock OpenAI-compatible async client returning *answer* via streaming."""
+    async def _create(**kwargs):
+        return _stream_chunks(answer)
 
     client = MagicMock()
     client.chat = MagicMock()
     client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock(return_value=response)
+    client.chat.completions.create = AsyncMock(side_effect=_create)
     return client
 
 

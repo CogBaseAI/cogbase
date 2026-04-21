@@ -32,14 +32,31 @@ from examples.contract_analyst_demo.schema import (
 # Test doubles
 # ---------------------------------------------------------------------------
 
+async def _stream_delta(content: str):
+    delta = SimpleNamespace(content=content)
+    choice = SimpleNamespace(delta=delta)
+    yield SimpleNamespace(choices=[choice])
+
+
+async def _drain_query(app: CogBaseApp, text: str) -> GenerationResult:
+    async for item in app.query_stream(text):
+        if not isinstance(item, str):
+            return item
+    raise AssertionError("query_stream did not yield a GenerationResult")
+
+
 def _make_client(content: str) -> MagicMock:
-    """Build a mock OpenAI client that always returns *content*."""
-    choice = SimpleNamespace(message=SimpleNamespace(content=content))
-    response = SimpleNamespace(choices=[choice])
+    """Build a mock OpenAI client returning *content* (streaming or non-streaming)."""
+    async def _create(**kwargs):
+        if kwargs.get("stream"):
+            return _stream_delta(content)
+        choice = SimpleNamespace(message=SimpleNamespace(content=content))
+        return SimpleNamespace(choices=[choice])
+
     client = MagicMock()
     client.chat = MagicMock()
     client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock(return_value=response)
+    client.chat.completions.create = AsyncMock(side_effect=_create)
     return client
 
 
@@ -250,6 +267,11 @@ class TestCogBaseAppQuery:
     ) -> tuple[CogBaseApp, InMemoryStructuredStore]:
         store = InMemoryStructuredStore()
 
+        async def _stream_content(content: str):
+            delta = SimpleNamespace(content=content)
+            choice = SimpleNamespace(delta=delta)
+            yield SimpleNamespace(choices=[choice])
+
         async def _create(**kwargs):
             messages = kwargs.get("messages", [])
             system_content = messages[0].get("content", "") if messages else ""
@@ -259,6 +281,8 @@ class TestCogBaseAppQuery:
                 content = router_json
             else:
                 content = generator_answer
+            if kwargs.get("stream"):
+                return _stream_content(content)
             choice = SimpleNamespace(message=SimpleNamespace(content=content))
             return SimpleNamespace(choices=[choice])
 
@@ -269,6 +293,7 @@ class TestCogBaseAppQuery:
 
         app = _make_app(client, store)
         return app, store
+
 
     @pytest.mark.asyncio
     async def test_query_pattern_a_returns_structured_answer(self):
@@ -295,7 +320,7 @@ class TestCogBaseAppQuery:
         )
         await store.save(CONTRACTS_COLLECTION, [record])
 
-        result = await app.query("list NDA contracts")
+        result = await _drain_query(app, "list NDA contracts")
         assert isinstance(result, GenerationResult)
         assert result.pattern == QueryPattern.A
         assert "acme" in result.answer.lower() or "nda" in result.answer.lower() or "30 days" in result.answer
@@ -312,7 +337,7 @@ class TestCogBaseAppQuery:
             generator_answer="The termination notice period is 60 days.",
         )
         await app.setup()
-        result = await app.query("what is the termination notice period?")
+        result = await _drain_query(app, "what is the termination notice period?")
         assert isinstance(result, GenerationResult)
         assert result.pattern == QueryPattern.B
 
@@ -329,7 +354,7 @@ class TestCogBaseAppQuery:
         )
         app, store = self._make_app_with_router_response(router_resp, gen_answer)
         await app.setup()
-        result = await app.query("summarise indemnification clauses")
+        result = await _drain_query(app, "summarise indemnification clauses")
         assert result.pattern == QueryPattern.D
         assert result.findings is not None
         assert "indemnification" in result.findings.lower()
@@ -381,10 +406,9 @@ class TestStructuredOnlyPatternRestriction:
         async def _create(**kwargs):
             messages = kwargs.get("messages", [])
             system_content = messages[0].get("content", "") if messages else ""
-            if "query router" in system_content:
-                content = router_resp
-            else:
-                content = "The answer."
+            content = router_resp if "query router" in system_content else "The answer."
+            if kwargs.get("stream"):
+                return _stream_delta(content)
             choice = SimpleNamespace(message=SimpleNamespace(content=content))
             return SimpleNamespace(choices=[choice])
 
@@ -395,7 +419,7 @@ class TestStructuredOnlyPatternRestriction:
 
         app = _make_app(client, InMemoryStructuredStore())
         await app.setup()
-        result = await app.query("what is the termination clause?")
+        result = await _drain_query(app, "what is the termination clause?")
         assert isinstance(result, GenerationResult)
 
 

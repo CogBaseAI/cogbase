@@ -27,17 +27,19 @@ Typical usage::
         generator=LLMGenerator(client, model="claude-sonnet-4-6"),
     )
 
-    result = await engine.query("what are the termination clauses in the contracts?")
-    print(result.answer)
-
-    # For grounded generation (Pattern D) the structured fields are also set:
-    print(result.findings)
-    print(result.supporting_quotes)
+    async for item in engine.query_stream("what are the termination clauses in the contracts?"):
+        if isinstance(item, str):
+            print(item, end="", flush=True)
+        else:
+            print()
+            print("pattern:", item.pattern.value)
+            print("findings:", item.findings)
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncGenerator
 
 from cogbase.engine.generation.base import GenerationResult, GeneratorBase
 from cogbase.engine.retrieval.base import RetrieverBase
@@ -66,38 +68,21 @@ class Engine:
         self._retriever = retriever
         self._generator = generator
 
-    async def query(self, text: str) -> GenerationResult:
-        """Answer a natural-language query end-to-end.
-
-        Steps:
-            1. Route: classify the query and extract any structured targets.
-            2. Retrieve: fetch evidence from the appropriate store(s).
-            3. Generate: produce the final answer from the evidence.
-
-        Args:
-            text: The user's natural-language query.
-
-        Returns:
-            ``GenerationResult`` containing the answer and, for Pattern D,
-            structured ``findings`` and ``supporting_quotes``.
-
-        Raises:
-            Any router, retriever, or generator error propagates to the caller.
-        """
-        logger.info("engine.query.start query_len=%d", len(text))
+    async def query_stream(self, text: str) -> AsyncGenerator[str | GenerationResult, None]:
+        """Route and retrieve, then stream tokens followed by a final GenerationResult."""
+        logger.info("engine.query_stream.start query_len=%d", len(text))
         route = await self._router.route(text)
         logger.info(
-            "engine.query.routed pattern=%s structured_targets=%d",
+            "engine.query_stream.routed pattern=%s structured_targets=%d",
             route.pattern.value,
             len(route.structured_targets),
         )
         retrieval = await self._retriever.retrieve(route)
         logger.info(
-            "engine.query.retrieved pattern=%s structured_records=%d chunks=%d",
+            "engine.query_stream.retrieved pattern=%s structured_records=%d chunks=%d",
             route.pattern.value,
             len(retrieval.structured_records),
             len(retrieval.chunks),
         )
-        result = await self._generator.generate(text, retrieval)
-        logger.info("engine.query.done pattern=%s answer_len=%d", route.pattern.value, len(result.answer))
-        return result
+        async for chunk in self._generator.generate_stream(text, retrieval):
+            yield chunk
