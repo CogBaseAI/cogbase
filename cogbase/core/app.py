@@ -28,7 +28,7 @@ Typical usage::
     app = CogBaseApp(
         client=client,
         model="gpt-4o-mini",
-        extractors=[extractor],
+        extractor=extractor,
         structured_store=SQLiteStructuredStore("contracts.db"),
         vector_store=FAISSVectorStore(dim=384),
         embedder=SentenceTransformersEmbedding(),
@@ -78,8 +78,7 @@ class CogBaseApp:
         client:               Async OpenAI-compatible client for the router and
                               generator.
         model:                Model name forwarded to the router and generator.
-        extractors:           One or more ``ExtractorBase`` instances.  Each
-                              extractor writes to its own structured collection.
+        extractor:            Optional ``ExtractorBase`` for structured extraction.
         structured_store:     Persistent store for extracted records.
         vector_store:         Vector store for raw text chunks.  Must be provided
                               together with *embedder* and *chunker*.  When
@@ -99,7 +98,7 @@ class CogBaseApp:
         name: str,
         client: Any,
         model: str,
-        extractors: list[ExtractorBase],
+        extractor: ExtractorBase | None,
         structured_store: StructuredStoreBase | None,
         *,
         vector_store: VectorStoreBase | None = None,
@@ -116,36 +115,30 @@ class CogBaseApp:
                 "or all omitted. Received a partial set."
             )
 
-        structured_collections: list[StructuredCollection] = []
-        if structured_store is not None:
-            structured_collections = [
-                StructuredCollection(
-                    schema=extractor.schema,
-                    store=structured_store,
-                    extractor=extractor,
-                )
-                for extractor in extractors
-            ]
-
-        vector_collections: list[VectorCollection] = []
-        if vector_store is not None:
-            assert embedder is not None and chunker is not None  # validated above
-            vector_collections.append(
-                VectorCollection(
-                    name=name,
-                    store=vector_store,
-                    embedder=embedder,
-                    chunker=chunker,
-                )
+        structured_collection: StructuredCollection | None = None
+        if structured_store is not None and extractor is not None:
+            structured_collection = StructuredCollection(
+                schema=extractor.schema,
+                store=structured_store,
+                extractor=extractor,
             )
 
-        # app name
+        vector_collection: VectorCollection | None = None
+        if vector_store is not None:
+            assert embedder is not None and chunker is not None  # validated above
+            vector_collection = VectorCollection(
+                name=name,
+                store=vector_store,
+                embedder=embedder,
+                chunker=chunker,
+            )
+
         self.name = name
 
         self._ingest_pipeline = IngestionPipeline(
             name=name,
-            vector_collections=vector_collections,
-            structured_collections=structured_collections,
+            vector_collection=vector_collection,
+            structured_collection=structured_collection,
         )
 
         if structured_store is None:

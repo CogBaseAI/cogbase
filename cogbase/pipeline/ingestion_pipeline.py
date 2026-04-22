@@ -1,8 +1,9 @@
-"""IngestionPipeline — top-level grouping of vector and structured collections.
+"""IngestionPipeline — a single vector collection and a single structured collection.
 
 An ``IngestionPipeline`` is the primary entry point for configuring CogBase
-ingestion.  It bundles one or more collections (vector and/or structured) under
-a single name and exposes ``setup`` and ``ingest`` as the two lifecycle methods.
+ingestion.  It bundles an optional vector collection and an optional structured
+collection under a single name and exposes ``setup`` and ``ingest`` as the two
+lifecycle methods.
 
 Typical usage::
 
@@ -10,26 +11,22 @@ Typical usage::
 
     pipeline = IngestionPipeline(
         name="legal",
-        vector_collections=[
-            VectorCollection(
-                name="documents",
-                store=FAISSVectorStore(dim=384),
-                embedder=SentenceTransformersEmbedding(),
-                chunker=FixedSizeChunker(chunk_size=512, overlap=64),
-            )
-        ],
-        structured_collections=[
-            StructuredCollection(
-                schema=clause_schema,
-                store=SQLiteStructuredStore("data.db"),
-                extractor=ClauseExtractor(),
-            )
-        ],
+        vector_collection=VectorCollection(
+            name="legal",
+            store=FAISSVectorStore(dim=384),
+            embedder=SentenceTransformersEmbedding(),
+            chunker=FixedSizeChunker(chunk_size=512, overlap=64),
+        ),
+        structured_collection=StructuredCollection(
+            schema=clause_schema,
+            store=SQLiteStructuredStore("data.db"),
+            extractor=ClauseExtractor(),
+        ),
     )
 
     await pipeline._ingest(Document(doc_id="contract-001", text=contract_text))
 
-    # Pass schemas to the router so it can target the right collections:
+    # Pass schemas to the router so it can target the right collection:
     router = LLMRouter(client, model="...", schema=pipeline.structured_schemas)
 """
 
@@ -119,96 +116,88 @@ class StructuredCollection:
 
 
 class IngestionPipeline:
-    """Top-level entry point: a named set of vector and structured collections.
+    """Top-level entry point: an optional vector collection and structured collection.
 
     An ingestion pipeline groups all the stores, schemas, extractors, embedders,
     and chunkers needed for a single deployment under one object.  It exposes one
     lifecycle method:
 
-    - ``ingest(doc)`` — chunks, embeds, and extracts a document into every
-      collection.
+    - ``ingest(doc)`` — chunks, embeds, and extracts a document.
 
     The ``structured_schemas`` property returns the ``CollectionSchema`` list
-    needed by ``LLMRouter`` so the router can reference the correct collections
+    needed by ``LLMRouter`` so the router can reference the correct collection
     and fields when building query filters.
 
     Args:
-        name:                   Logical name for the pipeline.
-        vector_collections:     Vector collections to manage.  Defaults to
-                                an empty list (structured-only pipelines are
-                                valid).
-        structured_collections: Structured collections to manage.  Defaults to
-                                an empty list (vector-only pipelines are
-                                valid).
+        name:                  Logical name for the pipeline.
+        vector_collection:     Optional vector collection.
+        structured_collection: Optional structured collection.
     """
 
     def __init__(
         self,
         name: str,
-        vector_collections: list[VectorCollection] | None = None,
-        structured_collections: list[StructuredCollection] | None = None,
+        vector_collection: VectorCollection | None = None,
+        structured_collection: StructuredCollection | None = None,
     ) -> None:
         self.name = name
-        self._vector_collections: list[VectorCollection] = vector_collections or []
-        self._structured_collections: list[StructuredCollection] = structured_collections or []
+        self._vector_collection = vector_collection
+        self._structured_collection = structured_collection
 
     # ------------------------------------------------------------------
     # Accessors
     # ------------------------------------------------------------------
 
     @property
-    def vector_collections(self) -> list[VectorCollection]:
-        """Read-only view of the registered vector collections."""
-        return list(self._vector_collections)
+    def vector_collection(self) -> VectorCollection | None:
+        """The registered vector collection, or ``None``."""
+        return self._vector_collection
 
     @property
-    def structured_collections(self) -> list[StructuredCollection]:
-        """Read-only view of the registered structured collections."""
-        return list(self._structured_collections)
+    def structured_collection(self) -> StructuredCollection | None:
+        """The registered structured collection, or ``None``."""
+        return self._structured_collection
 
     @property
     def structured_schemas(self) -> list[CollectionSchema]:
-        """Schemas for all structured collections.
+        """Schema for the structured collection as a list, or empty if none.
 
         Pass this to ``LLMRouter(schema=pipeline.structured_schemas)`` so the
-        router knows which collection names and field types are available.
+        router knows which collection name and field types are available.
         """
-        return [sc.schema for sc in self._structured_collections]
+        return [self._structured_collection.schema] if self._structured_collection else []
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     async def setup(self) -> None:
-        """Create all structured collections in their respective stores. Idempotent."""
-        logger.info(
-            "ingestion_pipeline.setup.start name=%s structured_collections=%d",
-            self.name,
-            len(self._structured_collections),
-        )
-        for sc in self._structured_collections:
+        """Create the structured collection in its store. Idempotent."""
+        logger.info("ingestion_pipeline.setup.start name=%s", self.name)
+        if self._structured_collection:
+            sc = self._structured_collection
             logger.debug("ingestion_pipeline.setup.create_collection name=%s collection=%s", self.name, sc.name)
             await sc.store.create_collection(sc.schema)
         logger.info("ingestion_pipeline.setup.done name=%s", self.name)
 
     async def _ingest(self, doc: Document) -> int:
-        """Ingest a document into all collections.
+        """Ingest a document.
 
-        For each vector collection: chunk → embed → upsert.
-        For each structured collection: extract → save.
+        Vector collection: chunk → embed → upsert.
+        Structured collection: extract → save.
 
-        Empty text is a no-op for vector collections (no chunks produced).
-        Extractors may still return records for structured collections even when
-        the text is short, depending on the extractor's implementation.
+        Empty text is a no-op for the vector collection (no chunks produced).
 
         Args:
             doc: Document to ingest.
 
         Returns:
-            Total number of records written across all structured collections.
+            1 if a structured record was extracted and saved, 0 otherwise.
         """
         logger.info("ingestion_pipeline.ingest.start name=%s doc_id=%s", self.name, doc.doc_id)
-        for vc in self._vector_collections:
+
+        if self._vector_collection:
+            vc = self._vector_collection
             chunks = vc.chunker.chunk(doc)
             logger.debug(
                 "ingestion_pipeline.ingest.vector_chunked name=%s doc_id=%s collection=%s chunks=%d",
@@ -236,25 +225,27 @@ class IngestionPipeline:
                     len(embedded),
                 )
 
-        total_records = 0
-        for sc in self._structured_collections:
+        records_extracted = 0
+        if self._structured_collection:
+            sc = self._structured_collection
             record = await sc.extractor.extract(doc)
             if record is not None:
                 await sc.store.save(sc.schema.name, [record])
-                total_records += 1
+                records_extracted = 1
                 logger.debug(
                     "ingestion_pipeline.ingest.structured_saved name=%s doc_id=%s collection=%s",
                     self.name,
                     doc.doc_id,
                     sc.name,
                 )
+
         logger.info(
             "ingestion_pipeline.ingest.done name=%s doc_id=%s records_extracted=%d",
             self.name,
             doc.doc_id,
-            total_records,
+            records_extracted,
         )
-        return total_records
+        return records_extracted
 
     async def ingest_documents(
         self,

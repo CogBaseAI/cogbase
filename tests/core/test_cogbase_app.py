@@ -119,7 +119,7 @@ def _make_app(
         name=name,
         client=client,
         model="test-model",
-        extractors=[extractor],
+        extractor=extractor,
         structured_store=store,
         vector_store=vector_store,
         embedder=embedder,
@@ -136,9 +136,9 @@ class TestCogBaseAppConstruction:
         client = _make_client("{}")
         app = _make_app(client, InMemoryStructuredStore())
         assert app._ingest_pipeline.name == "legal"
-        assert len(app._ingest_pipeline.structured_collections) == 1
-        assert app._ingest_pipeline.structured_collections[0].name == CONTRACTS_COLLECTION
-        assert app._ingest_pipeline.vector_collections == []
+        assert app._ingest_pipeline.structured_collection is not None
+        assert app._ingest_pipeline.structured_collection.name == CONTRACTS_COLLECTION
+        assert app._ingest_pipeline.vector_collection is None
 
     def test_full_mode_builds(self):
         client = _make_client("{}")
@@ -149,8 +149,8 @@ class TestCogBaseAppConstruction:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=64, overlap=0),
         )
-        assert len(app._ingest_pipeline.vector_collections) == 1
-        assert app._ingest_pipeline.vector_collections[0].name == "legal"
+        assert app._ingest_pipeline.vector_collection is not None
+        assert app._ingest_pipeline.vector_collection.name == "legal"
 
     def test_partial_vector_params_raises(self):
         client = _make_client("{}")
@@ -160,7 +160,7 @@ class TestCogBaseAppConstruction:
                 name='testapp',
                 client=client,
                 model="test-model",
-                extractors=[extractor],
+                extractor=extractor,
                 structured_store=InMemoryStructuredStore(),
                 vector_store=FAISSVectorStore(dim=4),
                 # embedder and chunker missing
@@ -436,20 +436,20 @@ class TestVectorOnlyMode:
             name="vector-only",
             client=client,
             model="test-model",
-            extractors=[],
+            extractor=None,
             structured_store=None,
             vector_store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
 
-    def test_no_structured_collections(self):
+    def test_no_structured_collection(self):
         app = self._make_vector_only_app(_make_client("{}"))
-        assert app._ingest_pipeline.structured_collections == []
+        assert app._ingest_pipeline.structured_collection is None
 
     def test_vector_collection_present(self):
         app = self._make_vector_only_app(_make_client("{}"))
-        assert len(app._ingest_pipeline.vector_collections) == 1
+        assert app._ingest_pipeline.vector_collection is not None
 
     def test_structured_schemas_empty(self):
         app = self._make_vector_only_app(_make_client("{}"))
@@ -478,7 +478,7 @@ class TestVectorOnlyMode:
             name='testapp',
             client=_make_client("{}"),
             model="test-model",
-            extractors=[],
+            extractor=None,
             structured_store=None,
             vector_store=vector_store,
             embedder=StubEmbedding(dim=4),

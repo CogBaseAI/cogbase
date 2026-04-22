@@ -88,7 +88,7 @@ class TestBuildAppStructuredStoreResolution:
         cfg = AppConfig.from_yaml(_MINIMAL_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
         app = build_app(cfg, system_structured_store=system_store)
-        structured_store = app._ingest_pipeline._structured_collections[0].store
+        structured_store = app._ingest_pipeline._structured_collection.store
         assert structured_store is system_store
 
     @patch("api.factory._build_llm_client")
@@ -100,7 +100,7 @@ class TestBuildAppStructuredStoreResolution:
         cfg = AppConfig.from_yaml(cfg_yaml)
         system_store = InMemoryStructuredStore()
         app = build_app(cfg, system_structured_store=system_store)
-        structured_store = app._ingest_pipeline._structured_collections[0].store
+        structured_store = app._ingest_pipeline._structured_collection.store
         assert isinstance(structured_store, SQLiteStructuredStore)
 
 
@@ -111,7 +111,7 @@ class TestBuildAppVectorStoreResolution:
         cfg = AppConfig.from_yaml(_MINIMAL_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
         app = build_app(cfg, system_structured_store=system_store)
-        assert app._ingest_pipeline._vector_collections == []
+        assert app._ingest_pipeline._vector_collection is None
 
     @patch("api.factory._build_llm_client")
     def test_system_vector_store_cfg_used_when_embedding_present(self, mock_llm):
@@ -128,7 +128,7 @@ class TestBuildAppVectorStoreResolution:
                 system_vector_store_cfg=sys_vs_cfg,
             )
 
-        assert len(app._ingest_pipeline._vector_collections) == 1
+        assert app._ingest_pipeline._vector_collection is not None
 
     @patch("api.factory._build_llm_client")
     def test_no_vector_store_when_no_embedding_even_with_system_cfg(self, mock_llm):
@@ -142,4 +142,4 @@ class TestBuildAppVectorStoreResolution:
             system_structured_store=system_store,
             system_vector_store_cfg=sys_vs_cfg,
         )
-        assert app._ingest_pipeline._vector_collections == []
+        assert app._ingest_pipeline._vector_collection is None

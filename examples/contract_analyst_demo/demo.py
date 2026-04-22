@@ -141,7 +141,7 @@ def _build_app(
     return CogBaseApp(
         client=client,
         model=_CHAT_MODEL,
-        extractors=[extractor],
+        extractor=extractor,
         structured_store=store,
         vector_store=vector_store,
         embedder=embedder,

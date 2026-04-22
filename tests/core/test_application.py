@@ -113,8 +113,8 @@ class TestIngestionPipelineConstruction:
     def test_empty_application(self):
         app = IngestionPipeline(name="empty")
         assert app.name == "empty"
-        assert app.vector_collections == []
-        assert app.structured_collections == []
+        assert app.vector_collection is None
+        assert app.structured_collection is None
         assert app.structured_schemas == []
 
     def test_vector_only(self):
@@ -124,9 +124,9 @@ class TestIngestionPipelineConstruction:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
-        app = IngestionPipeline(name="app", vector_collections=[vc])
-        assert len(app.vector_collections) == 1
-        assert app.structured_collections == []
+        app = IngestionPipeline(name="app", vector_collection=vc)
+        assert app.vector_collection is not None
+        assert app.structured_collection is None
 
     def test_structured_only(self):
         sc = StructuredCollection(
@@ -134,9 +134,9 @@ class TestIngestionPipelineConstruction:
             store=InMemoryStructuredStore(),
             extractor=StubExtractor(),
         )
-        app = IngestionPipeline(name="app", structured_collections=[sc])
-        assert app.vector_collections == []
-        assert len(app.structured_collections) == 1
+        app = IngestionPipeline(name="app", structured_collection=sc)
+        assert app.vector_collection is None
+        assert app.structured_collection is not None
 
     def test_structured_schemas_property(self):
         sc = StructuredCollection(
@@ -144,16 +144,10 @@ class TestIngestionPipelineConstruction:
             store=InMemoryStructuredStore(),
             extractor=StubExtractor(),
         )
-        app = IngestionPipeline(name="app", structured_collections=[sc])
+        app = IngestionPipeline(name="app", structured_collection=sc)
         schemas = app.structured_schemas
         assert len(schemas) == 1
         assert schemas[0].name == "tags"
-
-    def test_collections_views_are_copies(self):
-        """Mutating the returned list does not affect the application."""
-        app = IngestionPipeline(name="app")
-        app.vector_collections.append(object())  # type: ignore[arg-type]
-        assert app.vector_collections == []
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +164,7 @@ class TestIngestionPipelineSetup:
             store=store,
             extractor=StubExtractor(),
         )
-        app = IngestionPipeline(name="app", structured_collections=[sc])
+        app = IngestionPipeline(name="app", structured_collection=sc)
         await app.setup()
 
         # Collection now exists — querying it must not raise
@@ -185,7 +179,7 @@ class TestIngestionPipelineSetup:
             store=store,
             extractor=StubExtractor(),
         )
-        app = IngestionPipeline(name="app", structured_collections=[sc])
+        app = IngestionPipeline(name="app", structured_collection=sc)
         await app.setup()
         await app.setup()  # must not raise
 
@@ -210,7 +204,7 @@ class TestIngestionPipelineIngest:
             store=structured_store,
             extractor=StubExtractor(),
         )
-        app = IngestionPipeline(name="app", vector_collections=[vc], structured_collections=[sc])
+        app = IngestionPipeline(name="app", vector_collection=vc, structured_collection=sc)
         return app, vector_store, structured_store
 
     @pytest.mark.asyncio
@@ -263,11 +257,11 @@ class TestIngestionPipelineIngest:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
-        app = IngestionPipeline(name="app", vector_collections=[vc])
+        app = IngestionPipeline(name="app", vector_collection=vc)
         await app.setup()
         count = await app._ingest(Document(doc_id="doc-1", text="word " * 30))
         assert vector_store.ntotal > 0
-        assert count == 0  # no structured collections
+        assert count == 0  # no structured collection
 
     @pytest.mark.asyncio
     async def test_structured_only_app_ingest(self):
@@ -277,7 +271,7 @@ class TestIngestionPipelineIngest:
             store=structured_store,
             extractor=StubExtractor(),
         )
-        app = IngestionPipeline(name="app", structured_collections=[sc])
+        app = IngestionPipeline(name="app", structured_collection=sc)
         await app.setup()
         await app._ingest(Document(doc_id="doc-1", text="important clause about termination"))
         rows = await structured_store.query("tags")
@@ -299,7 +293,7 @@ class TestIngestionPipelineIngestMany:
             store=structured_store,
             extractor=StubExtractor(),
         )
-        app = IngestionPipeline(name="app", structured_collections=[sc])
+        app = IngestionPipeline(name="app", structured_collection=sc)
         return app, structured_store
 
     @pytest.mark.asyncio
@@ -380,7 +374,7 @@ class TestIngestionPipelineIngestMany:
             store=structured_store,
             extractor=FailFirstExtractor(),
         )
-        app = IngestionPipeline(name="app", structured_collections=[sc])
+        app = IngestionPipeline(name="app", structured_collection=sc)
         await app.setup()
 
         results = await app.ingest_documents(
