@@ -53,7 +53,7 @@ structured_collections:
       type: llm
 pipeline:
   steps:
-    - action: extract
+    - tool: extract-structured
       collection: contract_extraction
 """
 
@@ -79,9 +79,9 @@ structured_collections:
 pipeline:
   parallel: true
   steps:
-    - action: chunk_and_embed
+    - tool: chunk-embed-upsert
       collection: document_chunks
-    - action: extract
+    - tool: extract-structured
       collection: contract_extraction
 """
 

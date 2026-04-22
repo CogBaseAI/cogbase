@@ -151,10 +151,12 @@ _FULL_YAML = textwrap.dedent("""\
     embedding:
       provider: openai
       model: text-embedding-3-small
-    chunker:
-      type: fixed
-      chunk_size: 256
-      overlap: 32
+    vector_collections:
+      - name: doc_chunks
+        chunker:
+          type: fixed
+          chunk_size: 256
+          overlap: 32
 """)
 
 
@@ -166,14 +168,14 @@ class TestAppConfig:
         assert cfg.structured_store is None
         assert cfg.vector_store is None
         assert cfg.embedding is None
-        assert cfg.chunker is None
+        assert cfg.vector_collections == []
 
     def test_from_yaml_full(self):
         cfg = AppConfig.from_yaml(_FULL_YAML)
         assert cfg.name == "full-app"
         assert cfg.embedding is not None
-        assert cfg.chunker is not None
-        assert cfg.chunker.chunk_size == 256
+        assert len(cfg.vector_collections) == 1
+        assert cfg.vector_collections[0].chunker.chunk_size == 256
 
     def test_from_yaml_with_explicit_store(self):
         yaml_text = textwrap.dedent("""\
@@ -189,52 +191,45 @@ class TestAppConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            chunker:
-              type: fixed
-              chunk_size: 512
-              overlap: 64
+            vector_collections:
+              - name: doc_chunks
+                chunker:
+                  type: fixed
+                  chunk_size: 512
+                  overlap: 64
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         assert cfg.structured_store.type == "sqlite"
         assert cfg.structured_store.path == "./data/my.db"
         assert cfg.vector_store.dim == 768
 
-    def test_embedding_without_chunker_raises(self):
+    def test_vector_collections_without_embedding_raises(self):
         yaml_text = textwrap.dedent("""\
             name: bad-app
+            llm:
+              model: gpt-4o-mini
+            vector_collections:
+              - name: doc_chunks
+                chunker:
+                  type: fixed
+                  chunk_size: 512
+                  overlap: 64
+        """)
+        with pytest.raises(Exception, match="embedding is required when vector_collections"):
+            AppConfig.from_yaml(yaml_text)
+
+    def test_embedding_alone_is_valid(self):
+        yaml_text = textwrap.dedent("""\
+            name: ok-app
             llm:
               model: gpt-4o-mini
             embedding:
               provider: openai
               model: text-embedding-3-small
         """)
-        with pytest.raises(Exception, match="embedding and chunker"):
-            AppConfig.from_yaml(yaml_text)
-
-    def test_chunker_without_embedding_raises(self):
-        yaml_text = textwrap.dedent("""\
-            name: bad-app
-            llm:
-              model: gpt-4o-mini
-            chunker:
-              type: fixed
-              chunk_size: 512
-              overlap: 64
-        """)
-        with pytest.raises(Exception, match="embedding and chunker"):
-            AppConfig.from_yaml(yaml_text)
-
-    def test_vector_store_without_embedding_raises(self):
-        yaml_text = textwrap.dedent("""\
-            name: bad-app
-            llm:
-              model: gpt-4o-mini
-            vector_store:
-              type: faiss
-              dim: 1536
-        """)
-        with pytest.raises(Exception, match="vector_store requires embedding"):
-            AppConfig.from_yaml(yaml_text)
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert cfg.embedding is not None
+        assert cfg.vector_collections == []
 
     def test_from_yaml_non_mapping_raises(self):
         with pytest.raises(ValueError, match="mapping"):

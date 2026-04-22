@@ -215,7 +215,7 @@ class TestCreateApplication:
                   prompt: extraction_prompt.txt
             pipeline:
               steps:
-                - action: extract
+                - tool: extract-structured
                   collection: contract_extraction
         """).encode()
         bundle = _make_bundle(

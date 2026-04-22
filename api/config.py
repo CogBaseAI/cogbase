@@ -78,7 +78,7 @@ class StructuredCollectionConfig(BaseModel):
 
 
 class PipelineStepConfig(BaseModel):
-    action: Literal["chunk_and_embed", "extract"]
+    tool: Literal["chunk-embed-upsert", "extract-structured"]
     collection: str       # must match a vector_collection or structured_collection name
 
 
@@ -105,11 +105,11 @@ class AppConfig(BaseModel):
             vc_names = {vc.name for vc in self.vector_collections}
             sc_names = {sc.name for sc in self.structured_collections}
             for step in self.pipeline.steps:
-                if step.action == "chunk_and_embed" and step.collection not in vc_names:
+                if step.tool == "chunk-embed-upsert" and step.collection not in vc_names:
                     raise ValueError(
                         f"Pipeline step references unknown vector collection: {step.collection!r}"
                     )
-                if step.action == "extract" and step.collection not in sc_names:
+                if step.tool == "extract-structured" and step.collection not in sc_names:
                     raise ValueError(
                         f"Pipeline step references unknown structured collection: {step.collection!r}"
                     )

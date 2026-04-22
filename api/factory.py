@@ -90,8 +90,8 @@ def build_app(
     vc_by_name = {vc.name: vc for vc in config.vector_collections}
     sc_by_name = {sc.name: sc for sc in config.structured_collections}
 
-    # --- Vector collection (chunk_and_embed step) ----------------------------
-    chunk_step = next((s for s in steps if s.action == "chunk_and_embed"), None)
+    # --- Vector collection (chunk-embed-upsert step) -------------------------
+    chunk_step = next((s for s in steps if s.tool == "chunk-embed-upsert"), None)
     vector_store = None
     embedder = None
     chunker = None
@@ -126,8 +126,8 @@ def build_app(
         else:
             raise ValueError(f"Unknown chunker type: {chunker_cfg.type!r}")
 
-    # --- Structured collection (extract step) --------------------------------
-    extract_step = next((s for s in steps if s.action == "extract"), None)
+    # --- Structured collection (extract-structured step) ---------------------
+    extract_step = next((s for s in steps if s.tool == "extract-structured"), None)
     structured_store = None
     extractor = None
 
