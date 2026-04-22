@@ -24,7 +24,6 @@ def _make_extractor(client: MagicMock) -> LLMExtractor:
         model="test-model",
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
-        id_field="contract_id",
     )
 
 
@@ -94,16 +93,7 @@ async def test_extract_returns_one_record():
     result = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
 
     assert result is not None
-    assert hasattr(result, "contract_id")
     assert hasattr(result, "doc_id")
-
-
-@pytest.mark.asyncio
-async def test_extract_contract_id_contains_doc_id():
-    extractor = _make_extractor(_make_client(_full_payload()))
-    result = await extractor.extract(Document(doc_id="vendor-42", text="contract text"))
-
-    assert result.contract_id.startswith("vendor-42_")
 
 
 @pytest.mark.asyncio
@@ -279,35 +269,6 @@ async def test_extract_non_list_special_conditions_rejects_record():
     assert result is None
 
 
-@pytest.mark.asyncio
-async def test_extract_unique_record_ids_per_call():
-    extractor = _make_extractor(_make_client(_full_payload()))
-    r1 = await extractor.extract(Document(doc_id="doc-010", text="text"))
-    r2 = await extractor.extract(Document(doc_id="doc-010", text="text"))
-    assert r1.contract_id != r2.contract_id
-
-
-# ---------------------------------------------------------------------------
-# Custom id_field
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_custom_id_field():
-    """id_field parameter controls the name of the identity field on the record."""
-    extractor = LLMExtractor(
-        _make_client(_full_payload()),
-        model="test-model",
-        extraction_model=ContractExtraction,
-        collection_name="custom_collection",
-        id_field="entry_id",
-    )
-    result = await extractor.extract(Document(doc_id="doc-011", text="contract text"))
-
-    assert hasattr(result, "entry_id")
-    assert result.entry_id.startswith("doc-011_")
-    assert not hasattr(result, "record_id")
-
-
 # ---------------------------------------------------------------------------
 # extract() — retry behaviour
 # ---------------------------------------------------------------------------
@@ -334,7 +295,6 @@ async def test_extract_succeeds_on_retry_after_bad_json(monkeypatch):
         client, model="test-model",
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
-        id_field="contract_id",
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-1", text="contract text"))
@@ -352,7 +312,6 @@ async def test_extract_returns_none_after_all_retries_exhausted(monkeypatch):
         client, model="test-model",
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
-        id_field="contract_id",
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-2", text="contract text"))
@@ -370,7 +329,6 @@ async def test_extract_no_retry_on_success(monkeypatch):
         _make_client(_full_payload()), model="test-model",
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
-        id_field="contract_id",
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-3", text="contract text"))
@@ -389,7 +347,6 @@ async def test_extract_retry_uses_exponential_backoff(monkeypatch):
         client, model="test-model",
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
-        id_field="contract_id",
         max_retries=2,
     )
     await extractor.extract(Document(doc_id="doc-retry-4", text="contract text"))
@@ -408,7 +365,6 @@ async def test_extract_max_retries_zero_no_sleep(monkeypatch):
         _make_client("bad json"), model="test-model",
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
-        id_field="contract_id",
         max_retries=0,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-5", text="contract text"))

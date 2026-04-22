@@ -54,9 +54,8 @@ def _mock_vector_store(chunks: list[Chunk]) -> MagicMock:
 
 def _mock_embedder(vector: list[float] | None = None) -> MagicMock:
     v = vector or [0.1, 0.2, 0.3]
-    embedded_chunk = Chunk(doc_id="__query__", text="test query", embedding=v)
     embedder = MagicMock()
-    embedder.embed = AsyncMock(return_value=[embedded_chunk])
+    embedder.embed = AsyncMock(return_value=[v])
     return embedder
 
 
@@ -184,7 +183,7 @@ async def test_vector_retriever_embeds_semantic_query() -> None:
 
     call_args = embedder.embed.call_args[0][0]
     assert len(call_args) == 1
-    assert call_args[0].text == "notice period length"
+    assert call_args[0] == "notice period length"
 
 
 @pytest.mark.asyncio
@@ -216,9 +215,8 @@ async def test_vector_retriever_passes_embedding_to_store() -> None:
 
 @pytest.mark.asyncio
 async def test_vector_retriever_raises_when_embedder_returns_no_vector() -> None:
-    chunk_no_embedding = Chunk(doc_id="__query__", text="q", embedding=None)
     embedder = MagicMock()
-    embedder.embed = AsyncMock(return_value=[chunk_no_embedding])
+    embedder.embed = AsyncMock(return_value=[None])
     vector_store = _mock_vector_store([])
     retriever = VectorRetriever(vector_store, embedder)
     route = _route(QueryPattern.B)

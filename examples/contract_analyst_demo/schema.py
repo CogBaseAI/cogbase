@@ -9,7 +9,7 @@ from cogbase.core.basemodel_to_schema import cls_generate_schema
 
 # Fields that ContractExtractor._parse always populates — they cannot be
 # excluded from a customised schema without breaking extraction.
-_CORE_FIELDS = frozenset({"contract_id", "doc_id"})
+_CORE_FIELDS = frozenset({"doc_id"})
 
 CONTRACTS_SYSTEM_PROMPT_PREFIX = (
     "You are a legal contract analyst.  Extract structured information from the\n"
@@ -149,13 +149,12 @@ class ContractExtraction(BaseModel):
 class ContractRecord(ContractExtraction):
     """Full stored record: ``ContractExtraction`` fields plus identity fields."""
 
-    contract_id: str
     doc_id: str
 
 
 CONTRACTS_SCHEMA = CollectionSchema(
     name=CONTRACTS_COLLECTION,
-    primary_fields=["contract_id"],
+    primary_fields=["doc_id"],
     fields=cls_generate_schema(ContractRecord),
 )
 
@@ -173,7 +172,7 @@ def build_contracts_schema(
         extra_fields: Additional fields to append after the defaults.  Field
                       names must not already exist in ``CONTRACTS_SCHEMA``.
         exclude:      Field names to remove from the default schema.
-                      ``contract_id`` and ``doc_id`` cannot be excluded —
+                      ``doc_id`` cannot be excluded —
                       ``ContractExtractor`` always populates them.
 
     Returns:

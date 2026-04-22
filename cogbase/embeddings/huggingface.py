@@ -4,7 +4,6 @@ import asyncio
 import functools
 import logging
 
-from cogbase.core.models import Chunk
 from cogbase.embeddings.base import EmbeddingBase
 
 logger = logging.getLogger(__name__)
@@ -13,9 +12,8 @@ logger = logging.getLogger(__name__)
 class SentenceTransformersEmbedding(EmbeddingBase):
     """Embedder backed by a ``sentence-transformers`` model.
 
-    Vectors are L2-normalised before being attached to chunks, which makes
-    cosine similarity equivalent to dot-product — consistent with
-    ``FAISSVectorStore`` (IndexFlatIP).
+    Vectors are L2-normalised, which makes cosine similarity equivalent to
+    dot-product and stays consistent with ``FAISSVectorStore`` (IndexFlatIP).
 
     Install the extra dependency before use::
 
@@ -39,19 +37,16 @@ class SentenceTransformersEmbedding(EmbeddingBase):
 
         self._model = SentenceTransformer(model_name)
 
-    async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
-        if not chunks:
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
             return []
 
         loop = asyncio.get_event_loop()
         encode = functools.partial(
             self._model.encode,
-            [c.text for c in chunks],
+            texts,
             normalize_embeddings=True,
             show_progress_bar=False,
         )
         vectors = await loop.run_in_executor(None, encode)
-        return [
-            c.model_copy(update={"embedding": vec.tolist()})
-            for c, vec in zip(chunks, vectors)
-        ]
+        return [vec.tolist() for vec in vectors]

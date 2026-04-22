@@ -43,30 +43,6 @@ class CollectionSchema(BaseModel):
     primary_fields: list[str] = Field(min_length=1)
     fields: dict[str, FieldSchema]
 
-    @model_validator(mode="before")
-    @classmethod
-    def _normalise_primary_fields(cls, data: object) -> object:
-        if not isinstance(data, dict):
-            return data
-
-        primary_fields = data.get("primary_fields")
-        id_field = data.get("id_field")
-
-        if primary_fields is None and id_field is not None:
-            data = dict(data)
-            data["primary_fields"] = [id_field]
-            return data
-
-        if primary_fields is not None and id_field is not None:
-            expected = [id_field]
-            if primary_fields != expected:
-                raise ValueError(
-                    "Provide either primary_fields or id_field; if both are set, "
-                    "primary_fields must equal [id_field]"
-                )
-
-        return data
-
     @field_validator("name")
     @classmethod
     def _valid_name(cls, v: str) -> str:
@@ -92,12 +68,3 @@ class CollectionSchema(BaseModel):
                 f"primary_fields {missing!r} must be present in fields"
             )
         return self
-
-    @property
-    def id_field(self) -> str:
-        """Backward-compatible accessor for legacy single-column primary keys."""
-        if len(self.primary_fields) != 1:
-            raise AttributeError(
-                "CollectionSchema has a composite primary key; use primary_fields instead of id_field"
-            )
-        return self.primary_fields[0]

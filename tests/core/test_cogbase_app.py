@@ -11,7 +11,7 @@ import pytest
 
 from cogbase.core.app import CogBaseApp
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
-from cogbase.core.models import Chunk, Document
+from cogbase.core.models import Document
 from cogbase.embeddings import EmbeddingBase
 from cogbase.engine.engine import Engine
 from cogbase.engine.generation.base import GenerationResult
@@ -92,8 +92,8 @@ class StubEmbedding(EmbeddingBase):
     def __init__(self, dim: int = 4) -> None:
         self._dim = dim
 
-    async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
-        return [c.model_copy(update={"embedding": [0.1] * self._dim}) for c in chunks]
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[0.1] * self._dim for _ in texts]
 
 
 def _make_extractor(client: MagicMock) -> LLMExtractor:
@@ -116,6 +116,7 @@ def _make_app(
 ) -> CogBaseApp:
     extractor = _make_extractor(client)
     return CogBaseApp(
+        name=name,
         client=client,
         model="test-model",
         extractors=[extractor],
@@ -123,7 +124,6 @@ def _make_app(
         vector_store=vector_store,
         embedder=embedder,
         chunker=chunker,
-        name=name,
     )
 
 
@@ -150,13 +150,14 @@ class TestCogBaseAppConstruction:
             chunker=FixedSizeChunker(chunk_size=64, overlap=0),
         )
         assert len(app._ingest_pipeline.vector_collections) == 1
-        assert app._ingest_pipeline.vector_collections[0].name == "documents"
+        assert app._ingest_pipeline.vector_collections[0].name == "legal"
 
     def test_partial_vector_params_raises(self):
         client = _make_client("{}")
         extractor = _make_extractor(client)
         with pytest.raises(ValueError, match="all be provided together"):
             CogBaseApp(
+                name='testapp',
                 client=client,
                 model="test-model",
                 extractors=[extractor],
@@ -432,6 +433,7 @@ class TestVectorOnlyMode:
 
     def _make_vector_only_app(self, client: MagicMock) -> CogBaseApp:
         return CogBaseApp(
+            name="vector-only",
             client=client,
             model="test-model",
             extractors=[],
@@ -439,7 +441,6 @@ class TestVectorOnlyMode:
             vector_store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
-            name="vector-only",
         )
 
     def test_no_structured_collections(self):
@@ -474,6 +475,7 @@ class TestVectorOnlyMode:
     async def test_ingest_populates_vector_store_not_structured(self):
         vector_store = FAISSVectorStore(dim=4)
         app = CogBaseApp(
+            name='testapp',
             client=_make_client("{}"),
             model="test-model",
             extractors=[],

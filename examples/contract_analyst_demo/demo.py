@@ -136,7 +136,6 @@ def _build_app(
         model=_CHAT_MODEL,
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
-        id_field="contract_id",
         system_prompt=CONTRACTS_SYSTEM_PROMPT_PREFIX + cls_json_schema_for_llm(ContractExtraction),
     )
     return CogBaseApp(

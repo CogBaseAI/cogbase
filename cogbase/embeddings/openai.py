@@ -6,7 +6,6 @@ The provider that provides OpenAI compatible API can use this implementation.
 import logging
 from typing import Any
 
-from cogbase.core.models import Chunk
 from cogbase.embeddings.base import EmbeddingBase
 
 logger = logging.getLogger(__name__)
@@ -15,10 +14,9 @@ logger = logging.getLogger(__name__)
 class OpenAIEmbedding(EmbeddingBase):
     """Embedder backed by the OpenAI Embeddings API.
 
-    Sends all chunk texts in a single batched API call and attaches the
-    returned vectors to the chunks.  The client must be an async
-    OpenAI-compatible client (``openai.AsyncOpenAI`` or any compatible
-    drop-in).
+    Sends all texts in a single batched API call and returns the vectors. The
+    client must be an async OpenAI-compatible client (``openai.AsyncOpenAI`` or
+    any compatible drop-in).
 
     Install the extra dependency before use::
 
@@ -40,7 +38,7 @@ class OpenAIEmbedding(EmbeddingBase):
 
         client = openai.AsyncOpenAI(api_key="...")
         embedder = OpenAIEmbedding(client, model="text-embedding-3-small")
-        chunks = await embedder.embed(chunks)
+        vectors = await embedder.embed(["hello world", "foo bar"])
     """
 
     def __init__(
@@ -54,24 +52,20 @@ class OpenAIEmbedding(EmbeddingBase):
         self._model = model
         self._dimensions = dimensions
 
-    async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
-        if not chunks:
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
             return []
 
         kwargs: dict[str, Any] = {
-            "input": [c.text for c in chunks],
+            "input": texts,
             "model": self._model,
         }
         if self._dimensions is not None:
             kwargs["dimensions"] = self._dimensions
 
-        logger.debug("openai_embedder.request model=%s chunks=%d", self._model, len(chunks))
+        logger.debug("openai_embedder.request model=%s texts=%d", self._model, len(texts))
         response = await self._client.embeddings.create(**kwargs)
         logger.debug("openai_embedder.response usage=%s", response.usage)
 
         # The API returns embeddings in the same order as the input.
-        vectors = [item.embedding for item in response.data]
-        return [
-            c.model_copy(update={"embedding": vec})
-            for c, vec in zip(chunks, vectors)
-        ]
+        return [item.embedding for item in response.data]

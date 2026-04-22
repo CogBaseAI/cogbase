@@ -1,18 +1,13 @@
-"""Abstract contract and built-in implementations for chunk embedders."""
+"""Abstract contract and built-in implementations for text embedders."""
 
 import abc
-import asyncio
-import functools
 import logging
-from typing import Any
-
-from cogbase.core.models import Chunk
 
 logger = logging.getLogger(__name__)
 
 
 class EmbeddingBase(abc.ABC):
-    """Attach embeddings to a list of ``Chunk`` objects.
+    """Embed a list of texts into dense vectors.
 
     Implement this class to plug in a custom embedding backend.  The pipeline
     accepts any ``EmbeddingBase`` instance via dependency injection.
@@ -20,7 +15,7 @@ class EmbeddingBase(abc.ABC):
     Example::
 
         class MyEmbedding(EmbeddingBase):
-            async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
+            async def embed(self, texts: list[str]) -> list[list[float]]:
                 ...
 
         await ingest(text, doc_id, chunker=..., embedder=MyEmbedding(), ...)
@@ -29,18 +24,17 @@ class EmbeddingBase(abc.ABC):
     calls (OpenAI, Cohere, etc.).  CPU-bound local models should offload to a
     thread pool via ``asyncio.get_event_loop().run_in_executor``.
 
-    The input chunks are never mutated.  Implementations must return new
-    ``Chunk`` objects (or copies) with ``embedding`` populated.
+    Implementations must return one embedding per input text, preserving
+    order.
     """
 
     @abc.abstractmethod
-    async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
-        """Return *chunks* with the ``embedding`` field populated.
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Return embeddings for *texts*.
 
         Args:
-            chunks: Chunks to embed. May be empty — return ``[]`` in that case.
+            texts: Texts to embed. May be empty; return ``[]`` in that case.
 
         Returns:
-            Same chunks in the same order, each with ``embedding`` set to a
-            non-None list of floats.  Input chunks are not mutated.
+            One embedding vector per input text, in the same order.
         """

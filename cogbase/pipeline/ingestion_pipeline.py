@@ -218,7 +218,15 @@ class IngestionPipeline:
                 len(chunks),
             )
             if chunks:
-                embedded = await vc.embedder.embed(chunks)
+                embeddings = await vc.embedder.embed([chunk.text for chunk in chunks])
+                if len(embeddings) != len(chunks):
+                    raise ValueError(
+                        f"Embedder returned {len(embeddings)} embeddings for {len(chunks)} chunks."
+                    )
+                embedded = [
+                    chunk.model_copy(update={"embedding": embedding})
+                    for chunk, embedding in zip(chunks, embeddings)
+                ]
                 await vc.store.upsert(embedded)
                 logger.debug(
                     "ingestion_pipeline.ingest.vector_upserted name=%s doc_id=%s collection=%s embedded=%d",

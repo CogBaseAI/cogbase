@@ -39,7 +39,7 @@ async def ingest(
     pipeline steps together in order:
 
     1. **Chunk** — split ``doc.text`` into overlapping windows via *chunker*.
-    2. **Embed** — attach a dense vector to each chunk via *embedder*.
+    2. **Embed** — generate a dense vector for each chunk via *embedder*.
     3. **Store (vector)** — upsert the embedded chunks into *vector_store*.
     4. **Extract** — run each extractor in *extractors* over *doc* and save
        results to *structured_store* (skipped when either is ``None``).
@@ -51,7 +51,7 @@ async def ingest(
         doc:              Document to ingest.  ``doc.doc_id`` is the stable
                           identifier used for later retrieval and deletion.
         chunker:          ``ChunkerBase`` implementation that splits the document.
-        embedder:         ``EmbeddingBase`` implementation that populates embeddings.
+        embedder:         ``EmbeddingBase`` implementation that returns embeddings.
         vector_store:     ``VectorStoreBase`` implementation that persists chunks.
         extractors:       Optional list of ``ExtractorBase`` implementations.
                           Each extractor pulls a different record type (facts,
@@ -70,7 +70,15 @@ async def ingest(
     if not chunks:
         return []
 
-    embedded = await embedder.embed(chunks)
+    embeddings = await embedder.embed([chunk.text for chunk in chunks])
+    if len(embeddings) != len(chunks):
+        raise ValueError(
+            f"Embedder returned {len(embeddings)} embeddings for {len(chunks)} chunks."
+        )
+    embedded = [
+        chunk.model_copy(update={"embedding": embedding})
+        for chunk, embedding in zip(chunks, embeddings)
+    ]
     await vector_store.upsert(embedded)
 
     if extractors and structured_store:

@@ -3,7 +3,7 @@
 import pytest
 from pydantic import BaseModel
 
-from cogbase.core.models import Chunk, Document
+from cogbase.core.models import Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.embeddings import EmbeddingBase
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
@@ -73,8 +73,8 @@ class EmptyExtractor(ExtractorBase):
 
 
 class StubEmbedding(EmbeddingBase):
-    async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
-        return [c.model_copy(update={"embedding": [1.0, 0.0]}) for c in chunks]
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[1.0, 0.0] for _ in texts]
 
 
 # ---------------------------------------------------------------------------

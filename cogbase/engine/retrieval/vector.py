@@ -15,7 +15,6 @@ Example::
 
 from __future__ import annotations
 
-from cogbase.core.models import Chunk
 from cogbase.engine.retrieval.base import RetrievalResult, RetrieverBase
 from cogbase.engine.router import RouteResult
 from cogbase.embeddings import EmbeddingBase
@@ -43,12 +42,8 @@ class VectorRetriever(RetrieverBase):
         self._top_k = top_k
 
     async def retrieve(self, route: RouteResult) -> RetrievalResult:
-        # Embed the cleaned query as a single synthetic chunk, then extract its vector.
-        query_chunk = Chunk(doc_id="__query__", text=route.semantic_query)
-        (embedded,) = await self._embedder.embed([query_chunk])
-
-        if embedded.embedding is None:
-            raise RuntimeError("Embedder returned a chunk with no embedding vector.")
-
-        chunks = await self._store.search(embedded.embedding, self._top_k)
+        (query_embedding,) = await self._embedder.embed([route.semantic_query])
+        if query_embedding is None:
+            raise RuntimeError("Embedder returned no embedding vector for the query.")
+        chunks = await self._store.search(query_embedding, self._top_k)
         return RetrievalResult(chunks=chunks, route=route)

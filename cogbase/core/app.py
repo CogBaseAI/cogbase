@@ -74,6 +74,7 @@ class CogBaseApp:
     """Generic CogBase application wiring ingestion and query together.
 
     Args:
+        name:                 Logical name for the application.
         client:               Async OpenAI-compatible client for the router and
                               generator.
         model:                Model name forwarded to the router and generator.
@@ -85,7 +86,6 @@ class CogBaseApp:
                               ``None`` the app runs in structured-only mode.
         embedder:             Embedder for chunked text.  Required with *vector_store*.
         chunker:              Chunker for splitting text.  Required with *vector_store*.
-        name:                 Logical name for the application.
         generator_max_tokens: Max tokens for the ``LLMGenerator`` LLM call.
         retriever_top_k:      Nearest-neighbour chunks returned per semantic query.
 
@@ -96,6 +96,7 @@ class CogBaseApp:
 
     def __init__(
         self,
+        name: str,
         client: Any,
         model: str,
         extractors: list[ExtractorBase],
@@ -104,7 +105,6 @@ class CogBaseApp:
         vector_store: VectorStoreBase | None = None,
         embedder: EmbeddingBase | None = None,
         chunker: ChunkerBase | None = None,
-        name: str = "app",
         generator_max_tokens: int = 4096,
         retriever_top_k: int = 10,
     ) -> None:
@@ -132,12 +132,15 @@ class CogBaseApp:
             assert embedder is not None and chunker is not None  # validated above
             vector_collections.append(
                 VectorCollection(
-                    name="documents",
+                    name=name,
                     store=vector_store,
                     embedder=embedder,
                     chunker=chunker,
                 )
             )
+
+        # app name
+        self.name = name
 
         self._ingest_pipeline = IngestionPipeline(
             name=name,

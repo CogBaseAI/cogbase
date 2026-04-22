@@ -5,7 +5,7 @@ from pydantic import ValidationError
 from pydantic import BaseModel
 
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult, StructuredCollection, VectorCollection
-from cogbase.core.models import Chunk, Document
+from cogbase.core.models import Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
 from cogbase.embeddings import EmbeddingBase
@@ -26,11 +26,8 @@ class StubEmbedding(EmbeddingBase):
     def __init__(self, dim: int = 4) -> None:
         self._dim = dim
 
-    async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
-        return [
-            c.model_copy(update={"embedding": [1.0] * self._dim})
-            for c in chunks
-        ]
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[1.0] * self._dim for _ in texts]
 
 
 class TagRecord(BaseModel):

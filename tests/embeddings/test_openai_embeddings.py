@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase, OpenAIEmbedding
 from tests.embeddings.test_embeddings import make_chunks, assert_embedder_contract
 
@@ -49,35 +48,25 @@ class TestOpenAIEmbedding:
 
     @pytest.mark.asyncio
     async def test_single_chunk(self, embedder):
-        chunks = make_chunks(["single sentence"])
-        result = await embedder.embed(chunks)
+        result = await embedder.embed(["single sentence"])
         assert len(result) == 1
-        assert result[0].embedding is not None
+        assert len(result[0]) > 0
 
     @pytest.mark.asyncio
     async def test_embedding_dimension_default(self, embedder):
         # text-embedding-3-small native dimensionality is 1536
-        chunks = make_chunks(["dimension check"])
-        result = await embedder.embed(chunks)
-        assert len(result[0].embedding) == 1536
+        result = await embedder.embed(["dimension check"])
+        assert len(result[0]) == 1536
 
     @pytest.mark.asyncio
     async def test_embedding_dimension_truncated(self, embedder_with_dimensions):
-        chunks = make_chunks(["truncated dimension check"])
-        result = await embedder_with_dimensions.embed(chunks)
-        assert len(result[0].embedding) == 256
-
-    @pytest.mark.asyncio
-    async def test_input_not_mutated(self, embedder):
-        chunks = make_chunks(["immutability check"])
-        await embedder.embed(chunks)
-        assert chunks[0].embedding is None
+        result = await embedder_with_dimensions.embed(["truncated dimension check"])
+        assert len(result[0]) == 256
 
     @pytest.mark.asyncio
     async def test_different_texts_different_embeddings(self, embedder):
-        chunks = make_chunks(["apple fruit", "quantum physics"])
-        result = await embedder.embed(chunks)
-        assert result[0].embedding != result[1].embedding
+        result = await embedder.embed(["apple fruit", "quantum physics"])
+        assert result[0] != result[1]
 
     def test_is_subclass(self):
         assert issubclass(OpenAIEmbedding, EmbeddingBase)

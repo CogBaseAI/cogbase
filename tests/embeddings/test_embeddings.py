@@ -1,8 +1,5 @@
 """Tests for EmbeddingBase."""
 
-import os
-from pathlib import Path
-
 import pytest
 
 from cogbase.core.models import Chunk
@@ -20,23 +17,18 @@ def make_chunks(texts: list[str], doc_id: str = "doc-1") -> list[Chunk]:
     ]
 
 
-async def assert_embedder_contract(embedder: EmbeddingBase, chunks: list[Chunk]) -> list[Chunk]:
+async def assert_embedder_contract(
+    embedder: EmbeddingBase,
+    chunks: list[Chunk],
+) -> list[list[float]]:
     """Invariants every compliant embedder must satisfy."""
-    result = await embedder.embed(chunks)
+    result = await embedder.embed([chunk.text for chunk in chunks])
     assert isinstance(result, list)
     assert len(result) == len(chunks)
-    for original, embedded in zip(chunks, result):
-        assert isinstance(embedded, Chunk)
-        assert embedded.chunk_id == original.chunk_id
-        assert embedded.doc_id == original.doc_id
-        assert embedded.text == original.text
-        assert embedded.embedding is not None
-        assert isinstance(embedded.embedding, list)
-        assert len(embedded.embedding) > 0
-        assert all(isinstance(v, float) for v in embedded.embedding)
-    # Input chunks must not be mutated
-    for chunk in chunks:
-        assert chunk.embedding is None
+    for embedding in result:
+        assert isinstance(embedding, list)
+        assert len(embedding) > 0
+        assert all(isinstance(v, float) for v in embedding)
     return result
 
 
@@ -54,8 +46,8 @@ class TestEmbeddingBaseIsAbstract:
         """Any EmbeddingBase subclass that sets a fixed vector passes the contract."""
 
         class ConstantEmbedding(EmbeddingBase):
-            async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
-                return [c.model_copy(update={"embedding": [0.1, 0.2, 0.3]}) for c in chunks]
+            async def embed(self, texts: list[str]) -> list[list[float]]:
+                return [[0.1, 0.2, 0.3] for _ in texts]
 
         chunks = make_chunks(["hello world", "foo bar"])
         await assert_embedder_contract(ConstantEmbedding(), chunks)
@@ -63,8 +55,7 @@ class TestEmbeddingBaseIsAbstract:
     @pytest.mark.asyncio
     async def test_empty_input_returns_empty(self):
         class ConstantEmbedding(EmbeddingBase):
-            async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
-                return [c.model_copy(update={"embedding": [1.0]}) for c in chunks]
+            async def embed(self, texts: list[str]) -> list[list[float]]:
+                return [[1.0] for _ in texts]
 
         assert await ConstantEmbedding().embed([]) == []
-

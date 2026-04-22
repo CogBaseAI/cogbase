@@ -120,6 +120,7 @@ def build_app(
 
     if config.extraction_schema is None:
         return CogBaseApp(
+            name=config.name,
             client=llm_client,
             model=config.llm.model,
             extractors=[],
@@ -155,6 +156,7 @@ def build_app(
     )
 
     return CogBaseApp(
+        name=config.name,
         client=llm_client,
         model=config.llm.model,
         extractors=[extractor],

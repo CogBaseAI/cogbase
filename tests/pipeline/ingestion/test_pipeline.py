@@ -20,11 +20,8 @@ class StubEmbedding(EmbeddingBase):
     def __init__(self, dim: int = 4) -> None:
         self._dim = dim
 
-    async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
-        return [
-            c.model_copy(update={"embedding": [float(i + 1)] * self._dim})
-            for i, c in enumerate(chunks)
-        ]
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[float(i + 1)] * self._dim for i, _ in enumerate(texts)]
 
 
 # ---------------------------------------------------------------------------
@@ -92,14 +89,14 @@ class TestIngest:
 
     @pytest.mark.asyncio
     async def test_embedder_called_with_chunker_output(self):
-        """Embedder receives exactly the chunks the chunker produced."""
+        """Embedder receives exactly the texts the chunker produced."""
 
-        seen_chunks: list[list[Chunk]] = []
+        seen_texts: list[list[str]] = []
 
         class RecordingEmbedding(EmbeddingBase):
-            async def embed(self, chunks: list[Chunk]) -> list[Chunk]:
-                seen_chunks.append(list(chunks))
-                return [c.model_copy(update={"embedding": [1.0, 0.0]}) for c in chunks]
+            async def embed(self, texts: list[str]) -> list[list[float]]:
+                seen_texts.append(list(texts))
+                return [[1.0, 0.0] for _ in texts]
 
         store = FAISSVectorStore(dim=2)
         chunker = FixedSizeChunker(chunk_size=20, overlap=0)
@@ -107,7 +104,6 @@ class TestIngest:
 
         await ingest(Document(doc_id="doc-rec", text=text), chunker=chunker, embedder=RecordingEmbedding(), vector_store=store)
 
-        assert len(seen_chunks) == 1
-        assert len(seen_chunks[0]) == 3
-        assert all(c.doc_id == "doc-rec" for c in seen_chunks[0])
-        assert all(c.embedding is None for c in seen_chunks[0])  # embedder gets un-embedded chunks
+        assert len(seen_texts) == 1
+        assert len(seen_texts[0]) == 3
+        assert all(chunk_text == "x" * 20 for chunk_text in seen_texts[0])
