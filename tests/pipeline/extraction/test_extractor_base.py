@@ -1,16 +1,11 @@
-"""Tests for ExtractorBase and the extractor path in ingest()."""
+"""Tests for ExtractorBase."""
 
 import pytest
 from pydantic import BaseModel
 
 from cogbase.core.models import Document
 from cogbase.pipeline.extraction.base import ExtractorBase
-from cogbase.embeddings import EmbeddingBase
-from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
-from cogbase.pipeline.ingestion.pipeline import ingest, setup_extraction
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
-from cogbase.stores.structured.memory import InMemoryStructuredStore
-from cogbase.stores.vector.faiss_store import FAISSVectorStore
 
 
 # ---------------------------------------------------------------------------
@@ -54,11 +49,12 @@ class StubExtractor(ExtractorBase):
         return NounRecord(noun_id=f"{doc.doc_id}-0", doc_id=doc.doc_id, text=doc.text)
 
 
-class EmptyExtractor(ExtractorBase):
-    """Always returns None — represents an extractor that finds nothing parseable."""
+class NullExtractor(ExtractorBase):
+    """Always returns None — simulates a parse failure on every attempt."""
 
-    def __init__(self) -> None:
-        super().__init__(max_retries=0)
+    def __init__(self, max_retries: int = 0) -> None:
+        super().__init__(max_retries=max_retries)
+        self.call_count = 0
 
     @property
     def collection(self) -> str:
@@ -69,12 +65,8 @@ class EmptyExtractor(ExtractorBase):
         return _NOUN_SCHEMA
 
     async def _extract_once(self, doc: Document) -> None:
+        self.call_count += 1
         return None
-
-
-class StubEmbedding(EmbeddingBase):
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        return [[1.0, 0.0] for _ in texts]
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +79,7 @@ class TestExtractorBase:
             ExtractorBase()  # type: ignore[abstract]
 
     def test_concrete_subclass_requires_all_methods(self):
-        """Subclass missing extract() must still be abstract."""
+        """Subclass missing _extract_once() must still be abstract."""
 
         class Incomplete(ExtractorBase):
             @property
@@ -109,182 +101,51 @@ class TestExtractorBase:
 
 
 # ---------------------------------------------------------------------------
-# ingest() — extractor path
+# ExtractorBase.extract() behaviour
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def vector_store():
-    return FAISSVectorStore(dim=2)
-
-
-@pytest.fixture
-def structured_store():
-    return InMemoryStructuredStore()
-
-
-@pytest.fixture
-def chunker():
-    return FixedSizeChunker(chunk_size=50, overlap=0)
-
-
-@pytest.fixture
-def embedder():
-    return StubEmbedding()
-
-
-class TestIngestWithExtractors:
+class TestExtract:
     @pytest.mark.asyncio
-    async def test_extractor_called_with_full_text_and_doc_id(
-        self, chunker, embedder, vector_store, structured_store
-    ):
+    async def test_extract_calls_extract_once_with_doc(self):
         extractor = StubExtractor()
-        await setup_extraction([extractor], structured_store)
-        text = "hello world foo bar"
-        await ingest(
-            Document(doc_id="doc-1", text=text),
-            chunker=chunker, embedder=embedder,
-            vector_store=vector_store,
-            collection="chunks",
-            extractors=[extractor],
-            structured_store=structured_store,
-        )
-        assert extractor._calls == [(text, "doc-1")]
+        doc = Document(doc_id="d1", text="hello world")
+        await extractor.extract(doc)
+        assert extractor._calls == [("hello world", "d1")]
 
     @pytest.mark.asyncio
-    async def test_records_saved_to_structured_store(
-        self, chunker, embedder, vector_store, structured_store
-    ):
+    async def test_extract_returns_record_on_success(self):
         extractor = StubExtractor()
-        await setup_extraction([extractor], structured_store)
-        text = "alpha beta gamma"
-        await ingest(
-            Document(doc_id="doc-2", text=text),
-            chunker=chunker, embedder=embedder,
-            vector_store=vector_store,
-            collection="chunks",
-            extractors=[extractor],
-            structured_store=structured_store,
-        )
-        rows = await structured_store.query("nouns")
-        assert len(rows) == 1
-        assert rows[0]["text"] == text
+        doc = Document(doc_id="d2", text="some text")
+        result = await extractor.extract(doc)
+        assert isinstance(result, NounRecord)
+        assert result.doc_id == "d2"
+        assert result.text == "some text"
 
     @pytest.mark.asyncio
-    async def test_empty_extractor_saves_nothing(
-        self, chunker, embedder, vector_store, structured_store
-    ):
-        extractor = EmptyExtractor()
-        await setup_extraction([extractor], structured_store)
-        await ingest(
-            Document(doc_id="doc-3", text="some text"),
-            chunker=chunker, embedder=embedder,
-            vector_store=vector_store,
-            collection="chunks",
-            extractors=[extractor],
-            structured_store=structured_store,
-        )
-        rows = await structured_store.query("nouns")
-        assert rows == []
+    async def test_extract_returns_none_for_blank_text(self):
+        extractor = StubExtractor()
+        result = await extractor.extract(Document(doc_id="d3", text="   "))
+        assert result is None
+        assert extractor._calls == []
 
     @pytest.mark.asyncio
-    async def test_multiple_extractors_each_write_to_own_collection(
-        self, chunker, embedder, vector_store, structured_store
-    ):
-        class TagRecord(BaseModel):
-            tag_id: str
-            doc_id: str
-            label: str
-
-        _tag_schema = CollectionSchema(
-            name="tags",
-            primary_fields=["tag_id"],
-            fields={
-                "tag_id": FieldSchema(type=FieldType.STRING),
-                "doc_id": FieldSchema(type=FieldType.STRING),
-                "label":  FieldSchema(type=FieldType.STRING),
-            },
-        )
-
-        class TagExtractor(ExtractorBase):
-            @property
-            def collection(self) -> str:
-                return "tags"
-
-            @property
-            def schema(self) -> CollectionSchema:
-                return _tag_schema
-
-            async def _extract_once(self, doc: Document) -> TagRecord:
-                return TagRecord(tag_id=f"{doc.doc_id}-t0", doc_id=doc.doc_id, label="test-tag")
-
-        extractors = [StubExtractor(), TagExtractor()]
-        await setup_extraction(extractors, structured_store)
-        await ingest(
-            Document(doc_id="doc-4", text="hello world"),
-            chunker=chunker, embedder=embedder,
-            vector_store=vector_store,
-            collection="chunks",
-            extractors=extractors,
-            structured_store=structured_store,
-        )
-
-        nouns = await structured_store.query("nouns")
-        tags = await structured_store.query("tags")
-        assert len(nouns) == 1
-        assert len(tags) == 1
-        assert tags[0]["label"] == "test-tag"
+    async def test_extract_returns_none_after_all_retries_exhausted(self):
+        extractor = NullExtractor(max_retries=0)
+        result = await extractor.extract(Document(doc_id="d4", text="text"))
+        assert result is None
+        assert extractor.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_no_extractors_skips_structured_store(
-        self, chunker, embedder, vector_store
-    ):
-        """ingest() without extractors must not touch a structured store."""
-        result = await ingest(
-            Document(doc_id="doc-5", text="text without extraction"),
-            chunker=chunker, embedder=embedder,
-            vector_store=vector_store,
-            collection="chunks",
-        )
-        assert len(result) > 0  # vector path still works
+    async def test_extract_retries_on_none(self):
+        extractor = NullExtractor(max_retries=2)
+        await extractor.extract(Document(doc_id="d5", text="text"))
+        assert extractor.call_count == 3  # 1 initial + 2 retries
 
     @pytest.mark.asyncio
-    async def test_missing_collection_raises(
-        self, chunker, embedder, vector_store, structured_store
-    ):
-        """ingest() does not create collections — caller must call setup_extraction first."""
-        with pytest.raises(KeyError):
-            await ingest(
-                Document(doc_id="doc-6", text="one two three"),
-                chunker=chunker, embedder=embedder,
-                vector_store=vector_store,
-                collection="chunks",
-                extractors=[StubExtractor()],
-                structured_store=structured_store,
-            )
-
-    @pytest.mark.asyncio
-    async def test_setup_extraction_creates_collections(self, structured_store):
-        from cogbase.pipeline.ingestion.pipeline import setup_extraction
-        extractors = [StubExtractor()]
-        await setup_extraction(extractors, structured_store)
-        # Collection exists — query should not raise
-        rows = await structured_store.query("nouns")
-        assert rows == []
-
-    @pytest.mark.asyncio
-    async def test_setup_then_ingest(
-        self, chunker, embedder, vector_store, structured_store
-    ):
-        from cogbase.pipeline.ingestion.pipeline import setup_extraction
-        extractors = [StubExtractor()]
-        await setup_extraction(extractors, structured_store)
-        await ingest(
-            Document(doc_id="doc-7", text="one two three"),
-            chunker=chunker, embedder=embedder,
-            vector_store=vector_store,
-            collection="chunks",
-            extractors=extractors,
-            structured_store=structured_store,
-        )
-        rows = await structured_store.query("nouns")
-        assert len(rows) == 1
+    async def test_extract_stops_at_first_success(self):
+        """Returns immediately on first non-None result without exhausting retries."""
+        extractor = StubExtractor()
+        doc = Document(doc_id="d6", text="stop early")
+        result = await extractor.extract(doc)
+        assert result is not None
+        assert len(extractor._calls) == 1
