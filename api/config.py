@@ -6,7 +6,7 @@ import os
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class LLMConfig(BaseModel):
@@ -57,27 +57,62 @@ class ChunkerConfig(BaseModel):
     overlap: int = 64
 
 
+class VectorCollectionConfig(BaseModel):
+    name: str
+    chunker: ChunkerConfig
+
+
+class ExtractorConfig(BaseModel):
+    type: Literal["llm"] = "llm"
+    # Prompt prefix for the LLM system message; the JSON schema is appended
+    # automatically.  When omitted LLMExtractor uses its built-in default.
+    prompt: str | None = None  # resolved from filename ref at upload time
+
+
+class StructuredCollectionConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str
+    schema_: str = Field(alias="schema")  # JSON Schema string; resolved from filename ref at upload time
+    extractor: ExtractorConfig
+
+
+class PipelineStepConfig(BaseModel):
+    action: Literal["chunk_and_embed", "extract"]
+    collection: str       # must match a vector_collection or structured_collection name
+
+
+class PipelineConfig(BaseModel):
+    parallel: bool = True
+    steps: list[PipelineStepConfig] = []
+
+
 class AppConfig(BaseModel):
     name: str
     llm: LLMConfig
     embedding: EmbeddingConfig | None = None
     structured_store: StructuredStoreConfig | None = None
     vector_store: VectorStoreConfig | None = None
-    chunker: ChunkerConfig | None = None
-    extraction_schema: str | None = None  # JSON Schema string (draft-07)
-    extract_system_prompt_prefix: str | None = None
+    vector_collections: list[VectorCollectionConfig] = []
+    structured_collections: list[StructuredCollectionConfig] = []
+    pipeline: PipelineConfig | None = None
 
     @model_validator(mode="after")
-    def _validate_vector_config(self) -> "AppConfig":
-        # embedding and chunker must be provided together.
-        emb_chk = sum(x is not None for x in (self.embedding, self.chunker))
-        if 0 < emb_chk < 2:
-            raise ValueError("embedding and chunker must both be provided or both omitted")
-        # An explicit vector_store requires embedding + chunker in the same config.
-        if self.vector_store is not None and emb_chk == 0:
-            raise ValueError(
-                "vector_store requires embedding and chunker to also be provided"
-            )
+    def _validate(self) -> "AppConfig":
+        if self.vector_collections and self.embedding is None:
+            raise ValueError("embedding is required when vector_collections are defined")
+        if self.pipeline:
+            vc_names = {vc.name for vc in self.vector_collections}
+            sc_names = {sc.name for sc in self.structured_collections}
+            for step in self.pipeline.steps:
+                if step.action == "chunk_and_embed" and step.collection not in vc_names:
+                    raise ValueError(
+                        f"Pipeline step references unknown vector collection: {step.collection!r}"
+                    )
+                if step.action == "extract" and step.collection not in sc_names:
+                    raise ValueError(
+                        f"Pipeline step references unknown structured collection: {step.collection!r}"
+                    )
         return self
 
     @classmethod

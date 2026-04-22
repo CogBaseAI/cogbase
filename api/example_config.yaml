@@ -1,26 +1,50 @@
-# Example CogBase application config
-# POST this file to /applications to create an application.
+# Example CogBase application config (config.yaml inside your ZIP bundle)
+#
+# Bundle structure:
+#   my_app.zip
+#   ├── config.yaml               (this file)
+#   ├── extraction_schema.json    (JSON Schema for structured extraction)
+#   └── extraction_prompt.txt     (optional LLM system prompt prefix)
+#
+# POST the ZIP to POST /applications to create an application.
 #
 # Required: name, llm
-# Optional: embedding + chunker (both or neither)
+# Optional: embedding (required when vector_collections are defined)
 #
 # Store backends (structured_store, vector_store) are not set here —
 # the service automatically uses the stores defined in cogbase_system.yaml.
-# The application's collections are namespaced under its name automatically.
 
 name: my-contract-analyzer
 
 llm:
   provider: openai           # only "openai" supported today
-  model: gpt-5-mini
+  model: gpt-4o-mini
   # api_key: sk-...          # omit to use OPENAI_API_KEY env var
 
-embedding:                   # remove this section for structured-only mode
+embedding:                   # shared across all vector collections; omit for structured-only mode
   provider: openai
   model: text-embedding-3-small
   # dimensions: 512          # optional: truncate to smaller vectors
 
-chunker:                     # remove this section for structured-only mode
-  type: fixed                # fixed | langchain
-  chunk_size: 512
-  overlap: 64
+vector_collections:
+  - name: document_chunks
+    chunker:
+      type: fixed            # fixed | langchain
+      chunk_size: 512
+      overlap: 64
+
+structured_collections:
+  - name: contract_extraction
+    schema: extraction_schema.json      # filename in ZIP root (resolved at upload time)
+    extractor:
+      type: llm
+      prompt: extraction_prompt.txt     # filename in ZIP root; omit to use built-in default
+
+pipeline:
+  parallel: true             # steps run concurrently (false = sequential top-to-bottom)
+  steps:
+    - action: chunk_and_embed
+      collection: document_chunks
+
+    - action: extract
+      collection: contract_extraction

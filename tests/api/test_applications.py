@@ -6,8 +6,10 @@ overrides injected — no real LLM calls or file I/O happens.
 
 from __future__ import annotations
 
+import io
 import json
 import textwrap
+import zipfile
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -32,6 +34,20 @@ from cogbase.stores.structured.memory import InMemoryStructuredStore
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_bundle(config_yaml: bytes, files: dict[str, bytes] | None = None) -> bytes:
+    """Build an in-memory ZIP bundle from a config YAML and optional extra files."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("config.yaml", config_yaml)
+        for name, content in (files or {}).items():
+            zf.writestr(name, content)
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
 # Fixtures — lightweight dependency overrides
 # ---------------------------------------------------------------------------
 
@@ -48,14 +64,14 @@ def _system_config() -> SystemConfig:
     return SystemConfig.model_validate({"system_db": {"type": "memory"}})
 
 
-_VALID_YAML = textwrap.dedent("""\
+_VALID_CONFIG_YAML = textwrap.dedent("""\
     name: my-contract-analyzer
     llm:
       provider: openai
       model: gpt-4o-mini
-    pack:
-      name: legal.contract_analyst
 """).encode()
+
+_VALID_BUNDLE = _make_bundle(_VALID_CONFIG_YAML)
 
 
 def _mock_app_instance() -> MagicMock:
@@ -89,23 +105,13 @@ async def client():
 # POST /applications
 # ---------------------------------------------------------------------------
 
-_YAML_NO_SCHEMA = textwrap.dedent("""\
-    name: vector-only-app
-    llm:
-      provider: openai
-      model: gpt-4o-mini
-    pack:
-      name: legal.contract_analyst
-""").encode()
-
-
 class TestCreateApplication:
     @pytest.mark.asyncio
     async def test_create_returns_201(self, client):
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             resp = await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         assert resp.status_code == 201
         data = resp.json()
@@ -118,7 +124,7 @@ class TestCreateApplication:
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             resp = await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         assert resp.status_code == 201
         config = resp.json()["config"]
@@ -129,21 +135,42 @@ class TestCreateApplication:
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
             resp = await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         assert resp.status_code == 409
         assert "already exists" in resp.json()["detail"]
 
     @pytest.mark.asyncio
-    async def test_create_invalid_yaml_returns_422(self, client):
-        bad_yaml = b"not: valid: yaml: app: config\n"
+    async def test_create_not_a_zip_returns_422(self, client):
         resp = await client.post(
             "/applications",
-            files={"config_file": ("config.yaml", bad_yaml, "application/yaml")},
+            files={"bundle": ("bundle.zip", b"not a zip file", "application/zip")},
+        )
+        assert resp.status_code == 422
+        assert "ZIP" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_create_zip_missing_config_yaml_returns_422(self, client):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("other.txt", "hello")
+        resp = await client.post(
+            "/applications",
+            files={"bundle": ("bundle.zip", buf.getvalue(), "application/zip")},
+        )
+        assert resp.status_code == 422
+        assert "config.yaml" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_create_invalid_config_yaml_returns_422(self, client):
+        bad_bundle = _make_bundle(b"not: valid: yaml: app: config\n")
+        resp = await client.post(
+            "/applications",
+            files={"bundle": ("bundle.zip", bad_bundle, "application/zip")},
         )
         assert resp.status_code == 422
 
@@ -154,7 +181,7 @@ class TestCreateApplication:
         with patch("api.routers.applications.build_app", return_value=failing_app):
             resp = await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         assert resp.status_code == 201
         data = resp.json()
@@ -163,61 +190,57 @@ class TestCreateApplication:
 
     @pytest.mark.asyncio
     async def test_create_non_mapping_yaml_returns_422(self, client):
+        bad_bundle = _make_bundle(b"- item1\n- item2\n")
         resp = await client.post(
             "/applications",
-            files={"config_file": ("config.yaml", b"- item1\n- item2\n", "application/yaml")},
+            files={"bundle": ("bundle.zip", bad_bundle, "application/zip")},
         )
         assert resp.status_code == 422
 
-
-# ---------------------------------------------------------------------------
-# POST /applications — extraction_schema=None
-# ---------------------------------------------------------------------------
-
-class TestCreateApplicationWithoutExtractionSchema:
     @pytest.mark.asyncio
-    async def test_create_without_schema_returns_201(self, client):
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()) as mock_build:
+    async def test_file_refs_resolved_from_bundle(self, client):
+        """Schema and prompt filenames in config.yaml are replaced with file contents."""
+        schema_json = b'{"type":"object","properties":{"value":{"type":"string"}}}'
+        prompt_txt = b"Extract contract fields."
+        config_yaml = textwrap.dedent("""\
+            name: my-contract-analyzer
+            llm:
+              provider: openai
+              model: gpt-4o-mini
+            structured_collections:
+              - name: contract_extraction
+                schema: extraction_schema.json
+                extractor:
+                  type: llm
+                  prompt: extraction_prompt.txt
+            pipeline:
+              steps:
+                - action: extract
+                  collection: contract_extraction
+        """).encode()
+        bundle = _make_bundle(
+            config_yaml,
+            files={
+                "extraction_schema.json": schema_json,
+                "extraction_prompt.txt": prompt_txt,
+            },
+        )
+        captured: list = []
+
+        def _capture(config, **kwargs):
+            captured.append(config)
+            return _mock_app_instance()
+
+        with patch("api.routers.applications.build_app", side_effect=_capture):
             resp = await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _YAML_NO_SCHEMA, "application/yaml")},
+                files={"bundle": ("bundle.zip", bundle, "application/zip")},
             )
+
         assert resp.status_code == 201
-        assert resp.json()["status"] == "active"
-
-    @pytest.mark.asyncio
-    async def test_build_app_receives_none_extraction_schema(self, client):
-        captured: list = []
-
-        def _capture_build(config, **kwargs):
-            captured.append(config)
-            return _mock_app_instance()
-
-        with patch("api.routers.applications.build_app", side_effect=_capture_build):
-            await client.post(
-                "/applications",
-                files={"config_file": ("config.yaml", _YAML_NO_SCHEMA, "application/yaml")},
-            )
-
-        assert len(captured) == 1
-        assert captured[0].extraction_schema is None
-
-    @pytest.mark.asyncio
-    async def test_no_default_schema_injected(self, client):
-        """_parse_config must not silently inject ContractExtraction when schema is absent."""
-        captured: list = []
-
-        def _capture_build(config, **kwargs):
-            captured.append(config)
-            return _mock_app_instance()
-
-        with patch("api.routers.applications.build_app", side_effect=_capture_build):
-            await client.post(
-                "/applications",
-                files={"config_file": ("config.yaml", _YAML_NO_SCHEMA, "application/yaml")},
-            )
-
-        assert captured[0].extraction_schema is None
+        sc = captured[0].structured_collections[0]
+        assert sc.schema_ == schema_json.decode()
+        assert sc.extractor.prompt == prompt_txt.decode()
 
 
 # ---------------------------------------------------------------------------
@@ -235,11 +258,11 @@ class TestListApplications:
 
     @pytest.mark.asyncio
     async def test_list_returns_created_apps(self, client):
-        yaml_a = b"name: app-a\nllm:\n  model: gpt-4o-mini\npack:\n  name: legal.contract_analyst\n"
-        yaml_b = b"name: app-b\nllm:\n  model: gpt-4o-mini\npack:\n  name: legal.contract_analyst\n"
+        bundle_a = _make_bundle(b"name: app-a\nllm:\n  model: gpt-4o-mini\n")
+        bundle_b = _make_bundle(b"name: app-b\nllm:\n  model: gpt-4o-mini\n")
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
-            await client.post("/applications", files={"config_file": ("a.yaml", yaml_a, "application/yaml")})
-            await client.post("/applications", files={"config_file": ("b.yaml", yaml_b, "application/yaml")})
+            await client.post("/applications", files={"bundle": ("a.zip", bundle_a, "application/zip")})
+            await client.post("/applications", files={"bundle": ("b.zip", bundle_b, "application/zip")})
         resp = await client.get("/applications")
         assert resp.status_code == 200
         body = resp.json()
@@ -258,7 +281,7 @@ class TestGetApplication:
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         resp = await client.get("/applications/my-contract-analyzer")
         assert resp.status_code == 200
@@ -281,14 +304,15 @@ class TestUpdateApplication:
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
 
-        updated_yaml = _VALID_YAML.replace(b"gpt-4o-mini", b"gpt-4o")
+        updated_yaml = _VALID_CONFIG_YAML.replace(b"gpt-4o-mini", b"gpt-4o")
+        updated_bundle = _make_bundle(updated_yaml)
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             resp = await client.patch(
                 "/applications/my-contract-analyzer",
-                files={"config_file": ("config.yaml", updated_yaml, "application/yaml")},
+                files={"bundle": ("bundle.zip", updated_bundle, "application/zip")},
             )
         assert resp.status_code == 200
         assert resp.json()["status"] == "active"
@@ -297,23 +321,22 @@ class TestUpdateApplication:
     async def test_update_nonexistent_returns_404(self, client):
         resp = await client.patch(
             "/applications/ghost",
-            files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+            files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
         )
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
     async def test_update_name_conflict_returns_409(self, client):
-        yaml_a = b"name: app-a\nllm:\n  model: gpt-4o-mini\npack:\n  name: legal.contract_analyst\n"
-        yaml_b = b"name: app-b\nllm:\n  model: gpt-4o-mini\npack:\n  name: legal.contract_analyst\n"
+        bundle_a = _make_bundle(b"name: app-a\nllm:\n  model: gpt-4o-mini\n")
+        bundle_b = _make_bundle(b"name: app-b\nllm:\n  model: gpt-4o-mini\n")
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
-            await client.post("/applications", files={"config_file": ("a.yaml", yaml_a, "application/yaml")})
-            await client.post("/applications", files={"config_file": ("b.yaml", yaml_b, "application/yaml")})
+            await client.post("/applications", files={"bundle": ("a.zip", bundle_a, "application/zip")})
+            await client.post("/applications", files={"bundle": ("b.zip", bundle_b, "application/zip")})
 
-        # Try to rename app-a to app-b (already taken)
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             resp = await client.patch(
                 "/applications/app-a",
-                files={"config_file": ("config.yaml", yaml_b, "application/yaml")},
+                files={"bundle": ("bundle.zip", bundle_b, "application/zip")},
             )
         assert resp.status_code == 409
 
@@ -322,7 +345,7 @@ class TestUpdateApplication:
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
 
         failing_app = MagicMock()
@@ -330,7 +353,7 @@ class TestUpdateApplication:
         with patch("api.routers.applications.build_app", return_value=failing_app):
             resp = await client.patch(
                 "/applications/my-contract-analyzer",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         assert resp.status_code == 200
         data = resp.json()
@@ -348,7 +371,7 @@ class TestDeleteApplication:
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         resp = await client.delete("/applications/my-contract-analyzer")
         assert resp.status_code == 204
@@ -358,7 +381,7 @@ class TestDeleteApplication:
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         await client.delete("/applications/my-contract-analyzer")
         resp = await client.get("/applications")
@@ -377,7 +400,7 @@ class TestDeleteApplication:
         with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         assert app_cache.get("my-contract-analyzer") is not None
 
@@ -495,7 +518,7 @@ class TestIngestDocuments:
         with patch("api.routers.applications.build_app", return_value=failing):
             await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
 
         resp = await client.post(
@@ -625,7 +648,7 @@ async def _create_app(client, mock_app: MagicMock) -> None:
     with patch("api.routers.applications.build_app", return_value=mock_app):
         resp = await client.post(
             "/applications",
-            files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+            files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
         )
     assert resp.status_code == 201
 
@@ -694,7 +717,7 @@ class TestQueryApplication:
         with patch("api.routers.applications.build_app", return_value=failing):
             await client.post(
                 "/applications",
-                files={"config_file": ("config.yaml", _VALID_YAML, "application/yaml")},
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
 
         resp = await client.post(
@@ -706,7 +729,6 @@ class TestQueryApplication:
     @pytest.mark.asyncio
     async def test_retries_on_first_failure(self, client):
         gen = _make_generation("Retry worked.")
-        good_app = _mock_query_app(gen)
 
         call_count = 0
 

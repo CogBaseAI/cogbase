@@ -80,13 +80,15 @@ class CogBaseApp:
         model:                Model name forwarded to the router and generator.
         extractor:            Optional ``ExtractorBase`` for structured extraction.
         structured_store:     Persistent store for extracted records.
-        vector_store:         Vector store for raw text chunks.  Must be provided
-                              together with *embedder* and *chunker*.  When
-                              ``None`` the app runs in structured-only mode.
-        embedder:             Embedder for chunked text.  Required with *vector_store*.
-        chunker:              Chunker for splitting text.  Required with *vector_store*.
-        generator_max_tokens: Max tokens for the ``LLMGenerator`` LLM call.
-        retriever_top_k:      Nearest-neighbour chunks returned per semantic query.
+        vector_store:           Vector store for raw text chunks.  Must be provided
+                                together with *embedder* and *chunker*.  When
+                                ``None`` the app runs in structured-only mode.
+        embedder:               Embedder for chunked text.  Required with *vector_store*.
+        chunker:                Chunker for splitting text.  Required with *vector_store*.
+        vector_collection_name: Name used for the vector collection and retriever lookup.
+                                Defaults to *name* when ``None``.
+        generator_max_tokens:   Max tokens for the ``LLMGenerator`` LLM call.
+        retriever_top_k:        Nearest-neighbour chunks returned per semantic query.
 
     Raises:
         ValueError: If only some of *vector_store*, *embedder*, *chunker* are
@@ -104,6 +106,7 @@ class CogBaseApp:
         vector_store: VectorStoreBase | None = None,
         embedder: EmbeddingBase | None = None,
         chunker: ChunkerBase | None = None,
+        vector_collection_name: str | None = None,
         generator_max_tokens: int = 4096,
         retriever_top_k: int = 10,
     ) -> None:
@@ -123,11 +126,12 @@ class CogBaseApp:
                 extractor=extractor,
             )
 
+        _vc_name = vector_collection_name or name
         vector_collection: VectorCollection | None = None
         if vector_store is not None:
             assert embedder is not None and chunker is not None  # validated above
             vector_collection = VectorCollection(
-                name=name,
+                name=_vc_name,
                 store=vector_store,
                 embedder=embedder,
                 chunker=chunker,
@@ -154,7 +158,7 @@ class CogBaseApp:
                 available_patterns=available_patterns,
             ),
             retriever=HybridRetriever(
-                collection_name=name,
+                collection_name=_vc_name,
                 structured_store=structured_store,
                 vector_store=vector_store,
                 embedder=embedder,

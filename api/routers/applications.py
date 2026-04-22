@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import logging
+import zipfile
 from datetime import datetime, timezone
 
 import json
-
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -52,13 +53,55 @@ def _to_response(record: AppRecord) -> ApplicationResponse:
     )
 
 
-def _parse_config(raw: bytes) -> tuple[str, AppConfig]:
-    yaml_text = raw.decode()
+def _resolve_file_refs(data: dict, files: dict[str, str]) -> None:
+    """Replace filename references in-place with file contents from the ZIP."""
+    for sc in data.get("structured_collections", []):
+        schema_ref = sc.get("schema", "")
+        if schema_ref in files:
+            sc["schema"] = files[schema_ref]
+        extractor = sc.get("extractor") or {}
+        prompt_ref = extractor.get("prompt", "")
+        if prompt_ref and prompt_ref in files:
+            extractor["prompt"] = files[prompt_ref]
+
+
+def _parse_bundle(raw: bytes) -> tuple[str, AppConfig]:
+    """Unzip bundle, resolve file refs, parse config, return (stored_yaml, config)."""
     try:
-        config = AppConfig.from_yaml(yaml_text)
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=422, detail="Uploaded file is not a valid ZIP archive") from exc
+
+    names = set(zf.namelist())
+    if "config.yaml" not in names:
+        raise HTTPException(status_code=422, detail="ZIP bundle must contain config.yaml at the root")
+
+    try:
+        yaml_text = zf.read("config.yaml").decode()
+        files = {n: zf.read(n).decode() for n in names if n != "config.yaml"}
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid config YAML: {exc}") from exc
-    return yaml_text, config
+        raise HTTPException(status_code=422, detail=f"Failed to read bundle contents: {exc}") from exc
+
+    try:
+        data = yaml.safe_load(yaml_text)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid config.yaml: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=422, detail="config.yaml must be a YAML mapping")
+
+    _resolve_file_refs(data, files)
+
+    try:
+        config = AppConfig.model_validate(data)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid config: {exc}") from exc
+
+    # Store the resolved config (file refs replaced with content) so the app
+    # can be rebuilt from the system store without the original ZIP.
+    # by_alias=True preserves "schema" as the YAML key (field name is schema_).
+    stored_yaml = yaml.dump(config.model_dump(by_alias=True), allow_unicode=True, default_flow_style=False)
+    return stored_yaml, config
 
 
 @router.post("", response_model=ApplicationResponse, status_code=status.HTTP_201_CREATED)
@@ -67,20 +110,19 @@ async def create_application(
     app_cache: AppCacheDep,
     system_config: SystemConfigDep,
     system_structured_store: SystemStructuredStoreDep,
-    config_file: UploadFile = File(..., description="YAML config file"),
+    bundle: UploadFile = File(..., description="ZIP bundle containing config.yaml and referenced files"),
 ) -> ApplicationResponse:
-    """Create a new CogBase application from a YAML config file.
+    """Create a new CogBase application from a ZIP bundle.
 
-    The YAML must contain at minimum ``name`` and ``llm`` sections.  Store
-    backends (``structured_store``, ``vector_store``) are optional — when
-    omitted the service automatically uses the system-configured stores defined
-    in ``cogbase_system.yaml``.
+    The bundle must contain ``config.yaml`` at the root.  Any files referenced
+    by filename in the config (prompt templates, JSON schemas) must also be
+    present flat at the zip root.
 
     The application is set up immediately; its status is ``active`` on success
     or ``error`` if setup fails (the record is still persisted so you can
     inspect the error and update the config).
     """
-    yaml_text, config = _parse_config(await config_file.read())
+    yaml_text, config = _parse_bundle(await bundle.read())
 
     if await system_store.get_app(config.name) is not None:
         raise HTTPException(
@@ -146,7 +188,7 @@ async def update_application(
     app_cache: AppCacheDep,
     system_config: SystemConfigDep,
     system_structured_store: SystemStructuredStoreDep,
-    config_file: UploadFile = File(..., description="Updated YAML config file"),
+    bundle: UploadFile = File(..., description="Updated ZIP bundle containing config.yaml and referenced files"),
 ) -> ApplicationResponse:
     """Replace an application's config and restart it.
 
@@ -158,7 +200,7 @@ async def update_application(
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
-    yaml_text, config = _parse_config(await config_file.read())
+    yaml_text, config = _parse_bundle(await bundle.read())
 
     if config.name != app_name and await system_store.get_app(config.name) is not None:
         raise HTTPException(

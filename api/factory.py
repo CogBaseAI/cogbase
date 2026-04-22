@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from api.config import AppConfig, ChunkerConfig, EmbeddingConfig, StructuredStoreConfig, VectorStoreConfig
+from api.config import AppConfig, EmbeddingConfig, StructuredStoreConfig, VectorStoreConfig
 from cogbase.stores.base import StructuredStoreBase
 from cogbase.core.app import CogBaseApp
 from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
@@ -31,10 +31,10 @@ def build_structured_store(cfg: StructuredStoreConfig) -> Any:
         return InMemoryStructuredStore()
     if cfg.type == "sqlite":
         from cogbase.stores.structured.sqlite import SQLiteStructuredStore
-        return SQLiteStructuredStore(cfg.path)  # path validated by config
+        return SQLiteStructuredStore(cfg.path)
     if cfg.type == "postgres":
         from cogbase.stores.structured.postgres import PostgresStructuredStore
-        return PostgresStructuredStore(cfg.url)  # url validated by config
+        return PostgresStructuredStore(cfg.url)
     raise ValueError(f"Unknown structured_store type: {cfg.type!r}")
 
 
@@ -64,20 +64,6 @@ def _build_embedder(cfg: EmbeddingConfig, llm_client: Any) -> Any:
     raise ValueError(f"Unsupported embedding provider: {cfg.provider!r}")
 
 
-def _build_chunker(cfg: ChunkerConfig) -> Any:
-    if cfg.type == "fixed":
-        from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
-        return FixedSizeChunker(chunk_size=cfg.chunk_size, overlap=cfg.overlap)
-    if cfg.type == "langchain":
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
-        from cogbase.pipeline.ingestion.langchain import LangChainChunker
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=cfg.chunk_size, chunk_overlap=cfg.overlap
-        )
-        return LangChainChunker(splitter)
-    raise ValueError(f"Unknown chunker type: {cfg.type!r}")
-
-
 def build_app(
     config: AppConfig,
     *,
@@ -86,74 +72,93 @@ def build_app(
 ) -> Any:
     """Instantiate a CogBase application from *config*.
 
+    Iterates over ``config.pipeline.steps`` to determine which collections to
+    activate.  Currently supports one ``chunk_and_embed`` step (vector) and one
+    ``extract`` step (structured).
+
     Store backends are resolved in priority order:
 
     1. Values declared explicitly in *config* (``structured_store``,
        ``vector_store``) — full per-application isolation.
     2. System-level stores supplied via the keyword arguments — the structured
-       store is shared; collection names are already scoped to the app name so
-       no additional namespacing is required.
-    3. No fallback — raises ``ValueError`` when neither config store nor system
-       store is provided.
-
-    The returned object has ``setup()``, ``ingest_documents()``, and
-    ``query()`` methods but is not yet set up — call ``await app.setup()``
-    before use.
-
-    Args:
-        config:                   Parsed application config.
-        system_structured_store:  Shared structured store from system config.
-        system_vector_store_cfg:  Vector store type/settings from system config;
-                                  a new instance is created per application.
+       store is shared; collection names scope records to their collection.
+    3. No fallback — raises ``ValueError`` when neither is provided.
     """
     llm_client = _build_llm_client(config)
 
-    # --- Vector store -------------------------------------------------------
-    # Priority: app config > system config (new instance per app) > None
-    vector_store_cfg = config.vector_store or (
-        system_vector_store_cfg if config.embedding is not None else None
-    )
-    vector_store = _build_vector_store(vector_store_cfg) if vector_store_cfg else None
+    steps = config.pipeline.steps if config.pipeline else []
+    vc_by_name = {vc.name: vc for vc in config.vector_collections}
+    sc_by_name = {sc.name: sc for sc in config.structured_collections}
 
-    embedder = _build_embedder(config.embedding, llm_client) if config.embedding else None
-    chunker = _build_chunker(config.chunker) if config.chunker else None
+    # --- Vector collection (chunk_and_embed step) ----------------------------
+    chunk_step = next((s for s in steps if s.action == "chunk_and_embed"), None)
+    vector_store = None
+    embedder = None
+    chunker = None
+    vector_collection_name = None
 
-    if config.extraction_schema is None:
-        return CogBaseApp(
-            name=config.name,
-            client=llm_client,
-            model=config.llm.model,
-            extractor=None,
-            structured_store=None,
-            vector_store=vector_store,
-            embedder=embedder,
-            chunker=chunker,
+    if chunk_step and chunk_step.collection in vc_by_name:
+        vc_cfg = vc_by_name[chunk_step.collection]
+        vector_collection_name = vc_cfg.name
+        vector_store_cfg = config.vector_store or system_vector_store_cfg
+        if vector_store_cfg is None:
+            raise ValueError(
+                f"chunk_and_embed step for '{vc_cfg.name}' requires a vector store "
+                "(configure vector_store in the app config or system config)"
+            )
+        if config.embedding is None:
+            raise ValueError(
+                f"chunk_and_embed step for '{vc_cfg.name}' requires an embedding config"
+            )
+        vector_store = _build_vector_store(vector_store_cfg)
+        embedder = _build_embedder(config.embedding, llm_client)
+        chunker_cfg = vc_cfg.chunker
+        if chunker_cfg.type == "fixed":
+            from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
+            chunker = FixedSizeChunker(chunk_size=chunker_cfg.chunk_size, overlap=chunker_cfg.overlap)
+        elif chunker_cfg.type == "langchain":
+            from langchain_text_splitters import RecursiveCharacterTextSplitter
+            from cogbase.pipeline.ingestion.langchain import LangChainChunker
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=chunker_cfg.chunk_size, chunk_overlap=chunker_cfg.overlap
+            )
+            chunker = LangChainChunker(splitter)
+        else:
+            raise ValueError(f"Unknown chunker type: {chunker_cfg.type!r}")
+
+    # --- Structured collection (extract step) --------------------------------
+    extract_step = next((s for s in steps if s.action == "extract"), None)
+    structured_store = None
+    extractor = None
+
+    if extract_step and extract_step.collection in sc_by_name:
+        sc_cfg = sc_by_name[extract_step.collection]
+
+        if config.structured_store is not None:
+            structured_store = build_structured_store(config.structured_store)
+        elif system_structured_store is not None:
+            structured_store = system_structured_store
+        else:
+            raise ValueError(
+                f"extract step for '{sc_cfg.name}' requires a structured store "
+                "(configure structured_store in the app config or system config)"
+            )
+
+        extraction_model = build_model_from_json_schema(
+            sc_cfg.schema_, model_name="DynamicExtraction"
         )
 
-    # --- Structured store ---------------------------------------------------
-    # Priority: app config > system shared store (namespaced) > error
-    if config.structured_store is not None:
-        structured_store = build_structured_store(config.structured_store)
-    elif system_structured_store is not None:
-        structured_store: Any = system_structured_store
-    else:
-        raise ValueError("Custom or system structured store is required")
+        system_prompt = None
+        if sc_cfg.extractor.prompt:
+            system_prompt = sc_cfg.extractor.prompt + cls_json_schema_for_llm(extraction_model)
 
-    extraction_model = build_model_from_json_schema(
-        config.extraction_schema, model_name="DynamicContractExtraction"
-    )
-
-    system_prompt = None
-    if config.extract_system_prompt_prefix is not None:
-        system_prompt = config.extract_system_prompt_prefix + cls_json_schema_for_llm(extraction_model)
-
-    extractor = LLMExtractor(
-        llm_client,
-        config.llm.model,
-        extraction_model=extraction_model,
-        collection_name=config.name,
-        system_prompt=system_prompt,
-    )
+        extractor = LLMExtractor(
+            llm_client,
+            config.llm.model,
+            extraction_model=extraction_model,
+            collection_name=sc_cfg.name,
+            system_prompt=system_prompt,
+        )
 
     return CogBaseApp(
         name=config.name,
@@ -164,4 +169,5 @@ def build_app(
         vector_store=vector_store,
         embedder=embedder,
         chunker=chunker,
+        vector_collection_name=vector_collection_name,
     )
