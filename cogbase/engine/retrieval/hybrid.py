@@ -50,6 +50,8 @@ class HybridRetriever(RetrieverBase):
     merged into a single ``RetrievalResult``.
 
     Args:
+        collection_name:  Vector store collection to search. Required when
+                          *vector_store* is provided.
         structured_store: Any ``StructuredStoreBase`` implementation.
         vector_store:     Any ``VectorStoreBase`` implementation.  ``None``
                           disables vector retrieval — patterns B, C, and D
@@ -61,6 +63,7 @@ class HybridRetriever(RetrieverBase):
 
     def __init__(
         self,
+        collection_name: str,
         structured_store: StructuredStoreBase | None = None,
         vector_store: VectorStoreBase | None = None,
         embedder: EmbeddingBase | None = None,
@@ -68,7 +71,7 @@ class HybridRetriever(RetrieverBase):
     ) -> None:
         self._structured = StructuredRetriever(structured_store) if structured_store is not None else None
         self._vector = (
-            VectorRetriever(vector_store, embedder, top_k)
+            VectorRetriever(collection_name, vector_store, embedder, top_k)
             if vector_store is not None and embedder is not None
             else None
         )

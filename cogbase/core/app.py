@@ -161,6 +161,7 @@ class CogBaseApp:
                 available_patterns=available_patterns,
             ),
             retriever=HybridRetriever(
+                collection_name=name,
                 structured_store=structured_store,
                 vector_store=vector_store,
                 embedder=embedder,

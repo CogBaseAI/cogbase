@@ -15,7 +15,6 @@ Example::
     chunker = LangChainChunker(
         RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     )
-    await ingest(doc, chunker=chunker, ...)
 """
 
 from langchain_text_splitters import TextSplitter

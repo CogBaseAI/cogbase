@@ -24,6 +24,3 @@ chunker:                     # remove this section for structured-only mode
   type: fixed                # fixed | langchain
   chunk_size: 512
   overlap: 64
-
-pack:
-  name: legal.contract_analyst

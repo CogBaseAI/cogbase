@@ -144,6 +144,7 @@ class TestIngestWithExtractors:
             Document(doc_id="doc-1", text=text),
             chunker=chunker, embedder=embedder,
             vector_store=vector_store,
+            collection="chunks",
             extractors=[extractor],
             structured_store=structured_store,
         )
@@ -160,6 +161,7 @@ class TestIngestWithExtractors:
             Document(doc_id="doc-2", text=text),
             chunker=chunker, embedder=embedder,
             vector_store=vector_store,
+            collection="chunks",
             extractors=[extractor],
             structured_store=structured_store,
         )
@@ -177,6 +179,7 @@ class TestIngestWithExtractors:
             Document(doc_id="doc-3", text="some text"),
             chunker=chunker, embedder=embedder,
             vector_store=vector_store,
+            collection="chunks",
             extractors=[extractor],
             structured_store=structured_store,
         )
@@ -220,6 +223,7 @@ class TestIngestWithExtractors:
             Document(doc_id="doc-4", text="hello world"),
             chunker=chunker, embedder=embedder,
             vector_store=vector_store,
+            collection="chunks",
             extractors=extractors,
             structured_store=structured_store,
         )
@@ -239,6 +243,7 @@ class TestIngestWithExtractors:
             Document(doc_id="doc-5", text="text without extraction"),
             chunker=chunker, embedder=embedder,
             vector_store=vector_store,
+            collection="chunks",
         )
         assert len(result) > 0  # vector path still works
 
@@ -252,6 +257,7 @@ class TestIngestWithExtractors:
                 Document(doc_id="doc-6", text="one two three"),
                 chunker=chunker, embedder=embedder,
                 vector_store=vector_store,
+                collection="chunks",
                 extractors=[StubExtractor()],
                 structured_store=structured_store,
             )
@@ -276,6 +282,7 @@ class TestIngestWithExtractors:
             Document(doc_id="doc-7", text="one two three"),
             chunker=chunker, embedder=embedder,
             vector_store=vector_store,
+            collection="chunks",
             extractors=extractors,
             structured_store=structured_store,
         )

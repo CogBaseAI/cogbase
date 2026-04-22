@@ -18,8 +18,6 @@ class ChunkerBase(abc.ABC):
             def chunk(self, doc: Document) -> list[Chunk]:
                 ...
 
-        await ingest(doc, chunker=MyChunker(), ...)
-
     ``metadata`` may carry chunker-specific fields (e.g. ``{"chunk_index": "0"}``).
     Embeddings are ``None`` on output — the pipeline fills them in separately.
     """

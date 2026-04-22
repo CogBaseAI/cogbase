@@ -30,6 +30,7 @@ async def ingest(
     chunker: ChunkerBase,
     embedder: EmbeddingBase,
     vector_store: VectorStoreBase,
+    collection: str,
     extractors: list[ExtractorBase] | None = None,
     structured_store: StructuredStoreBase | None = None,
 ) -> list[Chunk]:
@@ -79,7 +80,7 @@ async def ingest(
         chunk.model_copy(update={"embedding": embedding})
         for chunk, embedding in zip(chunks, embeddings)
     ]
-    await vector_store.upsert(embedded)
+    await vector_store.upsert(collection, embedded)
 
     if extractors and structured_store:
         for extractor in extractors:

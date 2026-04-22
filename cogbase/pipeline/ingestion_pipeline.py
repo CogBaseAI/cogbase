@@ -227,7 +227,7 @@ class IngestionPipeline:
                     chunk.model_copy(update={"embedding": embedding})
                     for chunk, embedding in zip(chunks, embeddings)
                 ]
-                await vc.store.upsert(embedded)
+                await vc.store.upsert(vc.name, embedded)
                 logger.debug(
                     "ingestion_pipeline.ingest.vector_upserted name=%s doc_id=%s collection=%s embedded=%d",
                     self.name,

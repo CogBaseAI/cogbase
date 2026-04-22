@@ -18,8 +18,6 @@ class EmbeddingBase(abc.ABC):
             async def embed(self, texts: list[str]) -> list[list[float]]:
                 ...
 
-        await ingest(text, doc_id, chunker=..., embedder=MyEmbedding(), ...)
-
     The interface is async because production embedders typically make HTTP
     calls (OpenAI, Cohere, etc.).  CPU-bound local models should offload to a
     thread pool via ``asyncio.get_event_loop().run_in_executor``.

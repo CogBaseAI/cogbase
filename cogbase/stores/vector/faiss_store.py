@@ -74,7 +74,7 @@ class FAISSVectorStore(VectorStoreBase):
         self._id_rev.clear()
         self._next_id = 0
 
-    async def upsert(self, chunks: list[Chunk]) -> None:
+    async def upsert(self, collection: str, chunks: list[Chunk]) -> None:
         """Add or replace chunks. Chunks without an embedding are skipped."""
         incoming = [c for c in chunks if c.embedding is not None]
         if not incoming:
@@ -107,7 +107,7 @@ class FAISSVectorStore(VectorStoreBase):
 
         self._next_id += len(to_add)
 
-    async def search(self, query_embedding: list[float], top_k: int) -> list[Chunk]:
+    async def search(self, collection: str, query_embedding: list[float], top_k: int) -> list[Chunk]:
         """Return up to ``top_k`` chunks ordered by cosine similarity (highest first)."""
         if self._index is None or self._index.ntotal == 0:
             return []
@@ -127,7 +127,7 @@ class FAISSVectorStore(VectorStoreBase):
                 results.append(self._chunks[chunk_id])
         return results
 
-    async def delete(self, doc_id: str) -> None:
+    async def delete(self, collection: str, doc_id: str) -> None:
         """Remove all chunks belonging to ``doc_id`` and rebuild the index."""
         targets = [cid for cid, c in self._chunks.items() if c.doc_id == doc_id]
         if not targets:
