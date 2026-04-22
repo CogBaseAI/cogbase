@@ -40,6 +40,7 @@ class LangChainChunker(ChunkerBase):
             return []
         return [
             Chunk(
+                chunk_id=f"{doc.doc_id}_{i}",
                 doc_id=doc.doc_id,
                 text=piece,
                 metadata={"chunk_index": str(i)},

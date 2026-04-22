@@ -40,6 +40,11 @@ class TestLangChainChunkerBehavior:
             str(i) for i in range(len(chunks))
         ]
 
+    def test_chunk_id_uses_doc_id_and_index(self):
+        splitter = CharacterTextSplitter(chunk_size=5, chunk_overlap=0, separator=" ")
+        chunks = LangChainChunker(splitter).chunk(Document(doc_id="doc-1", text="hello world"))
+        assert [c.chunk_id for c in chunks] == [f"doc-1_{i}" for i in range(len(chunks))]
+
     def test_embedding_is_none(self):
         splitter = RecursiveCharacterTextSplitter(chunk_size=100, chunk_overlap=0)
         chunks = LangChainChunker(splitter).chunk(Document(doc_id="doc-1", text="some text " * 10))

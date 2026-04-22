@@ -41,6 +41,7 @@ class FixedSizeChunker(ChunkerBase):
             end = start + self.chunk_size
             chunks.append(
                 Chunk(
+                    chunk_id=f"{doc.doc_id}_{index}",
                     doc_id=doc.doc_id,
                     text=doc.text[start:end],
                     metadata={"chunk_index": str(index)},

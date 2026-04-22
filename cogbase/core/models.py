@@ -52,7 +52,7 @@ class Chunk(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    chunk_id: str = Field(default_factory=lambda: str(uuid4()))
+    chunk_id: str
     doc_id: str
     text: str
     embedding: list[float] | None = None

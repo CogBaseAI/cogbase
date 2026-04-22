@@ -60,7 +60,7 @@ def _mock_embedder(vector: list[float] | None = None) -> MagicMock:
 
 
 def _make_chunk(text: str = "hello") -> Chunk:
-    return Chunk(doc_id="doc-1", text=text)
+    return Chunk(chunk_id="doc-1_0", doc_id="doc-1", text=text)
 
 
 # ---------------------------------------------------------------------------

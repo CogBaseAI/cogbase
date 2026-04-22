@@ -93,6 +93,11 @@ class TestFixedSizeChunkerChunk:
         chunks = chunker.chunk(Document(doc_id="doc-1", text="abcdeabcde"))
         assert [c.metadata["chunk_index"] for c in chunks] == ["0", "1"]
 
+    def test_chunk_id_uses_doc_id_and_index(self):
+        chunker = FixedSizeChunker(chunk_size=5, overlap=0)
+        chunks = chunker.chunk(Document(doc_id="doc-1", text="abcdeabcde"))
+        assert [c.chunk_id for c in chunks] == ["doc-1_0", "doc-1_1"]
+
     def test_doc_id_propagated(self):
         chunker = FixedSizeChunker(chunk_size=5, overlap=0)
         chunks = chunker.chunk(Document(doc_id="my-doc", text="hello world"))
@@ -119,7 +124,12 @@ class TestFixedSizeChunkerIsChunkerBase:
         class WordChunker(ChunkerBase):
             def chunk(self, doc: Document) -> list[Chunk]:
                 return [
-                    Chunk(doc_id=doc.doc_id, text=word, metadata={"chunk_index": str(i)})
+                    Chunk(
+                        chunk_id=f"{doc.doc_id}_{i}",
+                        doc_id=doc.doc_id,
+                        text=word,
+                        metadata={"chunk_index": str(i)},
+                    )
                     for i, word in enumerate(doc.text.split())
                     if word
                 ]

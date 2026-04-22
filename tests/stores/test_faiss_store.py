@@ -1,6 +1,7 @@
 """Tests for FAISSVectorStore."""
 
 import math
+from uuid import uuid4
 
 import numpy as np
 import pytest
@@ -20,7 +21,8 @@ def unit(v: list[float]) -> list[float]:
 
 
 def make_chunk(doc_id: str = "doc-1", embedding: list[float] | None = None, **kwargs) -> Chunk:
-    return Chunk(doc_id=doc_id, text="sample text", embedding=embedding, **kwargs)
+    chunk_id = kwargs.pop("chunk_id", f"{doc_id}_{uuid4().hex[:8]}")
+    return Chunk(chunk_id=chunk_id, doc_id=doc_id, text="sample text", embedding=embedding, **kwargs)
 
 
 # ------------------------------------------------------------------

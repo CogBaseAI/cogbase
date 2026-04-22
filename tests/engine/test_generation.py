@@ -46,7 +46,7 @@ def _retrieval(
 
 
 def _make_chunk(text: str, doc_id: str = "doc-1") -> Chunk:
-    return Chunk(doc_id=doc_id, text=text)
+    return Chunk(chunk_id=f"{doc_id}_0", doc_id=doc_id, text=text)
 
 
 async def _stream_chunks(content: str):
