@@ -146,23 +146,46 @@ class SkillRunner:
 
     async def run(
         self,
-        skill: Skill,
+        skills: list[Skill],
         user_input: str,
         history: list[ChatMessage] | None = None,
         base_prompt: str = "You are a helpful assistant.",
         runtime_context: dict | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Drive the tool-call loop for *skill* and yield text chunks.
+        """Select skills and drive the tool-call loop, yielding text chunks.
 
-        Yields status strings during tool execution and the final LLM response.
+        At the start of each iteration the best skill is re-selected from
+        *skills* based on the accumulated conversation state, so the agent can
+        switch skills between tool-call rounds.  Yields status strings during
+        tool execution and the final LLM response as the last item.
         """
-        system_prompt = self.build_system_prompt(base_prompt, skill, runtime_context)
-        messages: list[ChatMessage] = [{"role": "system", "content": system_prompt}]
+        # Slot 0 is reserved for the system prompt; updated each iteration.
+        messages: list[ChatMessage] = [{"role": "system", "content": ""}]
         messages.extend(history or [])
         messages.append({"role": "user", "content": user_input})
 
+        current_skill: Skill | None = None
         call_count = 0
+
         while call_count < self._max_calls:
+            # Re-select skill each iteration so the agent can switch mid-task.
+            # Pass conversation so far (excluding the system slot) as context.
+            selected = await self.select(skills, user_input, messages[1:])
+
+            if selected is None and current_skill is None:
+                # No skill applies at all — answer directly without skill context.
+                result = await self._llm.complete(messages[1:])
+                yield result.get("content") or ""
+                return
+
+            if selected is not None and selected is not current_skill:
+                current_skill = selected
+                logger.info("[skills] active skill → '%s'", current_skill.name)
+                yield f"Using skill: {current_skill.name}..."
+
+            system_prompt = self.build_system_prompt(base_prompt, current_skill, runtime_context)
+            messages[0] = {"role": "system", "content": system_prompt}
+
             result = await self._llm.complete(messages, tools=BASE_TOOLS)
 
             tool_calls = result.get("tool_calls")
@@ -171,7 +194,7 @@ class SkillRunner:
                 return
 
             tool_names = ", ".join(tc["name"] for tc in tool_calls)
-            logger.info("[skills] tool_calls: %s", tool_names)
+            logger.info("[skills] tool_calls (skill=%s): %s", current_skill.name, tool_names)
             yield f"Executing: {tool_names}..."
 
             messages.append({
@@ -189,7 +212,7 @@ class SkillRunner:
                     pass
 
                 logger.info("[skills] execute_tool %s(%s)", tc["name"], json.dumps(inputs)[:300])
-                output = await self._execute_tool(tc["name"], inputs, skill)
+                output = await self._execute_tool(tc["name"], inputs, current_skill)
                 logger.info("[skills] execute_tool done: %s", output[:300])
 
                 messages.append({
@@ -198,7 +221,7 @@ class SkillRunner:
                     "content": output,
                 })
 
-        logger.error("[skills] max tool calls (%d) reached. skill=%s", self._max_calls, skill.name)
+        logger.error("[skills] max tool calls (%d) reached. skill=%s", self._max_calls, current_skill.name if current_skill else "none")
         yield (
             "I was unable to complete your request within the allowed number of steps. "
             "Please try a simpler or more specific request."
