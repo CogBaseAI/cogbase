@@ -8,14 +8,15 @@ Typical usage::
 
     import json
     import openai
+    from cogbase.llms import OpenAILLM
     from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
     from cogbase.pipeline.extraction.llm import LLMExtractor
 
     extraction_model = build_model_from_json_schema(extraction_schema_json_str)
     client = openai.AsyncOpenAI(api_key="...")
+    llm = OpenAILLM(client, model="gpt-5.4")
     extractor = LLMExtractor(
-        client=client,
-        model="gpt-4o-mini",
+        llm=llm,
         extraction_model=extraction_model,
         collection_name='your_collection_name',
     )
@@ -25,11 +26,12 @@ Typical usage::
 from __future__ import annotations
 
 import logging
-from typing import Any, Type
+from typing import Type
 
 from pydantic import BaseModel, ValidationError, create_model
 
 from cogbase.core.models import Document
+from cogbase.llms import LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.stores.schema import CollectionSchema
 from cogbase.core.basemodel_to_schema import cls_generate_schema, cls_json_schema_for_llm
@@ -79,8 +81,7 @@ class LLMExtractor(ExtractorBase):
     identity field (the document identifier passed in).
 
     Args:
-        client:           Async OpenAI-compatible client.
-        model:            Model name (e.g. ``"gpt-4o-mini"``).
+        llm:              LLM backend.
         extraction_model: Pydantic ``BaseModel`` class describing the fields to
                           extract.  Its field descriptions are included in the
                           LLM prompt.
@@ -95,8 +96,7 @@ class LLMExtractor(ExtractorBase):
 
     def __init__(
         self,
-        client: Any,
-        model: str,
+        llm: LLMBase,
         extraction_model: Type[BaseModel],
         collection_name: str,
         *,
@@ -105,8 +105,7 @@ class LLMExtractor(ExtractorBase):
         max_retries: int = 2,
     ) -> None:
         super().__init__(max_retries=max_retries)
-        self._client = client
-        self._model = model
+        self._llm = llm
         self._max_tokens = max_tokens
         self._collection_name = collection_name
         self._extraction_model = extraction_model
@@ -126,15 +125,13 @@ class LLMExtractor(ExtractorBase):
 
     async def _extract_once(self, doc: Document) -> BaseModel | None:
         """Single LLM call; returns ``None`` when the response is unparseable."""
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            max_completion_tokens=self._max_tokens,
-            messages=[
+        raw = await self._llm.complete(
+            [
                 {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": doc.text},
             ],
+            max_tokens=self._max_tokens,
         )
-        raw = response.choices[0].message.content.strip()
         return self._parse(raw, doc.doc_id)
 
     def _parse(self, raw: str, doc_id: str) -> BaseModel | None:

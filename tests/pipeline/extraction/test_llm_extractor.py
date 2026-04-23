@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from cogbase.llms import LLMBase
 from cogbase.core.models import Document
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from examples.contract_analyst_demo.schema import (
@@ -17,25 +17,24 @@ from examples.contract_analyst_demo.schema import (
 )
 
 
-def _make_extractor(client: MagicMock) -> LLMExtractor:
-    """Build a LLMExtractor wired to the contract analyst schema."""
+def _make_llm(content: str) -> MagicMock:
+    """Build a mock LLMBase returning *content* for complete() and streaming it."""
+    llm = MagicMock(spec=LLMBase)
+    llm.complete = AsyncMock(return_value=content)
+
+    async def _stream(*args, **kwargs):
+        yield content
+
+    llm.complete_stream = _stream
+    return llm
+
+
+def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
-        client,
-        model="test-model",
+        llm,
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
     )
-
-
-def _make_client(content: str) -> MagicMock:
-    """Build a minimal mock OpenAI client that returns *content*."""
-    choice = SimpleNamespace(message=SimpleNamespace(content=content))
-    response = SimpleNamespace(choices=[choice])
-    client = MagicMock()
-    client.chat = MagicMock()
-    client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock(return_value=response)
-    return client
 
 
 def _full_payload(**overrides) -> str:
@@ -89,7 +88,7 @@ def test_schema_matches_contracts_schema():
 
 @pytest.mark.asyncio
 async def test_extract_returns_one_record():
-    extractor = _make_extractor(_make_client(_full_payload()))
+    extractor = _make_extractor(_make_llm(_full_payload()))
     result = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
 
     assert result is not None
@@ -98,7 +97,7 @@ async def test_extract_returns_one_record():
 
 @pytest.mark.asyncio
 async def test_extract_doc_id_set():
-    extractor = _make_extractor(_make_client(_full_payload()))
+    extractor = _make_extractor(_make_llm(_full_payload()))
     result = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
 
     assert result.doc_id == "doc-001"
@@ -106,7 +105,7 @@ async def test_extract_doc_id_set():
 
 @pytest.mark.asyncio
 async def test_extract_contract_basics():
-    extractor = _make_extractor(_make_client(_full_payload()))
+    extractor = _make_extractor(_make_llm(_full_payload()))
     r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
 
     assert r.contract_type == "NDA"
@@ -120,7 +119,7 @@ async def test_extract_contract_basics():
 
 @pytest.mark.asyncio
 async def test_extract_common_clause_text_verbatim():
-    extractor = _make_extractor(_make_client(_full_payload()))
+    extractor = _make_extractor(_make_llm(_full_payload()))
     r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
 
     assert r.termination == "Either party may terminate with 30 days written notice."
@@ -130,7 +129,7 @@ async def test_extract_common_clause_text_verbatim():
 
 @pytest.mark.asyncio
 async def test_extract_absent_clauses_are_none():
-    extractor = _make_extractor(_make_client(_full_payload()))
+    extractor = _make_extractor(_make_llm(_full_payload()))
     r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
 
     assert r.payment_terms is None
@@ -142,7 +141,7 @@ async def test_extract_absent_clauses_are_none():
 
 @pytest.mark.asyncio
 async def test_extract_notice_period_days():
-    extractor = _make_extractor(_make_client(_full_payload(notice_period_days=30)))
+    extractor = _make_extractor(_make_llm(_full_payload(notice_period_days=30)))
     r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
 
     assert r.notice_period_days == 30
@@ -150,7 +149,7 @@ async def test_extract_notice_period_days():
 
 @pytest.mark.asyncio
 async def test_extract_key_terms():
-    extractor = _make_extractor(_make_client(_full_payload()))
+    extractor = _make_extractor(_make_llm(_full_payload()))
     r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
 
     assert len(r.key_terms) == 1
@@ -164,7 +163,7 @@ async def test_extract_special_conditions():
         "This agreement supersedes all prior NDAs between the parties.",
         "Obligations survive termination for 5 years.",
     ])
-    extractor = _make_extractor(_make_client(payload))
+    extractor = _make_extractor(_make_llm(payload))
     r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
 
     assert len(r.special_conditions) == 2
@@ -174,7 +173,7 @@ async def test_extract_special_conditions():
 @pytest.mark.asyncio
 async def test_extract_contract_value_and_currency():
     payload = _full_payload(contract_value=250000.0, currency="USD")
-    extractor = _make_extractor(_make_client(payload))
+    extractor = _make_extractor(_make_llm(payload))
     r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
 
     assert r.contract_value == 250000.0
@@ -184,7 +183,7 @@ async def test_extract_contract_value_and_currency():
 @pytest.mark.asyncio
 async def test_extract_liability_cap():
     payload = _full_payload(liability_cap=500000.0, currency="GBP")
-    extractor = _make_extractor(_make_client(payload))
+    extractor = _make_extractor(_make_llm(payload))
     r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
 
     assert r.liability_cap == 500000.0
@@ -196,14 +195,14 @@ async def test_extract_liability_cap():
 
 @pytest.mark.asyncio
 async def test_extract_empty_text_returns_none():
-    extractor = _make_extractor(_make_client("{}"))
+    extractor = _make_extractor(_make_llm("{}"))
     result = await extractor.extract(Document(doc_id="doc-002", text="   "))
     assert result is None
 
 
 @pytest.mark.asyncio
 async def test_extract_invalid_json_returns_none():
-    extractor = _make_extractor(_make_client("not json"))
+    extractor = _make_extractor(_make_llm("not json"))
     result = await extractor.extract(Document(doc_id="doc-003", text="contract text"))
     assert result is None
 
@@ -211,7 +210,7 @@ async def test_extract_invalid_json_returns_none():
 @pytest.mark.asyncio
 async def test_extract_json_array_instead_of_object_returns_none():
     """LLM accidentally returns an array — should return None, not crash."""
-    extractor = _make_extractor(_make_client("[1, 2, 3]"))
+    extractor = _make_extractor(_make_llm("[1, 2, 3]"))
     result = await extractor.extract(Document(doc_id="doc-004", text="contract text"))
     assert result is None
 
@@ -219,7 +218,7 @@ async def test_extract_json_array_instead_of_object_returns_none():
 @pytest.mark.asyncio
 async def test_extract_missing_fields_default_to_none_or_empty():
     """Minimal response — only the outer object, no fields."""
-    extractor = _make_extractor(_make_client("{}"))
+    extractor = _make_extractor(_make_llm("{}"))
     result = await extractor.extract(Document(doc_id="doc-005", text="contract text"))
 
     assert result is not None
@@ -233,7 +232,7 @@ async def test_extract_missing_fields_default_to_none_or_empty():
 async def test_extract_invalid_numeric_fields_rejects_record():
     """Non-numeric strings for int/float fields fail Pydantic validation — record is None."""
     payload = _full_payload(notice_period_days="thirty", contract_value="one million")
-    extractor = _make_extractor(_make_client(payload))
+    extractor = _make_extractor(_make_llm(payload))
     result = await extractor.extract(Document(doc_id="doc-006", text="contract text"))
 
     assert result is None
@@ -242,7 +241,7 @@ async def test_extract_invalid_numeric_fields_rejects_record():
 @pytest.mark.asyncio
 async def test_extract_explicit_null_fields():
     payload = _full_payload(parties=[], effective_date=None)
-    extractor = _make_extractor(_make_client(payload))
+    extractor = _make_extractor(_make_llm(payload))
     r = await extractor.extract(Document(doc_id="doc-007", text="contract text"))
 
     assert r.parties == []
@@ -253,7 +252,7 @@ async def test_extract_explicit_null_fields():
 async def test_extract_non_list_key_terms_rejects_record():
     """A scalar where a list is expected fails Pydantic validation — record is None."""
     payload = _full_payload(key_terms="not a list")
-    extractor = _make_extractor(_make_client(payload))
+    extractor = _make_extractor(_make_llm(payload))
     result = await extractor.extract(Document(doc_id="doc-008", text="contract text"))
 
     assert result is None
@@ -263,7 +262,7 @@ async def test_extract_non_list_key_terms_rejects_record():
 async def test_extract_non_list_special_conditions_rejects_record():
     """A dict where a list is expected fails Pydantic validation — record is None."""
     payload = _full_payload(special_conditions={"key": "value"})
-    extractor = _make_extractor(_make_client(payload))
+    extractor = _make_extractor(_make_llm(payload))
     result = await extractor.extract(Document(doc_id="doc-009", text="contract text"))
 
     assert result is None
@@ -273,26 +272,25 @@ async def test_extract_non_list_special_conditions_rejects_record():
 # extract() — retry behaviour
 # ---------------------------------------------------------------------------
 
-def _make_client_with_responses(*contents: str) -> MagicMock:
-    """Build a mock client that returns each content string in sequence."""
-    responses = [
-        SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=c))])
-        for c in contents
-    ]
-    client = MagicMock()
-    client.chat = MagicMock()
-    client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock(side_effect=responses)
-    return client
+def _make_llm_with_responses(*contents: str) -> MagicMock:
+    """Build a mock LLMBase that returns each content string in sequence."""
+    llm = MagicMock(spec=LLMBase)
+    llm.complete = AsyncMock(side_effect=list(contents))
+
+    async def _stream(*args, **kwargs):
+        yield contents[-1]
+
+    llm.complete_stream = _stream
+    return llm
 
 
 @pytest.mark.asyncio
 async def test_extract_succeeds_on_retry_after_bad_json(monkeypatch):
     """First call returns bad JSON; second call returns valid JSON — should succeed."""
     monkeypatch.setattr("asyncio.sleep", AsyncMock())
-    client = _make_client_with_responses("not json", _full_payload())
+    llm = _make_llm_with_responses("not json", _full_payload())
     extractor = LLMExtractor(
-        client, model="test-model",
+        llm,
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
         max_retries=2,
@@ -300,16 +298,16 @@ async def test_extract_succeeds_on_retry_after_bad_json(monkeypatch):
     result = await extractor.extract(Document(doc_id="doc-retry-1", text="contract text"))
 
     assert result is not None
-    assert client.chat.completions.create.call_count == 2
+    assert llm.complete.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_extract_returns_none_after_all_retries_exhausted(monkeypatch):
     """All attempts return bad JSON — should return None."""
     monkeypatch.setattr("asyncio.sleep", AsyncMock())
-    client = _make_client_with_responses("bad", "bad", "bad")
+    llm = _make_llm_with_responses("bad", "bad", "bad")
     extractor = LLMExtractor(
-        client, model="test-model",
+        llm,
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
         max_retries=2,
@@ -317,7 +315,7 @@ async def test_extract_returns_none_after_all_retries_exhausted(monkeypatch):
     result = await extractor.extract(Document(doc_id="doc-retry-2", text="contract text"))
 
     assert result is None
-    assert client.chat.completions.create.call_count == 3
+    assert llm.complete.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -326,7 +324,7 @@ async def test_extract_no_retry_on_success(monkeypatch):
     sleep_mock = AsyncMock()
     monkeypatch.setattr("asyncio.sleep", sleep_mock)
     extractor = LLMExtractor(
-        _make_client(_full_payload()), model="test-model",
+        _make_llm(_full_payload()),
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
         max_retries=2,
@@ -342,9 +340,9 @@ async def test_extract_retry_uses_exponential_backoff(monkeypatch):
     """Sleep is called with 1s then 2s for two retries."""
     sleep_mock = AsyncMock()
     monkeypatch.setattr("asyncio.sleep", sleep_mock)
-    client = _make_client_with_responses("bad", "bad", _full_payload())
+    llm = _make_llm_with_responses("bad", "bad", _full_payload())
     extractor = LLMExtractor(
-        client, model="test-model",
+        llm,
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
         max_retries=2,
@@ -362,7 +360,7 @@ async def test_extract_max_retries_zero_no_sleep(monkeypatch):
     sleep_mock = AsyncMock()
     monkeypatch.setattr("asyncio.sleep", sleep_mock)
     extractor = LLMExtractor(
-        _make_client("bad json"), model="test-model",
+        _make_llm("bad json"),
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
         max_retries=0,

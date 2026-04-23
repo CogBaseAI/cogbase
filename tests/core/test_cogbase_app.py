@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -16,6 +15,7 @@ from cogbase.embeddings import EmbeddingBase
 from cogbase.engine.engine import Engine
 from cogbase.engine.generation.base import GenerationResult
 from cogbase.engine.router import QueryPattern
+from cogbase.llms.base import LLMBase
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -32,10 +32,16 @@ from examples.contract_analyst_demo.schema import (
 # Test doubles
 # ---------------------------------------------------------------------------
 
-async def _stream_delta(content: str):
-    delta = SimpleNamespace(content=content)
-    choice = SimpleNamespace(delta=delta)
-    yield SimpleNamespace(choices=[choice])
+def _make_llm(content: str) -> MagicMock:
+    """Build a mock LLMBase returning *content* for complete() and streaming it."""
+    llm = MagicMock(spec=LLMBase)
+    llm.complete = AsyncMock(return_value=content)
+
+    async def _stream(*args, **kwargs):
+        yield content
+
+    llm.complete_stream = _stream
+    return llm
 
 
 async def _drain_query(app: CogBaseApp, text: str) -> GenerationResult:
@@ -43,21 +49,6 @@ async def _drain_query(app: CogBaseApp, text: str) -> GenerationResult:
         if not isinstance(item, str):
             return item
     raise AssertionError("query_stream did not yield a GenerationResult")
-
-
-def _make_client(content: str) -> MagicMock:
-    """Build a mock OpenAI client returning *content* (streaming or non-streaming)."""
-    async def _create(**kwargs):
-        if kwargs.get("stream"):
-            return _stream_delta(content)
-        choice = SimpleNamespace(message=SimpleNamespace(content=content))
-        return SimpleNamespace(choices=[choice])
-
-    client = MagicMock()
-    client.chat = MagicMock()
-    client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock(side_effect=_create)
-    return client
 
 
 def _contract_payload(**overrides) -> str:
@@ -96,17 +87,16 @@ class StubEmbedding(EmbeddingBase):
         return [[0.1] * self._dim for _ in texts]
 
 
-def _make_extractor(client: MagicMock) -> LLMExtractor:
+def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
-        client,
-        model="test-model",
+        llm,
         extraction_model=ContractExtraction,
         collection_name=CONTRACTS_COLLECTION,
     )
 
 
 def _make_app(
-    client: MagicMock,
+    llm: MagicMock,
     store: InMemoryStructuredStore,
     *,
     vector_store: FAISSVectorStore | None = None,
@@ -114,11 +104,10 @@ def _make_app(
     chunker=None,
     name: str = "legal",
 ) -> CogBaseApp:
-    extractor = _make_extractor(client)
+    extractor = _make_extractor(llm)
     return CogBaseApp(
         name=name,
-        client=client,
-        model="test-model",
+        llm=llm,
         extractor=extractor,
         structured_store=store,
         vector_store=vector_store,
@@ -133,17 +122,15 @@ def _make_app(
 
 class TestCogBaseAppConstruction:
     def test_structured_only_builds(self):
-        client = _make_client("{}")
-        app = _make_app(client, InMemoryStructuredStore())
+        app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
         assert app._ingest_pipeline.name == "legal"
         assert app._ingest_pipeline.structured_collection is not None
         assert app._ingest_pipeline.structured_collection.name == CONTRACTS_COLLECTION
         assert app._ingest_pipeline.vector_collection is None
 
     def test_full_mode_builds(self):
-        client = _make_client("{}")
         app = _make_app(
-            client,
+            _make_llm("{}"),
             InMemoryStructuredStore(),
             vector_store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
@@ -153,13 +140,12 @@ class TestCogBaseAppConstruction:
         assert app._ingest_pipeline.vector_collection.name == "legal"
 
     def test_partial_vector_params_raises(self):
-        client = _make_client("{}")
-        extractor = _make_extractor(client)
+        llm = _make_llm("{}")
+        extractor = _make_extractor(llm)
         with pytest.raises(ValueError, match="all be provided together"):
             CogBaseApp(
                 name='testapp',
-                client=client,
-                model="test-model",
+                llm=llm,
                 extractor=extractor,
                 structured_store=InMemoryStructuredStore(),
                 vector_store=FAISSVectorStore(dim=4),
@@ -167,20 +153,17 @@ class TestCogBaseAppConstruction:
             )
 
     def test_custom_name(self):
-        client = _make_client("{}")
-        app = _make_app(client, InMemoryStructuredStore(), name="my-legal-app")
+        app = _make_app(_make_llm("{}"), InMemoryStructuredStore(), name="my-legal-app")
         assert app._ingest_pipeline.name == "my-legal-app"
 
     def test_structured_schemas_exposed(self):
-        client = _make_client("{}")
-        app = _make_app(client, InMemoryStructuredStore())
+        app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
         schemas = app.structured_schemas
         assert len(schemas) == 1
         assert schemas[0].name == CONTRACTS_COLLECTION
 
     def test_ingestion_pipeline_and_engine_accessible(self):
-        client = _make_client("{}")
-        app = _make_app(client, InMemoryStructuredStore())
+        app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
         assert isinstance(app.ingestion_pipeline, IngestionPipeline)
         assert isinstance(app.engine, Engine)
 
@@ -193,7 +176,7 @@ class TestCogBaseAppLifecycle:
     @pytest.mark.asyncio
     async def test_setup_creates_collection(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_client("{}"), store)
+        app = _make_app(_make_llm("{}"), store)
         await app.setup()
         rows = await store.query(CONTRACTS_COLLECTION)
         assert rows == []
@@ -201,14 +184,14 @@ class TestCogBaseAppLifecycle:
     @pytest.mark.asyncio
     async def test_setup_idempotent(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_client("{}"), store)
+        app = _make_app(_make_llm("{}"), store)
         await app.setup()
         await app.setup()  # must not raise
 
     @pytest.mark.asyncio
     async def test_ingest_extracts_record(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_client(_contract_payload(contract_type="SaaS")), store)
+        app = _make_app(_make_llm(_contract_payload(contract_type="SaaS")), store)
         await app.setup()
         await app.ingest_documents([Document(doc_id="c-001", text="Some contract text.")])
         rows = await store.query(CONTRACTS_COLLECTION)
@@ -218,7 +201,7 @@ class TestCogBaseAppLifecycle:
     @pytest.mark.asyncio
     async def test_ingest_empty_text_is_noop(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_client("{}"), store)
+        app = _make_app(_make_llm("{}"), store)
         await app.setup()
         await app.ingest_documents([Document(doc_id="c-empty", text="")])
         rows = await store.query(CONTRACTS_COLLECTION)
@@ -227,7 +210,7 @@ class TestCogBaseAppLifecycle:
     @pytest.mark.asyncio
     async def test_ingest_multiple_docs_accumulate(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_client(_contract_payload()), store)
+        app = _make_app(_make_llm(_contract_payload()), store)
         await app.setup()
         await app.ingest_documents([
             Document(doc_id="c-001", text="contract one text"),
@@ -243,7 +226,7 @@ class TestCogBaseAppLifecycle:
         store = InMemoryStructuredStore()
         vector_store = FAISSVectorStore(dim=4)
         app = _make_app(
-            _make_client("{}"),
+            _make_llm("{}"),
             store,
             vector_store=vector_store,
             embedder=StubEmbedding(dim=4),
@@ -268,33 +251,26 @@ class TestCogBaseAppQuery:
     ) -> tuple[CogBaseApp, InMemoryStructuredStore]:
         store = InMemoryStructuredStore()
 
-        async def _stream_content(content: str):
-            delta = SimpleNamespace(content=content)
-            choice = SimpleNamespace(delta=delta)
-            yield SimpleNamespace(choices=[choice])
+        llm = MagicMock(spec=LLMBase)
 
-        async def _create(**kwargs):
-            messages = kwargs.get("messages", [])
+        async def _complete(messages, **kwargs):
             system_content = messages[0].get("content", "") if messages else ""
-            if "legal contract analyst" in system_content or "extract structured" in system_content.lower():
-                content = extractor_json
-            elif "query router" in system_content:
-                content = router_json
-            else:
-                content = generator_answer
-            if kwargs.get("stream"):
-                return _stream_content(content)
-            choice = SimpleNamespace(message=SimpleNamespace(content=content))
-            return SimpleNamespace(choices=[choice])
+            if "extract structured" in system_content.lower():
+                return extractor_json
+            if "query router" in system_content:
+                return router_json
+            return generator_answer
 
-        client = MagicMock()
-        client.chat = MagicMock()
-        client.chat.completions = MagicMock()
-        client.chat.completions.create = AsyncMock(side_effect=_create)
+        llm.complete = AsyncMock(side_effect=_complete)
 
-        app = _make_app(client, store)
+        async def _stream(messages, **kwargs):
+            system_content = messages[0].get("content", "") if messages else ""
+            yield generator_answer
+
+        llm.complete_stream = _stream
+
+        app = _make_app(llm, store)
         return app, store
-
 
     @pytest.mark.asyncio
     async def test_query_pattern_a_returns_structured_answer(self):
@@ -310,7 +286,7 @@ class TestCogBaseAppQuery:
         await app.setup()
         from cogbase.stores.schema import CollectionSchema
         # Pre-load a contract record directly into the store using the extractor's schema
-        extractor = _make_extractor(MagicMock())
+        extractor = _make_extractor(_make_llm("{}"))
         record_model = extractor._record_model
         record = record_model(
             contract_id="c-001_abc",
@@ -371,22 +347,22 @@ class TestStructuredOnlyPatternRestriction:
         return app.engine._router._system_prompt
 
     def test_structured_only_prompt_excludes_pattern_b(self):
-        app = _make_app(_make_client("{}"), InMemoryStructuredStore())
+        app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
         assert "B —" not in self._capture_system_prompt(app)
 
     def test_structured_only_prompt_excludes_pattern_c(self):
-        app = _make_app(_make_client("{}"), InMemoryStructuredStore())
+        app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
         assert "C —" not in self._capture_system_prompt(app)
 
     def test_structured_only_prompt_includes_pattern_a_and_d(self):
-        app = _make_app(_make_client("{}"), InMemoryStructuredStore())
+        app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
         prompt = self._capture_system_prompt(app)
         assert "A —" in prompt
         assert "D —" in prompt
 
     def test_full_mode_prompt_includes_all_four_patterns(self):
         app = _make_app(
-            _make_client("{}"),
+            _make_llm("{}"),
             InMemoryStructuredStore(),
             vector_store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
@@ -404,21 +380,22 @@ class TestStructuredOnlyPatternRestriction:
             "structured_targets": [],
         })
 
-        async def _create(**kwargs):
-            messages = kwargs.get("messages", [])
+        llm = MagicMock(spec=LLMBase)
+
+        async def _complete(messages, **kwargs):
             system_content = messages[0].get("content", "") if messages else ""
-            content = router_resp if "query router" in system_content else "The answer."
-            if kwargs.get("stream"):
-                return _stream_delta(content)
-            choice = SimpleNamespace(message=SimpleNamespace(content=content))
-            return SimpleNamespace(choices=[choice])
+            if "query router" in system_content:
+                return router_resp
+            return "The answer."
 
-        client = MagicMock()
-        client.chat = MagicMock()
-        client.chat.completions = MagicMock()
-        client.chat.completions.create = AsyncMock(side_effect=_create)
+        llm.complete = AsyncMock(side_effect=_complete)
 
-        app = _make_app(client, InMemoryStructuredStore())
+        async def _stream(messages, **kwargs):
+            yield "The answer."
+
+        llm.complete_stream = _stream
+
+        app = _make_app(llm, InMemoryStructuredStore())
         await app.setup()
         result = await _drain_query(app, "what is the termination clause?")
         assert isinstance(result, GenerationResult)
@@ -431,11 +408,10 @@ class TestStructuredOnlyPatternRestriction:
 class TestVectorOnlyMode:
     """CogBaseApp with structured_store=None skips extraction entirely."""
 
-    def _make_vector_only_app(self, client: MagicMock) -> CogBaseApp:
+    def _make_vector_only_app(self, llm: MagicMock) -> CogBaseApp:
         return CogBaseApp(
             name="vector-only",
-            client=client,
-            model="test-model",
+            llm=llm,
             extractor=None,
             structured_store=None,
             vector_store=FAISSVectorStore(dim=4),
@@ -444,31 +420,31 @@ class TestVectorOnlyMode:
         )
 
     def test_no_structured_collection(self):
-        app = self._make_vector_only_app(_make_client("{}"))
+        app = self._make_vector_only_app(_make_llm("{}"))
         assert app._ingest_pipeline.structured_collection is None
 
     def test_vector_collection_present(self):
-        app = self._make_vector_only_app(_make_client("{}"))
+        app = self._make_vector_only_app(_make_llm("{}"))
         assert app._ingest_pipeline.vector_collection is not None
 
     def test_structured_schemas_empty(self):
-        app = self._make_vector_only_app(_make_client("{}"))
+        app = self._make_vector_only_app(_make_llm("{}"))
         assert app.structured_schemas == []
 
     def test_prompt_excludes_pattern_a(self):
-        app = self._make_vector_only_app(_make_client("{}"))
+        app = self._make_vector_only_app(_make_llm("{}"))
         prompt = app.engine._router._system_prompt
         assert "A —" not in prompt
 
     def test_prompt_includes_patterns_b_c_d(self):
-        app = self._make_vector_only_app(_make_client("{}"))
+        app = self._make_vector_only_app(_make_llm("{}"))
         prompt = app.engine._router._system_prompt
         for label in ("B —", "C —", "D —"):
             assert label in prompt
 
     @pytest.mark.asyncio
     async def test_setup_is_noop(self):
-        app = self._make_vector_only_app(_make_client("{}"))
+        app = self._make_vector_only_app(_make_llm("{}"))
         await app.setup()  # must not raise
 
     @pytest.mark.asyncio
@@ -476,8 +452,7 @@ class TestVectorOnlyMode:
         vector_store = FAISSVectorStore(dim=4)
         app = CogBaseApp(
             name='testapp',
-            client=_make_client("{}"),
-            model="test-model",
+            llm=_make_llm("{}"),
             extractor=None,
             structured_store=None,
             vector_store=vector_store,
@@ -492,7 +467,7 @@ class TestVectorOnlyMode:
 
     @pytest.mark.asyncio
     async def test_ingest_records_extracted_is_zero(self):
-        app = self._make_vector_only_app(_make_client("{}"))
+        app = self._make_vector_only_app(_make_llm("{}"))
         await app.setup()
         results = await app.ingest_documents([Document(doc_id="d-001", text="some text " * 5)])
         assert results[0].records_extracted == 0
@@ -506,7 +481,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_returns_one_result_per_document(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_client(_contract_payload()), store)
+        app = _make_app(_make_llm(_contract_payload()), store)
         await app.setup()
 
         documents = [
@@ -522,7 +497,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_results_in_input_order(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_client("{}"), store)
+        app = _make_app(_make_llm("{}"), store)
         await app.setup()
 
         doc_ids = [f"c-{i:03d}" for i in range(8)]
@@ -534,7 +509,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_success_flag_set(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_client(_contract_payload()), store)
+        app = _make_app(_make_llm(_contract_payload()), store)
         await app.setup()
 
         results = await app.ingest_documents([Document(doc_id="c-001", text="some text")])
@@ -545,7 +520,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_records_extracted_count(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_client(_contract_payload()), store)
+        app = _make_app(_make_llm(_contract_payload()), store)
         await app.setup()
 
         results = await app.ingest_documents([Document(doc_id="c-001", text="contract text")])
@@ -557,20 +532,23 @@ class TestIngestMany:
         store = InMemoryStructuredStore()
         call_n = 0
 
-        async def _create(**kwargs):
+        llm = MagicMock(spec=LLMBase)
+
+        async def _complete(messages, **kwargs):
             nonlocal call_n
             call_n += 1
             if call_n == 1:
                 raise RuntimeError("LLM unavailable")
-            choice = SimpleNamespace(message=SimpleNamespace(content=_contract_payload()))
-            return SimpleNamespace(choices=[choice])
+            return _contract_payload()
 
-        client = MagicMock()
-        client.chat = MagicMock()
-        client.chat.completions = MagicMock()
-        client.chat.completions.create = AsyncMock(side_effect=_create)
+        llm.complete = AsyncMock(side_effect=_complete)
 
-        app = _make_app(client, store)
+        async def _stream(*args, **kwargs):
+            yield ""
+
+        llm.complete_stream = _stream
+
+        app = _make_app(llm, store)
         await app.setup()
 
         results = await app.ingest_documents(
@@ -595,7 +573,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_empty_list_returns_empty(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_client("{}"), store)
+        app = _make_app(_make_llm("{}"), store)
         await app.setup()
 
         results = await app.ingest_documents([])
@@ -604,7 +582,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_invalid_concurrency_raises(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_client("{}"), store)
+        app = _make_app(_make_llm("{}"), store)
         await app.setup()
 
         with pytest.raises(ValueError, match="concurrency"):
@@ -617,7 +595,9 @@ class TestIngestMany:
         peak = 0
         lock = asyncio.Lock()
 
-        async def _create(**kwargs):
+        llm = MagicMock(spec=LLMBase)
+
+        async def _complete(messages, **kwargs):
             nonlocal active, peak
             async with lock:
                 active += 1
@@ -626,15 +606,16 @@ class TestIngestMany:
             await asyncio.sleep(0)
             async with lock:
                 active -= 1
-            choice = SimpleNamespace(message=SimpleNamespace(content="{}"))
-            return SimpleNamespace(choices=[choice])
+            return "{}"
 
-        client = MagicMock()
-        client.chat = MagicMock()
-        client.chat.completions = MagicMock()
-        client.chat.completions.create = AsyncMock(side_effect=_create)
+        llm.complete = AsyncMock(side_effect=_complete)
 
-        app = _make_app(client, store)
+        async def _stream(*args, **kwargs):
+            yield ""
+
+        llm.complete_stream = _stream
+
+        app = _make_app(llm, store)
         await app.setup()
 
         documents = [Document(doc_id=f"c-{i}", text="text") for i in range(10)]

@@ -10,13 +10,12 @@ Four patterns (from the CogBase architecture):
     C — Hybrid: retrieval from both stores, then reasoning over combined results.
     D — Grounded generation: output separates [FINDINGS] from [SUPPORTING_QUOTES].
 
-``LLMRouter`` is the only router.  It accepts any OpenAI-compatible async
-client — the same interface is supported by vLLM, Ollama, and Anthropic's
-compatibility endpoint, so no provider lock-in is required.
+``LLMRouter`` is the only router.
 
 Usage::
 
     import openai
+    from cogbase.llm import OpenAILLM
     from cogbase.engine.router import LLMRouter
     from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
 
@@ -46,7 +45,8 @@ Usage::
         base_url="https://api.anthropic.com/v1",
         api_key="...",
     )
-    router = LLMRouter(client, model="gpt-5.4", schema=schema)
+    llm = OpenAILLM(client, model="gpt-5.4")
+    router = LLMRouter(llm, schema=schema)
     result = await router.route("does the review contradict the termination reason?")
     # result.pattern              == QueryPattern.C
     # result.structured_targets   — list of CollectionTarget (collection + filters + fields)
@@ -54,11 +54,12 @@ Usage::
 
     # Without a schema the router still classifies patterns but cannot populate
     # structured_targets.
-    router = LLMRouter(client, model="gpt-5.4")
+    router = LLMRouter(llm)
 
     # vLLM / Ollama / any OpenAI-compatible server
     client = openai.AsyncOpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
-    router = LLMRouter(client, model="llama3", schema=schema)
+    llm = OpenAILLM(client, model="gpt-5.4")
+    router = LLMRouter(llm, schema=schema)
 """
 
 from __future__ import annotations
@@ -68,10 +69,9 @@ import json
 import logging
 import re
 from enum import Enum
-from typing import Any
-
 from pydantic import BaseModel
 
+from cogbase.llms.base import LLMBase
 from cogbase.stores.filters import Filter, Op
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
 
@@ -292,19 +292,12 @@ def _format_field_for_prompt(field_name: str, field_schema: FieldSchema) -> str:
 class LLMRouter(QueryRouter):
     """Production query router backed by any OpenAI-compatible API.
 
-    Accepts any async client that exposes ``client.chat.completions.create``
-    with the OpenAI signature — this covers OpenAI, Anthropic's compatibility
-    endpoint, vLLM, Ollama, and any other compatible server.
-
     If the LLM returns malformed JSON, the call is retried up to ``max_retries``
     times before the parse error is re-raised.  LLM API errors (network, auth,
     rate-limit) are not retried — those should be handled at a higher level.
 
     Args:
-        client:      Async OpenAI-compatible client
-                     (e.g. ``openai.AsyncOpenAI(...)``).
-        model:       Model name to pass to the API (e.g. ``"claude-opus-4-6"``,
-                     ``"gpt-5.4"``, ``"llama3"``).
+        llm:                 LLM backend.
         schema:              Descriptions of available structured-store collections.
                              When provided, injected into the system prompt so the
                              LLM can populate ``structured_targets`` with the right
@@ -325,6 +318,7 @@ class LLMRouter(QueryRouter):
     Example::
 
         import openai
+        from cogbase.llm import OpenAILLM
         from cogbase.engine.router import CollectionSchema, LLMRouter
 
         schema = [
@@ -332,21 +326,20 @@ class LLMRouter(QueryRouter):
             CollectionSchema(name="facts",     fields=["type", "value", "confidence"]),
         ]
         client = openai.AsyncOpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
-        router = LLMRouter(client, model="llama3", schema=schema)
+        llm = OpenAILLM(client, model="gpt-5.4")
+        router = LLMRouter(llm, schema=schema)
         result = await router.route("compare the indemnity clauses across both contracts")
     """
 
     def __init__(
         self,
-        client: Any,
-        model: str,
+        llm: LLMBase,
         schema: list[CollectionSchema] | None = None,
         available_patterns: list[QueryPattern] | None = None,
         max_tokens: int = 4096,
         max_retries: int = 2,
     ) -> None:
-        self._client = client
-        self._model = model
+        self._llm = llm
         self._max_tokens = max_tokens
         self._max_retries = max_retries
         self._system_prompt = _build_system_prompt(schema, available_patterns)
@@ -355,15 +348,13 @@ class LLMRouter(QueryRouter):
         last_exc: Exception | None = None
         for attempt in range(self._max_retries + 1):
             logger.debug("router.route.attempt attempt=%d query_len=%d", attempt + 1, len(query))
-            response = await self._client.chat.completions.create(
-                model=self._model,
-                max_completion_tokens=self._max_tokens,
-                messages=[
+            raw = await self._llm.complete(
+                [
                     {"role": "system", "content": self._system_prompt},
                     {"role": "user", "content": query.strip()},
                 ],
+                max_tokens=self._max_tokens,
             )
-            raw: str = response.choices[0].message.content
             logger.debug("router.route.raw query=%s, result raw=%s", query, raw)
             try:
                 result = _parse_llm_response(raw, query)

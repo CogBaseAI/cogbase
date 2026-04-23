@@ -86,34 +86,37 @@ pipeline:
 """
 
 
-def _mock_openai_client():
-    client = MagicMock()
-    client.chat = MagicMock()
-    client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock()
-    return client
+def _mock_llm():
+    from cogbase.llms.base import LLMBase
+    llm = MagicMock(spec=LLMBase)
+    llm.complete = AsyncMock(return_value="")
+    async def _empty_stream(*a, **kw):
+        return
+        yield  # make it an async generator
+    llm.complete_stream = _empty_stream
+    return llm
 
 
 class TestBuildAppStructuredStoreResolution:
-    @patch("api.factory._build_llm_client")
-    def test_raises_when_no_stores(self, mock_llm):
-        mock_llm.return_value = _mock_openai_client()
+    @patch("api.factory._build_llm")
+    def test_raises_when_no_stores(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         with pytest.raises(ValueError, match="structured store"):
             build_app(cfg)
 
-    @patch("api.factory._build_llm_client")
-    def test_uses_system_store_when_no_app_store(self, mock_llm):
-        mock_llm.return_value = _mock_openai_client()
+    @patch("api.factory._build_llm")
+    def test_uses_system_store_when_no_app_store(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
         app = build_app(cfg, system_structured_store=system_store)
         structured_store = app._ingest_pipeline._structured_collection.store
         assert structured_store is system_store
 
-    @patch("api.factory._build_llm_client")
-    def test_app_config_store_overrides_system_store(self, mock_llm, tmp_path):
-        mock_llm.return_value = _mock_openai_client()
+    @patch("api.factory._build_llm")
+    def test_app_config_store_overrides_system_store(self, mock_build_llm, tmp_path):
+        mock_build_llm.return_value = _mock_llm()
         cfg_yaml = _EXTRACT_ONLY_CONFIG_YAML + (
             "structured_store:\n  type: sqlite\n  path: \":memory:\"\n"
         )
@@ -125,17 +128,17 @@ class TestBuildAppStructuredStoreResolution:
 
 
 class TestBuildAppVectorStoreResolution:
-    @patch("api.factory._build_llm_client")
-    def test_no_vector_collection_when_no_chunk_step(self, mock_llm):
-        mock_llm.return_value = _mock_openai_client()
+    @patch("api.factory._build_llm")
+    def test_no_vector_collection_when_no_chunk_step(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
         app = build_app(cfg, system_structured_store=system_store)
         assert app._ingest_pipeline._vector_collection is None
 
-    @patch("api.factory._build_llm_client")
-    def test_system_vector_store_cfg_used_when_chunk_step_present(self, mock_llm):
-        mock_llm.return_value = _mock_openai_client()
+    @patch("api.factory._build_llm")
+    def test_system_vector_store_cfg_used_when_chunk_step_present(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
         system_store = InMemoryStructuredStore()
@@ -150,10 +153,10 @@ class TestBuildAppVectorStoreResolution:
 
         assert app._ingest_pipeline._vector_collection is not None
 
-    @patch("api.factory._build_llm_client")
-    def test_vector_collection_name_matches_config(self, mock_llm):
+    @patch("api.factory._build_llm")
+    def test_vector_collection_name_matches_config(self, mock_build_llm):
         """The vector collection name comes from vector_collections config, not app name."""
-        mock_llm.return_value = _mock_openai_client()
+        mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
         system_store = InMemoryStructuredStore()

@@ -1,9 +1,5 @@
 """LLM-backed generator — produces answers from retrieval evidence.
 
-Accepts any OpenAI-compatible async client, matching the interface used by
-``LLMRouter``.  Pattern A responses are formatted without an LLM call (the
-architecture specifies "no LLM" for structured lookups).
-
 Pattern-specific behaviour:
 
     A — Structured lookup: structured records are rendered as a plain-text
@@ -20,10 +16,12 @@ Pattern-specific behaviour:
 Usage::
 
     import openai
+    from cogbase.llm import OpenAILLM
     from cogbase.engine.generation.llm import LLMGenerator
 
     client = openai.AsyncOpenAI(api_key="...")
-    generator = LLMGenerator(client, model="claude-sonnet-4-6")
+    llm = OpenAILLM(client, model="gpt-5.4")
+    generator = LLMGenerator(llm)
 
     async for item in generator.generate_stream(query, retrieval_result):
         if isinstance(item, str):
@@ -43,11 +41,10 @@ import json
 import logging
 import re
 from collections.abc import AsyncGenerator
-from typing import Any
-
 from cogbase.engine.generation.base import GenerationResult, GeneratorBase
 from cogbase.engine.retrieval.base import RetrievalResult
 from cogbase.engine.router import QueryPattern
+from cogbase.llms import LLMBase
 
 logger = logging.getLogger(__name__)
 
@@ -166,27 +163,20 @@ def _parse_pattern_d(text: str) -> tuple[str, list[str]]:
 class LLMGenerator(GeneratorBase):
     """Production generator backed by any OpenAI-compatible API.
 
-    Accepts any async client that exposes ``client.chat.completions.create``
-    with the OpenAI signature — OpenAI, Anthropic's compatibility endpoint,
-    vLLM, Ollama, and any other compatible server.
-
     Pattern A responses are produced without an LLM call — structured records
     are formatted directly into a plain-text answer.
 
     Args:
-        client:     Async OpenAI-compatible client.
-        model:      Model name (e.g. ``"claude-sonnet-4-6"``, ``"gpt-4o"``).
+        llm:        LLM backend.
         max_tokens: Maximum tokens to generate.  Defaults to 1024.
     """
 
     def __init__(
         self,
-        client: Any,
-        model: str,
+        llm: LLMBase,
         max_tokens: int = 16384,
     ) -> None:
-        self._client = client
-        self._model = model
+        self._llm = llm
         self._max_tokens = max_tokens
 
     async def generate_stream(
@@ -215,22 +205,16 @@ class LLMGenerator(GeneratorBase):
 
         system_prompt, user_content = self._build_prompt(query, retrieval, pattern)
 
-        stream = await self._client.chat.completions.create(
-            model=self._model,
-            max_completion_tokens=self._max_tokens,
-            messages=[
+        chunks: list[str] = []
+        async for delta in self._llm.complete_stream(
+            [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
-            stream=True,
-        )
-
-        chunks: list[str] = []
-        async for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                chunks.append(delta)
-                yield delta
+            max_tokens=self._max_tokens,
+        ):
+            chunks.append(delta)
+            yield delta
 
         answer = "".join(chunks).strip()
         findings: str | None = None

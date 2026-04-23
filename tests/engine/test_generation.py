@@ -1,6 +1,6 @@
 """Tests for cogbase.engine.generation."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -14,7 +14,7 @@ from cogbase.engine.generation.llm import (
     _parse_pattern_d,
 )
 from cogbase.engine.retrieval.base import RetrievalResult
-from cogbase.engine.router import CollectionTarget, QueryPattern, RouteResult
+from cogbase.engine.router import QueryPattern, RouteResult
 
 
 # ---------------------------------------------------------------------------
@@ -49,27 +49,16 @@ def _make_chunk(text: str, doc_id: str = "doc-1") -> Chunk:
     return Chunk(chunk_id=f"{doc_id}_0", doc_id=doc_id, text=text)
 
 
-async def _stream_chunks(content: str):
+async def _stream_text(content: str):
     """Async generator yielding *content* as a single streaming delta."""
-    delta = MagicMock()
-    delta.content = content
-    choice = MagicMock()
-    choice.delta = delta
-    chunk = MagicMock()
-    chunk.choices = [choice]
-    yield chunk
+    yield content
 
 
-def _mock_llm_client(answer: str) -> MagicMock:
-    """Mock OpenAI-compatible async client returning *answer* via streaming."""
-    async def _create(**kwargs):
-        return _stream_chunks(answer)
-
-    client = MagicMock()
-    client.chat = MagicMock()
-    client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock(side_effect=_create)
-    return client
+def _mock_llm(answer: str) -> MagicMock:
+    """Mock LLMBase-compatible object returning *answer* via complete_stream."""
+    llm = MagicMock()
+    llm.complete_stream = MagicMock(return_value=_stream_text(answer))
+    return llm
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +166,8 @@ def test_parse_pattern_d_missing_sections_returns_empty() -> None:
 
 @pytest.mark.asyncio
 async def test_generator_pattern_a_formats_records_without_llm() -> None:
-    client = _mock_llm_client("should not be called")
-    generator = LLMGenerator(client, model="test-model")
+    llm = _mock_llm("should not be called")
+    generator = LLMGenerator(llm)
     retrieval = _retrieval(
         QueryPattern.A,
         records=[{"id": "1", "clause": "termination"}],
@@ -186,7 +175,7 @@ async def test_generator_pattern_a_formats_records_without_llm() -> None:
 
     result = await generator.generate("list all clauses", retrieval)
 
-    client.chat.completions.create.assert_not_called()
+    llm.complete_stream.assert_not_called()
     assert isinstance(result, GenerationResult)
     assert result.pattern == QueryPattern.A
     assert "termination" in result.answer
@@ -194,14 +183,14 @@ async def test_generator_pattern_a_formats_records_without_llm() -> None:
 
 @pytest.mark.asyncio
 async def test_generator_pattern_a_no_records_returns_not_found() -> None:
-    client = _mock_llm_client("")
-    generator = LLMGenerator(client, model="test-model")
+    llm = _mock_llm("")
+    generator = LLMGenerator(llm)
     retrieval = _retrieval(QueryPattern.A, records=[])
 
     result = await generator.generate("list all clauses", retrieval)
 
     assert "No matching records found" in result.answer
-    client.chat.completions.create.assert_not_called()
+    llm.complete_stream.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -211,8 +200,8 @@ async def test_generator_pattern_a_no_records_returns_not_found() -> None:
 
 @pytest.mark.asyncio
 async def test_generator_pattern_b_calls_llm() -> None:
-    client = _mock_llm_client("The notice period is 30 days.")
-    generator = LLMGenerator(client, model="test-model")
+    llm = _mock_llm("The notice period is 30 days.")
+    generator = LLMGenerator(llm)
     retrieval = _retrieval(
         QueryPattern.B,
         chunks=[_make_chunk("notice period is 30 days")],
@@ -220,7 +209,7 @@ async def test_generator_pattern_b_calls_llm() -> None:
 
     result = await generator.generate("what is the notice period?", retrieval)
 
-    client.chat.completions.create.assert_called_once()
+    llm.complete_stream.assert_called_once()
     assert result.answer == "The notice period is 30 days."
     assert result.pattern == QueryPattern.B
     assert result.findings is None
@@ -229,8 +218,8 @@ async def test_generator_pattern_b_calls_llm() -> None:
 
 @pytest.mark.asyncio
 async def test_generator_pattern_b_includes_chunks_in_prompt() -> None:
-    client = _mock_llm_client("answer")
-    generator = LLMGenerator(client, model="test-model")
+    llm = _mock_llm("answer")
+    generator = LLMGenerator(llm)
     retrieval = _retrieval(
         QueryPattern.B,
         chunks=[_make_chunk("verbatim passage here", doc_id="doc-99")],
@@ -238,8 +227,8 @@ async def test_generator_pattern_b_includes_chunks_in_prompt() -> None:
 
     await generator.generate("query", retrieval)
 
-    call_kwargs = client.chat.completions.create.call_args
-    messages = call_kwargs.kwargs["messages"] if call_kwargs.kwargs else call_kwargs[1]["messages"]
+    call_kwargs = llm.complete_stream.call_args
+    messages = call_kwargs.args[0]
     user_content = next(m["content"] for m in messages if m["role"] == "user")
     assert "verbatim passage here" in user_content
     assert "doc-99" in user_content
@@ -252,8 +241,8 @@ async def test_generator_pattern_b_includes_chunks_in_prompt() -> None:
 
 @pytest.mark.asyncio
 async def test_generator_pattern_c_includes_both_records_and_chunks() -> None:
-    client = _mock_llm_client("hybrid answer")
-    generator = LLMGenerator(client, model="test-model")
+    llm = _mock_llm("hybrid answer")
+    generator = LLMGenerator(llm)
     retrieval = _retrieval(
         QueryPattern.C,
         records=[{"id": "r1", "value": "structured-value"}],
@@ -262,8 +251,8 @@ async def test_generator_pattern_c_includes_both_records_and_chunks() -> None:
 
     await generator.generate("compare clauses", retrieval)
 
-    call_kwargs = client.chat.completions.create.call_args
-    messages = call_kwargs.kwargs["messages"] if call_kwargs.kwargs else call_kwargs[1]["messages"]
+    call_kwargs = llm.complete_stream.call_args
+    messages = call_kwargs.args[0]
     user_content = next(m["content"] for m in messages if m["role"] == "user")
     assert "structured-value" in user_content
     assert "vector passage" in user_content
@@ -271,8 +260,8 @@ async def test_generator_pattern_c_includes_both_records_and_chunks() -> None:
 
 @pytest.mark.asyncio
 async def test_generator_pattern_c_result_has_no_findings() -> None:
-    client = _mock_llm_client("combined answer")
-    generator = LLMGenerator(client, model="test-model")
+    llm = _mock_llm("combined answer")
+    generator = LLMGenerator(llm)
     retrieval = _retrieval(QueryPattern.C)
 
     result = await generator.generate("query", retrieval)
@@ -297,8 +286,8 @@ _PATTERN_D_RESPONSE = (
 
 @pytest.mark.asyncio
 async def test_generator_pattern_d_parses_findings() -> None:
-    client = _mock_llm_client(_PATTERN_D_RESPONSE)
-    generator = LLMGenerator(client, model="test-model")
+    llm = _mock_llm(_PATTERN_D_RESPONSE)
+    generator = LLMGenerator(llm)
     retrieval = _retrieval(QueryPattern.D)
 
     result = await generator.generate("summarise termination", retrieval)
@@ -310,8 +299,8 @@ async def test_generator_pattern_d_parses_findings() -> None:
 
 @pytest.mark.asyncio
 async def test_generator_pattern_d_parses_supporting_quotes() -> None:
-    client = _mock_llm_client(_PATTERN_D_RESPONSE)
-    generator = LLMGenerator(client, model="test-model")
+    llm = _mock_llm(_PATTERN_D_RESPONSE)
+    generator = LLMGenerator(llm)
     retrieval = _retrieval(QueryPattern.D)
 
     result = await generator.generate("summarise termination", retrieval)
@@ -322,8 +311,8 @@ async def test_generator_pattern_d_parses_supporting_quotes() -> None:
 
 @pytest.mark.asyncio
 async def test_generator_pattern_d_full_answer_preserved() -> None:
-    client = _mock_llm_client(_PATTERN_D_RESPONSE)
-    generator = LLMGenerator(client, model="test-model")
+    llm = _mock_llm(_PATTERN_D_RESPONSE)
+    generator = LLMGenerator(llm)
     retrieval = _retrieval(QueryPattern.D)
 
     result = await generator.generate("query", retrieval)
@@ -338,8 +327,8 @@ async def test_generator_pattern_d_full_answer_preserved() -> None:
 
 @pytest.mark.asyncio
 async def test_generator_preserves_retrieval_in_result() -> None:
-    client = _mock_llm_client("answer")
-    generator = LLMGenerator(client, model="test-model")
+    llm = _mock_llm("answer")
+    generator = LLMGenerator(llm)
     retrieval = _retrieval(QueryPattern.B, chunks=[_make_chunk("passage")])
 
     result = await generator.generate("query", retrieval)
@@ -348,19 +337,18 @@ async def test_generator_preserves_retrieval_in_result() -> None:
 
 
 # ---------------------------------------------------------------------------
-# LLMGenerator — passes correct model and max_tokens
+# LLMGenerator — passes max_tokens
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_generator_passes_model_and_max_tokens() -> None:
-    client = _mock_llm_client("answer")
-    generator = LLMGenerator(client, model="my-model", max_tokens=512)
+async def test_generator_passes_max_tokens() -> None:
+    llm = _mock_llm("answer")
+    generator = LLMGenerator(llm, max_tokens=512)
     retrieval = _retrieval(QueryPattern.B)
 
     await generator.generate("query", retrieval)
 
-    call_kwargs = client.chat.completions.create.call_args
+    call_kwargs = llm.complete_stream.call_args
     kwargs = call_kwargs.kwargs if call_kwargs.kwargs else call_kwargs[1]
-    assert kwargs["model"] == "my-model"
-    assert kwargs["max_completion_tokens"] == 512
+    assert kwargs["max_tokens"] == 512

@@ -13,6 +13,7 @@ from cogbase.engine.router import (
     _build_system_prompt,
     _parse_llm_response,
 )
+from cogbase.llms.base import LLMBase
 from cogbase.stores.filters import Op
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
 
@@ -22,28 +23,21 @@ from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
 # ---------------------------------------------------------------------------
 
 
-def _make_openai_client(
+def _make_llm(
     pattern: str,
     semantic_query: str | None = None,
     structured_targets: list | None = None,
 ) -> MagicMock:
-    """Return a mock OpenAI-compatible async client."""
+    """Return a mock LLMBase whose complete() returns a router-compatible JSON string."""
     payload: dict = {"pattern": pattern, "reasoning": "test"}
     if semantic_query is not None:
         payload["semantic_query"] = semantic_query
     if structured_targets is not None:
         payload["structured_targets"] = structured_targets
 
-    message = MagicMock()
-    message.content = json.dumps(payload)
-    choice = MagicMock()
-    choice.message = message
-    response = MagicMock()
-    response.choices = [choice]
-
-    client = MagicMock()
-    client.chat.completions.create = AsyncMock(return_value=response)
-    return client
+    llm = MagicMock(spec=LLMBase)
+    llm.complete = AsyncMock(return_value=json.dumps(payload))
+    return llm
 
 
 _SAMPLE_SCHEMA = [
@@ -78,47 +72,38 @@ _SAMPLE_SCHEMA = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pattern", ["A", "B", "C", "D"])
 async def test_llm_router_all_patterns(pattern: str) -> None:
-    router = LLMRouter(_make_openai_client(pattern), model="test-model")
+    router = LLMRouter(_make_llm(pattern))
     result = await router.route("any query")
     assert result.pattern == QueryPattern(pattern)
 
 
 @pytest.mark.asyncio
 async def test_llm_router_returns_route_result() -> None:
-    router = LLMRouter(_make_openai_client("B"), model="test-model")
+    router = LLMRouter(_make_llm("B"))
     result = await router.route("what is the notice period")
     assert isinstance(result, RouteResult)
 
 
 @pytest.mark.asyncio
 async def test_llm_router_uses_semantic_query_from_response() -> None:
-    router = LLMRouter(_make_openai_client("B", semantic_query="notice period"), model="test-model")
+    router = LLMRouter(_make_llm("B", semantic_query="notice period"))
     result = await router.route("  what is the notice period?  ")
     assert result.semantic_query == "notice period"
 
 
 @pytest.mark.asyncio
 async def test_llm_router_falls_back_to_stripped_query_when_missing() -> None:
-    router = LLMRouter(_make_openai_client("B"), model="test-model")
+    router = LLMRouter(_make_llm("B"))
     result = await router.route("  what is the notice period?  ")
     assert result.semantic_query == "what is the notice period?"
 
 
 @pytest.mark.asyncio
-async def test_llm_router_passes_model_to_client() -> None:
-    client = _make_openai_client("B")
-    router = LLMRouter(client, model="llama3")
-    await router.route("any query")
-    call_kwargs = client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "llama3"
-
-
-@pytest.mark.asyncio
 async def test_llm_router_sends_system_and_user_messages() -> None:
-    client = _make_openai_client("B")
-    router = LLMRouter(client, model="test-model")
+    llm = _make_llm("B")
+    router = LLMRouter(llm)
     await router.route("my query")
-    messages = client.chat.completions.create.call_args.kwargs["messages"]
+    messages = llm.complete.call_args[0][0]
     roles = [m["role"] for m in messages]
     assert roles == ["system", "user"]
     assert messages[1]["content"] == "my query"
@@ -126,17 +111,17 @@ async def test_llm_router_sends_system_and_user_messages() -> None:
 
 @pytest.mark.asyncio
 async def test_llm_router_no_schema_gives_empty_targets() -> None:
-    router = LLMRouter(_make_openai_client("A"), model="test-model")
+    router = LLMRouter(_make_llm("A"))
     result = await router.route("list all contracts")
     assert result.structured_targets == []
 
 
 @pytest.mark.asyncio
 async def test_llm_router_schema_injected_into_system_prompt() -> None:
-    client = _make_openai_client("B")
-    router = LLMRouter(client, model="test-model", schema=_SAMPLE_SCHEMA)
+    llm = _make_llm("B")
+    router = LLMRouter(llm, schema=_SAMPLE_SCHEMA)
     await router.route("any query")
-    system_content = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    system_content = llm.complete.call_args[0][0][0]["content"]
     assert "contracts" in system_content
     assert "facts" in system_content
     assert "party_a" in system_content
@@ -150,8 +135,8 @@ async def test_llm_router_schema_injected_into_system_prompt() -> None:
 @pytest.mark.asyncio
 async def test_llm_router_parses_single_structured_target() -> None:
     targets_payload = [{"collection": "facts", "filters": []}]
-    client = _make_openai_client("A", structured_targets=targets_payload)
-    router = LLMRouter(client, model="test-model", schema=_SAMPLE_SCHEMA)
+    llm = _make_llm("A", structured_targets=targets_payload)
+    router = LLMRouter(llm, schema=_SAMPLE_SCHEMA)
     result = await router.route("list all facts")
     assert len(result.structured_targets) == 1
     assert result.structured_targets[0].collection == "facts"
@@ -164,8 +149,8 @@ async def test_llm_router_parses_multiple_structured_targets() -> None:
         {"collection": "contracts", "filters": []},
         {"collection": "facts", "filters": []},
     ]
-    client = _make_openai_client("C", structured_targets=targets_payload)
-    router = LLMRouter(client, model="test-model", schema=_SAMPLE_SCHEMA)
+    llm = _make_llm("C", structured_targets=targets_payload)
+    router = LLMRouter(llm, schema=_SAMPLE_SCHEMA)
     result = await router.route("compare contracts and facts")
     assert len(result.structured_targets) == 2
     assert result.structured_targets[0].collection == "contracts"
@@ -180,8 +165,8 @@ async def test_llm_router_parses_filters_in_target() -> None:
             "filters": [{"field": "type", "op": "=", "value": "date"}],
         }
     ]
-    client = _make_openai_client("A", structured_targets=targets_payload)
-    router = LLMRouter(client, model="test-model", schema=_SAMPLE_SCHEMA)
+    llm = _make_llm("A", structured_targets=targets_payload)
+    router = LLMRouter(llm, schema=_SAMPLE_SCHEMA)
     result = await router.route("find date facts")
     target = result.structured_targets[0]
     assert len(target.filters) == 1
@@ -197,77 +182,48 @@ async def test_llm_router_parses_filters_in_target() -> None:
 
 @pytest.mark.asyncio
 async def test_llm_router_propagates_api_error() -> None:
-    client = MagicMock()
-    client.chat.completions.create = AsyncMock(side_effect=RuntimeError("LLM unavailable"))
-    router = LLMRouter(client, model="test-model")
+    llm = MagicMock(spec=LLMBase)
+    llm.complete = AsyncMock(side_effect=RuntimeError("LLM unavailable"))
+    router = LLMRouter(llm)
     with pytest.raises(RuntimeError, match="LLM unavailable"):
         await router.route("any query")
 
 
 @pytest.mark.asyncio
 async def test_llm_router_propagates_parse_error_after_retries() -> None:
-    message = MagicMock()
-    message.content = "not valid json"
-    choice = MagicMock()
-    choice.message = message
-    response = MagicMock()
-    response.choices = [choice]
-    client = MagicMock()
-    client.chat.completions.create = AsyncMock(return_value=response)
-
-    router = LLMRouter(client, model="test-model", max_retries=2)
+    llm = MagicMock(spec=LLMBase)
+    llm.complete = AsyncMock(return_value="not valid json")
+    router = LLMRouter(llm, max_retries=2)
     with pytest.raises(Exception):
         await router.route("any query")
 
     # 1 initial attempt + 2 retries = 3 total calls
-    assert client.chat.completions.create.call_count == 3
+    assert llm.complete.call_count == 3
 
 
 @pytest.mark.asyncio
 async def test_llm_router_retries_on_bad_json_then_succeeds() -> None:
     """Router succeeds on the second attempt when the first returns bad JSON."""
-    bad_message = MagicMock()
-    bad_message.content = "not valid json"
-    bad_choice = MagicMock()
-    bad_choice.message = bad_message
-    bad_response = MagicMock()
-    bad_response.choices = [bad_choice]
-
-    good_message = MagicMock()
-    good_message.content = '{"pattern": "B", "semantic_query": "notice period"}'
-    good_choice = MagicMock()
-    good_choice.message = good_message
-    good_response = MagicMock()
-    good_response.choices = [good_choice]
-
-    client = MagicMock()
-    client.chat.completions.create = AsyncMock(
-        side_effect=[bad_response, good_response]
+    llm = MagicMock(spec=LLMBase)
+    llm.complete = AsyncMock(
+        side_effect=["not valid json", '{"pattern": "B", "semantic_query": "notice period"}']
     )
-
-    router = LLMRouter(client, model="test-model", max_retries=2)
+    router = LLMRouter(llm, max_retries=2)
     result = await router.route("what is the notice period")
 
     assert result.pattern == QueryPattern.B
-    assert client.chat.completions.create.call_count == 2
+    assert llm.complete.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_llm_router_no_retry_when_max_retries_zero() -> None:
-    message = MagicMock()
-    message.content = "not valid json"
-    choice = MagicMock()
-    choice.message = message
-    response = MagicMock()
-    response.choices = [choice]
-    client = MagicMock()
-    client.chat.completions.create = AsyncMock(return_value=response)
-
-    router = LLMRouter(client, model="test-model", max_retries=0)
+    llm = MagicMock(spec=LLMBase)
+    llm.complete = AsyncMock(return_value="not valid json")
+    router = LLMRouter(llm, max_retries=0)
     with pytest.raises(Exception):
         await router.route("any query")
 
-    assert client.chat.completions.create.call_count == 1
+    assert llm.complete.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -448,14 +404,13 @@ def test_available_patterns_none_includes_all_four() -> None:
 @pytest.mark.asyncio
 async def test_llm_router_available_patterns_injected_into_system_prompt() -> None:
     """LLMRouter passes available_patterns to the system prompt builder."""
-    client = _make_openai_client("A")
+    llm = _make_llm("A")
     router = LLMRouter(
-        client,
-        model="test-model",
+        llm,
         available_patterns=[QueryPattern.A, QueryPattern.D],
     )
     await router.route("list all contracts")
-    system_content = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    system_content = llm.complete.call_args[0][0][0]["content"]
     assert "B —" not in system_content
     assert "C —" not in system_content
     assert "A —" in system_content

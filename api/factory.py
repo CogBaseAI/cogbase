@@ -11,16 +11,19 @@ from cogbase.core.app import CogBaseApp
 from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.core.basemodel_to_schema import cls_json_schema_for_llm
+from cogbase.llms.base import LLMBase
+from cogbase.llms.openai import OpenAILLM
 
 
-def _build_llm_client(config: AppConfig) -> Any:
+def _build_llm(config: AppConfig) -> LLMBase:
     if config.llm.provider == "openai":
         try:
             import openai
         except ImportError as exc:
             raise ImportError("openai package required: pip install openai") from exc
         api_key = config.llm.resolved_api_key()
-        return openai.AsyncOpenAI(api_key=api_key)
+        client = openai.AsyncOpenAI(api_key=api_key)
+        return OpenAILLM(client, model=config.llm.model)
     raise ValueError(f"Unsupported LLM provider: {config.llm.provider!r}")
 
 
@@ -84,7 +87,7 @@ def build_app(
        store is shared; collection names scope records to their collection.
     3. No fallback — raises ``ValueError`` when neither is provided.
     """
-    llm_client = _build_llm_client(config)
+    llm = _build_llm(config)
 
     steps = config.pipeline.steps if config.pipeline else []
     vc_by_name = {vc.name: vc for vc in config.vector_collections}
@@ -111,7 +114,7 @@ def build_app(
                 f"chunk_and_embed step for '{vc_cfg.name}' requires an embedding config"
             )
         vector_store = _build_vector_store(vector_store_cfg)
-        embedder = _build_embedder(config.embedding, llm_client)
+        embedder = _build_embedder(config.embedding, llm)
         chunker_cfg = vc_cfg.chunker
         if chunker_cfg.type == "fixed":
             from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
@@ -153,8 +156,7 @@ def build_app(
             system_prompt = sc_cfg.extractor.prompt + cls_json_schema_for_llm(extraction_model)
 
         extractor = LLMExtractor(
-            llm_client,
-            config.llm.model,
+            llm,
             extraction_model=extraction_model,
             collection_name=sc_cfg.name,
             system_prompt=system_prompt,
@@ -162,8 +164,7 @@ def build_app(
 
     return CogBaseApp(
         name=config.name,
-        client=llm_client,
-        model=config.llm.model,
+        llm=llm,
         extractor=extractor,
         structured_store=structured_store,
         vector_store=vector_store,

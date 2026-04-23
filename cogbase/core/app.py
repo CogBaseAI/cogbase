@@ -7,6 +7,7 @@
 Typical usage::
 
     import openai
+    from cogbase.llms import OpenAILLM
     from cogbase.core.app import CogBaseApp
     from cogbase.core.models import Document
     from cogbase.pipeline.extraction.llm import LLMExtractor
@@ -19,14 +20,15 @@ Typical usage::
 
     extraction_model = build_model_from_json_schema(extraction_json_schema_str)
     client = openai.AsyncOpenAI(api_key="...")
+    llm = OpenAILLM(client, model="gpt-5.4")
     extractor = LLMExtractor(
-        client=client,
+        llm=llm,
         model="gpt-4o-mini",
         extraction_model=extraction_model,
         collection_name='your_collection_name',
     )
     app = CogBaseApp(
-        client=client,
+        llm=llm,
         model="gpt-4o-mini",
         extractor=extractor,
         structured_store=SQLiteStructuredStore("contracts.db"),
@@ -47,7 +49,7 @@ Typical usage::
 from __future__ import annotations
 
 import logging
-from typing import Any, Sequence
+from typing import Sequence
 
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult, StructuredCollection, VectorCollection
 from cogbase.core.models import Document
@@ -57,6 +59,7 @@ from cogbase.engine.generation.llm import LLMGenerator
 from cogbase.engine.retrieval.hybrid import HybridRetriever
 from cogbase.engine.router import LLMRouter, QueryPattern
 from cogbase.embeddings import EmbeddingBase
+from cogbase.llms import LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
 from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
@@ -75,8 +78,7 @@ class CogBaseApp:
 
     Args:
         name:                 Logical name for the application.
-        client:               Async OpenAI-compatible client for the router and
-                              generator.
+        llm:                  LLM for the router and generator.
         model:                Model name forwarded to the router and generator.
         extractor:            Optional ``ExtractorBase`` for structured extraction.
         structured_store:     Persistent store for extracted records.
@@ -98,8 +100,7 @@ class CogBaseApp:
     def __init__(
         self,
         name: str,
-        client: Any,
-        model: str,
+        llm: LLMBase,
         extractor: ExtractorBase | None,
         structured_store: StructuredStoreBase | None,
         *,
@@ -152,8 +153,7 @@ class CogBaseApp:
 
         self._engine = Engine(
             router=LLMRouter(
-                client,
-                model,
+                llm,
                 schema=self._ingest_pipeline.structured_schemas,
                 available_patterns=available_patterns,
             ),
@@ -164,7 +164,7 @@ class CogBaseApp:
                 embedder=embedder,
                 top_k=retriever_top_k,
             ),
-            generator=LLMGenerator(client, model, max_tokens=generator_max_tokens),
+            generator=LLMGenerator(llm, max_tokens=generator_max_tokens),
         )
 
     # ------------------------------------------------------------------
