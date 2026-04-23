@@ -1,18 +1,15 @@
 """Unit tests for ChunkEmbedUpsertTool."""
 
+import json
+
 import pytest
 
 from cogbase.core.models import Chunk, Document
-from cogbase.core.session import Session
 from cogbase.tools.builtin.chunk_embed_upsert import ChunkEmbedUpsertTool
 
 
 def _doc(text: str = "Hello world.") -> Document:
     return Document(doc_id="doc-1", text=text)
-
-
-def _session() -> Session:
-    return Session()
 
 
 def _chunk(text: str, idx: int = 0) -> Chunk:
@@ -69,7 +66,7 @@ async def test_run_returns_correct_count():
         vector_store=store,
         collection_name="col",
     )
-    result = await tool.run({"document": _doc()}, _session())
+    result = json.loads(await tool.handler({"document": _doc()}))
     assert result == {"doc_id": "doc-1", "chunks_upserted": 2}
 
 
@@ -84,14 +81,13 @@ async def test_run_upserts_embeddings_onto_chunks():
         vector_store=store,
         collection_name="col",
     )
-    await tool.run({"document": _doc()}, _session())
+    await tool.handler({"document": _doc()})
     assert store.upserted[0].embedding == [1.0, 2.0]
 
 
 @pytest.mark.asyncio
 async def test_run_uses_correct_collection():
     chunk = _chunk("x", 0)
-    store = StubVectorStore()
 
     class TrackingStore:
         def __init__(self):
@@ -109,7 +105,7 @@ async def test_run_uses_correct_collection():
         vector_store=tracking,
         collection_name="my-col",
     )
-    await tool.run({"document": _doc()}, _session())
+    await tool.handler({"document": _doc()})
     assert tracking.collections == ["my-col"]
 
 
@@ -126,7 +122,7 @@ async def test_run_empty_chunks_returns_zero():
         vector_store=store,
         collection_name="col",
     )
-    result = await tool.run({"document": _doc()}, _session())
+    result = json.loads(await tool.handler({"document": _doc()}))
     assert result == {"doc_id": "doc-1", "chunks_upserted": 0}
     assert store.upserted == []
 
@@ -144,7 +140,7 @@ async def test_run_wrong_type_raises():
         collection_name="col",
     )
     with pytest.raises(TypeError, match="Document"):
-        await tool.run({"document": "not-a-doc"}, _session())
+        await tool.handler({"document": "not-a-doc"})
 
 
 @pytest.mark.asyncio
@@ -156,7 +152,7 @@ async def test_run_missing_key_raises():
         collection_name="col",
     )
     with pytest.raises(KeyError):
-        await tool.run({}, _session())
+        await tool.handler({})
 
 
 # ---------------------------------------------------------------------------
@@ -173,4 +169,4 @@ async def test_run_embedder_count_mismatch_raises():
         collection_name="col",
     )
     with pytest.raises(ValueError, match="embeddings"):
-        await tool.run({"document": _doc()}, _session())
+        await tool.handler({"document": _doc()})

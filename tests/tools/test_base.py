@@ -1,48 +1,31 @@
-"""Unit tests for cogbase.tools.base — Tool ABC and validation."""
+"""Unit tests for tool name/description validation enforced by ToolRegistry.register."""
 
 import pytest
 
-from cogbase.core.session import Session
-from cogbase.tools.base import Tool
+from cogbase.llms.base import SystemTool, ToolDefinition
+from cogbase.tools.registry import ToolRegistry
 
 
-class EchoTool(Tool):
-    name = "echo"
-    description = "Returns the input unchanged."
+def _tool(name: str, description: str = "A tool.") -> SystemTool:
+    return SystemTool(
+        definition=ToolDefinition(name=name, description=description, parameters={}),
+        handler=lambda inputs: "{}",
+    )
 
-    async def run(self, input: dict, session: Session) -> dict:
-        return input
 
-
-# ---------------------------------------------------------------------------
-# Valid subclass
-# ---------------------------------------------------------------------------
-
-def test_valid_subclass_instantiates():
-    tool = EchoTool()
-    assert tool.name == "echo"
+def _register(name: str, description: str = "A tool.") -> None:
+    ToolRegistry().register(_tool(name, description))
 
 
 # ---------------------------------------------------------------------------
-# Missing required class variables
+# Valid tool
 # ---------------------------------------------------------------------------
 
-def test_missing_name_raises():
-    with pytest.raises(TypeError, match="name"):
-        class BadTool(Tool):
-            description = "No name."
-
-            async def run(self, input: dict, session: Session) -> dict:
-                return {}
-
-
-def test_missing_description_raises():
-    with pytest.raises(TypeError, match="description"):
-        class BadTool(Tool):
-            name = "bad-tool"
-
-            async def run(self, input: dict, session: Session) -> dict:
-                return {}
+def test_valid_tool_registers():
+    reg = ToolRegistry()
+    tool = _tool("echo")
+    reg.register(tool)
+    assert reg.get("echo") is tool
 
 
 # ---------------------------------------------------------------------------
@@ -50,53 +33,28 @@ def test_missing_description_raises():
 # ---------------------------------------------------------------------------
 
 def test_name_uppercase_raises():
-    with pytest.raises(TypeError, match="invalid"):
-        class BadTool(Tool):
-            name = "BadTool"
-            description = "Bad name."
-
-            async def run(self, input: dict, session: Session) -> dict:
-                return {}
+    with pytest.raises(ValueError, match="invalid"):
+        _register("BadTool")
 
 
 def test_name_leading_hyphen_raises():
-    with pytest.raises(TypeError, match="invalid"):
-        class BadTool(Tool):
-            name = "-bad"
-            description = "Bad name."
-
-            async def run(self, input: dict, session: Session) -> dict:
-                return {}
+    with pytest.raises(ValueError, match="invalid"):
+        _register("-bad")
 
 
 def test_name_consecutive_hyphens_raises():
-    with pytest.raises(TypeError, match="invalid"):
-        class BadTool(Tool):
-            name = "bad--tool"
-            description = "Bad name."
-
-            async def run(self, input: dict, session: Session) -> dict:
-                return {}
+    with pytest.raises(ValueError, match="invalid"):
+        _register("bad--tool")
 
 
 def test_name_too_long_raises():
-    with pytest.raises(TypeError, match="64"):
-        class BadTool(Tool):
-            name = "a" * 65
-            description = "Name too long."
-
-            async def run(self, input: dict, session: Session) -> dict:
-                return {}
+    with pytest.raises(ValueError, match="64"):
+        _register("a" * 65)
 
 
 def test_name_empty_raises():
-    with pytest.raises(TypeError, match="empty"):
-        class BadTool(Tool):
-            name = ""
-            description = "Empty name."
-
-            async def run(self, input: dict, session: Session) -> dict:
-                return {}
+    with pytest.raises(ValueError, match="empty"):
+        _register("")
 
 
 # ---------------------------------------------------------------------------
@@ -104,32 +62,10 @@ def test_name_empty_raises():
 # ---------------------------------------------------------------------------
 
 def test_description_too_long_raises():
-    with pytest.raises(TypeError, match="1024"):
-        class BadTool(Tool):
-            name = "long-desc"
-            description = "x" * 1025
-
-            async def run(self, input: dict, session: Session) -> dict:
-                return {}
+    with pytest.raises(ValueError, match="1024"):
+        _register("long-desc", description="x" * 1025)
 
 
 def test_description_empty_raises():
-    with pytest.raises(TypeError, match="empty"):
-        class BadTool(Tool):
-            name = "empty-desc"
-            description = ""
-
-            async def run(self, input: dict, session: Session) -> dict:
-                return {}
-
-
-# ---------------------------------------------------------------------------
-# Abstract enforcement
-# ---------------------------------------------------------------------------
-
-def test_abstract_run_not_implemented():
-    with pytest.raises(TypeError):
-        class NoRun(Tool):
-            name = "no-run"
-            description = "Missing run."
-        NoRun()
+    with pytest.raises(ValueError, match="empty"):
+        _register("empty-desc", description="")

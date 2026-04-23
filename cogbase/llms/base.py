@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import abc
-from collections.abc import AsyncGenerator
-from typing import Literal, TypedDict
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from typing import Literal, TypedDict, Union
 
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
 
@@ -23,6 +23,27 @@ class ToolDefinition(TypedDict):
     name: str
     description: str
     parameters: dict  # JSON Schema object
+
+
+ToolHandler = Callable[[dict], Union[Awaitable[str], str]]
+
+
+class SystemTool:
+    """A named tool with its JSON-schema definition and async/sync handler.
+
+    Args:
+        definition: ``ToolDefinition`` exposed to the LLM.
+        handler:    ``(inputs: dict) -> str | Awaitable[str]`` — executes the
+                    tool and returns a result string for the LLM.
+    """
+
+    def __init__(self, definition: ToolDefinition, handler: ToolHandler) -> None:
+        self.definition = definition
+        self.handler = handler
+
+    @property
+    def name(self) -> str:
+        return self.definition["name"]
 
 
 class CompletionResult(TypedDict):

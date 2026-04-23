@@ -1,11 +1,12 @@
 """CogBase tools layer — composable, async pipeline operations."""
 
-from cogbase.tools.base import Tool
+from cogbase.llms.base import SystemTool, ToolDefinition
 from cogbase.tools.registry import ToolInfo, ToolRegistry
 from cogbase.tools.builtin import ChunkEmbedUpsertTool, ExtractTool
 
 __all__ = [
-    "Tool",
+    "ToolDefinition",
+    "SystemTool",
     "ToolInfo",
     "ToolRegistry",
     "ChunkEmbedUpsertTool",

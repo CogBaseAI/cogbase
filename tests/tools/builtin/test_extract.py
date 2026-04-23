@@ -1,19 +1,16 @@
 """Unit tests for ExtractTool."""
 
+import json
+
 import pytest
 from pydantic import BaseModel
 
 from cogbase.core.models import Document
-from cogbase.core.session import Session
 from cogbase.tools.builtin.extract import ExtractTool
 
 
 def _doc(text: str = "Some content.") -> Document:
     return Document(doc_id="doc-42", text=text)
-
-
-def _session() -> Session:
-    return Session()
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +48,7 @@ async def test_run_returns_extracted_true():
     record = _Record(doc_id="doc-42", value="v")
     store = StubStructuredStore()
     tool = ExtractTool(extractor=StubExtractor(record), structured_store=store)
-    result = await tool.run({"document": _doc()}, _session())
+    result = json.loads(await tool.handler({"document": _doc()}))
     assert result == {"doc_id": "doc-42", "extracted": True}
 
 
@@ -60,7 +57,7 @@ async def test_run_saves_to_correct_collection():
     record = _Record(doc_id="doc-42", value="v")
     store = StubStructuredStore()
     tool = ExtractTool(extractor=StubExtractor(record), structured_store=store)
-    await tool.run({"document": _doc()}, _session())
+    await tool.handler({"document": _doc()})
     assert len(store.saved) == 1
     col, records = store.saved[0]
     assert col == "test-col"
@@ -75,7 +72,7 @@ async def test_run_saves_to_correct_collection():
 async def test_run_returns_extracted_false_when_none():
     store = StubStructuredStore()
     tool = ExtractTool(extractor=StubExtractor(None), structured_store=store)
-    result = await tool.run({"document": _doc()}, _session())
+    result = json.loads(await tool.handler({"document": _doc()}))
     assert result == {"doc_id": "doc-42", "extracted": False}
 
 
@@ -83,7 +80,7 @@ async def test_run_returns_extracted_false_when_none():
 async def test_run_does_not_save_when_no_record():
     store = StubStructuredStore()
     tool = ExtractTool(extractor=StubExtractor(None), structured_store=store)
-    await tool.run({"document": _doc()}, _session())
+    await tool.handler({"document": _doc()})
     assert store.saved == []
 
 
@@ -98,7 +95,7 @@ async def test_run_wrong_type_raises():
         structured_store=StubStructuredStore(),
     )
     with pytest.raises(TypeError, match="Document"):
-        await tool.run({"document": 123}, _session())
+        await tool.handler({"document": 123})
 
 
 @pytest.mark.asyncio
@@ -108,4 +105,4 @@ async def test_run_missing_key_raises():
         structured_store=StubStructuredStore(),
     )
     with pytest.raises(KeyError):
-        await tool.run({}, _session())
+        await tool.handler({})

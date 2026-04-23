@@ -2,25 +2,15 @@
 
 import pytest
 
-from cogbase.core.session import Session
-from cogbase.tools.base import Tool
+from cogbase.llms.base import SystemTool, ToolDefinition
 from cogbase.tools.registry import ToolInfo, ToolRegistry
 
 
-class AlphaTool(Tool):
-    name = "alpha"
-    description = "Alpha tool."
-
-    async def run(self, input: dict, session: Session) -> dict:
-        return {}
-
-
-class BetaTool(Tool):
-    name = "beta"
-    description = "Beta tool."
-
-    async def run(self, input: dict, session: Session) -> dict:
-        return {}
+def _make_tool(name: str, description: str = "A tool.") -> SystemTool:
+    return SystemTool(
+        definition=ToolDefinition(name=name, description=description, parameters={}),
+        handler=lambda inputs: "{}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -29,16 +19,16 @@ class BetaTool(Tool):
 
 def test_register_and_get():
     reg = ToolRegistry()
-    tool = AlphaTool()
+    tool = _make_tool("alpha")
     reg.register(tool)
     assert reg.get("alpha") is tool
 
 
 def test_duplicate_registration_raises():
     reg = ToolRegistry()
-    reg.register(AlphaTool())
+    reg.register(_make_tool("alpha"))
     with pytest.raises(ValueError, match="already registered"):
-        reg.register(AlphaTool())
+        reg.register(_make_tool("alpha"))
 
 
 def test_get_unknown_raises():
@@ -49,7 +39,7 @@ def test_get_unknown_raises():
 
 def test_get_error_lists_known_tools():
     reg = ToolRegistry()
-    reg.register(AlphaTool())
+    reg.register(_make_tool("alpha"))
     with pytest.raises(KeyError, match="alpha"):
         reg.get("missing")
 
@@ -66,7 +56,7 @@ def test_get_error_shows_none_when_empty():
 
 def test_deregister_removes_tool():
     reg = ToolRegistry()
-    reg.register(AlphaTool())
+    reg.register(_make_tool("alpha"))
     reg.deregister("alpha")
     with pytest.raises(KeyError):
         reg.get("alpha")
@@ -87,16 +77,16 @@ def test_list_tools_empty():
 
 def test_list_tools_returns_all_sorted():
     reg = ToolRegistry()
-    reg.register(BetaTool())
-    reg.register(AlphaTool())
+    reg.register(_make_tool("beta"))
+    reg.register(_make_tool("alpha"))
     infos = reg.list_tools()
     assert [ti.name for ti in infos] == ["alpha", "beta"]
 
 
 def test_list_tools_builtin_flag():
     reg = ToolRegistry()
-    reg.register(AlphaTool(), builtin=True)
-    reg.register(BetaTool(), builtin=False)
+    reg.register(_make_tool("alpha"), builtin=True)
+    reg.register(_make_tool("beta"), builtin=False)
     infos = {ti.name: ti for ti in reg.list_tools()}
     assert infos["alpha"].builtin is True
     assert infos["beta"].builtin is False
@@ -104,8 +94,8 @@ def test_list_tools_builtin_flag():
 
 def test_list_builtin_tools_filters():
     reg = ToolRegistry()
-    reg.register(AlphaTool(), builtin=True)
-    reg.register(BetaTool(), builtin=False)
+    reg.register(_make_tool("alpha"), builtin=True)
+    reg.register(_make_tool("beta"), builtin=False)
     builtins = reg.list_builtin_tools()
     assert len(builtins) == 1
     assert builtins[0].name == "alpha"
@@ -117,14 +107,14 @@ def test_list_builtin_tools_empty_registry():
 
 def test_deregister_also_removes_builtin_flag():
     reg = ToolRegistry()
-    reg.register(AlphaTool(), builtin=True)
+    reg.register(_make_tool("alpha"), builtin=True)
     reg.deregister("alpha")
     assert reg.list_builtin_tools() == []
 
 
 def test_tool_info_fields():
     reg = ToolRegistry()
-    reg.register(AlphaTool(), builtin=True)
+    reg.register(_make_tool("alpha", description="Alpha tool."), builtin=True)
     info = reg.list_tools()[0]
     assert isinstance(info, ToolInfo)
     assert info.name == "alpha"

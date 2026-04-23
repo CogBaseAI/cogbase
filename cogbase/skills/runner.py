@@ -10,7 +10,7 @@ import sys
 import tempfile
 from collections.abc import AsyncGenerator
 
-from cogbase.llms.base import ChatMessage, LLMBase, ToolDefinition
+from cogbase.llms.base import ChatMessage, LLMBase, SystemTool, ToolDefinition
 from cogbase.skills.skill import Skill
 
 logger = logging.getLogger(__name__)
@@ -52,13 +52,26 @@ class SkillRunner:
     """Drives the select → prompt → tool-call loop for a skill.
 
     Args:
-        llm:       LLM backend used for skill selection and execution.
-        max_calls: Maximum tool-call iterations before giving up.
+        llm:          LLM backend used for skill selection and execution.
+        max_calls:    Maximum tool-call iterations before giving up.
+        system_tools: Store-backed or service tools injected by the caller
+                      (e.g. semantic_search, structured_query).  Merged with
+                      BASE_TOOLS and available to the LLM on every turn.
     """
 
-    def __init__(self, llm: LLMBase, max_calls: int = 10) -> None:
+    def __init__(
+        self,
+        llm: LLMBase,
+        max_calls: int = 10,
+        system_tools: list[SystemTool] | None = None,
+    ) -> None:
         self._llm = llm
         self._max_calls = max_calls
+        self._system_tools: dict[str, SystemTool] = {t.name: t for t in (system_tools or [])}
+
+    @property
+    def _all_tool_definitions(self) -> list[ToolDefinition]:
+        return BASE_TOOLS + [t.definition for t in self._system_tools.values()]
 
     async def select(
         self,
@@ -186,7 +199,7 @@ class SkillRunner:
             system_prompt = self.build_system_prompt(base_prompt, current_skill, runtime_context)
             messages[0] = {"role": "system", "content": system_prompt}
 
-            result = await self._llm.complete(messages, tools=BASE_TOOLS)
+            result = await self._llm.complete(messages, tools=self._all_tool_definitions)
 
             tool_calls = result.get("tool_calls")
             if not tool_calls:
@@ -228,8 +241,16 @@ class SkillRunner:
         )
 
     async def _execute_tool(self, name: str, inputs: dict, skill: Skill | None = None) -> str:
-        env = self._tool_env(skill)
+        if name in self._system_tools:
+            try:
+                result = self._system_tools[name].handler(inputs)
+                if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+                    return await result
+                return result  # type: ignore[return-value]
+            except Exception as e:
+                return f"Tool error ({name}): {e}"
 
+        env = self._tool_env(skill)
         if name == "python":
             return await self._run_python(inputs.get("code", ""), env)
         if name == "shell":
