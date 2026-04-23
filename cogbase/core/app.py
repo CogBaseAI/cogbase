@@ -1,7 +1,7 @@
 """Generic CogBase application — bundles ingestion and query under one object.
 
 ``CogBaseApp`` wires together an ``IngestionPipeline`` (ingestion layer) and an
-``Engine`` (query layer) behind a small interface: ``setup`` → ``ingest`` /
+``QueryRunner`` (query layer) behind a small interface: ``setup`` → ``ingest`` /
 ``ingest_documents`` → ``query``.
 
 Typical usage::
@@ -54,7 +54,6 @@ from typing import Sequence
 
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult, StructuredCollection, VectorCollection
 from cogbase.core.models import Document
-from cogbase.engine.engine import Engine
 from cogbase.engine.query_runner import QueryResult, QueryRunner
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms import LLMBase
@@ -140,17 +139,15 @@ class CogBaseApp:
             structured_collection=structured_collection,
         )
 
-        self._engine = Engine(
-            QueryRunner(
-                llm=llm,
-                structured_store=structured_store,
-                vector_store=vector_store,
-                embedder=embedder,
-                default_vector_collection=_vc_name,
-                structured_schemas=self._ingest_pipeline.structured_schemas or None,
-                passthrough_token_threshold=passthrough_token_threshold,
-                max_rounds=query_max_rounds,
-            )
+        self._runner = QueryRunner(
+            llm=llm,
+            structured_store=structured_store,
+            vector_store=vector_store,
+            embedder=embedder,
+            default_vector_collection=_vc_name,
+            structured_schemas=self._ingest_pipeline.structured_schemas or None,
+            passthrough_token_threshold=passthrough_token_threshold,
+            max_rounds=query_max_rounds,
         )
 
     # ------------------------------------------------------------------
@@ -187,7 +184,7 @@ class CogBaseApp:
         returned directly as formatted text (passthrough rule).
         """
         logger.info("app.query_stream.start query=%s", text[:200])
-        async for chunk in self._engine.query_stream(text):
+        async for chunk in self._runner.query_stream(text):
             yield chunk
 
     # ------------------------------------------------------------------
@@ -200,9 +197,9 @@ class CogBaseApp:
         return self._ingest_pipeline
 
     @property
-    def engine(self) -> Engine:
-        """The underlying ``Engine`` (query layer)."""
-        return self._engine
+    def query_runner(self) -> QueryRunner:
+        """The underlying ``QueryRunner`` (query layer)."""
+        return self._runner
 
     @property
     def structured_schemas(self) -> list[CollectionSchema]:

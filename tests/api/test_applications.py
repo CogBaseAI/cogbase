@@ -27,9 +27,7 @@ from api.main import app
 from api.app_cache import AppCache
 from api.system_config import SystemConfig
 from api.system_store import SystemStore
-from cogbase.engine.generation.base import GenerationResult
-from cogbase.engine.retrieval.base import RetrievalResult
-from cogbase.engine.router import QueryPattern, RouteResult
+from cogbase.engine.query_runner import QueryResult
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 
 
@@ -604,32 +602,27 @@ class TestIngestDocuments:
 # Helpers shared by query tests
 # ---------------------------------------------------------------------------
 
-def _make_generation(
+def _make_query_result(
     answer: str = "The notice period is 60 days.",
-    pattern: QueryPattern = QueryPattern.B,
-    findings: str | None = None,
-    supporting_quotes: list[str] | None = None,
-) -> GenerationResult:
-    route = RouteResult(pattern=pattern, semantic_query="q", structured_targets=[])
-    retrieval = RetrievalResult(route=route)
-    return GenerationResult(
+    passthrough: bool = False,
+    structured_records: list[dict] | None = None,
+) -> QueryResult:
+    return QueryResult(
         answer=answer,
-        pattern=pattern,
-        findings=findings,
-        supporting_quotes=supporting_quotes or [],
-        retrieval=retrieval,
+        passthrough=passthrough,
+        structured_records=structured_records or [],
     )
 
 
-def _mock_query_app(generation: GenerationResult) -> MagicMock:
-    """Build a mock CogBaseApp whose query_stream yields tokens then a GenerationResult."""
+def _mock_query_app(result: QueryResult) -> MagicMock:
+    """Build a mock CogBaseApp whose query_stream yields tokens then a QueryResult."""
     inst = MagicMock()
     inst.setup = AsyncMock()
 
     async def _query_stream(text: str):
-        for token in generation.answer.split():
+        for token in result.answer.split():
             yield token + " "
-        yield generation
+        yield result
 
     inst.query_stream = _query_stream
     return inst
@@ -660,8 +653,8 @@ async def _create_app(client, mock_app: MagicMock) -> None:
 class TestQueryApplication:
     @pytest.mark.asyncio
     async def test_returns_200_with_answer(self, client):
-        gen = _make_generation("The notice period is 60 days.")
-        await _create_app(client, _mock_query_app(gen))
+        result = _make_query_result("The notice period is 60 days.")
+        await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query",
@@ -669,38 +662,39 @@ class TestQueryApplication:
         )
 
         assert resp.status_code == 200
-        assert resp.json()["answer"] == gen.answer
+        assert resp.json()["answer"] == result.answer
 
     @pytest.mark.asyncio
-    async def test_returns_correct_pattern(self, client):
-        gen = _make_generation(pattern=QueryPattern.C)
-        await _create_app(client, _mock_query_app(gen))
+    async def test_passthrough_false_by_default(self, client):
+        result = _make_query_result(passthrough=False)
+        await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query",
             json={"text": "q"},
         )
 
-        assert resp.json()["pattern"] == "C"
+        assert resp.json()["passthrough"] is False
 
     @pytest.mark.asyncio
-    async def test_pattern_d_returns_findings_and_quotes(self, client):
-        gen = _make_generation(
-            answer="[FINDINGS]\nFound it.\n[SUPPORTING_QUOTES]\n- quote",
-            pattern=QueryPattern.D,
-            findings="Found it.",
-            supporting_quotes=["quote"],
+    async def test_passthrough_true_with_records(self, client):
+        records = [{"contract_type": "NDA", "doc_id": "c-001"}]
+        result = _make_query_result(
+            answer="Found 1 record(s): contract_type: NDA, doc_id: c-001",
+            passthrough=True,
+            structured_records=records,
         )
-        await _create_app(client, _mock_query_app(gen))
+        await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query",
-            json={"text": "summarise"},
+            json={"text": "list NDA contracts"},
         )
 
         data = resp.json()
-        assert data["findings"] == "Found it."
-        assert data["supporting_quotes"] == ["quote"]
+        assert data["passthrough"] is True
+        assert len(data["structured_records"]) == 1
+        assert data["structured_records"][0]["contract_type"] == "NDA"
 
     @pytest.mark.asyncio
     async def test_404_when_app_not_found(self, client):
@@ -728,7 +722,7 @@ class TestQueryApplication:
 
     @pytest.mark.asyncio
     async def test_retries_on_first_failure(self, client):
-        gen = _make_generation("Retry worked.")
+        result = _make_query_result("Retry worked.")
 
         call_count = 0
 
@@ -737,10 +731,10 @@ class TestQueryApplication:
             call_count += 1
             if call_count == 1:
                 raise RuntimeError("transient failure")
-            yield gen.answer
-            yield gen
+            yield result.answer
+            yield result
 
-        failing_then_good = _mock_query_app(gen)
+        failing_then_good = _mock_query_app(result)
         failing_then_good.query_stream = _flaky_stream
 
         await _create_app(client, failing_then_good)
@@ -762,8 +756,8 @@ class TestQueryApplication:
 class TestQueryApplicationStream:
     @pytest.mark.asyncio
     async def test_returns_event_stream_content_type(self, client):
-        gen = _make_generation()
-        await _create_app(client, _mock_query_app(gen))
+        result = _make_query_result()
+        await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query/stream",
@@ -775,8 +769,8 @@ class TestQueryApplicationStream:
 
     @pytest.mark.asyncio
     async def test_streams_token_events(self, client):
-        gen = _make_generation("Hello world.")
-        await _create_app(client, _mock_query_app(gen))
+        result = _make_query_result("Hello world.")
+        await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query/stream",
@@ -788,12 +782,12 @@ class TestQueryApplicationStream:
         tokens = [json.loads(e) for e in token_events if "token" in json.loads(e)]
         assert len(tokens) > 0
         assembled = "".join(t["token"] for t in tokens)
-        assert assembled.strip() == gen.answer
+        assert assembled.strip() == result.answer
 
     @pytest.mark.asyncio
-    async def test_final_result_event_contains_answer_and_pattern(self, client):
-        gen = _make_generation("The answer.", pattern=QueryPattern.C)
-        await _create_app(client, _mock_query_app(gen))
+    async def test_final_result_event_contains_answer_and_passthrough(self, client):
+        result = _make_query_result("The answer.", passthrough=False)
+        await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query/stream",
@@ -803,14 +797,14 @@ class TestQueryApplicationStream:
         events = _parse_sse(resp.text)
         result_events = [json.loads(e) for e in events if e != "[DONE]" and "result" in json.loads(e)]
         assert len(result_events) == 1
-        result = result_events[0]["result"]
-        assert result["answer"] == "The answer."
-        assert result["pattern"] == "C"
+        payload = result_events[0]["result"]
+        assert payload["answer"] == "The answer."
+        assert payload["passthrough"] is False
 
     @pytest.mark.asyncio
     async def test_ends_with_done_sentinel(self, client):
-        gen = _make_generation()
-        await _create_app(client, _mock_query_app(gen))
+        result = _make_query_result()
+        await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query/stream",
@@ -821,13 +815,14 @@ class TestQueryApplicationStream:
         assert events[-1] == "[DONE]"
 
     @pytest.mark.asyncio
-    async def test_pattern_d_result_includes_findings_and_quotes(self, client):
-        gen = _make_generation(
-            pattern=QueryPattern.D,
-            findings="Key finding.",
-            supporting_quotes=["verbatim excerpt"],
+    async def test_result_includes_structured_records(self, client):
+        records = [{"contract_type": "NDA", "doc_id": "c-001"}]
+        result = _make_query_result(
+            answer="Found 1 record(s).",
+            passthrough=True,
+            structured_records=records,
         )
-        await _create_app(client, _mock_query_app(gen))
+        await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query/stream",
@@ -836,9 +831,9 @@ class TestQueryApplicationStream:
 
         events = _parse_sse(resp.text)
         result_events = [json.loads(e) for e in events if e != "[DONE]" and "result" in json.loads(e)]
-        result = result_events[0]["result"]
-        assert result["findings"] == "Key finding."
-        assert result["supporting_quotes"] == ["verbatim excerpt"]
+        payload = result_events[0]["result"]
+        assert payload["passthrough"] is True
+        assert payload["structured_records"] == records
 
     @pytest.mark.asyncio
     async def test_404_when_app_not_found(self, client):

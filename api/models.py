@@ -59,6 +59,5 @@ class QueryRequest(BaseModel):
 
 class QueryResponse(BaseModel):
     answer: str
-    pattern: str
-    findings: str | None = None
-    supporting_quotes: list[str] = []
+    passthrough: bool = False
+    structured_records: list[dict] = []

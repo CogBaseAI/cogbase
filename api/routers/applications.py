@@ -328,11 +328,11 @@ async def ingest_documents(
 
 
 async def _drain_query(app, text: str):
-    """Drain app.query_stream and return the final GenerationResult."""
+    """Drain app.query_stream and return the final QueryResult."""
     async for item in app.query_stream(text):
         if not isinstance(item, str):
             return item
-    raise RuntimeError("query_stream did not yield a GenerationResult")
+    raise RuntimeError("query_stream did not yield a QueryResult")
 
 
 @router.post("/{app_name}/query", response_model=QueryResponse)
@@ -346,8 +346,9 @@ async def query_application(
 ) -> QueryResponse:
     """Answer a natural-language query over an active application's ingested documents.
 
-    The query is automatically routed to the appropriate retrieval pattern
-    (A — structured lookup, B — semantic search, C — hybrid, D — grounded report).
+    The LLM agent loop calls structured_lookup and/or vector_search tools as needed,
+    then synthesises a final answer.  Large structured result sets are returned
+    directly (passthrough=True) without an additional synthesis step.
     """
     app = await _get_active_app(app_name, app_cache, system_store, system_config, system_structured_store)
     try:
@@ -360,9 +361,8 @@ async def query_application(
         result = await _drain_query(app, body.text)
     return QueryResponse(
         answer=result.answer,
-        pattern=result.pattern.value,
-        findings=result.findings,
-        supporting_quotes=result.supporting_quotes,
+        passthrough=result.passthrough,
+        structured_records=result.structured_records,
     )
 
 
@@ -378,7 +378,7 @@ async def query_application_stream(
     """Stream a natural-language query response as Server-Sent Events.
 
     Token events: ``{"token": "<text>"}``
-    Final event:  ``{"result": {answer, pattern, findings, supporting_quotes}}``
+    Final event:  ``{"result": {answer, passthrough, structured_records}}``
     Sentinel:     ``data: [DONE]``
     """
     app = await _get_active_app(app_name, app_cache, system_store, system_config, system_structured_store)
@@ -392,9 +392,8 @@ async def query_application_stream(
                     payload = {
                         "result": {
                             "answer": item.answer,
-                            "pattern": item.pattern.value,
-                            "findings": item.findings,
-                            "supporting_quotes": item.supporting_quotes,
+                            "passthrough": item.passthrough,
+                            "structured_records": item.structured_records,
                         }
                     }
                     yield f"data: {json.dumps(payload)}\n\n"

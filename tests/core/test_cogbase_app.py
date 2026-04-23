@@ -12,9 +12,7 @@ from cogbase.core.app import CogBaseApp
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
 from cogbase.core.models import Document
 from cogbase.embeddings import EmbeddingBase
-from cogbase.engine.engine import Engine
-from cogbase.engine.generation.base import GenerationResult
-from cogbase.engine.router import QueryPattern
+from cogbase.engine.query_runner import QueryResult, QueryRunner
 from cogbase.llms.base import LLMBase
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
@@ -33,7 +31,7 @@ from examples.contract_analyst_demo.schema import (
 # ---------------------------------------------------------------------------
 
 def _make_llm(content: str) -> MagicMock:
-    """Build a mock LLMBase returning *content* for complete() and streaming it."""
+    """Build a mock LLMBase returning *content* for complete() (extractor usage)."""
     llm = MagicMock(spec=LLMBase)
     llm.complete = AsyncMock(return_value=content)
 
@@ -44,11 +42,11 @@ def _make_llm(content: str) -> MagicMock:
     return llm
 
 
-async def _drain_query(app: CogBaseApp, text: str) -> GenerationResult:
+async def _drain_query(app: CogBaseApp, text: str) -> QueryResult:
     async for item in app.query_stream(text):
         if not isinstance(item, str):
             return item
-    raise AssertionError("query_stream did not yield a GenerationResult")
+    raise AssertionError("query_stream did not yield a QueryResult")
 
 
 def _contract_payload(**overrides) -> str:
@@ -162,10 +160,10 @@ class TestCogBaseAppConstruction:
         assert len(schemas) == 1
         assert schemas[0].name == CONTRACTS_COLLECTION
 
-    def test_ingestion_pipeline_and_engine_accessible(self):
+    def test_ingestion_pipeline_and_query_runner_accessible(self):
         app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
         assert isinstance(app.ingestion_pipeline, IngestionPipeline)
-        assert isinstance(app.engine, Engine)
+        assert isinstance(app.query_runner, QueryRunner)
 
 
 # ---------------------------------------------------------------------------
@@ -242,50 +240,74 @@ class TestCogBaseAppLifecycle:
 # ---------------------------------------------------------------------------
 
 class TestCogBaseAppQuery:
-    def _make_app_with_router_response(
+    def _make_app_with_runner_response(
         self,
-        router_json: str,
-        generator_answer: str,
+        runner_response: dict,
         *,
         extractor_json: str = "{}",
     ) -> tuple[CogBaseApp, InMemoryStructuredStore]:
+        """Build app where QueryRunner LLM always returns *runner_response* (a dict)."""
         store = InMemoryStructuredStore()
-
         llm = MagicMock(spec=LLMBase)
 
         async def _complete(messages, **kwargs):
             system_content = messages[0].get("content", "") if messages else ""
             if "extract structured" in system_content.lower():
                 return extractor_json
-            if "query router" in system_content:
-                return router_json
-            return generator_answer
+            return runner_response
 
         llm.complete = AsyncMock(side_effect=_complete)
 
         async def _stream(messages, **kwargs):
-            system_content = messages[0].get("content", "") if messages else ""
-            yield generator_answer
+            yield runner_response.get("content") or ""
 
         llm.complete_stream = _stream
-
         app = _make_app(llm, store)
         return app, store
 
     @pytest.mark.asyncio
-    async def test_query_pattern_a_returns_structured_answer(self):
-        router_resp = json.dumps({
-            "pattern": "A",
-            "semantic_query": "list NDA contracts",
-            "structured_targets": [{"collection": CONTRACTS_COLLECTION, "filters": []}],
-        })
-        app, store = self._make_app_with_router_response(
-            router_resp,
-            generator_answer="unused for pattern A",
+    async def test_direct_answer_returns_query_result(self):
+        app, store = self._make_app_with_runner_response(
+            {"content": "The termination notice period is 60 days.", "tool_calls": None},
         )
         await app.setup()
-        from cogbase.stores.schema import CollectionSchema
-        # Pre-load a contract record directly into the store using the extractor's schema
+        result = await _drain_query(app, "what is the termination notice period?")
+        assert isinstance(result, QueryResult)
+        assert "60 days" in result.answer
+
+    @pytest.mark.asyncio
+    async def test_structured_lookup_populates_records(self):
+        """LLM calls structured_lookup; records from store appear in QueryResult."""
+        store = InMemoryStructuredStore()
+        llm = MagicMock(spec=LLMBase)
+        call_count = 0
+
+        async def _complete(messages, **kwargs):
+            nonlocal call_count
+            system_content = messages[0].get("content", "") if messages else ""
+            if "extract structured" in system_content.lower():
+                return "{}"
+            call_count += 1
+            if call_count == 1:
+                return {
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "name": "structured_lookup",
+                        "arguments": json.dumps({"collection": CONTRACTS_COLLECTION, "filters": []}),
+                    }],
+                }
+            return {"content": "Found NDA contracts: Acme Corp and Supplier Ltd.", "tool_calls": None}
+
+        llm.complete = AsyncMock(side_effect=_complete)
+
+        async def _stream(messages, **kwargs):
+            yield "Found NDA contracts: Acme Corp and Supplier Ltd."
+
+        llm.complete_stream = _stream
+        app = _make_app(llm, store)
+        await app.setup()
+
         extractor = _make_extractor(_make_llm("{}"))
         record_model = extractor._record_model
         record = record_model(
@@ -298,69 +320,38 @@ class TestCogBaseAppQuery:
         await store.save(CONTRACTS_COLLECTION, [record])
 
         result = await _drain_query(app, "list NDA contracts")
-        assert isinstance(result, GenerationResult)
-        assert result.pattern == QueryPattern.A
-        assert "acme" in result.answer.lower() or "nda" in result.answer.lower() or "30 days" in result.answer
+        assert isinstance(result, QueryResult)
+        assert len(result.structured_records) > 0
+        assert result.passthrough is False
 
     @pytest.mark.asyncio
-    async def test_query_pattern_b_returns_answer(self):
-        router_resp = json.dumps({
-            "pattern": "B",
-            "semantic_query": "termination notice period",
-            "structured_targets": [],
-        })
-        app, store = self._make_app_with_router_response(
-            router_resp,
-            generator_answer="The termination notice period is 60 days.",
+    async def test_answer_content_captured(self):
+        app, store = self._make_app_with_runner_response(
+            {"content": "Both parties have broad indemnification obligations.", "tool_calls": None},
         )
-        await app.setup()
-        result = await _drain_query(app, "what is the termination notice period?")
-        assert isinstance(result, GenerationResult)
-        assert result.pattern == QueryPattern.B
-
-    @pytest.mark.asyncio
-    async def test_query_pattern_d_populates_findings(self):
-        router_resp = json.dumps({
-            "pattern": "D",
-            "semantic_query": "summarise indemnification",
-            "structured_targets": [{"collection": CONTRACTS_COLLECTION, "filters": []}],
-        })
-        gen_answer = (
-            "[FINDINGS]\nBoth parties have broad indemnification obligations.\n\n"
-            "[SUPPORTING_QUOTES]\n- Each party shall indemnify the other."
-        )
-        app, store = self._make_app_with_router_response(router_resp, gen_answer)
         await app.setup()
         result = await _drain_query(app, "summarise indemnification clauses")
-        assert result.pattern == QueryPattern.D
-        assert result.findings is not None
-        assert "indemnification" in result.findings.lower()
-        assert len(result.supporting_quotes) > 0
+        assert isinstance(result, QueryResult)
+        assert "indemnification" in result.answer.lower()
 
 
 # ---------------------------------------------------------------------------
-# Structured-only mode — pattern B/C skipping
+# Tool availability — structured-only vs full mode
 # ---------------------------------------------------------------------------
 
-class TestStructuredOnlyPatternRestriction:
-    def _capture_system_prompt(self, app: CogBaseApp) -> str:
-        return app.engine._router._system_prompt
+class TestQueryRunnerToolAvailability:
+    def _tool_names(self, app: CogBaseApp) -> list[str]:
+        return [t["name"] for t in app.query_runner._tool_defs]
 
-    def test_structured_only_prompt_excludes_pattern_b(self):
+    def test_structured_only_has_no_vector_search(self):
         app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
-        assert "B —" not in self._capture_system_prompt(app)
+        assert "vector_search" not in self._tool_names(app)
 
-    def test_structured_only_prompt_excludes_pattern_c(self):
+    def test_structured_only_has_structured_lookup(self):
         app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
-        assert "C —" not in self._capture_system_prompt(app)
+        assert "structured_lookup" in self._tool_names(app)
 
-    def test_structured_only_prompt_includes_pattern_a_and_d(self):
-        app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
-        prompt = self._capture_system_prompt(app)
-        assert "A —" in prompt
-        assert "D —" in prompt
-
-    def test_full_mode_prompt_includes_all_four_patterns(self):
+    def test_full_mode_has_both_tools(self):
         app = _make_app(
             _make_llm("{}"),
             InMemoryStructuredStore(),
@@ -368,25 +359,16 @@ class TestStructuredOnlyPatternRestriction:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=64, overlap=0),
         )
-        prompt = self._capture_system_prompt(app)
-        for label in ("A —", "B —", "C —", "D —"):
-            assert label in prompt
+        names = self._tool_names(app)
+        assert "structured_lookup" in names
+        assert "vector_search" in names
 
     @pytest.mark.asyncio
-    async def test_structured_only_query_pattern_b_returns_empty_chunks(self):
-        router_resp = json.dumps({
-            "pattern": "B",
-            "semantic_query": "termination clause",
-            "structured_targets": [],
-        })
-
+    async def test_structured_only_query_returns_result(self):
         llm = MagicMock(spec=LLMBase)
 
         async def _complete(messages, **kwargs):
-            system_content = messages[0].get("content", "") if messages else ""
-            if "query router" in system_content:
-                return router_resp
-            return "The answer."
+            return {"content": "The answer.", "tool_calls": None}
 
         llm.complete = AsyncMock(side_effect=_complete)
 
@@ -398,7 +380,7 @@ class TestStructuredOnlyPatternRestriction:
         app = _make_app(llm, InMemoryStructuredStore())
         await app.setup()
         result = await _drain_query(app, "what is the termination clause?")
-        assert isinstance(result, GenerationResult)
+        assert isinstance(result, QueryResult)
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +401,9 @@ class TestVectorOnlyMode:
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
 
+    def _tool_names(self, app: CogBaseApp) -> list[str]:
+        return [t["name"] for t in app.query_runner._tool_defs]
+
     def test_no_structured_collection(self):
         app = self._make_vector_only_app(_make_llm("{}"))
         assert app._ingest_pipeline.structured_collection is None
@@ -431,16 +416,13 @@ class TestVectorOnlyMode:
         app = self._make_vector_only_app(_make_llm("{}"))
         assert app.structured_schemas == []
 
-    def test_prompt_excludes_pattern_a(self):
+    def test_no_structured_lookup_tool(self):
         app = self._make_vector_only_app(_make_llm("{}"))
-        prompt = app.engine._router._system_prompt
-        assert "A —" not in prompt
+        assert "structured_lookup" not in self._tool_names(app)
 
-    def test_prompt_includes_patterns_b_c_d(self):
+    def test_has_vector_search_tool(self):
         app = self._make_vector_only_app(_make_llm("{}"))
-        prompt = app.engine._router._system_prompt
-        for label in ("B —", "C —", "D —"):
-            assert label in prompt
+        assert "vector_search" in self._tool_names(app)
 
     @pytest.mark.asyncio
     async def test_setup_is_noop(self):
