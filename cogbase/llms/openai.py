@@ -9,7 +9,14 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any
 
-from cogbase.llms.base import ChatMessage, LLMBase, ReasoningEffort
+from cogbase.llms.base import (
+    ChatMessage,
+    CompletionResult,
+    LLMBase,
+    ReasoningEffort,
+    ToolCall,
+    ToolDefinition,
+)
 
 
 def _coerce_message_content(content: Any) -> str:
@@ -47,31 +54,49 @@ class OpenAILLM(LLMBase):
         self,
         messages: list[ChatMessage],
         *,
+        tools: list[ToolDefinition] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
         reasoning_effort: ReasoningEffort | None = None,
-    ) -> str:
+    ) -> CompletionResult:
         kwargs = self._build_kwargs(
             messages=messages,
+            tools=tools,
             max_tokens=max_tokens,
             temperature=temperature,
             reasoning_effort=reasoning_effort,
             stream=False,
         )
         response = await self._client.chat.completions.create(**kwargs)
-        content = response.choices[0].message.content
-        return _coerce_message_content(content).strip()
+        choice = response.choices[0]
+
+        tool_calls: list[ToolCall] | None = None
+        if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
+            tool_calls = [
+                ToolCall(
+                    id=tc.id,
+                    name=tc.function.name,
+                    arguments=tc.function.arguments,
+                )
+                for tc in choice.message.tool_calls
+            ]
+
+        raw_content = choice.message.content
+        content = _coerce_message_content(raw_content).strip() if raw_content else None
+        return CompletionResult(content=content, tool_calls=tool_calls)
 
     async def complete_stream(
         self,
         messages: list[ChatMessage],
         *,
+        tools: list[ToolDefinition] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
         reasoning_effort: ReasoningEffort | None = None,
     ) -> AsyncGenerator[str, None]:
         kwargs = self._build_kwargs(
             messages=messages,
+            tools=tools,
             max_tokens=max_tokens,
             temperature=temperature,
             reasoning_effort=reasoning_effort,
@@ -87,6 +112,7 @@ class OpenAILLM(LLMBase):
         self,
         *,
         messages: list[ChatMessage],
+        tools: list[ToolDefinition] | None,
         max_tokens: int | None,
         temperature: float | None,
         reasoning_effort: ReasoningEffort | None,
@@ -97,6 +123,18 @@ class OpenAILLM(LLMBase):
             "messages": messages,
             "stream": stream,
         }
+        if tools:
+            kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t["description"],
+                        "parameters": t["parameters"],
+                    },
+                }
+                for t in tools
+            ]
         if max_tokens is not None:
             kwargs["max_completion_tokens"] = max_tokens
         if temperature is not None:

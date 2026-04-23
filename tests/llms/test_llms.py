@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator
 import pytest
 
 from cogbase.llms import LLMBase
-from cogbase.llms.base import ChatMessage, ReasoningEffort
+from cogbase.llms.base import ChatMessage, CompletionResult, ReasoningEffort, ToolDefinition
 
 
 class TestLLMBaseIsAbstract:
@@ -22,26 +22,30 @@ class TestLLMBaseIsAbstract:
                 self,
                 messages: list[ChatMessage],
                 *,
+                tools: list[ToolDefinition] | None = None,
                 max_tokens: int | None = None,
                 temperature: float | None = None,
                 reasoning_effort: ReasoningEffort | None = None,
-            ) -> str:
-                _ = (messages, max_tokens, temperature, reasoning_effort)
-                return "ok"
+            ) -> CompletionResult:
+                _ = (messages, tools, max_tokens, temperature, reasoning_effort)
+                return CompletionResult(content="ok", tool_calls=None)
 
             async def complete_stream(
                 self,
                 messages: list[ChatMessage],
                 *,
+                tools: list[ToolDefinition] | None = None,
                 max_tokens: int | None = None,
                 temperature: float | None = None,
                 reasoning_effort: ReasoningEffort | None = None,
             ) -> AsyncGenerator[str, None]:
-                _ = (messages, max_tokens, temperature, reasoning_effort)
+                _ = (messages, tools, max_tokens, temperature, reasoning_effort)
                 yield "o"
                 yield "k"
 
         llm = ConstantLLM()
         messages: list[ChatMessage] = [{"role": "user", "content": "hello"}]
-        assert await llm.complete(messages) == "ok"
+        result = await llm.complete(messages)
+        assert result["content"] == "ok"
+        assert result["tool_calls"] is None
         assert [part async for part in llm.complete_stream(messages)] == ["o", "k"]
