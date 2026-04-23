@@ -44,6 +44,7 @@ Typical usage::
         else:
             print()
             print("answer:", item.answer)
+            print("passthrough:", item.passthrough)
 """
 
 from __future__ import annotations
@@ -54,10 +55,7 @@ from typing import Sequence
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult, StructuredCollection, VectorCollection
 from cogbase.core.models import Document
 from cogbase.engine.engine import Engine
-from cogbase.engine.generation.base import GenerationResult
-from cogbase.engine.generation.llm import LLMGenerator
-from cogbase.engine.retrieval.hybrid import HybridRetriever
-from cogbase.engine.router import LLMRouter, QueryPattern
+from cogbase.engine.query_runner import QueryResult, QueryRunner
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms import LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
@@ -67,30 +65,26 @@ from cogbase.stores.schema import CollectionSchema
 
 logger = logging.getLogger(__name__)
 
-# Patterns available when no vector store is configured (B and C require one).
-_STRUCTURED_ONLY_PATTERNS = [QueryPattern.A, QueryPattern.D]
-# Patterns available when no structured store is configured (A requires one).
-_VECTOR_ONLY_PATTERNS = [QueryPattern.B, QueryPattern.C, QueryPattern.D]
-
 
 class CogBaseApp:
     """Generic CogBase application wiring ingestion and query together.
 
     Args:
-        name:                 Logical name for the application.
-        llm:                  LLM for the router and generator.
-        model:                Model name forwarded to the router and generator.
-        extractor:            Optional ``ExtractorBase`` for structured extraction.
-        structured_store:     Persistent store for extracted records.
-        vector_store:           Vector store for raw text chunks.  Must be provided
-                                together with *embedder* and *chunker*.  When
-                                ``None`` the app runs in structured-only mode.
-        embedder:               Embedder for chunked text.  Required with *vector_store*.
-        chunker:                Chunker for splitting text.  Required with *vector_store*.
-        vector_collection_name: Name used for the vector collection and retriever lookup.
-                                Defaults to *name* when ``None``.
-        generator_max_tokens:   Max tokens for the ``LLMGenerator`` LLM call.
-        retriever_top_k:        Nearest-neighbour chunks returned per semantic query.
+        name:                        Logical name for the application.
+        llm:                         LLM for query reasoning.
+        extractor:                   Optional ``ExtractorBase`` for structured extraction.
+        structured_store:            Persistent store for extracted records.
+        vector_store:                Vector store for raw text chunks.  Must be provided
+                                     together with *embedder* and *chunker*.  When
+                                     ``None`` the app runs in structured-only mode.
+        embedder:                    Embedder for chunked text.  Required with *vector_store*.
+        chunker:                     Chunker for splitting text.  Required with *vector_store*.
+        vector_collection_name:      Name used for the vector collection.
+                                     Defaults to *name* when ``None``.
+        passthrough_token_threshold: Estimated token count of structured results above
+                                     which records are returned directly without LLM
+                                     synthesis.  Defaults to 2000.
+        query_max_rounds:            Maximum retrieval rounds per query.  Defaults to 5.
 
     Raises:
         ValueError: If only some of *vector_store*, *embedder*, *chunker* are
@@ -108,8 +102,8 @@ class CogBaseApp:
         embedder: EmbeddingBase | None = None,
         chunker: ChunkerBase | None = None,
         vector_collection_name: str | None = None,
-        generator_max_tokens: int = 4096,
-        retriever_top_k: int = 10,
+        passthrough_token_threshold: int = 2000,
+        query_max_rounds: int = 5,
     ) -> None:
         vector_params = (vector_store, embedder, chunker)
         n_provided = sum(p is not None for p in vector_params)
@@ -146,25 +140,17 @@ class CogBaseApp:
             structured_collection=structured_collection,
         )
 
-        if structured_store is None:
-            available_patterns = _VECTOR_ONLY_PATTERNS if vector_store else None
-        else:
-            available_patterns = None if vector_store else _STRUCTURED_ONLY_PATTERNS
-
         self._engine = Engine(
-            router=LLMRouter(
-                llm,
-                schema=self._ingest_pipeline.structured_schemas,
-                available_patterns=available_patterns,
-            ),
-            retriever=HybridRetriever(
-                collection_name=_vc_name,
+            QueryRunner(
+                llm=llm,
                 structured_store=structured_store,
                 vector_store=vector_store,
                 embedder=embedder,
-                top_k=retriever_top_k,
-            ),
-            generator=LLMGenerator(llm, max_tokens=generator_max_tokens),
+                default_vector_collection=_vc_name,
+                structured_schemas=self._ingest_pipeline.structured_schemas or None,
+                passthrough_token_threshold=passthrough_token_threshold,
+                max_rounds=query_max_rounds,
+            )
         )
 
     # ------------------------------------------------------------------
@@ -194,10 +180,11 @@ class CogBaseApp:
         return results
 
     async def query_stream(self, text: str):
-        """Stream the answer token-by-token.
+        """Stream the answer token-by-token, then yield a final QueryResult.
 
-        Routing and retrieval complete before the first token is yielded;
-        only the LLM generation phase is streamed.
+        The retrieval loop runs until the LLM has enough evidence to answer or
+        ``query_max_rounds`` is exhausted.  Large structured result sets are
+        returned directly as formatted text (passthrough rule).
         """
         logger.info("app.query_stream.start query=%s", text[:200])
         async for chunk in self._engine.query_stream(text):

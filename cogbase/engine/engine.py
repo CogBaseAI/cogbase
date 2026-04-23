@@ -1,39 +1,35 @@
 """Engine — top-level query orchestrator.
 
-Composes the three engine components into a single ``query`` call:
-
-    1. ``QueryRouter``    — classifies the query into a pattern and extracts
-                           structured filter targets.
-    2. ``HybridRetriever`` — fetches evidence from the appropriate store(s).
-    3. ``GeneratorBase``  — produces the final answer from the evidence.
+Delegates to a ``QueryRunner`` which drives an agentic retrieval loop: the LLM
+calls ``structured_lookup`` and ``vector_search`` tools as needed, then
+synthesises a final answer.  Large structured result sets are returned directly
+without LLM synthesis (passthrough rule).
 
 Typical usage::
 
     import openai
+    from cogbase.llms import OpenAILLM
     from cogbase.engine.engine import Engine
-    from cogbase.engine.router import LLMRouter
-    from cogbase.engine.retrieval.hybrid import HybridRetriever
-    from cogbase.engine.generation.llm import LLMGenerator
+    from cogbase.engine.query_runner import QueryRunner
 
-    client = openai.AsyncOpenAI(api_key="...")
-
-    engine = Engine(
-        router=LLMRouter(client, model="claude-sonnet-4-6", schema=app.structured_schemas),
-        retriever=HybridRetriever(
-            structured_store=structured_store,
-            vector_store=vector_store,
-            embedder=embedder,
-        ),
-        generator=LLMGenerator(client, model="claude-sonnet-4-6"),
+    llm = OpenAILLM(openai.AsyncOpenAI(api_key="..."), model="claude-sonnet-4-6")
+    runner = QueryRunner(
+        llm=llm,
+        structured_store=structured_store,
+        vector_store=vector_store,
+        embedder=embedder,
+        default_vector_collection="legal_chunks",
+        structured_schemas=schemas,
     )
+    engine = Engine(runner)
 
-    async for item in engine.query_stream("what are the termination clauses in the contracts?"):
+    async for item in engine.query_stream("what are the termination clauses?"):
         if isinstance(item, str):
             print(item, end="", flush=True)
         else:
             print()
-            print("pattern:", item.pattern.value)
-            print("findings:", item.findings)
+            print("passthrough:", item.passthrough)
+            print("records:", len(item.structured_records))
 """
 
 from __future__ import annotations
@@ -41,48 +37,23 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncGenerator
 
-from cogbase.engine.generation.base import GenerationResult, GeneratorBase
-from cogbase.engine.retrieval.base import RetrieverBase
-from cogbase.engine.router import QueryRouter
+from cogbase.engine.query_runner import QueryResult, QueryRunner
 
 logger = logging.getLogger(__name__)
 
 
 class Engine:
-    """Orchestrates routing, retrieval, and generation for a single query.
+    """Thin orchestrator wrapping a ``QueryRunner``.
 
     Args:
-        router:    A ``QueryRouter`` implementation (e.g. ``LLMRouter``).
-        retriever: A ``RetrieverBase`` implementation.  ``HybridRetriever`` is
-                   recommended as it dispatches automatically based on pattern.
-        generator: A ``GeneratorBase`` implementation (e.g. ``LLMGenerator``).
+        runner: The ``QueryRunner`` that drives the agentic retrieval loop.
     """
 
-    def __init__(
-        self,
-        router: QueryRouter,
-        retriever: RetrieverBase,
-        generator: GeneratorBase,
-    ) -> None:
-        self._router = router
-        self._retriever = retriever
-        self._generator = generator
+    def __init__(self, runner: QueryRunner) -> None:
+        self._runner = runner
 
-    async def query_stream(self, text: str) -> AsyncGenerator[str | GenerationResult, None]:
-        """Route and retrieve, then stream tokens followed by a final GenerationResult."""
+    async def query_stream(self, text: str) -> AsyncGenerator[str | QueryResult, None]:
+        """Stream the answer token-by-token, then yield a final QueryResult."""
         logger.info("engine.query_stream.start query_len=%d", len(text))
-        route = await self._router.route(text)
-        logger.info(
-            "engine.query_stream.routed pattern=%s structured_targets=%d",
-            route.pattern.value,
-            len(route.structured_targets),
-        )
-        retrieval = await self._retriever.retrieve(route)
-        logger.info(
-            "engine.query_stream.retrieved pattern=%s structured_records=%d chunks=%d",
-            route.pattern.value,
-            len(retrieval.structured_records),
-            len(retrieval.chunks),
-        )
-        async for chunk in self._generator.generate_stream(text, retrieval):
-            yield chunk
+        async for item in self._runner.query_stream(text):
+            yield item
