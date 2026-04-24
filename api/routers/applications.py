@@ -15,10 +15,12 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from api.config import AppConfig
-from api.dependencies import AppCacheDep, SystemConfigDep, SystemStoreDep, SystemStructuredStoreDep
+from api.dependencies import AppCacheDep, SkillRegistryDep, SystemConfigDep, SystemStoreDep, SystemStructuredStoreDep
 from api.factory import build_app
 from api.app_cache import AppCache
 from api.models import (
+    AddSkillRequest,
+    AppSkillsResponse,
     ApplicationListResponse,
     ApplicationResponse,
     IngestDocumentsRequest,
@@ -104,12 +106,32 @@ def _parse_bundle(raw: bytes) -> tuple[str, AppConfig]:
     return stored_yaml, config
 
 
+def _validate_skills(skill_names: list[str], skill_registry) -> None:
+    """Raise HTTP 422 if any skill name is not in the registry."""
+    unknown = []
+    for name in skill_names:
+        try:
+            skill_registry.get(name)
+        except KeyError:
+            unknown.append(name)
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unknown skill(s): {', '.join(unknown)}. Run GET /skills to see available skills.",
+        )
+
+
+def _serialize_config(config: AppConfig) -> str:
+    return yaml.dump(config.model_dump(by_alias=True), allow_unicode=True, default_flow_style=False)
+
+
 @router.post("", response_model=ApplicationResponse, status_code=status.HTTP_201_CREATED)
 async def create_application(
     system_store: SystemStoreDep,
     app_cache: AppCacheDep,
     system_config: SystemConfigDep,
     system_structured_store: SystemStructuredStoreDep,
+    skill_registry: SkillRegistryDep,
     bundle: UploadFile = File(..., description="ZIP bundle containing config.yaml and referenced files"),
 ) -> ApplicationResponse:
     """Create a new CogBase application from a ZIP bundle.
@@ -123,6 +145,9 @@ async def create_application(
     inspect the error and update the config).
     """
     yaml_text, config = _parse_bundle(await bundle.read())
+
+    if config.skills:
+        _validate_skills(config.skills, skill_registry)
 
     if await system_store.get_app(config.name) is not None:
         raise HTTPException(
@@ -188,6 +213,7 @@ async def update_application(
     app_cache: AppCacheDep,
     system_config: SystemConfigDep,
     system_structured_store: SystemStructuredStoreDep,
+    skill_registry: SkillRegistryDep,
     bundle: UploadFile = File(..., description="Updated ZIP bundle containing config.yaml and referenced files"),
 ) -> ApplicationResponse:
     """Replace an application's config and restart it.
@@ -201,6 +227,9 @@ async def update_application(
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
     yaml_text, config = _parse_bundle(await bundle.read())
+
+    if config.skills:
+        _validate_skills(config.skills, skill_registry)
 
     if config.name != app_name and await system_store.get_app(config.name) is not None:
         raise HTTPException(
@@ -403,3 +432,85 @@ async def query_application_stream(
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# Application skills endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{app_name}/skills", response_model=AppSkillsResponse)
+async def list_application_skills(
+    app_name: str,
+    system_store: SystemStoreDep,
+) -> AppSkillsResponse:
+    """Return the skills currently assigned to an application."""
+    record = await system_store.get_app(app_name)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
+    config = AppConfig.from_yaml(record.config_yaml)
+    return AppSkillsResponse(app_name=app_name, skills=config.skills)
+
+
+@router.post("/{app_name}/skills", response_model=AppSkillsResponse, status_code=status.HTTP_201_CREATED)
+async def add_application_skill(
+    app_name: str,
+    body: AddSkillRequest,
+    system_store: SystemStoreDep,
+    skill_registry: SkillRegistryDep,
+) -> AppSkillsResponse:
+    """Assign a system skill to an application.
+
+    The skill must exist in the system skill registry (configured via
+    ``skills_dir`` in ``cogbase_system.yaml``).  Adding the same skill twice
+    is idempotent.
+    """
+    record = await system_store.get_app(app_name)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
+
+    try:
+        skill_registry.get(body.skill_name)
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Skill '{body.skill_name}' not found in the system skill registry",
+        )
+
+    config = AppConfig.from_yaml(record.config_yaml)
+    if body.skill_name not in config.skills:
+        updated_config = config.model_copy(update={"skills": config.skills + [body.skill_name]})
+        updated_record = record.model_copy(
+            update={"config_yaml": _serialize_config(updated_config), "updated_at": _now()}
+        )
+        await system_store.save_app(updated_record)
+        logger.info("Added skill '%s' to application '%s'", body.skill_name, app_name)
+        config = updated_config
+
+    return AppSkillsResponse(app_name=app_name, skills=config.skills)
+
+
+@router.delete("/{app_name}/skills/{skill_name}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def remove_application_skill(
+    app_name: str,
+    skill_name: str,
+    system_store: SystemStoreDep,
+) -> None:
+    """Remove a skill from an application."""
+    record = await system_store.get_app(app_name)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
+
+    config = AppConfig.from_yaml(record.config_yaml)
+    if skill_name not in config.skills:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Skill '{skill_name}' is not assigned to application '{app_name}'",
+        )
+
+    updated_config = config.model_copy(update={"skills": [s for s in config.skills if s != skill_name]})
+    updated_record = record.model_copy(
+        update={"config_yaml": _serialize_config(updated_config), "updated_at": _now()}
+    )
+    await system_store.save_app(updated_record)
+    logger.info("Removed skill '%s' from application '%s'", skill_name, app_name)

@@ -61,3 +61,29 @@ class QueryResponse(BaseModel):
     answer: str
     passthrough: bool = False
     structured_records: list[dict] = []
+
+
+# ---------------------------------------------------------------------------
+# Skill models
+# ---------------------------------------------------------------------------
+
+
+class SkillResponse(BaseModel):
+    name: str
+    description: str
+    metadata: dict[str, Any] = {}
+    source_path: str | None = None
+
+
+class SkillListResponse(BaseModel):
+    skills: list[SkillResponse]
+    total: int
+
+
+class AddSkillRequest(BaseModel):
+    skill_name: str
+
+
+class AppSkillsResponse(BaseModel):
+    app_name: str
+    skills: list[str]

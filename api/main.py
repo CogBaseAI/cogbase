@@ -12,8 +12,10 @@ from api.config import AppConfig
 from api.factory import build_app, build_structured_store
 from api.app_cache import AppCache
 from api.routers.applications import router as applications_router
+from api.routers.skills import router as skills_router
 from api.system_config import SystemConfig
 from api.system_store import SystemStore
+from cogbase.skills.registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "system_structured_store type=%s", system_cfg.structured_store.type
         )
 
+    skill_registry = SkillRegistry()
+    if system_cfg.skills_dir is not None:
+        skill_registry.load_from_dir(system_cfg.skills_dir)
+        logger.info("skill_registry loaded from skills_dir=%s", system_cfg.skills_dir)
+
     app_cache = AppCache()
 
     # Re-instantiate all previously active applications so they are immediately
@@ -71,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.system_config = system_cfg
     app.state.system_structured_store = system_structured_store
     app.state.system_store = system_store
+    app.state.skill_registry = skill_registry
     app.state.app_cache = app_cache
 
     yield
@@ -92,3 +100,4 @@ app = FastAPI(
 )
 
 app.include_router(applications_router)
+app.include_router(skills_router)

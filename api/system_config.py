@@ -49,6 +49,7 @@ class SystemConfig(BaseModel):
     )
     structured_store: StructuredStoreConfig | None = None
     vector_store: VectorStoreConfig | None = None
+    skills_dir: str | None = None  # directory containing <skill_name>/SKILL.md files
 
     @classmethod
     def from_yaml(cls, yaml_text: str) -> "SystemConfig":

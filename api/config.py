@@ -96,6 +96,7 @@ class AppConfig(BaseModel):
     vector_collections: list[VectorCollectionConfig] = []
     structured_collections: list[StructuredCollectionConfig] = []
     pipeline: PipelineConfig | None = None
+    skills: list[str] = []
 
     @model_validator(mode="after")
     def _validate(self) -> "AppConfig":

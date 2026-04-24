@@ -19,10 +19,12 @@ from httpx import ASGITransport, AsyncClient
 
 from api.dependencies import (
     get_app_cache,
+    get_skill_registry,
     get_system_config,
     get_system_store,
     get_system_structured_store,
 )
+from cogbase.skills.registry import SkillRegistry
 from api.main import app
 from api.app_cache import AppCache
 from api.system_config import SystemConfig
@@ -91,6 +93,7 @@ async def client():
     app.dependency_overrides[get_app_cache] = lambda: app_cache
     app.dependency_overrides[get_system_config] = lambda: _system_config()
     app.dependency_overrides[get_system_structured_store] = lambda: system_structured_store
+    app.dependency_overrides[get_skill_registry] = lambda: SkillRegistry()
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
