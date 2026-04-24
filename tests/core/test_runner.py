@@ -63,8 +63,8 @@ def _str_chunks(chunks: list) -> list[str]:
 async def test_select_returns_matching_skill():
     skills = [_make_skill("weather"), _make_skill("model-usage")]
     llm = _make_llm(_text_result("weather"))
-    runner = Runner(llm)
-    result = await runner.select(skills, "What's the weather?")
+    runner = Runner(llm, skills=skills)
+    result = await runner.select("What's the weather?")
     assert result is skills[0]
 
 
@@ -72,8 +72,8 @@ async def test_select_returns_matching_skill():
 async def test_select_returns_none_for_no_match():
     skills = [_make_skill("weather")]
     llm = _make_llm(_text_result("none"))
-    runner = Runner(llm)
-    result = await runner.select(skills, "Tell me a joke")
+    runner = Runner(llm, skills=skills)
+    result = await runner.select("Tell me a joke")
     assert result is None
 
 
@@ -81,8 +81,8 @@ async def test_select_returns_none_for_no_match():
 async def test_select_returns_none_for_unknown_skill_name():
     skills = [_make_skill("weather")]
     llm = _make_llm(_text_result("nonexistent"))
-    runner = Runner(llm)
-    result = await runner.select(skills, "something")
+    runner = Runner(llm, skills=skills)
+    result = await runner.select("something")
     assert result is None
 
 
@@ -91,7 +91,7 @@ async def test_select_empty_skills_returns_none_without_llm_call():
     llm = MagicMock()
     llm.complete = AsyncMock()
     runner = Runner(llm)
-    result = await runner.select([], "anything")
+    result = await runner.select("anything")
     assert result is None
     llm.complete.assert_not_called()
 
@@ -135,8 +135,8 @@ async def test_run_skill_no_tools_yields_answer_and_result():
         _text_result("weather"),      # select
         _text_result("It is sunny."), # answer
     )
-    runner = Runner(llm)
-    chunks = [c async for c in runner.run(skills, "Weather?")]
+    runner = Runner(llm, skills=skills)
+    chunks = [c async for c in runner.run("Weather?")]
     assert any("Using skill: weather" in c for c in _str_chunks(chunks))
     assert _str_chunks(chunks)[-1] == "It is sunny."
     assert isinstance(chunks[-1], RunResult)
@@ -152,9 +152,9 @@ async def test_run_skill_single_tool_call_then_answer():
         _text_result("weather"),                                 # re-select
         _text_result("The weather in NYC is 72°F."),            # answer
     )
-    runner = Runner(llm)
+    runner = Runner(llm, skills=skills)
     with patch.object(runner, "_execute_tool", new=AsyncMock(return_value="72°F, sunny")):
-        chunks = [c async for c in runner.run(skills, "Weather in NYC?")]
+        chunks = [c async for c in runner.run("Weather in NYC?")]
     assert any("Executing: shell" in c for c in _str_chunks(chunks))
     assert _str_chunks(chunks)[-1] == "The weather in NYC is 72°F."
 
@@ -169,9 +169,9 @@ async def test_run_skill_switches_between_iterations():
         _text_result("contradiction"),                            # re-select → contradiction
         _text_result("Found 2 contradictions."),                  # answer
     )
-    runner = Runner(llm)
+    runner = Runner(llm, skills=[skill_a, skill_b])
     with patch.object(runner, "_execute_tool", new=AsyncMock(return_value="facts extracted")):
-        chunks = [c async for c in runner.run([skill_a, skill_b], "Find contradictions.")]
+        chunks = [c async for c in runner.run("Find contradictions.")]
     status = [c for c in _str_chunks(chunks) if c.startswith("Using skill:")]
     assert "Using skill: extract..." in status
     assert "Using skill: contradiction..." in status
@@ -187,9 +187,9 @@ async def test_run_skill_unchanged_emits_status_once():
         _text_result("weather"),                             # re-select (same)
         _text_result("Sunny."),                              # answer
     )
-    runner = Runner(llm)
+    runner = Runner(llm, skills=skills)
     with patch.object(runner, "_execute_tool", new=AsyncMock(return_value="sunny")):
-        chunks = [c async for c in runner.run(skills, "Weather?")]
+        chunks = [c async for c in runner.run("Weather?")]
     assert sum(1 for c in _str_chunks(chunks) if "Using skill" in c) == 1
 
 
@@ -200,8 +200,8 @@ async def test_run_no_skill_selected_answers_directly():
         _text_result("none"),          # select → no skill
         _text_result("I don't know."), # direct answer
     )
-    runner = Runner(llm)
-    chunks = [c async for c in runner.run(skills, "What is 2+2?")]
+    runner = Runner(llm, skills=skills)
+    chunks = [c async for c in runner.run("What is 2+2?")]
     assert _str_chunks(chunks)[-1] == "I don't know."
     assert not any("Using skill" in c for c in _str_chunks(chunks))
     assert isinstance(chunks[-1], RunResult)
@@ -215,9 +215,9 @@ async def test_run_max_calls_exceeded_yields_error():
         _text_result("weather"), tool, # round 1
         _text_result("weather"), tool, # round 2
     )
-    runner = Runner(llm, max_calls=2)
+    runner = Runner(llm, max_calls=2, skills=skills)
     with patch.object(runner, "_execute_tool", new=AsyncMock(return_value="ok")):
-        chunks = [c async for c in runner.run(skills, "Weather?")]
+        chunks = [c async for c in runner.run("Weather?")]
     assert any("unable to complete" in c.lower() for c in _str_chunks(chunks))
     assert isinstance(chunks[-1], RunResult)
 
@@ -231,7 +231,7 @@ async def test_run_retrieval_direct_answer():
     """No skills, no tool calls — LLM answers directly."""
     llm = _make_llm(_text_result("The answer is 42."))
     runner = Runner(llm)
-    chunks = [c async for c in runner.run(None, "What is the answer?")]
+    chunks = [c async for c in runner.run("What is the answer?")]
     assert _str_chunks(chunks)[-1] == "The answer is 42."
     assert isinstance(chunks[-1], RunResult)
     assert chunks[-1].answer == "The answer is 42."
@@ -261,7 +261,7 @@ async def test_run_retrieval_structured_lookup_populates_records():
         _text_result("Found: Foo, Bar."),
     )
     runner = Runner(llm, structured_store=store)
-    chunks = [c async for c in runner.run(None, "list all facts")]
+    chunks = [c async for c in runner.run("list all facts")]
     result = chunks[-1]
     assert isinstance(result, RunResult)
     assert len(result.structured_records) == 2
@@ -293,7 +293,7 @@ async def test_run_retrieval_passthrough_when_records_exceed_threshold():
         _tool_result("structured_lookup", {"collection": "big"}),
     )
     runner = Runner(llm, structured_store=store, passthrough_token_threshold=2000)
-    chunks = [c async for c in runner.run(None, "dump big")]
+    chunks = [c async for c in runner.run("dump big")]
     result = chunks[-1]
     assert isinstance(result, RunResult)
     assert result.passthrough is True
@@ -331,7 +331,7 @@ async def test_run_retrieval_vector_search_populates_chunks():
         embedder=_FakeEmbedder(),
         default_vector_collection="docs",
     )
-    chunks = [c async for c in runner.run(None, "find relevant")]
+    chunks = [c async for c in runner.run("find relevant")]
     result = chunks[-1]
     assert isinstance(result, RunResult)
     assert len(result.chunks) == 1
@@ -405,7 +405,7 @@ async def test_run_custom_system_tool_is_called():
         _text_result("Done."),
     )
     runner = Runner(llm, system_tools=[system_tool])
-    chunks = [c async for c in runner.run(None, "run my tool")]
+    chunks = [c async for c in runner.run("run my tool")]
     assert called_with == [{"arg": "hello"}]
     assert _str_chunks(chunks)[-1] == "Done."
 

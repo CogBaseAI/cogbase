@@ -184,7 +184,7 @@ class CogBaseApp:
         returned directly as formatted text (passthrough rule).
         """
         logger.info("app.query_stream.start query=%s", text[:200])
-        async for chunk in self._runner.run(None, text):
+        async for chunk in self._runner.run(text):
             yield chunk
 
     # ------------------------------------------------------------------

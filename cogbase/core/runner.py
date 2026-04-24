@@ -31,7 +31,7 @@ Usage (retrieval mode, replaces QueryRunner)::
         embedder=embedder,
         structured_schemas=schemas,
     )
-    async for item in runner.run(None, "list all contracts expiring before 2026"):
+    async for item in runner.run("list all contracts expiring before 2026"):
         if isinstance(item, str):
             print(item, end="", flush=True)
         else:
@@ -39,8 +39,8 @@ Usage (retrieval mode, replaces QueryRunner)::
 
 Usage (skill mode, replaces SkillRunner)::
 
-    runner = Runner(llm=llm)
-    async for item in runner.run(skills, "What's the weather in NYC?"):
+    runner = Runner(llm=llm, skills=skills)
+    async for item in runner.run("What's the weather in NYC?"):
         if isinstance(item, str):
             print(item, end="", flush=True)
 """
@@ -277,6 +277,8 @@ class Runner:
     Args:
         llm:                         LLM backend.
         max_calls:                   Maximum LLM completion rounds per run. Default 10.
+        skills:                      Skills available for routing. Pass ``None`` or ``[]``
+                                     to skip skill selection and use the retrieval system prompt.
         system_tools:                Custom store-backed or service tools injected by the
                                      caller. Available on every turn alongside retrieval
                                      tools and (when skills are present) execution tools.
@@ -297,6 +299,7 @@ class Runner:
         self,
         llm: LLMBase,
         max_calls: int = 10,
+        skills: list | None = None,
         system_tools: list[SystemTool] | None = None,
         structured_store: StructuredStoreBase | None = None,
         vector_store: VectorStoreBase | None = None,
@@ -307,6 +310,7 @@ class Runner:
     ) -> None:
         self._llm = llm
         self._max_calls = max_calls
+        self._skills: list = skills or []
         self._system_tools: dict[str, SystemTool] = {t.name: t for t in (system_tools or [])}
         self._structured_store = structured_store
         self._vector_store = vector_store
@@ -328,11 +332,11 @@ class Runner:
 
     async def select(
         self,
-        skills: list,
         user_input: str,
         history: list[ChatMessage] | None = None,
     ):
         """Ask the LLM to pick the best skill for *user_input*; returns None if none apply."""
+        skills = self._skills
         if not skills:
             return None
 
@@ -416,7 +420,6 @@ class Runner:
 
     async def run(
         self,
-        skills: list | None,
         user_input: str,
         history: list[ChatMessage] | None = None,
         base_prompt: str = "You are a helpful assistant.",
@@ -425,14 +428,13 @@ class Runner:
         """Drive the agent loop, yielding str tokens then a final RunResult.
 
         Args:
-            skills:          Skills available for routing. Pass ``None`` or ``[]``
-                             to skip skill selection and use the retrieval system prompt.
             user_input:      The user's request.
             history:         Prior conversation messages.
             base_prompt:     Base system prompt merged with skill instructions when
                              skills are active.
             runtime_context: Key-value pairs injected into the skill system prompt.
         """
+        skills = self._skills
         # Slot 0 is reserved for the system prompt; updated each iteration.
         messages: list[ChatMessage] = [{"role": "system", "content": ""}]
         messages.extend(history or [])
@@ -445,7 +447,7 @@ class Runner:
         for _ in range(self._max_calls):
             # --- System prompt selection ---
             if skills:
-                selected = await self.select(skills, user_input, messages[1:])
+                selected = await self.select(user_input, messages[1:])
 
                 if selected is None and current_skill is None:
                     # No skill applies — answer directly with base prompt.
