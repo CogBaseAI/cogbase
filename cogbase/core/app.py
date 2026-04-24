@@ -1,7 +1,7 @@
 """Generic CogBase application — bundles ingestion and query under one object.
 
 ``CogBaseApp`` wires together an ``IngestionPipeline`` (ingestion layer) and an
-``QueryRunner`` (query layer) behind a small interface: ``setup`` → ``ingest`` /
+``Runner`` (query layer) behind a small interface: ``setup`` → ``ingest`` /
 ``ingest_documents`` → ``query``.
 
 Typical usage::
@@ -54,7 +54,7 @@ from typing import Sequence
 
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult, StructuredCollection, VectorCollection
 from cogbase.core.models import Document
-from cogbase.engine.query_runner import QueryResult, QueryRunner
+from cogbase.core.runner import RunResult, Runner
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms import LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
@@ -139,7 +139,7 @@ class CogBaseApp:
             structured_collection=structured_collection,
         )
 
-        self._runner = QueryRunner(
+        self._runner = Runner(
             llm=llm,
             structured_store=structured_store,
             vector_store=vector_store,
@@ -147,7 +147,7 @@ class CogBaseApp:
             default_vector_collection=_vc_name,
             structured_schemas=self._ingest_pipeline.structured_schemas or None,
             passthrough_token_threshold=passthrough_token_threshold,
-            max_rounds=query_max_rounds,
+            max_calls=query_max_rounds,
         )
 
     # ------------------------------------------------------------------
@@ -177,14 +177,14 @@ class CogBaseApp:
         return results
 
     async def query_stream(self, text: str):
-        """Stream the answer token-by-token, then yield a final QueryResult.
+        """Stream the answer token-by-token, then yield a final RunResult.
 
         The retrieval loop runs until the LLM has enough evidence to answer or
         ``query_max_rounds`` is exhausted.  Large structured result sets are
         returned directly as formatted text (passthrough rule).
         """
         logger.info("app.query_stream.start query=%s", text[:200])
-        async for chunk in self._runner.query_stream(text):
+        async for chunk in self._runner.run(None, text):
             yield chunk
 
     # ------------------------------------------------------------------
@@ -197,8 +197,8 @@ class CogBaseApp:
         return self._ingest_pipeline
 
     @property
-    def query_runner(self) -> QueryRunner:
-        """The underlying ``QueryRunner`` (query layer)."""
+    def query_runner(self) -> Runner:
+        """The underlying ``Runner`` (query layer)."""
         return self._runner
 
     @property

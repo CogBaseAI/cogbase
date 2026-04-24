@@ -1,0 +1,715 @@
+"""Runner — unified LLM agent loop with skill routing and retrieval tools.
+
+The runner drives an LLM agent loop that handles two complementary concerns:
+
+  Skill routing  — selects the best skill for each user request, builds a
+                   skill-specific system prompt, and re-evaluates after every
+                   tool-call round so the agent can switch skills mid-task.
+
+  Retrieval      — exposes ``structured_lookup`` and ``vector_search`` as
+                   system tools when the corresponding stores are configured.
+                   The passthrough rule applies: if ``structured_lookup``
+                   returns results whose estimated token count exceeds
+                   ``passthrough_token_threshold``, the formatted records are
+                   streamed directly and the loop exits without LLM synthesis.
+
+Either concern can be used alone:
+
+  - Skills only (no stores) — code-execution assistant, multi-step automation.
+  - Stores only (no skills) — document retrieval and Q&A, replaces QueryRunner.
+  - Both — skill-driven agents that can also query structured/vector data.
+
+The loop yields ``str`` tokens during execution followed by a final
+``RunResult`` that carries accumulated records, chunks, and a passthrough flag.
+
+Usage (retrieval mode, replaces QueryRunner)::
+
+    runner = Runner(
+        llm=llm,
+        structured_store=structured_store,
+        vector_store=vector_store,
+        embedder=embedder,
+        structured_schemas=schemas,
+    )
+    async for item in runner.run(None, "list all contracts expiring before 2026"):
+        if isinstance(item, str):
+            print(item, end="", flush=True)
+        else:
+            print("passthrough:", item.passthrough)
+
+Usage (skill mode, replaces SkillRunner)::
+
+    runner = Runner(llm=llm)
+    async for item in runner.run(skills, "What's the weather in NYC?"):
+        if isinstance(item, str):
+            print(item, end="", flush=True)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import sys
+import tempfile
+from collections.abc import AsyncGenerator
+
+from pydantic import BaseModel
+
+from cogbase.core.models import Chunk
+from cogbase.embeddings import EmbeddingBase
+from cogbase.llms.base import ChatMessage, LLMBase, SystemTool, ToolDefinition
+from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
+from cogbase.stores.filters import Filter, Op
+from cogbase.stores.schema import CollectionSchema
+
+logger = logging.getLogger(__name__)
+
+_TOOL_TIMEOUT = 30  # seconds
+
+
+# ---------------------------------------------------------------------------
+# Result type
+# ---------------------------------------------------------------------------
+
+
+class RunResult(BaseModel):
+    """Final result of a Runner invocation.
+
+    Attributes:
+        answer:              Full response text.
+        structured_records:  All records returned by structured_lookup calls.
+        chunks:              All chunks returned by vector_search calls.
+        passthrough:         True when records were returned directly without
+                             LLM synthesis (token threshold exceeded).
+    """
+
+    answer: str
+    structured_records: list[dict] = []
+    chunks: list[Chunk] = []
+    passthrough: bool = False
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+# ---------------------------------------------------------------------------
+# Execution tools (available when skills are present)
+# ---------------------------------------------------------------------------
+
+_BASE_TOOLS: list[ToolDefinition] = [
+    {
+        "name": "python",
+        "description": (
+            "Execute inline Python code and return stdout/stderr. "
+            "Use for computation, data processing, or logic that does not need a separate script file."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"code": {"type": "string", "description": "Python source code to execute"}},
+            "required": ["code"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "shell",
+        "description": (
+            "Run a bash command and return stdout/stderr. "
+            "Use whenever the active skill instructs you to run a command, especially "
+            "lines like 'python <script_path> ...' — those are shell commands, not inline code."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"command": {"type": "string", "description": "A bash command to execute"}},
+            "required": ["command"],
+            "additionalProperties": False,
+        },
+    },
+]
+
+
+# ---------------------------------------------------------------------------
+# Retrieval tool definitions
+# ---------------------------------------------------------------------------
+
+_STRUCTURED_LOOKUP_DEF: ToolDefinition = {
+    "name": "structured_lookup",
+    "description": (
+        "Query the structured store for exact records. Use when the query asks for "
+        "specific field values, counts, filtering by criteria, or listing records of a type."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "collection": {
+                "type": "string",
+                "description": "Collection name to query.",
+            },
+            "filters": {
+                "type": "array",
+                "description": (
+                    'Filter expressions (ANDed). Each item: {"field": "name", "op": "=", "value": ...}. '
+                    "Omit 'value' for is_null / is_not_null."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "field": {"type": "string"},
+                        "op": {"type": "string"},
+                        "value": {},
+                    },
+                    "required": ["field", "op"],
+                },
+            },
+            "fields": {
+                "type": "array",
+                "description": "Field names to return. Omit or leave empty for all fields.",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["collection"],
+        "additionalProperties": False,
+    },
+}
+
+_VECTOR_SEARCH_DEF: ToolDefinition = {
+    "name": "vector_search",
+    "description": (
+        "Semantically search the document collection for relevant passages. Use for "
+        "open-ended questions, conceptual queries, or finding similar text."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query text.",
+            },
+            "top_k": {
+                "type": "integer",
+                "description": "Number of results to return (default: 5, max: 20).",
+            },
+            "collection": {
+                "type": "string",
+                "description": "Vector collection to search. Omit to use the default collection.",
+            },
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# System prompt helpers
+# ---------------------------------------------------------------------------
+
+_RETRIEVAL_BASE_PROMPT = """\
+You are a document intelligence assistant. Answer the user's query by retrieving
+evidence from the available tools, then synthesising a final answer.
+
+Rules:
+- Call tools as needed to gather evidence before answering.
+- Do not invent facts not present in retrieved evidence.
+- When the evidence is sufficient, produce your final answer directly (no tool calls).
+"""
+
+_SCHEMA_HEADER = "\nAvailable structured collections (use these names and fields exactly):\n"
+
+_FILTER_LEGEND = """
+Filter operators: =, !=, <, >, <=, >=, like, in, not_in, is_null, is_not_null
+  in / not_in:            value must be a JSON array
+  like:                   SQL LIKE pattern (% = any sequence)
+  is_null / is_not_null:  omit "value"
+  JSON sub-keys:          use "field.subkey" notation
+"""
+
+
+def _build_retrieval_prompt(schemas: list[CollectionSchema] | None) -> str:
+    if not schemas:
+        return _RETRIEVAL_BASE_PROMPT
+    lines = [_RETRIEVAL_BASE_PROMPT, _SCHEMA_HEADER]
+    for schema in schemas:
+        fields_str = ", ".join(
+            f"{name} ({fschema.type.value})"
+            for name, fschema in schema.fields.items()
+        )
+        lines.append(f"  {schema.name}: {fields_str}")
+    lines.append(_FILTER_LEGEND)
+    return "\n".join(lines)
+
+
+def _estimate_tokens(text: str) -> int:
+    return len(text) // 4
+
+
+def _parse_filter(obj: dict) -> Filter:
+    return Filter(field=str(obj["field"]), op=Op(obj["op"]), value=obj.get("value"))
+
+
+def _format_records_as_text(records: list[dict]) -> str:
+    if not records:
+        return "No matching records found."
+    lines = [f"Found {len(records)} record(s):"]
+    for i, rec in enumerate(records, 1):
+        pairs = ", ".join(f"{k}: {v}" for k, v in rec.items())
+        lines.append(f"  {i}. {pairs}")
+    return "\n".join(lines)
+
+
+def _format_chunks(chunks: list[Chunk]) -> str:
+    if not chunks:
+        return "(no passages found)"
+    lines = ["Passages:"]
+    for i, chunk in enumerate(chunks, 1):
+        lines.append(f"  [{i}] (doc: {chunk.doc_id})\n  {chunk.text.strip()}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+
+class Runner:
+    """Unified LLM agent loop with skill routing and retrieval tools.
+
+    Args:
+        llm:                         LLM backend.
+        max_calls:                   Maximum LLM completion rounds per run. Default 10.
+        system_tools:                Custom store-backed or service tools injected by the
+                                     caller. Available on every turn alongside retrieval
+                                     tools and (when skills are present) execution tools.
+        structured_store:            Structured store; enables the ``structured_lookup`` tool.
+        vector_store:                Vector store; enables the ``vector_search`` tool
+                                     (requires *embedder*).
+        embedder:                    Embedder for ``vector_search``.
+        default_vector_collection:   Collection used when ``vector_search`` omits
+                                     ``"collection"``.
+        structured_schemas:          Schema list injected into the retrieval system prompt
+                                     so the LLM knows available collections and field types.
+        passthrough_token_threshold: Estimated token count of ``structured_lookup`` results
+                                     above which records are returned directly without LLM
+                                     synthesis. Defaults to 2000.
+    """
+
+    def __init__(
+        self,
+        llm: LLMBase,
+        max_calls: int = 10,
+        system_tools: list[SystemTool] | None = None,
+        structured_store: StructuredStoreBase | None = None,
+        vector_store: VectorStoreBase | None = None,
+        embedder: EmbeddingBase | None = None,
+        default_vector_collection: str | None = None,
+        structured_schemas: list[CollectionSchema] | None = None,
+        passthrough_token_threshold: int = 2000,
+    ) -> None:
+        self._llm = llm
+        self._max_calls = max_calls
+        self._system_tools: dict[str, SystemTool] = {t.name: t for t in (system_tools or [])}
+        self._structured_store = structured_store
+        self._vector_store = vector_store
+        self._embedder = embedder
+        self._default_vector_collection = default_vector_collection
+        self._retrieval_system_prompt = _build_retrieval_prompt(structured_schemas)
+        self._passthrough_token_threshold = passthrough_token_threshold
+
+        # Retrieval tool definitions — exposed as _tool_defs for introspection.
+        self._tool_defs: list[ToolDefinition] = []
+        if structured_store is not None:
+            self._tool_defs.append(_STRUCTURED_LOOKUP_DEF)
+        if vector_store is not None and embedder is not None:
+            self._tool_defs.append(_VECTOR_SEARCH_DEF)
+
+    # ------------------------------------------------------------------
+    # Skill selection helpers (used when skills are provided to run())
+    # ------------------------------------------------------------------
+
+    async def select(
+        self,
+        skills: list,
+        user_input: str,
+        history: list[ChatMessage] | None = None,
+    ):
+        """Ask the LLM to pick the best skill for *user_input*; returns None if none apply."""
+        if not skills:
+            return None
+
+        skill_list = "\n".join(
+            f"{i + 1}. name={s.name!r}  description={s.description!r}"
+            for i, s in enumerate(skills)
+        )
+        history_text = "\n".join(
+            f"[{m['role']}] {m.get('content', '')}" for m in (history or [])
+        )
+
+        messages: list[ChatMessage] = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a skill router. Given the conversation history, current user question, "
+                    "and available skills, return the name of the single most relevant skill, "
+                    "or 'none' if no skill applies. "
+                    "Output only the skill name or 'none' — no explanation, no punctuation."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Conversation history:\n{history_text}\n\n"
+                    f"Current user question:\n{user_input}\n\n"
+                    f"Available skills:\n{skill_list}"
+                ),
+            },
+        ]
+
+        result = await self._llm.complete(messages)
+        chosen = (result["content"] or "").lower().strip("'\"")
+
+        if chosen == "none":
+            logger.info("[runner] no skill selected for: %s", user_input[:100])
+            return None
+
+        for skill in skills:
+            if skill.name.lower() == chosen:
+                logger.info("[runner] selected skill '%s'", skill.name)
+                return skill
+
+        logger.error("[runner] router returned unknown skill '%s', ignoring", chosen)
+        return None
+
+    def build_system_prompt(
+        self,
+        base_prompt: str,
+        skill,
+        runtime_context: dict | None = None,
+    ) -> str:
+        """Merge *base_prompt* with the skill's markdown and optional *runtime_context*."""
+        base_dir = str(skill.source_path.parent) if skill.source_path else ""
+        metadata_block = ""
+        if skill.metadata:
+            metadata_block = (
+                "Skill metadata:\n"
+                f"```json\n{json.dumps(skill.metadata, ensure_ascii=False, indent=2)}\n```\n\n"
+            )
+
+        context_block = ""
+        if runtime_context:
+            lines = "\n".join(f"{k}: `{v}`" for k, v in runtime_context.items())
+            context_block = f"\n\n## Runtime Context\n\n{lines}\n"
+
+        return (
+            f"{base_prompt}\n\n"
+            f"## Active Skill: {skill.name}\n\n"
+            + (f"Skill base directory: `{base_dir}`\n\n" if base_dir else "")
+            + metadata_block
+            + "Follow the skill's instructions below to complete the user's request. "
+            "Use the `shell` tool to run any commands it suggests.\n\n"
+            + skill.raw_markdown
+            + context_block
+        )
+
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+
+    async def run(
+        self,
+        skills: list | None,
+        user_input: str,
+        history: list[ChatMessage] | None = None,
+        base_prompt: str = "You are a helpful assistant.",
+        runtime_context: dict | None = None,
+    ) -> AsyncGenerator[str | RunResult, None]:
+        """Drive the agent loop, yielding str tokens then a final RunResult.
+
+        Args:
+            skills:          Skills available for routing. Pass ``None`` or ``[]``
+                             to skip skill selection and use the retrieval system prompt.
+            user_input:      The user's request.
+            history:         Prior conversation messages.
+            base_prompt:     Base system prompt merged with skill instructions when
+                             skills are active.
+            runtime_context: Key-value pairs injected into the skill system prompt.
+        """
+        # Slot 0 is reserved for the system prompt; updated each iteration.
+        messages: list[ChatMessage] = [{"role": "system", "content": ""}]
+        messages.extend(history or [])
+        messages.append({"role": "user", "content": user_input})
+
+        all_records: list[dict] = []
+        all_chunks: list[Chunk] = []
+        current_skill = None
+
+        for _ in range(self._max_calls):
+            # --- System prompt selection ---
+            if skills:
+                selected = await self.select(skills, user_input, messages[1:])
+
+                if selected is None and current_skill is None:
+                    # No skill applies — answer directly with base prompt.
+                    messages[0] = {"role": "system", "content": base_prompt}
+                    result = await self._llm.complete(
+                        messages, tools=self._all_tools(has_skills=False) or None
+                    )
+                    answer = result.get("content") or ""
+                    yield answer
+                    yield RunResult(
+                        answer=answer,
+                        structured_records=all_records,
+                        chunks=all_chunks,
+                    )
+                    return
+
+                if selected is not None and selected is not current_skill:
+                    current_skill = selected
+                    logger.info("[runner] active skill → '%s'", current_skill.name)
+                    yield f"Using skill: {current_skill.name}..."
+
+                system_prompt = self.build_system_prompt(base_prompt, current_skill, runtime_context)
+            else:
+                system_prompt = self._retrieval_system_prompt
+
+            messages[0] = {"role": "system", "content": system_prompt}
+
+            # --- LLM completion ---
+            tools = self._all_tools(has_skills=bool(skills))
+            result = await self._llm.complete(messages, tools=tools or None)
+
+            tool_calls = result.get("tool_calls")
+            if not tool_calls:
+                answer = result.get("content") or ""
+                yield answer
+                yield RunResult(
+                    answer=answer,
+                    structured_records=all_records,
+                    chunks=all_chunks,
+                )
+                return
+
+            messages.append({
+                "role": "assistant",
+                "content": result.get("content"),
+                "tool_calls": tool_calls,
+            })
+
+            tool_names = ", ".join(tc["name"] for tc in tool_calls)
+            logger.info("[runner] tool_calls (skill=%s): %s", current_skill.name if current_skill else "none", tool_names)
+            if current_skill:
+                yield f"Executing: {tool_names}..."
+
+            # --- Tool execution ---
+            for tc in tool_calls:
+                inputs: dict = {}
+                try:
+                    inputs = json.loads(tc["arguments"])
+                except json.JSONDecodeError:
+                    pass
+
+                name = tc["name"]
+                logger.info("[runner] execute_tool %s(%s)", name, json.dumps(inputs)[:300])
+
+                if name == "structured_lookup":
+                    records, tool_output, passthrough = await self._run_structured_lookup(inputs)
+                    all_records.extend(records)
+                    if passthrough:
+                        yield tool_output
+                        yield RunResult(
+                            answer=tool_output,
+                            structured_records=all_records,
+                            chunks=all_chunks,
+                            passthrough=True,
+                        )
+                        return
+                elif name == "vector_search":
+                    chunks, tool_output = await self._run_vector_search(inputs)
+                    all_chunks.extend(chunks)
+                else:
+                    tool_output = await self._execute_tool(name, inputs, current_skill)
+                    logger.info("[runner] execute_tool done: %s", tool_output[:300])
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": tool_output,
+                })
+
+        logger.error("[runner] max_calls (%d) reached. skill=%s", self._max_calls, current_skill.name if current_skill else "none")
+        answer = (
+            "I was unable to complete your request within the allowed number of steps. "
+            "Please try a simpler or more specific request."
+        )
+        yield answer
+        yield RunResult(
+            answer=answer,
+            structured_records=all_records,
+            chunks=all_chunks,
+        )
+
+    # ------------------------------------------------------------------
+    # Tool helpers
+    # ------------------------------------------------------------------
+
+    def _all_tools(self, has_skills: bool) -> list[ToolDefinition]:
+        tools: list[ToolDefinition] = []
+        if has_skills:
+            tools.extend(_BASE_TOOLS)
+        tools.extend(t.definition for t in self._system_tools.values())
+        tools.extend(self._tool_defs)
+        return tools
+
+    async def _execute_tool(self, name: str, inputs: dict, skill=None) -> str:
+        if name in self._system_tools:
+            try:
+                result = self._system_tools[name].handler(inputs)
+                if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+                    return await result
+                return result  # type: ignore[return-value]
+            except Exception as e:
+                return f"Tool error ({name}): {e}"
+
+        env = self._tool_env(skill)
+        if name == "python":
+            return await self._run_python(inputs.get("code", ""), env)
+        if name == "shell":
+            return await self._run_shell(inputs.get("command", ""), env)
+        return f"Unknown tool: {name}"
+
+    async def _run_structured_lookup(
+        self, inputs: dict
+    ) -> tuple[list[dict], str, bool]:
+        if self._structured_store is None:
+            return [], "structured_lookup is unavailable (no structured store configured)", False
+
+        collection = str(inputs.get("collection", ""))
+        raw_filters = inputs.get("filters") or []
+        fields = inputs.get("fields") or []
+
+        filters: list[Filter] = []
+        for f in raw_filters:
+            try:
+                filters.append(_parse_filter(f))
+            except (KeyError, ValueError) as exc:
+                logger.warning("[runner] structured_lookup.bad_filter filter=%s err=%s", f, exc)
+
+        try:
+            records = await self._structured_store.query(
+                collection,
+                filters or None,
+                fields or None,
+            )
+        except Exception as exc:
+            logger.exception("[runner] structured_lookup.error collection=%s", collection)
+            return [], f"structured_lookup error: {exc}", False
+
+        json_str = json.dumps(records, default=str)
+        estimated_tokens = _estimate_tokens(json_str)
+        logger.info(
+            "[runner] structured_lookup.result collection=%s records=%d estimated_tokens=%d",
+            collection, len(records), estimated_tokens,
+        )
+
+        if estimated_tokens > self._passthrough_token_threshold:
+            logger.info(
+                "[runner] structured_lookup.passthrough estimated_tokens=%d threshold=%d",
+                estimated_tokens, self._passthrough_token_threshold,
+            )
+            return records, _format_records_as_text(records), True
+
+        return records, json_str, False
+
+    async def _run_vector_search(self, inputs: dict) -> tuple[list[Chunk], str]:
+        if self._vector_store is None or self._embedder is None:
+            return [], "vector_search is unavailable (no vector store configured)"
+
+        query_text = str(inputs.get("query", ""))
+        top_k = min(int(inputs.get("top_k") or 5), 20)
+        collection = str(inputs.get("collection") or self._default_vector_collection or "")
+
+        if not collection:
+            return [], "vector_search error: no collection specified and no default collection configured"
+
+        try:
+            (query_embedding,) = await self._embedder.embed([query_text])
+            chunks = await self._vector_store.search(collection, query_embedding, top_k)
+        except Exception as exc:
+            logger.exception("[runner] vector_search.error collection=%s", collection)
+            return [], f"vector_search error: {exc}"
+
+        logger.info("[runner] vector_search.result collection=%s chunks=%d", collection, len(chunks))
+        return chunks, _format_chunks(chunks)
+
+    async def _run_python(self, code: str, env: dict) -> str:
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+                f.write(code)
+                tmp = f.name
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, tmp,
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                return await self._read_proc(proc)
+            finally:
+                os.unlink(tmp)
+        except Exception as e:
+            return f"Python error: {e}"
+
+    async def _run_shell(self, command: str, env: dict) -> str:
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            return await self._read_proc(proc)
+        except Exception as e:
+            return f"Shell error: {e}"
+
+    @staticmethod
+    async def _read_proc(proc: asyncio.subprocess.Process) -> str:
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_TOOL_TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return "Process timed out"
+        return stdout.decode().strip() or stderr.decode().strip() or "(no output)"
+
+    @staticmethod
+    def _tool_env(skill) -> dict:
+        env = os.environ.copy()
+        if skill and skill.site_packages:
+            existing = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = f"{skill.site_packages}:{existing}" if existing else skill.site_packages
+        return env
+
+    async def compact_messages(
+        self,
+        system_prompt: str,
+        messages: list[ChatMessage],
+    ) -> list[ChatMessage]:
+        """Summarise *messages* into a minimal list to recover from context overflow."""
+        transcript = "\n".join(
+            f"[{m['role']}] {str(m.get('content', ''))[:500]}"
+            for m in messages
+        )
+        result = await self._llm.complete([
+            {
+                "role": "user",
+                "content": (
+                    "Compress the following conversation transcript into a concise bullet-point "
+                    "summary preserving all key decisions, tool outputs, and conclusions. Be terse.\n\n"
+                    + transcript
+                ),
+            }
+        ])
+        summary = result.get("content") or "(empty summary)"
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Compacted context:\n\n{summary}\n\nContinue from this point."},
+        ]

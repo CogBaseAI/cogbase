@@ -328,11 +328,11 @@ async def ingest_documents(
 
 
 async def _drain_query(app, text: str):
-    """Drain app.query_stream and return the final QueryResult."""
+    """Drain app.query_stream and return the final result."""
     async for item in app.query_stream(text):
         if not isinstance(item, str):
             return item
-    raise RuntimeError("query_stream did not yield a QueryResult")
+    raise RuntimeError("query_stream did not yield a result")
 
 
 @router.post("/{app_name}/query", response_model=QueryResponse)

@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from cogbase.core.app import CogBaseApp
+from cogbase.core.runner import RunResult as QueryResult, Runner as QueryRunner
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
 from cogbase.core.models import Document
 from cogbase.embeddings import EmbeddingBase
-from cogbase.engine.query_runner import QueryResult, QueryRunner
 from cogbase.llms.base import LLMBase
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
