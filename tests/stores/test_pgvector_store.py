@@ -9,6 +9,7 @@ import pytest
 
 from cogbase.core.models import Chunk
 from cogbase.stores.base import VectorCollectionSchema
+from cogbase.stores.filters import Col
 from cogbase.stores.vector.pgvector_store import PGVectorStore
 
 
@@ -313,3 +314,165 @@ def test_get_pool_before_connect_raises():
     s = PGVectorStore(dsn="postgresql://localhost/test")
     with pytest.raises(RuntimeError, match="Not connected"):
         s._get_pool()
+
+
+# ---------------------------------------------------------------------------
+# Metadata filters
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_search_filter_by_doc_id(store):
+    a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0])
+    b = make_chunk(doc_id="doc-2", embedding=[0.9, 0.1, 0.0, 0.0])
+    await store.upsert(COLLECTION, [a, b])
+
+    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+                                 filters=[Col("doc_id") == "doc-1"])
+    assert len(results) == 1
+    assert results[0].chunk_id == a.chunk_id
+
+
+@pytest.mark.asyncio
+async def test_search_filter_by_metadata_eq(store):
+    a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0], metadata={"section": "intro"})
+    b = make_chunk(doc_id="doc-1", embedding=[0.9, 0.1, 0.0, 0.0], metadata={"section": "body"})
+    await store.upsert(COLLECTION, [a, b])
+
+    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+                                 filters=[Col("metadata.section") == "intro"])
+    assert len(results) == 1
+    assert results[0].chunk_id == a.chunk_id
+
+
+@pytest.mark.asyncio
+async def test_search_filter_in_operator(store):
+    a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0])
+    b = make_chunk(doc_id="doc-2", embedding=[0.9, 0.1, 0.0, 0.0])
+    c = make_chunk(doc_id="doc-3", embedding=[0.1, 0.9, 0.0, 0.0])
+    await store.upsert(COLLECTION, [a, b, c])
+
+    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+                                 filters=[Col("doc_id").in_(["doc-1", "doc-2"])])
+    assert len(results) == 2
+    assert {r.doc_id for r in results} == {"doc-1", "doc-2"}
+
+
+@pytest.mark.asyncio
+async def test_search_filter_metadata_like(store):
+    a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0],
+                   metadata={"source": "contract_2024.pdf"})
+    b = make_chunk(doc_id="doc-1", embedding=[0.9, 0.1, 0.0, 0.0],
+                   metadata={"source": "invoice.pdf"})
+    await store.upsert(COLLECTION, [a, b])
+
+    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+                                 filters=[Col("metadata.source").like("contract%")])
+    assert len(results) == 1
+    assert results[0].chunk_id == a.chunk_id
+
+
+@pytest.mark.asyncio
+async def test_search_filter_metadata_numeric_gte(store):
+    a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0], metadata={"page": 1})
+    b = make_chunk(doc_id="doc-1", embedding=[0.9, 0.1, 0.0, 0.0], metadata={"page": 3})
+    c = make_chunk(doc_id="doc-1", embedding=[0.8, 0.2, 0.0, 0.0], metadata={"page": 5})
+    await store.upsert(COLLECTION, [a, b, c])
+
+    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+                                 filters=[Col("metadata.page") >= 3])
+    assert len(results) == 2
+    assert {r.metadata["page"] for r in results} == {3, 5}
+
+
+@pytest.mark.asyncio
+async def test_search_filter_metadata_is_null(store):
+    a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0], metadata={"page": 1})
+    b = make_chunk(doc_id="doc-1", embedding=[0.9, 0.1, 0.0, 0.0], metadata={})
+    await store.upsert(COLLECTION, [a, b])
+
+    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+                                 filters=[Col("metadata.page").is_null()])
+    assert len(results) == 1
+    assert results[0].chunk_id == b.chunk_id
+
+
+@pytest.mark.asyncio
+async def test_search_filter_no_match_returns_empty(store):
+    await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0])])
+    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+                                 filters=[Col("doc_id") == "no-such-doc"])
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_search_filter_respects_top_k(store):
+    """top_k is applied after filtering."""
+    await store.upsert(COLLECTION, [
+        make_chunk(doc_id="doc-1", embedding=[float(i), 0.0, 0.0, 0.0]) for i in range(1, 6)
+    ])
+    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=2,
+                                 filters=[Col("doc_id") == "doc-1"])
+    assert len(results) == 2
+
+
+@pytest.mark.asyncio
+async def test_search_multiple_filters_are_anded(store):
+    a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0], metadata={"section": "intro"})
+    b = make_chunk(doc_id="doc-1", embedding=[0.9, 0.1, 0.0, 0.0], metadata={"section": "body"})
+    c = make_chunk(doc_id="doc-2", embedding=[0.8, 0.2, 0.0, 0.0], metadata={"section": "intro"})
+    await store.upsert(COLLECTION, [a, b, c])
+
+    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5, filters=[
+        Col("doc_id") == "doc-1",
+        Col("metadata.section") == "intro",
+    ])
+    assert len(results) == 1
+    assert results[0].chunk_id == a.chunk_id
+
+
+# ---------------------------------------------------------------------------
+# Field projection
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_search_fields_omits_embedding(store):
+    chunk = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0], metadata={"k": "v"})
+    await store.upsert(COLLECTION, [chunk])
+    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=1,
+                                 fields=["chunk_id", "doc_id", "text", "metadata"])
+    assert results[0].embedding is None
+    assert results[0].metadata == {"k": "v"}
+
+
+@pytest.mark.asyncio
+async def test_search_fields_omits_metadata(store):
+    chunk = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0], metadata={"k": "v"})
+    await store.upsert(COLLECTION, [chunk])
+    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=1,
+                                 fields=["chunk_id", "doc_id", "text", "embedding"])
+    assert results[0].metadata == {}
+    assert results[0].embedding is not None
+
+
+@pytest.mark.asyncio
+async def test_search_fields_none_returns_all(store):
+    chunk = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0], metadata={"k": "v"})
+    await store.upsert(COLLECTION, [chunk])
+    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=1, fields=None)
+    assert results[0].embedding is not None
+    assert results[0].metadata == {"k": "v"}
+
+
+@pytest.mark.asyncio
+async def test_search_filters_and_fields_combined(store):
+    a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0], metadata={"section": "intro"})
+    b = make_chunk(doc_id="doc-2", embedding=[0.9, 0.1, 0.0, 0.0], metadata={"section": "body"})
+    await store.upsert(COLLECTION, [a, b])
+
+    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+                                 filters=[Col("doc_id") == "doc-1"],
+                                 fields=["chunk_id", "doc_id", "text", "metadata"])
+    assert len(results) == 1
+    assert results[0].chunk_id == a.chunk_id
+    assert results[0].embedding is None
+    assert results[0].metadata == {"section": "intro"}

@@ -21,6 +21,7 @@ import numpy as np
 
 from cogbase.core.models import Chunk
 from cogbase.stores.base import VectorCollectionSchema, VectorStoreBase
+from cogbase.stores.filters import Filter, matches
 
 logger = logging.getLogger(__name__)
 
@@ -107,12 +108,21 @@ class FAISSVectorStore(VectorStoreBase):
 
         self._next_id += len(to_add)
 
-    async def search(self, collection: str, query_embedding: list[float], top_k: int) -> list[Chunk]:
+    async def search(
+        self,
+        collection: str,
+        query_embedding: list[float],
+        top_k: int,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
+    ) -> list[Chunk]:
         """Return up to ``top_k`` chunks ordered by cosine similarity (highest first)."""
         if self._index is None or self._index.ntotal == 0:
             return []
 
-        k = min(top_k, self._index.ntotal)
+        active_filters = filters or []
+        # Over-fetch the full index when filtering so we don't under-return.
+        k = self._index.ntotal if active_filters else min(top_k, self._index.ntotal)
         query = np.array([query_embedding], dtype=np.float32)
         faiss.normalize_L2(query)
 
@@ -123,8 +133,14 @@ class FAISSVectorStore(VectorStoreBase):
             if fid == -1:  # FAISS sentinel for no result
                 continue
             chunk_id = self._id_rev.get(fid)
-            if chunk_id is not None:
-                results.append(self._chunks[chunk_id])
+            if chunk_id is None:
+                continue
+            chunk = self._chunks[chunk_id]
+            if active_filters and not matches(chunk.model_dump(), active_filters):
+                continue
+            results.append(_project_chunk(chunk, fields))
+            if len(results) == top_k:
+                break
         return results
 
     async def delete(self, collection: str, doc_id: str) -> None:
@@ -239,3 +255,16 @@ class FAISSVectorStore(VectorStoreBase):
 
 def _make_index(dim: int) -> faiss.Index:
     return faiss.IndexIDMap(faiss.IndexFlatIP(dim))
+
+
+def _project_chunk(chunk: Chunk, fields: list[str] | None) -> Chunk:
+    if not fields:
+        return chunk
+    field_set = set(fields)
+    return Chunk(
+        chunk_id=chunk.chunk_id,
+        doc_id=chunk.doc_id,
+        text=chunk.text,
+        embedding=chunk.embedding if "embedding" in field_set else None,
+        metadata=chunk.metadata if "metadata" in field_set else {},
+    )

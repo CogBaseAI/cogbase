@@ -34,6 +34,7 @@ from typing import Any
 
 from cogbase.core.models import Chunk
 from cogbase.stores.base import VectorCollectionSchema, VectorStoreBase
+from cogbase.stores.filters import Filter, Op
 
 logger = logging.getLogger(__name__)
 
@@ -188,21 +189,42 @@ class PGVectorStore(VectorStoreBase):
         collection: str,
         query_embedding: list[float],
         top_k: int,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
     ) -> list[Chunk]:
         """Return up to ``top_k`` chunks from ``collection`` ordered by cosine similarity."""
         import numpy as np
 
         pool = self._get_pool()
         vec = np.array(query_embedding, dtype=np.float32)
+
+        # $1 = query vector (used in ORDER BY); filter params follow from $2 onward.
+        params: list[Any] = [vec]
+        where_sql = ""
+        if filters:
+            where_clause, filter_params = _build_pg_where(filters, param_offset=len(params))
+            params.extend(filter_params)
+            where_sql = f"WHERE {where_clause}"
+        params.append(top_k)
+
+        include_embedding = not fields or "embedding" in fields
+        include_metadata = not fields or "metadata" in fields
+        select_cols = "chunk_id, doc_id, text"
+        if include_embedding:
+            select_cols += ", embedding"
+        if include_metadata:
+            select_cols += ", metadata"
+
         sql = (
-            f'SELECT chunk_id, doc_id, text, embedding, metadata '
+            f"SELECT {select_cols} "
             f'FROM "{collection}" '
-            f'ORDER BY embedding <=> $1 '
-            f'LIMIT $2'
+            f"{where_sql} "
+            f"ORDER BY embedding <=> $1 "
+            f"LIMIT ${len(params)}"
         )
         async with pool.acquire() as conn:
-            rows = await conn.fetch(sql, vec, top_k)
-        return [_from_row(row) for row in rows]
+            rows = await conn.fetch(sql, *params)
+        return [_from_row(row, include_embedding, include_metadata) for row in rows]
 
     async def delete(self, collection: str, doc_id: str) -> None:
         """Remove all chunks for ``doc_id`` from ``collection``."""
@@ -242,17 +264,103 @@ def _to_row(chunk: Chunk) -> tuple[Any, ...]:
     )
 
 
-def _from_row(row: Any) -> Chunk:
+def _from_row(row: Any, include_embedding: bool = True, include_metadata: bool = True) -> Chunk:
     import json
 
-    metadata = row["metadata"]
-    if isinstance(metadata, str):
-        metadata = json.loads(metadata)
+    embedding = list(row["embedding"]) if include_embedding else None
+    if include_metadata:
+        metadata = row["metadata"]
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+    else:
+        metadata = {}
 
     return Chunk(
         chunk_id=row["chunk_id"],
         doc_id=row["doc_id"],
         text=row["text"],
-        embedding=list(row["embedding"]),
+        embedding=embedding,
         metadata=metadata,
     )
+
+
+# Top-level Chunk columns that can be filtered directly in SQL.
+_DIRECT_COLS = {"chunk_id", "doc_id", "text"}
+
+
+def _build_pg_where(filters: list[Filter], param_offset: int) -> tuple[str, list[Any]]:
+    """Translate a Filter list to a parameterised PostgreSQL WHERE clause fragment.
+
+    Supports top-level Chunk columns (``chunk_id``, ``doc_id``, ``text``) and
+    dot-notation for JSONB metadata sub-keys (``metadata.key``).
+
+    Args:
+        filters:      Filter expressions to translate.
+        param_offset: Number of params already bound before these (e.g. 1 if $1
+                      is the query vector).  Filter params start at $param_offset+1.
+
+    Returns:
+        ``(where_clause, params)`` — clause is a non-empty string ready to be
+        placed after ``WHERE``; params are the corresponding bound values.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    n = param_offset + 1  # 1-based asyncpg param index
+
+    for f in filters:
+        is_meta = "." in f.field and f.field.startswith("metadata.")
+        if is_meta:
+            key = f.field.split(".", 1)[1]
+            text_expr = f"metadata->>'{key}'"
+            num_expr = f"(metadata->>'{key}')::numeric"
+        elif f.field in _DIRECT_COLS:
+            text_expr = f'"{f.field}"'
+            num_expr = f'"{f.field}"'
+        else:
+            continue  # unknown field — skip
+
+        match f.op:
+            case Op.EQ:
+                clauses.append(f"{text_expr} = ${n}")
+                params.append(str(f.value) if is_meta else f.value)
+                n += 1
+            case Op.NE:
+                clauses.append(f"{text_expr} != ${n}")
+                params.append(str(f.value) if is_meta else f.value)
+                n += 1
+            case Op.LT:
+                clauses.append(f"{num_expr} < ${n}")
+                params.append(f.value)
+                n += 1
+            case Op.GT:
+                clauses.append(f"{num_expr} > ${n}")
+                params.append(f.value)
+                n += 1
+            case Op.LTE:
+                clauses.append(f"{num_expr} <= ${n}")
+                params.append(f.value)
+                n += 1
+            case Op.GTE:
+                clauses.append(f"{num_expr} >= ${n}")
+                params.append(f.value)
+                n += 1
+            case Op.IN:
+                values = [str(v) for v in f.value] if is_meta else list(f.value)
+                clauses.append(f"{text_expr} = ANY(${n})")
+                params.append(values)
+                n += 1
+            case Op.NOT_IN:
+                values = [str(v) for v in f.value] if is_meta else list(f.value)
+                clauses.append(f"NOT ({text_expr} = ANY(${n}))")
+                params.append(values)
+                n += 1
+            case Op.LIKE:
+                clauses.append(f"{text_expr} LIKE ${n}")
+                params.append(f.value)
+                n += 1
+            case Op.IS_NULL:
+                clauses.append(f"{text_expr} IS NULL")
+            case Op.IS_NOT_NULL:
+                clauses.append(f"{text_expr} IS NOT NULL")
+
+    return (" AND ".join(clauses), params)

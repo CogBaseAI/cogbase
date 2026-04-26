@@ -180,8 +180,37 @@ class VectorStoreBase(abc.ABC):
         collection: str,
         query_embedding: list[float],
         top_k: int,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
     ) -> list[Chunk]:
-        """Return the ``top_k`` nearest chunks from ``collection``."""
+        """Return the ``top_k`` nearest chunks from ``collection``.
+
+        Args:
+            collection:      Target collection name.
+            query_embedding: Query vector; must match the collection's dimensions.
+            top_k:           Maximum number of results to return.
+            filters:         AND-combined metadata filter expressions applied before
+                             (or alongside) the ANN search.  Supports top-level Chunk
+                             fields (``doc_id``, ``chunk_id``) and dot-notation for
+                             metadata sub-keys (``metadata.source``, ``metadata.page``).
+                             ``None`` / ``[]`` means no filter.  Example::
+
+                                 from cogbase.stores.filters import Col
+
+                                 await store.search(
+                                     "legal_chunks", embedding, top_k=5,
+                                     filters=[
+                                         Col("doc_id").in_(["doc-1", "doc-2"]),
+                                         Col("metadata.section") == "definitions",
+                                     ],
+                                 )
+
+            fields:          Chunk field names to populate in each returned object.
+                             ``None`` / ``[]`` returns all fields (default).  Backends
+                             that support projection (e.g. Pinecone ``include_metadata``
+                             / ``include_values``) may use this to reduce payload size.
+                             Unknown names are silently ignored.
+        """
 
     @abc.abstractmethod
     async def delete_collection(self, collection: str) -> None:
