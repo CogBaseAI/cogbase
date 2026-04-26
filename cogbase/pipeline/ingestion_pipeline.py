@@ -95,21 +95,31 @@ class IngestResult:
     error: Exception | None = field(default=None, repr=False)
 
 
+_DEFAULT_VC_DESCRIPTIONS: dict[str, str] = {
+    "document_chunks": "Full-text passage chunks; use for detailed or specific questions about document content.",
+    "document_summary": "One-per-document summaries; use for topic-level or high-level questions about what documents cover.",
+}
+
+
 @dataclass
 class VectorCollection:
     """A named vector collection backed by a store, embedder, and chunker.
 
     Args:
-        name:     Logical name for this collection (used for lookup and logging).
-        store:    ``VectorStoreBase`` implementation that persists chunks.
-        embedder: ``EmbeddingBase`` implementation that produces dense vectors.
-        chunker:  ``ChunkerBase`` implementation that splits document text.
+        name:        Logical name for this collection (used for lookup and logging).
+        store:       ``VectorStoreBase`` implementation that persists chunks.
+        embedder:    ``EmbeddingBase`` implementation that produces dense vectors.
+        chunker:     ``ChunkerBase`` implementation that splits document text.
+        description: Short description shown to the LLM to help it choose the right
+                     collection.  Falls back to ``_DEFAULT_VC_DESCRIPTIONS[name]``
+                     when empty, or the bare name if no default exists.
     """
 
     name: str
     store: VectorStoreBase
     embedder: EmbeddingBase
     chunker: ChunkerBase
+    description: str = ""
 
 
 @dataclass
@@ -153,12 +163,15 @@ class SummarizeCollection:
     topics rather than specific passages.
 
     Args:
-        name:       Logical name for this collection.
-        store:      ``VectorStoreBase`` that persists the summary chunks.
-        embedder:   ``EmbeddingBase`` that produces the summary embedding.
-        llm:        ``LLMBase`` used to generate the summary.
-        prompt:     System prompt for the summarisation call.
-        max_tokens: Maximum tokens for the generated summary.
+        name:        Logical name for this collection.
+        store:       ``VectorStoreBase`` that persists the summary chunks.
+        embedder:    ``EmbeddingBase`` that produces the summary embedding.
+        llm:         ``LLMBase`` used to generate the summary.
+        prompt:      System prompt for the summarisation call.
+        max_tokens:  Maximum tokens for the generated summary.
+        description: Short description shown to the LLM to help it choose the right
+                     collection.  Falls back to ``_DEFAULT_VC_DESCRIPTIONS[name]``
+                     when empty, or the bare name if no default exists.
     """
 
     name: str
@@ -167,6 +180,7 @@ class SummarizeCollection:
     llm: LLMBase
     prompt: str = "Summarize this document in a few sentences."
     max_tokens: int = 1024
+    description: str = ""
 
 
 class IngestionPipeline:
@@ -278,6 +292,28 @@ class IngestionPipeline:
         for tool, name in self._steps:
             if tool in ("chunk-embed-upsert", "summarize-embed-upsert") and name not in seen:
                 seen.append(name)
+        return seen
+
+    @property
+    def vector_collection_infos(self) -> list[tuple[str, str]]:
+        """``(name, description)`` pairs for all vector collections, in step order.
+
+        The description is taken from the collection's ``description`` field, falling
+        back to ``_DEFAULT_VC_DESCRIPTIONS`` for well-known names, then the bare name.
+        Pass to ``Runner(vector_collections=...)`` so the LLM can pick the right one.
+        """
+        seen: list[tuple[str, str]] = []
+        seen_names: set[str] = set()
+        for tool, name in self._steps:
+            if tool not in ("chunk-embed-upsert", "summarize-embed-upsert"):
+                continue
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+            col = self._vector_by_name.get(name) or self._summarize_by_name.get(name)
+            explicit = col.description if col is not None else ""
+            desc = explicit or _DEFAULT_VC_DESCRIPTIONS.get(name, name)
+            seen.append((name, desc))
         return seen
 
     def runner_resources(

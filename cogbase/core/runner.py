@@ -230,7 +230,7 @@ _VECTOR_COLLECTIONS_HEADER = "\nAvailable vector collections (pass name to vecto
 
 def _build_retrieval_prompt(
     schemas: list[CollectionSchema] | None,
-    vector_collection_names: list[str] | None = None,
+    vector_collections: list[tuple[str, str]] | None = None,
 ) -> str:
     lines = [_RETRIEVAL_BASE_PROMPT]
     if schemas:
@@ -240,12 +240,13 @@ def _build_retrieval_prompt(
                 f"{name} ({fschema.type.value})"
                 for name, fschema in schema.fields.items()
             )
-            lines.append(f"  {schema.name}: {fields_str}")
+            header = f"  {schema.name} ({schema.description})" if schema.description else f"  {schema.name}"
+            lines.append(f"{header}: {fields_str}")
         lines.append(_FILTER_LEGEND)
-    if vector_collection_names:
+    if vector_collections:
         lines.append(_VECTOR_COLLECTIONS_HEADER)
-        for vc_name in vector_collection_names:
-            lines.append(f"  - {vc_name}")
+        for vc_name, vc_desc in vector_collections:
+            lines.append(f"  - {vc_name}: {vc_desc}")
     return "\n".join(lines)
 
 
@@ -298,6 +299,9 @@ class Runner:
         embedder:                    Embedder for ``vector_search``.
         default_vector_collection:   Collection used when ``vector_search`` omits
                                      ``"collection"``.
+        vector_collections:          ``(name, description)`` pairs for all vector
+                                     collections, injected into the retrieval system
+                                     prompt so the LLM can choose the right one.
         structured_schemas:          Schema list injected into the retrieval system prompt
                                      so the LLM knows available collections and field types.
         passthrough_token_threshold: Estimated token count of ``structured_lookup`` results
@@ -315,7 +319,7 @@ class Runner:
         vector_store: VectorStoreBase | None = None,
         embedder: EmbeddingBase | None = None,
         default_vector_collection: str | None = None,
-        vector_collection_names: list[str] | None = None,
+        vector_collections: list[tuple[str, str]] | None = None,
         structured_schemas: list[CollectionSchema] | None = None,
         passthrough_token_threshold: int = 2000,
     ) -> None:
@@ -328,7 +332,7 @@ class Runner:
         self._embedder = embedder
         self._default_vector_collection = default_vector_collection
         self._retrieval_system_prompt = _build_retrieval_prompt(
-            structured_schemas, vector_collection_names
+            structured_schemas, vector_collections
         )
         self._passthrough_token_threshold = passthrough_token_threshold
 

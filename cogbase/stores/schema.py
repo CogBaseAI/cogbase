@@ -37,11 +37,16 @@ class CollectionSchema(BaseModel):
                         present in ``fields``.
         fields:         Ordered mapping of field name → field schema.
                         Fields not listed here are silently dropped on save.
+        description:    Short description shown to the LLM in the retrieval system
+                        prompt so it understands what this collection holds and when
+                        to query it (e.g. "Extracted contract metadata: parties, dates,
+                        governing law, termination clauses").
     """
 
     name: str
     primary_fields: list[str] = Field(min_length=1)
     fields: dict[str, FieldSchema]
+    description: str = ""
 
     @field_validator("name")
     @classmethod

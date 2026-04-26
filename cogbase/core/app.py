@@ -80,7 +80,7 @@ class CogBaseApp:
             vector_store=vector_store,
             embedder=embedder,
             default_vector_collection=default_vc,
-            vector_collection_names=pipeline.vector_collection_names or None,
+            vector_collections=pipeline.vector_collection_infos or None,
             structured_schemas=pipeline.structured_schemas or None,
             passthrough_token_threshold=passthrough_token_threshold,
             max_calls=query_max_rounds,
