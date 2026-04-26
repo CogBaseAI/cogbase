@@ -158,7 +158,7 @@ class VectorStoreBase(abc.ABC):
         schema = VectorCollectionSchema(name="legal_chunks", dimensions=1536)
         await store.create_collection(schema)
         await store.upsert("legal_chunks", chunks)
-        results = await store.search("legal_chunks", query_embedding, top_k=5)
+        results = await store.search("legal_chunks", "notice period", query_embedding, top_k=5)
         await store.delete("legal_chunks", doc_id="doc-42")
     """
 
@@ -178,6 +178,7 @@ class VectorStoreBase(abc.ABC):
     async def search(
         self,
         collection: str,
+        query: str,
         query_embedding: list[float],
         top_k: int,
         filters: list[Filter] | None = None,
@@ -187,6 +188,10 @@ class VectorStoreBase(abc.ABC):
 
         Args:
             collection:      Target collection name.
+            query:           Original query text.  Backends that support keyword or
+                             hybrid search (e.g. Elasticsearch, Weaviate, pgvector with
+                             full-text) may combine this with ``query_embedding`` for
+                             better recall.  Pure ANN backends may ignore it.
             query_embedding: Query vector; must match the collection's dimensions.
             top_k:           Maximum number of results to return.
             filters:         AND-combined metadata filter expressions applied before
@@ -198,7 +203,7 @@ class VectorStoreBase(abc.ABC):
                                  from cogbase.stores.filters import Col
 
                                  await store.search(
-                                     "legal_chunks", embedding, top_k=5,
+                                     "legal_chunks", "notice period", embedding, top_k=5,
                                      filters=[
                                          Col("doc_id").in_(["doc-1", "doc-2"]),
                                          Col("metadata.section") == "definitions",

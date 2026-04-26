@@ -651,7 +651,7 @@ class Runner:
 
         try:
             (query_embedding,) = await self._embedder.embed([query_text])
-            chunks = await self._vector_store.search(collection, query_embedding, top_k)
+            chunks = await self._vector_store.search(collection, query_text, query_embedding, top_k)
         except Exception as exc:
             logger.exception("[runner] vector_search.error collection=%s", collection)
             return [], f"vector_search error: {exc}"

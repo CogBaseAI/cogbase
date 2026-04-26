@@ -111,6 +111,7 @@ class FAISSVectorStore(VectorStoreBase):
     async def search(
         self,
         collection: str,
+        query: str,
         query_embedding: list[float],
         top_k: int,
         filters: list[Filter] | None = None,
@@ -123,10 +124,10 @@ class FAISSVectorStore(VectorStoreBase):
         active_filters = filters or []
         # Over-fetch the full index when filtering so we don't under-return.
         k = self._index.ntotal if active_filters else min(top_k, self._index.ntotal)
-        query = np.array([query_embedding], dtype=np.float32)
-        faiss.normalize_L2(query)
+        q = np.array([query_embedding], dtype=np.float32)
+        faiss.normalize_L2(q)
 
-        _, faiss_ids = self._index.search(query, k)
+        _, faiss_ids = self._index.search(q, k)
 
         results: list[Chunk] = []
         for fid in faiss_ids[0].tolist():

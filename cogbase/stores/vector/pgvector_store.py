@@ -18,7 +18,7 @@ Usage::
     schema = VectorCollectionSchema(name="chunks", dimensions=1536)
     await store.create_collection(schema)
     await store.upsert("chunks", chunks)
-    results = await store.search("chunks", query_embedding, top_k=10)
+    results = await store.search("chunks", query_text, query_embedding, top_k=10)
     await store.close()
 
     # --- or as async context manager ---
@@ -187,6 +187,7 @@ class PGVectorStore(VectorStoreBase):
     async def search(
         self,
         collection: str,
+        query: str,
         query_embedding: list[float],
         top_k: int,
         filters: list[Filter] | None = None,
