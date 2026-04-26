@@ -77,9 +77,27 @@ class StructuredCollectionConfig(BaseModel):
     extractor: ExtractorConfig
 
 
+class SummarizeCollectionConfig(BaseModel):
+    """Configuration for a summarize-embed-upsert vector collection.
+
+    Each ingested document produces one chunk: an LLM-generated summary of
+    its full text.  Useful for high-level semantic search over document topics.
+
+    Args:
+        name:       Collection name; referenced by ``summarize-embed-upsert`` steps.
+        prompt:     System prompt for the summarisation LLM call.  Defaults to
+                    ``"Summarize this document in 2–3 sentences."`` when omitted.
+        max_tokens: Maximum tokens for the generated summary.  Defaults to 1024.
+    """
+
+    name: str
+    prompt: str | None = None   # uses SummarizeCollection default when None
+    max_tokens: int = 1024
+
+
 class PipelineStepConfig(BaseModel):
-    tool: Literal["chunk-embed-upsert", "extract-structured"]
-    collection: str       # must match a vector_collection or structured_collection name
+    tool: Literal["chunk-embed-upsert", "extract-structured", "summarize-embed-upsert"]
+    collection: str       # must match a collection name of the corresponding type
 
 
 class PipelineConfig(BaseModel):
@@ -95,6 +113,7 @@ class AppConfig(BaseModel):
     vector_store: VectorStoreConfig | None = None
     vector_collections: list[VectorCollectionConfig] = []
     structured_collections: list[StructuredCollectionConfig] = []
+    summarize_collections: list[SummarizeCollectionConfig] = []
     pipeline: PipelineConfig | None = None
     skills: list[str] = []
 
@@ -102,9 +121,12 @@ class AppConfig(BaseModel):
     def _validate(self) -> "AppConfig":
         if self.vector_collections and self.embedding is None:
             raise ValueError("embedding is required when vector_collections are defined")
+        if self.summarize_collections and self.embedding is None:
+            raise ValueError("embedding is required when summarize_collections are defined")
         if self.pipeline:
             vc_names = {vc.name for vc in self.vector_collections}
             sc_names = {sc.name for sc in self.structured_collections}
+            smc_names = {smc.name for smc in self.summarize_collections}
             for step in self.pipeline.steps:
                 if step.tool == "chunk-embed-upsert" and step.collection not in vc_names:
                     raise ValueError(
@@ -113,6 +135,10 @@ class AppConfig(BaseModel):
                 if step.tool == "extract-structured" and step.collection not in sc_names:
                     raise ValueError(
                         f"Pipeline step references unknown structured collection: {step.collection!r}"
+                    )
+                if step.tool == "summarize-embed-upsert" and step.collection not in smc_names:
+                    raise ValueError(
+                        f"Pipeline step references unknown summarize collection: {step.collection!r}"
                     )
         return self
 

@@ -22,7 +22,7 @@ Either concern can be used alone:
 The loop yields ``str`` tokens during execution followed by a final
 ``RunResult`` that carries accumulated records, chunks, and a passthrough flag.
 
-Usage (retrieval mode, replaces QueryRunner)::
+Usage (retrieval mode)::
 
     runner = Runner(
         llm=llm,
@@ -37,7 +37,7 @@ Usage (retrieval mode, replaces QueryRunner)::
         else:
             print("passthrough:", item.passthrough)
 
-Usage (skill mode, replaces SkillRunner)::
+Usage (skill mode)::
 
     runner = Runner(llm=llm, skills=skills)
     async for item in runner.run("What's the weather in NYC?"):
@@ -225,17 +225,27 @@ Filter operators: =, !=, <, >, <=, >=, like, in, not_in, is_null, is_not_null
 """
 
 
-def _build_retrieval_prompt(schemas: list[CollectionSchema] | None) -> str:
-    if not schemas:
-        return _RETRIEVAL_BASE_PROMPT
-    lines = [_RETRIEVAL_BASE_PROMPT, _SCHEMA_HEADER]
-    for schema in schemas:
-        fields_str = ", ".join(
-            f"{name} ({fschema.type.value})"
-            for name, fschema in schema.fields.items()
-        )
-        lines.append(f"  {schema.name}: {fields_str}")
-    lines.append(_FILTER_LEGEND)
+_VECTOR_COLLECTIONS_HEADER = "\nAvailable vector collections (pass name to vector_search 'collection' param):\n"
+
+
+def _build_retrieval_prompt(
+    schemas: list[CollectionSchema] | None,
+    vector_collection_names: list[str] | None = None,
+) -> str:
+    lines = [_RETRIEVAL_BASE_PROMPT]
+    if schemas:
+        lines.append(_SCHEMA_HEADER)
+        for schema in schemas:
+            fields_str = ", ".join(
+                f"{name} ({fschema.type.value})"
+                for name, fschema in schema.fields.items()
+            )
+            lines.append(f"  {schema.name}: {fields_str}")
+        lines.append(_FILTER_LEGEND)
+    if vector_collection_names:
+        lines.append(_VECTOR_COLLECTIONS_HEADER)
+        for vc_name in vector_collection_names:
+            lines.append(f"  - {vc_name}")
     return "\n".join(lines)
 
 
@@ -305,6 +315,7 @@ class Runner:
         vector_store: VectorStoreBase | None = None,
         embedder: EmbeddingBase | None = None,
         default_vector_collection: str | None = None,
+        vector_collection_names: list[str] | None = None,
         structured_schemas: list[CollectionSchema] | None = None,
         passthrough_token_threshold: int = 2000,
     ) -> None:
@@ -316,7 +327,9 @@ class Runner:
         self._vector_store = vector_store
         self._embedder = embedder
         self._default_vector_collection = default_vector_collection
-        self._retrieval_system_prompt = _build_retrieval_prompt(structured_schemas)
+        self._retrieval_system_prompt = _build_retrieval_prompt(
+            structured_schemas, vector_collection_names
+        )
         self._passthrough_token_threshold = passthrough_token_threshold
 
         # Retrieval tool definitions — exposed as _tool_defs for introspection.

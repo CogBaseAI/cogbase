@@ -9,7 +9,7 @@
 # POST the ZIP to POST /applications to create an application.
 #
 # Required: name, llm
-# Optional: embedding (required when vector_collections are defined)
+# Optional: embedding (required when vector_collections or summarize_collections are defined)
 #
 # Store backends (structured_store, vector_store) are not set here —
 # the service automatically uses the stores defined in cogbase_system.yaml.
@@ -21,13 +21,13 @@ llm:
   model: gpt-4o-mini
   # api_key: sk-...          # omit to use OPENAI_API_KEY env var
 
-embedding:                   # shared across all vector collections; omit for structured-only mode
+embedding:                   # shared across all vector and summarize collections
   provider: openai
   model: text-embedding-3-small
   # dimensions: 512          # optional: truncate to smaller vectors
 
 vector_collections:
-  - name: document_chunks
+  - name: document_chunks    # full-text passage index
     chunker:
       type: fixed            # fixed | langchain
       chunk_size: 512
@@ -40,11 +40,19 @@ structured_collections:
       type: llm
       prompt: extraction_prompt.txt     # filename in ZIP root; omit to use built-in default
 
+summarize_collections:
+  - name: document_summary   # one summary chunk per document
+    prompt: "Summarize this document in a few sentences."
+    max_tokens: 1024
+
 pipeline:
-  parallel: true             # steps run concurrently (false = sequential top-to-bottom)
+  parallel: false            # steps run sequentially top-to-bottom
   steps:
     - tool: chunk-embed-upsert
       collection: document_chunks
 
     - tool: extract-structured
       collection: contract_extraction
+
+    - tool: summarize-embed-upsert
+      collection: document_summary

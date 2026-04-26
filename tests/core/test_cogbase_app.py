@@ -10,7 +10,12 @@ import pytest
 
 from cogbase.core.app import CogBaseApp
 from cogbase.core.runner import RunResult as QueryResult, Runner as QueryRunner
-from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
+from cogbase.pipeline.ingestion_pipeline import (
+    IngestionPipeline,
+    IngestResult,
+    StructuredCollection,
+    VectorCollection,
+)
 from cogbase.core.models import Document
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import LLMBase
@@ -31,7 +36,6 @@ from examples.contract_analyst_demo.schema import (
 # ---------------------------------------------------------------------------
 
 def _make_llm(content: str) -> MagicMock:
-    """Build a mock LLMBase returning *content* for complete() (extractor usage)."""
     llm = MagicMock(spec=LLMBase)
     llm.complete = AsyncMock(return_value=content)
 
@@ -93,6 +97,26 @@ def _make_extractor(llm: MagicMock) -> LLMExtractor:
     )
 
 
+def _make_pipeline(
+    llm: MagicMock,
+    store: InMemoryStructuredStore,
+    *,
+    vector_store: FAISSVectorStore | None = None,
+    embedder: StubEmbedding | None = None,
+    chunker=None,
+    name: str = "legal",
+) -> IngestionPipeline:
+    extractor = _make_extractor(llm)
+    sc = StructuredCollection(schema=extractor.schema, store=store, extractor=extractor)
+
+    vc = None
+    if vector_store is not None:
+        assert embedder is not None and chunker is not None
+        vc = VectorCollection(name=name, store=vector_store, embedder=embedder, chunker=chunker)
+
+    return IngestionPipeline(name=name, vector_collection=vc, structured_collection=sc)
+
+
 def _make_app(
     llm: MagicMock,
     store: InMemoryStructuredStore,
@@ -102,16 +126,8 @@ def _make_app(
     chunker=None,
     name: str = "legal",
 ) -> CogBaseApp:
-    extractor = _make_extractor(llm)
-    return CogBaseApp(
-        name=name,
-        llm=llm,
-        extractor=extractor,
-        structured_store=store,
-        vector_store=vector_store,
-        embedder=embedder,
-        chunker=chunker,
-    )
+    pipeline = _make_pipeline(llm, store, vector_store=vector_store, embedder=embedder, chunker=chunker, name=name)
+    return CogBaseApp(name, llm, pipeline)
 
 
 # ---------------------------------------------------------------------------
@@ -137,18 +153,10 @@ class TestCogBaseAppConstruction:
         assert app._ingest_pipeline.vector_collection is not None
         assert app._ingest_pipeline.vector_collection.name == "legal"
 
-    def test_partial_vector_params_raises(self):
-        llm = _make_llm("{}")
-        extractor = _make_extractor(llm)
-        with pytest.raises(ValueError, match="all be provided together"):
-            CogBaseApp(
-                name='testapp',
-                llm=llm,
-                extractor=extractor,
-                structured_store=InMemoryStructuredStore(),
-                vector_store=FAISSVectorStore(dim=4),
-                # embedder and chunker missing
-            )
+    def test_pipeline_wired_to_app(self):
+        pipeline = _make_pipeline(_make_llm("{}"), InMemoryStructuredStore())
+        app = CogBaseApp("test", _make_llm("{}"), pipeline)
+        assert app._ingest_pipeline is pipeline
 
     def test_custom_name(self):
         app = _make_app(_make_llm("{}"), InMemoryStructuredStore(), name="my-legal-app")
@@ -246,7 +254,6 @@ class TestCogBaseAppQuery:
         *,
         extractor_json: str = "{}",
     ) -> tuple[CogBaseApp, InMemoryStructuredStore]:
-        """Build app where QueryRunner LLM always returns *runner_response* (a dict)."""
         store = InMemoryStructuredStore()
         llm = MagicMock(spec=LLMBase)
 
@@ -277,7 +284,6 @@ class TestCogBaseAppQuery:
 
     @pytest.mark.asyncio
     async def test_structured_lookup_populates_records(self):
-        """LLM calls structured_lookup; records from store appear in QueryResult."""
         store = InMemoryStructuredStore()
         llm = MagicMock(spec=LLMBase)
         call_count = 0
@@ -384,22 +390,21 @@ class TestQueryRunnerToolAvailability:
 
 
 # ---------------------------------------------------------------------------
-# Vector-only mode (structured_store=None)
+# Vector-only mode (no structured collection)
 # ---------------------------------------------------------------------------
 
 class TestVectorOnlyMode:
-    """CogBaseApp with structured_store=None skips extraction entirely."""
+    """CogBaseApp with no structured collection skips extraction entirely."""
 
     def _make_vector_only_app(self, llm: MagicMock) -> CogBaseApp:
-        return CogBaseApp(
+        vc = VectorCollection(
             name="vector-only",
-            llm=llm,
-            extractor=None,
-            structured_store=None,
-            vector_store=FAISSVectorStore(dim=4),
+            store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
+        pipeline = IngestionPipeline(name="vector-only", vector_collection=vc)
+        return CogBaseApp("vector-only", llm, pipeline)
 
     def _tool_names(self, app: CogBaseApp) -> list[str]:
         return [t["name"] for t in app.query_runner._tool_defs]
@@ -432,15 +437,14 @@ class TestVectorOnlyMode:
     @pytest.mark.asyncio
     async def test_ingest_populates_vector_store_not_structured(self):
         vector_store = FAISSVectorStore(dim=4)
-        app = CogBaseApp(
-            name='testapp',
-            llm=_make_llm("{}"),
-            extractor=None,
-            structured_store=None,
-            vector_store=vector_store,
+        vc = VectorCollection(
+            name="testapp",
+            store=vector_store,
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
+        pipeline = IngestionPipeline(name="testapp", vector_collection=vc)
+        app = CogBaseApp("testapp", _make_llm("{}"), pipeline)
         await app.setup()
         results = await app.ingest_documents([Document(doc_id="d-001", text="word " * 20)])
         assert results[0].success is True

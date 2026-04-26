@@ -13,6 +13,7 @@ from api.config import (
     EmbeddingConfig,
     LLMConfig,
     StructuredStoreConfig,
+    SummarizeCollectionConfig,
     VectorStoreConfig,
 )
 
@@ -234,4 +235,122 @@ class TestAppConfig:
     def test_from_yaml_non_mapping_raises(self):
         with pytest.raises(ValueError, match="mapping"):
             AppConfig.from_yaml("- item1\n- item2\n")
+
+    def test_summarize_collections_empty_by_default(self):
+        cfg = AppConfig.from_yaml(_MINIMAL_YAML)
+        assert cfg.summarize_collections == []
+
+    def test_pipeline_step_literal_includes_summarize(self):
+        yaml_text = textwrap.dedent("""\
+            name: ok-app
+            llm:
+              model: gpt-4o-mini
+            embedding:
+              provider: openai
+              model: text-embedding-3-small
+            summarize_collections:
+              - name: doc_summary
+            pipeline:
+              steps:
+                - tool: summarize-embed-upsert
+                  collection: doc_summary
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert cfg.pipeline.steps[0].tool == "summarize-embed-upsert"
+        assert cfg.pipeline.steps[0].collection == "doc_summary"
+
+    def test_summarize_without_embedding_raises(self):
+        yaml_text = textwrap.dedent("""\
+            name: bad-app
+            llm:
+              model: gpt-4o-mini
+            summarize_collections:
+              - name: doc_summary
+        """)
+        with pytest.raises(Exception, match="embedding is required when summarize_collections"):
+            AppConfig.from_yaml(yaml_text)
+
+    def test_step_references_unknown_summarize_collection_raises(self):
+        yaml_text = textwrap.dedent("""\
+            name: bad-app
+            llm:
+              model: gpt-4o-mini
+            embedding:
+              provider: openai
+              model: text-embedding-3-small
+            summarize_collections:
+              - name: doc_summary
+            pipeline:
+              steps:
+                - tool: summarize-embed-upsert
+                  collection: nonexistent
+        """)
+        with pytest.raises(Exception, match="unknown summarize collection"):
+            AppConfig.from_yaml(yaml_text)
+
+    def test_full_three_step_config_parses(self):
+        _SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
+        yaml_text = textwrap.dedent(f"""\
+            name: contracts
+            llm:
+              model: gpt-4o-mini
+            embedding:
+              provider: openai
+              model: text-embedding-3-small
+            vector_collections:
+              - name: document_chunks
+                chunker:
+                  type: fixed
+                  chunk_size: 512
+                  overlap: 64
+            structured_collections:
+              - name: contract_extraction
+                schema: '{_SCHEMA}'
+                extractor:
+                  type: llm
+            summarize_collections:
+              - name: document_summary
+                prompt: "Summarize in one sentence."
+                max_tokens: 128
+            pipeline:
+              parallel: false
+              steps:
+                - tool: chunk-embed-upsert
+                  collection: document_chunks
+                - tool: extract-structured
+                  collection: contract_extraction
+                - tool: summarize-embed-upsert
+                  collection: document_summary
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert len(cfg.vector_collections) == 1
+        assert len(cfg.structured_collections) == 1
+        assert len(cfg.summarize_collections) == 1
+        assert cfg.summarize_collections[0].name == "document_summary"
+        assert cfg.summarize_collections[0].prompt == "Summarize in one sentence."
+        assert cfg.summarize_collections[0].max_tokens == 128
+        assert len(cfg.pipeline.steps) == 3
+        tools = [s.tool for s in cfg.pipeline.steps]
+        assert tools == ["chunk-embed-upsert", "extract-structured", "summarize-embed-upsert"]
+
+
+# ---------------------------------------------------------------------------
+# SummarizeCollectionConfig
+# ---------------------------------------------------------------------------
+
+class TestSummarizeCollectionConfig:
+    def test_defaults(self):
+        cfg = SummarizeCollectionConfig(name="s")
+        assert cfg.name == "s"
+        assert cfg.prompt is None
+        assert cfg.max_tokens == 1024
+
+    def test_custom_values(self):
+        cfg = SummarizeCollectionConfig(
+            name="doc_summary",
+            prompt="One sentence please.",
+            max_tokens=64,
+        )
+        assert cfg.prompt == "One sentence please."
+        assert cfg.max_tokens == 64
 

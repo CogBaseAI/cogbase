@@ -8,8 +8,10 @@ import pytest
 
 from api.config import AppConfig, StructuredStoreConfig, VectorStoreConfig
 from api.factory import build_structured_store, build_app
+from cogbase.pipeline.ingestion_pipeline import SummarizeCollection, VectorCollection
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.structured.sqlite import SQLiteStructuredStore
+from cogbase.stores.vector.faiss_store import FAISSVectorStore
 
 
 # ---------------------------------------------------------------------------
@@ -170,3 +172,175 @@ class TestBuildAppVectorStoreResolution:
             )
 
         assert app._ingest_pipeline._vector_collection.name == "document_chunks"
+
+
+# ---------------------------------------------------------------------------
+# build_app — summarize-embed-upsert step
+# ---------------------------------------------------------------------------
+
+_SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'  # already defined above, reused
+
+_SUMMARIZE_ONLY_CONFIG_YAML = """\
+name: test_app
+llm:
+  provider: openai
+  model: gpt-4o-mini
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+summarize_collections:
+  - name: document_summary
+    prompt: "Summarize in one sentence."
+    max_tokens: 128
+pipeline:
+  steps:
+    - tool: summarize-embed-upsert
+      collection: document_summary
+"""
+
+_THREE_STEP_CONFIG_YAML = f"""\
+name: test_app
+llm:
+  provider: openai
+  model: gpt-4o-mini
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+vector_collections:
+  - name: document_chunks
+    chunker:
+      type: fixed
+      chunk_size: 512
+      overlap: 64
+structured_collections:
+  - name: contract_extraction
+    schema: '{_SCHEMA}'
+    extractor:
+      type: llm
+summarize_collections:
+  - name: document_summary
+    prompt: "Summarize in one sentence."
+    max_tokens: 128
+pipeline:
+  parallel: false
+  steps:
+    - tool: chunk-embed-upsert
+      collection: document_chunks
+    - tool: extract-structured
+      collection: contract_extraction
+    - tool: summarize-embed-upsert
+      collection: document_summary
+"""
+
+
+class TestBuildAppSummarizeCollection:
+    @patch("api.factory._build_llm")
+    def test_summarize_collection_present_in_pipeline(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
+        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+
+        with patch("api.factory._build_embedder") as mock_emb:
+            mock_emb.return_value = MagicMock()
+            app = build_app(cfg, system_vector_store_cfg=sys_vs_cfg)
+
+        assert "document_summary" in app._ingest_pipeline._summarize_by_name
+
+    @patch("api.factory._build_llm")
+    def test_summarize_collection_name_prompt_max_tokens(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
+        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+
+        with patch("api.factory._build_embedder") as mock_emb:
+            mock_emb.return_value = MagicMock()
+            app = build_app(cfg, system_vector_store_cfg=sys_vs_cfg)
+
+        smc = app._ingest_pipeline._summarize_by_name["document_summary"]
+        assert smc.name == "document_summary"
+        assert smc.prompt == "Summarize in one sentence."
+        assert smc.max_tokens == 128
+
+    @patch("api.factory._build_llm")
+    def test_summarize_collection_uses_shared_vector_store(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
+        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+        system_store = InMemoryStructuredStore()
+
+        with patch("api.factory._build_embedder") as mock_emb:
+            mock_emb.return_value = MagicMock()
+            app = build_app(
+                cfg,
+                system_structured_store=system_store,
+                system_vector_store_cfg=sys_vs_cfg,
+            )
+
+        vc = app._ingest_pipeline._vector_collection
+        smc = app._ingest_pipeline._summarize_by_name["document_summary"]
+        # Both collections share the same vector store instance
+        assert vc.store is smc.store
+
+    @patch("api.factory._build_llm")
+    def test_three_step_pipeline_builds_all_collections(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
+        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+        system_store = InMemoryStructuredStore()
+
+        with patch("api.factory._build_embedder") as mock_emb:
+            mock_emb.return_value = MagicMock()
+            app = build_app(
+                cfg,
+                system_structured_store=system_store,
+                system_vector_store_cfg=sys_vs_cfg,
+            )
+
+        assert app._ingest_pipeline._vector_collection is not None
+        assert app._ingest_pipeline._structured_collection is not None
+        assert "document_summary" in app._ingest_pipeline._summarize_by_name
+
+    @patch("api.factory._build_llm")
+    def test_vector_collection_names_includes_both(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
+        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+        system_store = InMemoryStructuredStore()
+
+        with patch("api.factory._build_embedder") as mock_emb:
+            mock_emb.return_value = MagicMock()
+            app = build_app(
+                cfg,
+                system_structured_store=system_store,
+                system_vector_store_cfg=sys_vs_cfg,
+            )
+
+        names = app._ingest_pipeline.vector_collection_names
+        assert "document_chunks" in names
+        assert "document_summary" in names
+
+    @patch("api.factory._build_llm")
+    def test_default_runner_collection_is_first_chunk_step(self, mock_build_llm):
+        """Runner defaults to the first chunk-embed-upsert collection, not the summary."""
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
+        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+        system_store = InMemoryStructuredStore()
+
+        with patch("api.factory._build_embedder") as mock_emb:
+            mock_emb.return_value = MagicMock()
+            app = build_app(
+                cfg,
+                system_structured_store=system_store,
+                system_vector_store_cfg=sys_vs_cfg,
+            )
+
+        assert app._runner._default_vector_collection == "document_chunks"
+
+    @patch("api.factory._build_llm")
+    def test_summarize_step_without_vector_store_raises(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
+        # No vector store supplied
+        with pytest.raises(ValueError, match="vector store"):
+            build_app(cfg)
