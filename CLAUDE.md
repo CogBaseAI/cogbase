@@ -4,49 +4,52 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-CogBase is in early development. `cogbase/core/` and `cogbase/stores/base.py` are implemented; all other architecture described below is planned.
+CogBase is in active early development. The knowledge pipeline, query runner, skills registry, REST API, and store adapters are implemented. The memory layer (short-term, episodic, long-term) and contradiction detection engine are planned but not yet implemented.
 
 ## Architecture
 
-CogBase is a framework for structured fact extraction, contradiction detection, and grounded LLM reasoning over large document sets. It has four layers with clean boundaries:
+CogBase is a framework for structured fact extraction, contradiction detection, and grounded LLM reasoning over large document sets. It has three layers with clean boundaries:
 
 **Knowledge Pipeline** (async, ingest-time)
-- Parses raw inputs (PDF, DOCX, email, chat, transcripts)
-- Runs typed fact extraction via domain pack configuration
-- Writes structured facts to the structured store and vector embeddings to the vector store
+- Three step types run in declaration order per document:
+  - `chunk-embed-upsert` — splits text into overlapping passages, embeds, upserts to a vector collection
+  - `extract-structured` — LLM extraction → typed records → structured collection
+  - `summarize-embed-upsert` — LLM summary of the full document → embed → upsert as a single chunk per document to a vector collection
+- Writes to pluggable structured and vector stores
 
-**Reasoning Engine** (real-time, query-time)
-- Query router classifies intent into four patterns before touching any store:
-  - Pattern A: structured lookup (never hits LLM)
-  - Pattern B: semantic vector search
-  - Pattern C: hybrid retrieval from both stores + reasoning
-  - Pattern D: grounded generation (separates `[FACTS]` from `[SUPPORTING_QUOTES]`)
-- All capabilities are exposed as composable, stateless Skills
+**Query Runner** (real-time, query-time)
+- Unified LLM agent loop — no fixed routing patterns
+- LLM decides which tools to call based on the query:
+  - `structured_lookup` — exact record queries with field filters
+  - `vector_search` — semantic search against any named vector collection (passage chunks or document summaries)
+  - skill tools — custom capabilities registered with the application
+- Passthrough rule: large structured result sets are returned directly without LLM synthesis
+- `Runner` handles both retrieval-only and skill-routing modes
 
-**Agent Layer** (goal-driven)
-- Agents plan skill sequences, execute, observe, and replan
-- Reads/writes episodic memory to resume across sessions
-
-**Memory Layer** (persistent)
+**Memory Layer** (persistent, planned)
 - Short-term: Redis-backed session context
 - Episodic: conversation + agent action history in structured store
 - Long-term: cross-session confirmed facts, resolved contradictions, preferences
 
-## Planned project structure
+## Current project structure
 
 ```
 cogbase/
 ├── cogbase/
-│   ├── pipeline/         # ingestion/, extraction/, contradiction/
-│   ├── engine/           # router/, retrieval/, generation/
-│   ├── memory/           # short_term.py, episodic.py, long_term.py
-│   ├── stores/           # base.py (StructuredStoreBase, VectorStoreBase), structured/, vector/
-│   ├── skills/           # built-in skill definitions
-│   ├── agents/           # built-in agents
-│   └── core/             # skill registry, session, base classes
-├── packs/                # domain config packs (YAML + prompts + optional skills/agents)
-│   └── legal/
-├── api/                  # REST API
+│   ├── pipeline/         # ingestion/, extraction/, ingestion_pipeline.py
+│   ├── stores/           # base.py, schema.py, filters.py, structured/, vector/
+│   ├── skills/           # skill.py, registry.py
+│   ├── embeddings/       # base.py, openai.py, huggingface.py
+│   ├── llms/             # base.py, openai.py
+│   ├── tools/            # builtin/ (chunk_embed_upsert, extract)
+│   └── core/             # app.py, runner.py, session.py, models.py
+├── api/                  # FastAPI REST API
+│   ├── routers/          # applications.py, skills.py
+│   ├── config.py         # AppConfig (YAML schema)
+│   ├── factory.py        # build_app from config
+│   └── example_config.yaml
+├── examples/
+│   └── contract_analyst_demo/
 └── docker-compose.yml
 ```
 
@@ -55,18 +58,37 @@ cogbase/
 **Store adapters** — implement these to add a new backend:
 ```python
 class StructuredStoreBase:
-    def save_facts(self, facts: list[Fact]) -> None: ...
-    def query_facts(self, filters: dict) -> list[Fact]: ...
-    def save_timeline(self, events: list[Event]) -> None: ...
-    def query_timeline(self, session_id: str) -> list[Event]: ...
-    def save_contradiction(self, c: Contradiction) -> None: ...
-    def query_contradictions(self, filters: dict) -> list[Contradiction]: ...
+    async def create_collection(self, schema: CollectionSchema) -> None: ...
+    async def save(self, collection: str, records: list[BaseModel]) -> None: ...
+    async def query(self, collection: str, filters: list[Filter] | None = None, fields: list[str] | None = None) -> list[dict]: ...
+    async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None: ...
 
 class VectorStoreBase:
-    def upsert(self, chunks: list[Chunk]) -> None: ...
-    def search(self, query: str, query_embedding: list[float], top_k: int) -> list[Chunk]: ...
-    def delete(self, doc_id: str) -> None: ...
+    async def upsert(self, collection: str, chunks: list[Chunk]) -> None: ...
+    async def search(self, collection: str, query: str, query_embedding: list[float], top_k: int) -> list[Chunk]: ...
+    async def delete(self, collection: str, doc_id: str) -> None: ...
 ```
+
+All public/abstract methods are async. CPU-bound implementations use `run_in_executor`.
+
+**IngestionPipeline** — wraps collections and steps:
+```python
+pipeline = IngestionPipeline(
+    name="legal",
+    steps=[
+        ("chunk-embed-upsert",     "document_chunks"),
+        ("extract-structured",     "contracts"),
+        ("summarize-embed-upsert", "document_summary"),
+    ],
+    vector_collections=[VectorCollection(schema=VectorCollectionSchema(name="document_chunks", ...), ...)],
+    structured_collections=[StructuredCollection(schema=..., extractor=...)],
+    summarize_collections=[SummarizeCollection(schema=VectorCollectionSchema(name="document_summary", ...), ...)],
+)
+```
+
+**VectorCollectionSchema** carries: `name`, `dimensions`, `description` (shown to LLM in retrieval prompt), optional `metadata`.
+
+**CollectionSchema** carries: `name`, `primary_fields`, `fields` (dict of FieldSchema), `description` (shown to LLM in retrieval prompt).
 
 **Skill interface** — aligned with the [AgentSkills specification](https://agentskills.io/specification):
 ```python
@@ -78,15 +100,12 @@ class Skill:
     allowed_tools: list # optional — tools this skill may invoke
     def run(self, input: dict, session: Session) -> dict: ...
 ```
-Expected inputs/outputs are documented in each skill's class docstring or a `SKILL.md` alongside the implementation. `name` and `description` are validated at class-definition time.
 
-**Fact schema** — every extracted fact carries: `type`, `value`, `raw_text`, `doc_id`, `page`, `confidence`. `raw_text` is preserved verbatim as the citation.
+## Domain examples
 
-## Domain packs
+Domain-specific applications are in `examples/`, not in a `packs/` directory. Each example shows how to configure the pipeline, schema, and extractor for a specific vertical. Apps are deployed via the REST API using a ZIP bundle containing `config.yaml` and referenced files.
 
-Domain configuration lives in YAML + prompt templates under `packs/<domain>/`, not in Python code. Packs define what facts to extract, what contradictions to detect, and can ship their own skills and agents. The legal pack ships with the project; community packs are YAML + prompts + optional skills/agents.
-
-## Contradiction detection approach
+## Contradiction detection approach (planned)
 
 Two-phase (not a single LLM prompt over long context):
 1. Extract typed facts from each source individually
@@ -94,10 +113,11 @@ Two-phase (not a single LLM prompt over long context):
 
 Previously resolved contradictions are stored in long-term memory and excluded from future scans.
 
-## Quickstart (planned)
+## REST API
 
-```bash
-git clone https://github.com/cogbase/cogbase
-cd cogbase
-docker compose up
-```
+Applications are created and managed through `POST /applications` (ZIP bundle upload). Key endpoints:
+- `POST /applications` — create from ZIP bundle (config.yaml + referenced files)
+- `POST /applications/{name}/ingest_documents` — ingest a batch of documents
+- `POST /applications/{name}/query` — blocking query
+- `POST /applications/{name}/query/stream` — streaming query (SSE)
+- `GET/POST/DELETE /applications/{name}/skills` — manage skills per application
