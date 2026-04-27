@@ -1,15 +1,7 @@
 """Schema and Pydantic models for the legal contract review pack."""
 
-from __future__ import annotations
-
 from pydantic import BaseModel, Field
 
-from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
-from cogbase.core.basemodel_to_schema import cls_generate_schema
-
-# Fields that ContractExtractor._parse always populates — they cannot be
-# excluded from a customised schema without breaking extraction.
-_CORE_FIELDS = frozenset({"doc_id"})
 
 CONTRACTS_SYSTEM_PROMPT_PREFIX = (
     "You are a legal contract analyst.  Extract structured information from the\n"
@@ -21,8 +13,6 @@ CONTRACTS_SYSTEM_PROMPT_PREFIX = (
     "- Return ONLY the JSON object — no explanation, no markdown fences.\n\n"
     "Return a single JSON object with these fields:\n\n"
 )
-
-CONTRACTS_COLLECTION = "contracts"
 
 
 class Party(BaseModel):
@@ -65,7 +55,7 @@ class ContractExtraction(BaseModel):
 
     Every field is optional (null if not found).  This model drives both the
     LLM prompt schema (via ``cls_json_schema_for_llm``) and the store schema
-    (via ``cls_generate_schema`` applied to ``ContractRecord``).
+    (via ``cls_generate_schema``).
     """
 
     # contract basics
@@ -145,86 +135,3 @@ class ContractExtraction(BaseModel):
         description="verbatim conditions precedent, carve-outs, custom provisions, or anything unusual; use [] if none",
     )
 
-
-class ContractRecord(ContractExtraction):
-    """Full stored record: ``ContractExtraction`` fields plus identity fields."""
-
-    doc_id: str
-
-
-CONTRACTS_SCHEMA = CollectionSchema(
-    name=CONTRACTS_COLLECTION,
-    primary_fields=["doc_id"],
-    fields=cls_generate_schema(ContractRecord),
-)
-
-
-def build_contracts_schema(
-    extra_fields: dict[str, FieldSchema] | None = None,
-    exclude: set[str] | None = None,
-) -> CollectionSchema:
-    """Build a customised contracts schema from the default.
-
-    Start from ``CONTRACTS_SCHEMA`` and apply additions and/or removals to
-    produce a new ``CollectionSchema`` without touching the shared default.
-
-    Args:
-        extra_fields: Additional fields to append after the defaults.  Field
-                      names must not already exist in ``CONTRACTS_SCHEMA``.
-        exclude:      Field names to remove from the default schema.
-                      ``doc_id`` cannot be excluded —
-                      ``ContractExtractor`` always populates them.
-
-    Returns:
-        A new ``CollectionSchema`` with the requested customisations applied.
-
-    Raises:
-        ValueError: If *exclude* contains a core field, or if *extra_fields*
-                    duplicates an existing field name.
-
-    Example — remove fields your company does not need::
-
-        schema = build_contracts_schema(exclude={"indemnification", "dispute_resolution"})
-
-    Example — add a company-specific field::
-
-        from cogbase.stores.schema import FieldSchema, FieldType
-        schema = build_contracts_schema(
-            extra_fields={"risk_score": FieldSchema(type=FieldType.FLOAT, nullable=True)}
-        )
-
-    Example — both at once::
-
-        schema = build_contracts_schema(
-            extra_fields={"jurisdiction": FieldSchema(type=FieldType.STRING, nullable=True, index=True)},
-            exclude={"dispute_resolution"},
-        )
-    """
-    excluded = exclude or set()
-    extras = extra_fields or {}
-
-    protected = excluded & _CORE_FIELDS
-    if protected:
-        raise ValueError(
-            f"Cannot exclude core fields required by ContractExtractor: {sorted(protected)}"
-        )
-
-    duplicates = extras.keys() & CONTRACTS_SCHEMA.fields.keys()
-    if duplicates:
-        raise ValueError(
-            f"extra_fields duplicates existing field names: {sorted(duplicates)}. "
-            "To change an existing field, exclude it first then re-add it."
-        )
-
-    fields = {
-        name: field
-        for name, field in CONTRACTS_SCHEMA.fields.items()
-        if name not in excluded
-    }
-    fields.update(extras)
-
-    return CollectionSchema(
-        name=CONTRACTS_SCHEMA.name,
-        primary_fields=CONTRACTS_SCHEMA.primary_fields,
-        fields=fields,
-    )
