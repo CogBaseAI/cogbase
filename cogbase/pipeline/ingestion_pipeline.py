@@ -11,7 +11,7 @@ ingestion.  It supports three step types:
 Steps run in declaration order.  Multiple vector collections and structured
 collections may be used in the same pipeline.
 
-Typical usage (multi-collection)::
+Example::
 
     from cogbase.pipeline.ingestion_pipeline import (
         IngestionPipeline, VectorCollection, StructuredCollection, SummarizeCollection,
@@ -47,14 +47,6 @@ Typical usage (multi-collection)::
                 llm=llm,
             ),
         ],
-    )
-
-Backward-compatible single-collection usage (existing callers unaffected)::
-
-    pipeline = IngestionPipeline(
-        name="legal",
-        vector_collection=VectorCollection(...),
-        structured_collection=StructuredCollection(...),
     )
 """
 
@@ -201,8 +193,6 @@ class IngestionPipeline:
         vector_collections:    Vector collections available to steps.
         structured_collections: Structured collections available to steps.
         summarize_collections: Summarize collections available to steps.
-        vector_collection:     Backward-compat alias for a single VectorCollection.
-        structured_collection: Backward-compat alias for a single StructuredCollection.
     """
 
     def __init__(
@@ -212,24 +202,12 @@ class IngestionPipeline:
         vector_collections: list[VectorCollection] | None = None,
         structured_collections: list[StructuredCollection] | None = None,
         summarize_collections: list[SummarizeCollection] | None = None,
-        # Backward-compat single-item kwargs:
-        vector_collection: VectorCollection | None = None,
-        structured_collection: StructuredCollection | None = None,
     ) -> None:
         self.name = name
 
-        # Merge backward-compat single items (put them first to preserve step order)
-        _vcs: list[VectorCollection] = []
-        _scs: list[StructuredCollection] = []
+        _vcs: list[VectorCollection] = list(vector_collections or [])
+        _scs: list[StructuredCollection] = list(structured_collections or [])
         _smcs: list[SummarizeCollection] = list(summarize_collections or [])
-
-        if vector_collection is not None:
-            _vcs.append(vector_collection)
-        _vcs.extend(vc for vc in (vector_collections or []) if vc not in _vcs)
-
-        if structured_collection is not None:
-            _scs.append(structured_collection)
-        _scs.extend(sc for sc in (structured_collections or []) if sc not in _scs)
 
         self._vector_by_name: dict[str, VectorCollection] = {vc.name: vc for vc in _vcs}
         self._structured_by_name: dict[str, StructuredCollection] = {sc.name: sc for sc in _scs}
@@ -247,30 +225,6 @@ class IngestionPipeline:
             self._steps = _steps
         else:
             self._steps = list(steps)
-
-    # ------------------------------------------------------------------
-    # Backward-compat single-item accessors
-    # ------------------------------------------------------------------
-
-    @property
-    def _vector_collection(self) -> VectorCollection | None:
-        """First registered VectorCollection, or ``None``."""
-        return next(iter(self._vector_by_name.values()), None)
-
-    @property
-    def _structured_collection(self) -> StructuredCollection | None:
-        """First registered StructuredCollection, or ``None``."""
-        return next(iter(self._structured_by_name.values()), None)
-
-    @property
-    def vector_collection(self) -> VectorCollection | None:
-        """First registered VectorCollection, or ``None`` (backward compat)."""
-        return self._vector_collection
-
-    @property
-    def structured_collection(self) -> StructuredCollection | None:
-        """First registered StructuredCollection, or ``None`` (backward compat)."""
-        return self._structured_collection
 
     # ------------------------------------------------------------------
     # Accessors

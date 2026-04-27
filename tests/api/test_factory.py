@@ -113,7 +113,7 @@ class TestBuildAppStructuredStoreResolution:
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
         app = build_app(cfg, system_structured_store=system_store)
-        structured_store = app._ingest_pipeline._structured_collection.store
+        structured_store = next(iter(app._ingest_pipeline._structured_by_name.values())).store
         assert structured_store is system_store
 
     @patch("api.factory._build_llm")
@@ -125,7 +125,7 @@ class TestBuildAppStructuredStoreResolution:
         cfg = AppConfig.from_yaml(cfg_yaml)
         system_store = InMemoryStructuredStore()
         app = build_app(cfg, system_structured_store=system_store)
-        structured_store = app._ingest_pipeline._structured_collection.store
+        structured_store = next(iter(app._ingest_pipeline._structured_by_name.values())).store
         assert isinstance(structured_store, SQLiteStructuredStore)
 
 
@@ -136,7 +136,7 @@ class TestBuildAppVectorStoreResolution:
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
         app = build_app(cfg, system_structured_store=system_store)
-        assert app._ingest_pipeline._vector_collection is None
+        assert app._ingest_pipeline._vector_by_name == {}
 
     @patch("api.factory._build_llm")
     def test_system_vector_store_cfg_used_when_chunk_step_present(self, mock_build_llm):
@@ -153,7 +153,7 @@ class TestBuildAppVectorStoreResolution:
                 system_vector_store_cfg=sys_vs_cfg,
             )
 
-        assert app._ingest_pipeline._vector_collection is not None
+        assert app._ingest_pipeline._vector_by_name
 
     @patch("api.factory._build_llm")
     def test_vector_collection_name_matches_config(self, mock_build_llm):
@@ -171,7 +171,7 @@ class TestBuildAppVectorStoreResolution:
                 system_vector_store_cfg=sys_vs_cfg,
             )
 
-        assert app._ingest_pipeline._vector_collection.name == "document_chunks"
+        assert "document_chunks" in app._ingest_pipeline._vector_by_name
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +276,7 @@ class TestBuildAppSummarizeCollection:
                 system_vector_store_cfg=sys_vs_cfg,
             )
 
-        vc = app._ingest_pipeline._vector_collection
+        vc = next(iter(app._ingest_pipeline._vector_by_name.values()))
         smc = app._ingest_pipeline._summarize_by_name["document_summary"]
         # Both collections share the same vector store instance
         assert vc.store is smc.store
@@ -296,8 +296,8 @@ class TestBuildAppSummarizeCollection:
                 system_vector_store_cfg=sys_vs_cfg,
             )
 
-        assert app._ingest_pipeline._vector_collection is not None
-        assert app._ingest_pipeline._structured_collection is not None
+        assert app._ingest_pipeline._vector_by_name
+        assert app._ingest_pipeline._structured_by_name
         assert "document_summary" in app._ingest_pipeline._summarize_by_name
 
     @patch("api.factory._build_llm")
