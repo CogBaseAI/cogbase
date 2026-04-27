@@ -60,6 +60,7 @@ class ChunkerConfig(BaseModel):
 class VectorCollectionConfig(BaseModel):
     name: str
     chunker: ChunkerConfig
+    description: str = ""
 
 
 class ExtractorConfig(BaseModel):
@@ -91,6 +92,7 @@ class SummarizeCollectionConfig(BaseModel):
     """
 
     name: str
+    description: str = ""
     prompt: str | None = None   # uses SummarizeCollection default when None
     max_tokens: int = 1024
 

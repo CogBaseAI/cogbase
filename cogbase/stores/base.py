@@ -115,17 +115,21 @@ class VectorCollectionSchema(BaseModel):
     """Schema for a vector store collection (namespace/index).
 
     Args:
-        name:       Collection name — must be a valid identifier
-                    (``[a-zA-Z_][a-zA-Z0-9_]*``).
-        dimensions: Embedding vector dimensionality. All chunks upserted into
-                    this collection must carry embeddings of exactly this length.
-        metadata:   Optional free-form str→str metadata stored at the
-                    collection level (e.g. embedding model name, distance
-                    metric).
+        name:        Collection name — must be a valid identifier
+                     (``[a-zA-Z_][a-zA-Z0-9_]*``).
+        dimensions:  Embedding vector dimensionality. All chunks upserted into
+                     this collection must carry embeddings of exactly this length.
+        description: Short description shown to the LLM to help it choose the
+                     right collection (e.g. "Full-text passage chunks for detailed
+                     document questions").
+        metadata:    Optional free-form str→str metadata stored at the
+                     collection level (e.g. embedding model name, distance
+                     metric).
     """
 
     name: str
     dimensions: int
+    description: str = ""
     metadata: dict[str, str] = {}
 
     @field_validator("name")

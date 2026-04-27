@@ -6,7 +6,7 @@ import os
 from typing import Any
 
 from api.config import AppConfig, ChunkerConfig, EmbeddingConfig, StructuredStoreConfig, VectorStoreConfig
-from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
+from cogbase.stores.base import StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 from cogbase.core.app import CogBaseApp
 from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
 from cogbase.pipeline.extraction.llm import LLMExtractor
@@ -166,7 +166,11 @@ def build_app(
             vc_cfg = vc_by_name[step.collection]
             chunker = _build_chunker(vc_cfg.chunker)
             vector_collections.append(VectorCollection(
-                name=vc_cfg.name,
+                schema=VectorCollectionSchema(
+                    name=vc_cfg.name,
+                    dimensions=vector_store_cfg.dim,  # type: ignore[union-attr]
+                    description=vc_cfg.description,
+                ),
                 store=vector_store,  # type: ignore[arg-type]  # validated above
                 embedder=embedder,   # type: ignore[arg-type]
                 chunker=chunker,
@@ -197,7 +201,11 @@ def build_app(
         elif step.tool == "summarize-embed-upsert" and step.collection not in built_smc:
             smc_cfg = smc_by_name[step.collection]
             summarize_collections.append(SummarizeCollection(
-                name=smc_cfg.name,
+                schema=VectorCollectionSchema(
+                    name=smc_cfg.name,
+                    dimensions=vector_store_cfg.dim,  # type: ignore[union-attr]
+                    description=smc_cfg.description,
+                ),
                 store=vector_store,    # type: ignore[arg-type]  # validated above
                 embedder=embedder,     # type: ignore[arg-type]
                 llm=llm,

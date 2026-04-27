@@ -10,7 +10,7 @@ from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
 from cogbase.embeddings import EmbeddingBase
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
-from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
+from cogbase.stores.base import StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
@@ -119,7 +119,7 @@ class TestIngestionPipelineConstruction:
 
     def test_vector_only(self):
         vc = VectorCollection(
-            name="docs",
+            schema=VectorCollectionSchema(name="docs", dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
@@ -194,7 +194,7 @@ class TestIngestionPipelineIngest:
         vector_store = FAISSVectorStore(dim=4)
         structured_store = InMemoryStructuredStore()
         vc = VectorCollection(
-            name="docs",
+            schema=VectorCollectionSchema(name="docs", dimensions=4),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
@@ -252,7 +252,7 @@ class TestIngestionPipelineIngest:
     async def test_vector_only_app_ingest_returns_zero(self):
         vector_store = FAISSVectorStore(dim=4)
         vc = VectorCollection(
-            name="docs",
+            schema=VectorCollectionSchema(name="docs", dimensions=4),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),

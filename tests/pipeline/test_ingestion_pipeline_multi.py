@@ -18,6 +18,7 @@ from cogbase.pipeline.ingestion_pipeline import (
     SummarizeCollection,
     VectorCollection,
 )
+from cogbase.stores.base import VectorCollectionSchema
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
@@ -80,7 +81,7 @@ def _make_llm(summary: str = "A short summary.") -> MagicMock:
 class TestSummarizeCollection:
     def test_construction(self):
         smc = SummarizeCollection(
-            name="doc_summary",
+            schema=VectorCollectionSchema(name="doc_summary", dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             llm=_make_llm(),
@@ -91,7 +92,7 @@ class TestSummarizeCollection:
 
     def test_custom_prompt_and_tokens(self):
         smc = SummarizeCollection(
-            name="s",
+            schema=VectorCollectionSchema(name="s", dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             llm=_make_llm(),
@@ -109,7 +110,7 @@ class TestSummarizeCollection:
 class TestMultiCollectionPipelineConstruction:
     def _make_vc(self, name: str = "chunks") -> VectorCollection:
         return VectorCollection(
-            name=name,
+            schema=VectorCollectionSchema(name=name, dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
@@ -124,7 +125,7 @@ class TestMultiCollectionPipelineConstruction:
 
     def _make_smc(self, name: str = "summaries") -> SummarizeCollection:
         return SummarizeCollection(
-            name=name,
+            schema=VectorCollectionSchema(name=name, dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             llm=_make_llm(),
@@ -210,7 +211,7 @@ class TestRunnerResources:
         store = FAISSVectorStore(dim=4)
         emb = StubEmbedding(dim=4)
         vc = VectorCollection(
-            name="chunks",
+            schema=VectorCollectionSchema(name="chunks", dimensions=4),
             store=store,
             embedder=emb,
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
@@ -225,7 +226,7 @@ class TestRunnerResources:
 
     def test_falls_back_to_summarize_store(self):
         smc = SummarizeCollection(
-            name="summaries",
+            schema=VectorCollectionSchema(name="summaries", dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             llm=_make_llm(),
@@ -264,7 +265,7 @@ class TestSummarizeEmbedUpsert:
     def _make_pipeline_with_summary(self, summary_text: str) -> tuple[IngestionPipeline, FAISSVectorStore]:
         vector_store = FAISSVectorStore(dim=4)
         smc = SummarizeCollection(
-            name="summaries",
+            schema=VectorCollectionSchema(name="summaries", dimensions=4),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             llm=_make_llm(summary=summary_text),
@@ -307,7 +308,7 @@ class TestSummarizeEmbedUpsert:
         llm = MagicMock(spec=LLMBase)
         llm.complete = AsyncMock(return_value={"content": None, "tool_calls": None})
         smc = SummarizeCollection(
-            name="summaries",
+            schema=VectorCollectionSchema(name="summaries", dimensions=4),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             llm=llm,
@@ -327,7 +328,7 @@ class TestSummarizeEmbedUpsert:
         llm = MagicMock(spec=LLMBase)
         llm.complete = AsyncMock(side_effect=RuntimeError("LLM down"))
         smc = SummarizeCollection(
-            name="summaries",
+            schema=VectorCollectionSchema(name="summaries", dimensions=4),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             llm=llm,
@@ -356,7 +357,7 @@ class TestThreeStepPipeline:
         struct_store = InMemoryStructuredStore()
 
         vc = VectorCollection(
-            name="chunks",
+            schema=VectorCollectionSchema(name="chunks", dimensions=4),
             store=chunk_store,
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
@@ -367,7 +368,7 @@ class TestThreeStepPipeline:
             extractor=StubExtractor(),
         )
         smc = SummarizeCollection(
-            name="summaries",
+            schema=VectorCollectionSchema(name="summaries", dimensions=4),
             store=summary_store,
             embedder=StubEmbedding(dim=4),
             llm=_make_llm("Short summary."),

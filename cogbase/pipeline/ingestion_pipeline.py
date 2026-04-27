@@ -26,7 +26,7 @@ Example::
         ],
         vector_collections=[
             VectorCollection(
-                name="document_chunks",
+                schema=VectorCollectionSchema(name="document_chunks", dimensions=1536),
                 store=FAISSVectorStore(dim=1536),
                 embedder=OpenAIEmbedding(...),
                 chunker=FixedSizeChunker(chunk_size=512, overlap=64),
@@ -41,7 +41,7 @@ Example::
         ],
         summarize_collections=[
             SummarizeCollection(
-                name="document_summary",
+                schema=VectorCollectionSchema(name="document_summary", dimensions=1536),
                 store=FAISSVectorStore(dim=1536),  # typically the same store instance
                 embedder=OpenAIEmbedding(...),
                 llm=llm,
@@ -62,7 +62,7 @@ from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
-from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
+from cogbase.stores.base import StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 from cogbase.stores.schema import CollectionSchema
 
 logger = logging.getLogger(__name__)
@@ -95,23 +95,28 @@ _DEFAULT_VC_DESCRIPTIONS: dict[str, str] = {
 
 @dataclass
 class VectorCollection:
-    """A named vector collection backed by a store, embedder, and chunker.
+    """A vector collection backed by a store, embedder, and chunker.
 
     Args:
-        name:        Logical name for this collection (used for lookup and logging).
-        store:       ``VectorStoreBase`` implementation that persists chunks.
-        embedder:    ``EmbeddingBase`` implementation that produces dense vectors.
-        chunker:     ``ChunkerBase`` implementation that splits document text.
-        description: Short description shown to the LLM to help it choose the right
-                     collection.  Falls back to ``_DEFAULT_VC_DESCRIPTIONS[name]``
-                     when empty, or the bare name if no default exists.
+        schema:   ``VectorCollectionSchema`` carrying the collection name,
+                  dimensions, description, and optional metadata.
+        store:    ``VectorStoreBase`` implementation that persists chunks.
+        embedder: ``EmbeddingBase`` implementation that produces dense vectors.
+        chunker:  ``ChunkerBase`` implementation that splits document text.
     """
 
-    name: str
+    schema: VectorCollectionSchema
     store: VectorStoreBase
     embedder: EmbeddingBase
     chunker: ChunkerBase
-    description: str = ""
+
+    @property
+    def name(self) -> str:
+        return self.schema.name
+
+    @property
+    def description(self) -> str:
+        return self.schema.description
 
 
 @dataclass
@@ -155,24 +160,29 @@ class SummarizeCollection:
     topics rather than specific passages.
 
     Args:
-        name:        Logical name for this collection.
-        store:       ``VectorStoreBase`` that persists the summary chunks.
-        embedder:    ``EmbeddingBase`` that produces the summary embedding.
-        llm:         ``LLMBase`` used to generate the summary.
-        prompt:      System prompt for the summarisation call.
-        max_tokens:  Maximum tokens for the generated summary.
-        description: Short description shown to the LLM to help it choose the right
-                     collection.  Falls back to ``_DEFAULT_VC_DESCRIPTIONS[name]``
-                     when empty, or the bare name if no default exists.
+        schema:     ``VectorCollectionSchema`` carrying the collection name,
+                    dimensions, description, and optional metadata.
+        store:      ``VectorStoreBase`` that persists the summary chunks.
+        embedder:   ``EmbeddingBase`` that produces the summary embedding.
+        llm:        ``LLMBase`` used to generate the summary.
+        prompt:     System prompt for the summarisation call.
+        max_tokens: Maximum tokens for the generated summary.
     """
 
-    name: str
+    schema: VectorCollectionSchema
     store: VectorStoreBase
     embedder: EmbeddingBase
     llm: LLMBase
     prompt: str = "Summarize this document in a few sentences."
     max_tokens: int = 1024
-    description: str = ""
+
+    @property
+    def name(self) -> str:
+        return self.schema.name
+
+    @property
+    def description(self) -> str:
+        return self.schema.description
 
 
 class IngestionPipeline:

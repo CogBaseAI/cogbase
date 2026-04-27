@@ -21,6 +21,7 @@ from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import LLMBase
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
+from cogbase.stores.base import VectorCollectionSchema
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
 from examples.contract_analyst_demo.schema import (
@@ -112,7 +113,7 @@ def _make_pipeline(
     vc = None
     if vector_store is not None:
         assert embedder is not None and chunker is not None
-        vc = VectorCollection(name=name, store=vector_store, embedder=embedder, chunker=chunker)
+        vc = VectorCollection(schema=VectorCollectionSchema(name=name, dimensions=4), store=vector_store, embedder=embedder, chunker=chunker)
 
     return IngestionPipeline(
         name=name,
@@ -402,7 +403,7 @@ class TestVectorOnlyMode:
 
     def _make_vector_only_app(self, llm: MagicMock) -> CogBaseApp:
         vc = VectorCollection(
-            name="vector-only",
+            schema=VectorCollectionSchema(name="vector-only", dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
@@ -442,7 +443,7 @@ class TestVectorOnlyMode:
     async def test_ingest_populates_vector_store_not_structured(self):
         vector_store = FAISSVectorStore(dim=4)
         vc = VectorCollection(
-            name="testapp",
+            schema=VectorCollectionSchema(name="testapp", dimensions=4),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),

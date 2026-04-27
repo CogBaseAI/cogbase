@@ -19,9 +19,9 @@ Typical usage::
             ("extract-structured",     "contracts"),
             ("summarize-embed-upsert", "document_summary"),
         ],
-        vector_collections=[VectorCollection(name="document_chunks", ...)],
+        vector_collections=[VectorCollection(schema=VectorCollectionSchema(name="document_chunks", dimensions=1536), ...)],
         structured_collections=[StructuredCollection(schema=..., ...)],
-        summarize_collections=[SummarizeCollection(name="document_summary", ...)],
+        summarize_collections=[SummarizeCollection(schema=VectorCollectionSchema(name="document_summary", dimensions=1536), ...)],
     )
     app = CogBaseApp("legal", llm, pipeline)
     await app.setup()
