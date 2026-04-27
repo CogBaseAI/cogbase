@@ -51,6 +51,22 @@ class VectorStoreConfig(BaseModel):
         return self
 
 
+class DocumentStoreConfig(BaseModel):
+    type: Literal["local", "s3"] = "local"
+    path: str | None = None      # local only
+    bucket: str | None = None    # s3 only
+    prefix: str = ""             # s3 only
+    region: str | None = None    # s3 only
+
+    @model_validator(mode="after")
+    def _validate(self) -> "DocumentStoreConfig":
+        if self.type == "local" and not self.path:
+            raise ValueError("document_store.path is required for local type")
+        if self.type == "s3" and not self.bucket:
+            raise ValueError("document_store.bucket is required for s3 type")
+        return self
+
+
 class ChunkerConfig(BaseModel):
     type: Literal["fixed", "langchain"] = "fixed"
     chunk_size: int = 512
@@ -111,6 +127,7 @@ class AppConfig(BaseModel):
     name: str
     llm: LLMConfig
     embedding: EmbeddingConfig | None = None
+    document_store: DocumentStoreConfig | None = None
     structured_store: StructuredStoreConfig | None = None
     vector_store: VectorStoreConfig | None = None
     vector_collections: list[VectorCollectionConfig] = []

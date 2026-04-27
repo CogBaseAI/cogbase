@@ -39,6 +39,7 @@ from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
 from cogbase.core.models import Document
 from cogbase.core.runner import RunResult, Runner
 from cogbase.llms import LLMBase
+from cogbase.stores.document.base import DocumentStoreBase
 from cogbase.stores.schema import CollectionSchema
 
 logger = logging.getLogger(__name__)
@@ -65,12 +66,14 @@ class CogBaseApp:
         llm: LLMBase,
         pipeline: IngestionPipeline,
         *,
+        document_store: DocumentStoreBase | None = None,
         skills: list | None = None,
         passthrough_token_threshold: int = 2000,
         query_max_rounds: int = 5,
     ) -> None:
         self.name = name
         self._ingest_pipeline = pipeline
+        self._document_store = document_store
 
         structured_store, vector_store, embedder, default_vc = pipeline.runner_resources()
 
@@ -108,6 +111,11 @@ class CogBaseApp:
         in the same order as *documents*.
         """
         logger.info("app.ingest_documents.start documents=%d concurrency=%d", len(documents), concurrency)
+        if self._document_store is not None:
+            import asyncio
+            await asyncio.gather(*(
+                self._document_store.save(doc.doc_id, doc.text) for doc in documents
+            ))
         results = await self._ingest_pipeline.ingest_documents(documents, concurrency=concurrency)
         failures = sum(1 for r in results if not r.success)
         logger.info("app.ingest_documents.done documents=%d failures=%d", len(results), failures)
@@ -137,6 +145,11 @@ class CogBaseApp:
     def query_runner(self) -> Runner:
         """The underlying ``Runner`` (query layer)."""
         return self._runner
+
+    @property
+    def document_store(self) -> DocumentStoreBase | None:
+        """The document store, if configured."""
+        return self._document_store
 
     @property
     def structured_schemas(self) -> list[CollectionSchema]:

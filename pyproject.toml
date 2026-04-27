@@ -10,6 +10,7 @@ dependencies = ["pydantic>=2.0", "pandas>=2.0"]
 
 [project.optional-dependencies]
 faiss = ["faiss-cpu>=1.7"]
+s3 = ["boto3>=1.34"]
 langchain = ["langchain-text-splitters>=0.3"]
 postgres = ["asyncpg>=0.29"]
 pgvector = ["asyncpg>=0.29", "pgvector>=0.3", "numpy>=1.24"]

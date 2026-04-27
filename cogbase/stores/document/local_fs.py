@@ -1,0 +1,67 @@
+"""Local filesystem document store."""
+
+from __future__ import annotations
+
+import asyncio
+import pathlib
+
+from cogbase.stores.document.base import DocumentStoreBase
+
+
+class LocalFSDocumentStore(DocumentStoreBase):
+    """Stores document text as UTF-8 files under a root directory.
+
+    Each document is written to ``<root>/<doc_id>`` (intermediate directories
+    are created automatically).  Hierarchical doc_ids (e.g. ``"2024/q1/doc-1"``)
+    produce a matching directory tree.
+
+    Args:
+        root: Directory that will hold all document files.  Created on first
+              ``save`` if it does not exist.
+    """
+
+    def __init__(self, root: str | pathlib.Path) -> None:
+        self._root = pathlib.Path(root).resolve()
+
+    def _path(self, doc_id: str) -> pathlib.Path:
+        candidate = (self._root / doc_id).resolve()
+        if not str(candidate).startswith(str(self._root)):
+            raise ValueError(f"doc_id {doc_id!r} escapes the store root")
+        return candidate
+
+    async def save(self, doc_id: str, content: str) -> None:
+        path = self._path(doc_id)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._write, path, content)
+
+    async def load(self, doc_id: str) -> str:
+        path = self._path(doc_id)
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(None, path.read_text, "utf-8")
+        except FileNotFoundError:
+            raise KeyError(doc_id)
+
+    async def delete(self, doc_id: str) -> None:
+        path = self._path(doc_id)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._unlink, path)
+
+    async def exists(self, doc_id: str) -> bool:
+        path = self._path(doc_id)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, path.is_file)
+
+    # -- sync helpers -------------------------------------------------------
+
+    @staticmethod
+    def _write(path: pathlib.Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    @staticmethod
+    def _unlink(path: pathlib.Path) -> None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass

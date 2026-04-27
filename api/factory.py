@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from api.config import AppConfig, ChunkerConfig, EmbeddingConfig, StructuredStoreConfig, VectorStoreConfig
+from api.config import AppConfig, ChunkerConfig, DocumentStoreConfig, EmbeddingConfig, StructuredStoreConfig, VectorStoreConfig
 from cogbase.stores.base import StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 from cogbase.core.app import CogBaseApp
 from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
@@ -31,6 +31,17 @@ def _build_llm(config: AppConfig) -> LLMBase:
         client = openai.AsyncOpenAI(api_key=api_key)
         return OpenAILLM(client, model=config.llm.model)
     raise ValueError(f"Unsupported LLM provider: {config.llm.provider!r}")
+
+
+def build_document_store(cfg: DocumentStoreConfig) -> Any:
+    """Instantiate a document store from its config."""
+    if cfg.type == "local":
+        from cogbase.stores.document.local_fs import LocalFSDocumentStore
+        return LocalFSDocumentStore(cfg.path)  # type: ignore[arg-type]
+    if cfg.type == "s3":
+        from cogbase.stores.document.s3 import S3DocumentStore
+        return S3DocumentStore(bucket=cfg.bucket, prefix=cfg.prefix, region=cfg.region)  # type: ignore[arg-type]
+    raise ValueError(f"Unknown document_store type: {cfg.type!r}")
 
 
 def build_structured_store(cfg: StructuredStoreConfig) -> Any:
@@ -222,4 +233,5 @@ def build_app(
         summarize_collections=summarize_collections or None,
     )
 
-    return CogBaseApp(config.name, llm, pipeline)
+    document_store = build_document_store(config.document_store) if config.document_store else None
+    return CogBaseApp(config.name, llm, pipeline, document_store=document_store)
