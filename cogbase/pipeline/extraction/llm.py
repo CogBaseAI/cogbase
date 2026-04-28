@@ -3,24 +3,6 @@
 ``LLMExtractor`` calls an OpenAI-compatible LLM to extract structured data
 from a document according to a caller-supplied Pydantic model.  It automatically
 adds a ``doc_id`` identity field to each extracted record.
-
-Typical usage::
-
-    import json
-    import openai
-    from cogbase.llms import OpenAILLM
-    from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
-    from cogbase.pipeline.extraction.llm import LLMExtractor
-
-    extraction_model = build_model_from_json_schema(extraction_schema_json_str)
-    client = openai.AsyncOpenAI(api_key="...")
-    llm = OpenAILLM(client, model="gpt-5.4")
-    extractor = LLMExtractor(
-        llm=llm,
-        extraction_model=extraction_model,
-        collection_name='your_collection_name',
-    )
-    record = await extractor.extract(doc)
 """
 
 from __future__ import annotations

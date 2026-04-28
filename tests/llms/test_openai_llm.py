@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cogbase.llms import LLMBase, OpenAILLM
-from cogbase.llms.base import ChatMessage, ToolDefinition
+from cogbase.llms.base import LLMBase, ChatMessage, ToolDefinition
+from cogbase.llms.openai import OpenAILLM
 
 
 def _make_non_stream_client(

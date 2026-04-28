@@ -7,6 +7,7 @@ from typing import Any
 from cogbase.config.config import AppConfig, ChunkerConfig
 from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
 from cogbase.embeddings import build_embedding as _build_embedder
+from cogbase.llms import build_llm as _build_llm
 from cogbase.stores import (
     StructuredStoreBase,
     VectorCollectionSchema,
@@ -25,20 +26,6 @@ from cogbase.pipeline.ingestion_pipeline import (
     VectorCollection,
 )
 from cogbase.core.basemodel_to_schema import cls_json_schema_for_llm
-from cogbase.llms.base import LLMBase
-from cogbase.llms.openai import OpenAILLM
-
-
-def _build_llm(config: AppConfig) -> LLMBase:
-    if config.llm.provider == "openai":
-        try:
-            import openai
-        except ImportError as exc:
-            raise ImportError("openai package required: pip install openai") from exc
-        api_key = config.llm.resolved_api_key()
-        client = openai.AsyncOpenAI(api_key=api_key)
-        return OpenAILLM(client, model=config.llm.model)
-    raise ValueError(f"Unsupported LLM provider: {config.llm.provider!r}")
 
 
 def build_document_store(cfg: DocumentStoreConfig) -> Any:
@@ -91,7 +78,7 @@ def build_app(
        store is shared; collection names scope records to their collection.
     3. No fallback — raises ``ValueError`` when neither is provided.
     """
-    llm = _build_llm(config)
+    llm = _build_llm(config.llm)
 
     steps = config.pipeline.steps if config.pipeline else []
     vc_by_name = {vc.name: vc for vc in config.vector_collections}
