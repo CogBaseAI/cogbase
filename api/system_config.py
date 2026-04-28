@@ -21,7 +21,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel
 
-from api.config import StructuredStoreConfig, VectorStoreConfig
+from api.config import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
 
 
 class SystemConfig(BaseModel):
@@ -42,6 +42,9 @@ class SystemConfig(BaseModel):
                           ``None``, applications without an explicit
                           ``embedding`` + ``chunker`` config run in
                           structured-only mode.
+        document_store:   Default document store for full document text.
+                          Applications can override it with their own
+                          ``document_store`` config.
     """
 
     system_db: StructuredStoreConfig = StructuredStoreConfig(
@@ -49,6 +52,7 @@ class SystemConfig(BaseModel):
     )
     structured_store: StructuredStoreConfig | None = None
     vector_store: VectorStoreConfig | None = None
+    document_store: DocumentStoreConfig | None = None
     skills_dir: str | None = None  # directory containing <skill_name>/SKILL.md files
 
     @classmethod

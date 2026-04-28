@@ -68,6 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 config,
                 system_structured_store=system_structured_store,
                 system_vector_store_cfg=system_cfg.vector_store,
+                system_document_store_cfg=system_cfg.document_store,
             )
             await instance.setup()
             app_cache.add(record.name, instance)

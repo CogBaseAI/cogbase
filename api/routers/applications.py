@@ -171,6 +171,7 @@ async def create_application(
             config,
             system_structured_store=system_structured_store,
             system_vector_store_cfg=system_config.vector_store,
+            system_document_store_cfg=system_config.document_store,
         )
         await app.setup()
         app_cache.add(config.name, app)
@@ -259,6 +260,7 @@ async def update_application(
             config,
             system_structured_store=system_structured_store,
             system_vector_store_cfg=system_config.vector_store,
+            system_document_store_cfg=system_config.document_store,
         )
         await app.setup()
         app_cache.add(config.name, app)
@@ -312,6 +314,7 @@ async def _get_active_app(
         config,
         system_structured_store=system_structured_store,
         system_vector_store_cfg=system_config.vector_store,
+        system_document_store_cfg=system_config.document_store,
     )
     await app.setup()
     app_cache.add(app_name, app)

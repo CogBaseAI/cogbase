@@ -108,6 +108,7 @@ def build_app(
     *,
     system_structured_store: StructuredStoreBase | None = None,
     system_vector_store_cfg: VectorStoreConfig | None = None,
+    system_document_store_cfg: DocumentStoreConfig | None = None,
 ) -> Any:
     """Instantiate a CogBase application from *config*.
 
@@ -118,7 +119,7 @@ def build_app(
     Store backends are resolved in priority order:
 
     1. Values declared explicitly in *config* (``structured_store``,
-       ``vector_store``) — full per-application isolation.
+       ``vector_store``, ``document_store``) — full per-application isolation.
     2. System-level stores supplied via the keyword arguments — the structured
        store is shared; collection names scope records to their collection.
     3. No fallback — raises ``ValueError`` when neither is provided.
@@ -233,5 +234,6 @@ def build_app(
         summarize_collections=summarize_collections or None,
     )
 
-    document_store = build_document_store(config.document_store) if config.document_store else None
+    document_store_cfg = config.document_store or system_document_store_cfg
+    document_store = build_document_store(document_store_cfg) if document_store_cfg else None
     return CogBaseApp(config.name, llm, pipeline, document_store=document_store)

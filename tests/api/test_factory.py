@@ -6,9 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from api.config import AppConfig, StructuredStoreConfig, VectorStoreConfig
+from api.config import AppConfig, DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
 from api.factory import build_structured_store, build_app
 from cogbase.pipeline.ingestion_pipeline import SummarizeCollection, VectorCollection
+from cogbase.stores.document.local_fs import LocalFSDocumentStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.structured.sqlite import SQLiteStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
@@ -344,3 +345,37 @@ class TestBuildAppSummarizeCollection:
         # No vector store supplied
         with pytest.raises(ValueError, match="vector store"):
             build_app(cfg)
+
+
+class TestBuildAppDocumentStoreResolution:
+    @patch("api.factory._build_llm")
+    def test_uses_system_document_store_when_no_app_document_store(self, mock_build_llm, tmp_path):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml("""\
+name: test_app
+llm:
+  provider: openai
+  model: gpt-4o-mini
+""")
+        sys_doc_cfg = DocumentStoreConfig(type="local", path=str(tmp_path / "docs"))
+        app = build_app(cfg, system_document_store_cfg=sys_doc_cfg)
+
+        assert isinstance(app.document_store, LocalFSDocumentStore)
+
+    @patch("api.factory._build_llm")
+    def test_app_document_store_overrides_system_document_store(self, mock_build_llm, tmp_path):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(f"""\
+name: test_app
+llm:
+  provider: openai
+  model: gpt-4o-mini
+document_store:
+  type: local
+  path: {tmp_path / "app-docs"}
+""")
+        sys_doc_cfg = DocumentStoreConfig(type="local", path=str(tmp_path / "system-docs"))
+        app = build_app(cfg, system_document_store_cfg=sys_doc_cfg)
+
+        assert isinstance(app.document_store, LocalFSDocumentStore)
+        assert app.document_store._root.name == "app-docs"  # type: ignore[union-attr]

@@ -33,3 +33,13 @@ vector_store:
   dim: 1536                     # must match the embedding model's output dimension
   # type: pgvector
   # url: postgresql://user:pass@localhost:5432/cogbase   # required for pgvector
+
+# Default document store settings for storing full document text by doc_id.
+# Use this when applications do not provide their own document_store config.
+document_store:
+  type: local                   # local | s3
+  path: ./data/documents        # required for local
+  # type: s3
+  # bucket: my-cogbase-docs     # required for s3
+  # prefix: app-documents       # optional
+  # region: us-west-2           # optional

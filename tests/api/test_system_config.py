@@ -16,6 +16,7 @@ class TestSystemConfigFromYaml:
         assert cfg.system_db.type == "sqlite"
         assert cfg.structured_store is None
         assert cfg.vector_store is None
+        assert cfg.document_store is None
 
     def test_full_yaml(self):
         yaml_text = textwrap.dedent("""\
@@ -28,6 +29,9 @@ class TestSystemConfigFromYaml:
             vector_store:
               type: faiss
               dim: 768
+            document_store:
+              type: local
+              path: ./data/documents
         """)
         cfg = SystemConfig.from_yaml(yaml_text)
         assert cfg.system_db.type == "sqlite"
@@ -36,6 +40,8 @@ class TestSystemConfigFromYaml:
         assert cfg.structured_store.path == "./data/app.db"
         assert cfg.vector_store.type == "faiss"
         assert cfg.vector_store.dim == 768
+        assert cfg.document_store.type == "local"
+        assert cfg.document_store.path == "./data/documents"
 
     def test_system_db_postgres(self):
         yaml_text = textwrap.dedent("""\
@@ -79,6 +85,7 @@ class TestSystemConfigLoad:
         assert cfg.system_db.path == "./cogbase_system.db"
         assert cfg.structured_store is None
         assert cfg.vector_store is None
+        assert cfg.document_store is None
 
     def test_load_respects_cogbase_system_db_env_var(self, monkeypatch):
         monkeypatch.delenv("COGBASE_CONFIG", raising=False)
