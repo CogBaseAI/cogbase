@@ -5,8 +5,15 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from api.config import AppConfig, ChunkerConfig, DocumentStoreConfig, EmbeddingConfig, StructuredStoreConfig, VectorStoreConfig
-from cogbase.stores.base import StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
+from cogbase.config.config import AppConfig, ChunkerConfig, EmbeddingConfig
+from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
+from cogbase.stores.structured.base import StructuredStoreBase
+from cogbase.stores.vector.base import VectorCollectionSchema, VectorStoreBase
+from cogbase.stores.factory import (
+    build_document_store as _build_document_store,
+    build_structured_store as _build_structured_store,
+    build_vector_store as _build_vector_store,
+)
 from cogbase.core.app import CogBaseApp
 from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
 from cogbase.pipeline.extraction.llm import LLMExtractor
@@ -35,37 +42,12 @@ def _build_llm(config: AppConfig) -> LLMBase:
 
 def build_document_store(cfg: DocumentStoreConfig) -> Any:
     """Instantiate a document store from its config."""
-    if cfg.type == "local":
-        from cogbase.stores.document.local_fs import LocalFSDocumentStore
-        return LocalFSDocumentStore(cfg.path)  # type: ignore[arg-type]
-    if cfg.type == "s3":
-        from cogbase.stores.document.s3 import S3DocumentStore
-        return S3DocumentStore(bucket=cfg.bucket, prefix=cfg.prefix, region=cfg.region)  # type: ignore[arg-type]
-    raise ValueError(f"Unknown document_store type: {cfg.type!r}")
+    return _build_document_store(cfg)
 
 
 def build_structured_store(cfg: StructuredStoreConfig) -> Any:
     """Instantiate a structured store from its config."""
-    if cfg.type == "memory":
-        from cogbase.stores.structured.memory import InMemoryStructuredStore
-        return InMemoryStructuredStore()
-    if cfg.type == "sqlite":
-        from cogbase.stores.structured.sqlite import SQLiteStructuredStore
-        return SQLiteStructuredStore(cfg.path)
-    if cfg.type == "postgres":
-        from cogbase.stores.structured.postgres import PostgresStructuredStore
-        return PostgresStructuredStore(cfg.url)
-    raise ValueError(f"Unknown structured_store type: {cfg.type!r}")
-
-
-def _build_vector_store(cfg: VectorStoreConfig) -> Any:
-    if cfg.type == "faiss":
-        from cogbase.stores.vector.faiss_store import FAISSVectorStore
-        return FAISSVectorStore(dim=cfg.dim)
-    if cfg.type == "pgvector":
-        from cogbase.stores.vector.pgvector_store import PGVectorStore
-        return PGVectorStore(dim=cfg.dim, dsn=cfg.url)
-    raise ValueError(f"Unknown vector_store type: {cfg.type!r}")
+    return _build_structured_store(cfg)
 
 
 def _build_embedder(cfg: EmbeddingConfig, llm_client: Any) -> Any:

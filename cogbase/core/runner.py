@@ -60,7 +60,8 @@ from pydantic import BaseModel
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, LLMBase, SystemTool, ToolDefinition
-from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
+from cogbase.stores.structured.base import StructuredStoreBase
+from cogbase.stores.vector.base import VectorStoreBase
 from cogbase.stores.filters import Filter, Op
 from cogbase.stores.schema import CollectionSchema
 
@@ -181,6 +182,10 @@ _VECTOR_SEARCH_DEF: ToolDefinition = {
     "parameters": {
         "type": "object",
         "properties": {
+            "collection": {
+                "type": "string",
+                "description": "Vector collection to search. Omit to use the default collection.",
+            },
             "query": {
                 "type": "string",
                 "description": "Search query text.",
@@ -189,12 +194,8 @@ _VECTOR_SEARCH_DEF: ToolDefinition = {
                 "type": "integer",
                 "description": "Number of results to return (default: 5, max: 20).",
             },
-            "collection": {
-                "type": "string",
-                "description": "Vector collection to search. Omit to use the default collection.",
-            },
         },
-        "required": ["query"],
+        "required": ["collection", "query"],
         "additionalProperties": False,
     },
 }

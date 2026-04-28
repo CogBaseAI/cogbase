@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
-from api.config import AppConfig
+from cogbase.config.config import AppConfig
 from api.dependencies import AppCacheDep, SkillRegistryDep, SystemConfigDep, SystemStoreDep, SystemStructuredStoreDep
 from api.factory import build_app
 from api.app_cache import AppCache

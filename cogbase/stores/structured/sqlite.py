@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from cogbase.stores.base import StructuredStoreBase
+from cogbase.stores.structured.base import StructuredStoreBase
 from cogbase.stores.filters import Filter, matches, to_sql_where
 from cogbase.stores.schema import CollectionSchema, FieldType
 

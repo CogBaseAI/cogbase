@@ -53,7 +53,7 @@ from examples.contract_analyst_demo.schema import (  # noqa: E402
     CONTRACTS_SYSTEM_PROMPT_PREFIX,
     ContractExtraction,
 )
-from saas_contracts import CONTRACTS  # noqa: E402
+from examples.contract_analyst_demo.saas_contracts import CONTRACTS  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Configuration

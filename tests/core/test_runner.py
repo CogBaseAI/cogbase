@@ -307,7 +307,7 @@ async def test_run_retrieval_vector_search_populates_chunks():
     """vector_search results are accumulated in RunResult.chunks."""
     from cogbase.core.models import Chunk
     from cogbase.embeddings.base import EmbeddingBase
-    from cogbase.stores.base import VectorStoreBase
+    from cogbase.stores.vector.base import VectorStoreBase
 
     class _FakeEmbedder(EmbeddingBase):
         async def embed(self, texts):
@@ -352,7 +352,7 @@ def test_tool_defs_structured_only():
 
 def test_tool_defs_vector_only():
     from cogbase.embeddings.base import EmbeddingBase
-    from cogbase.stores.base import VectorStoreBase
+    from cogbase.stores.vector.base import VectorStoreBase
 
     class _V(VectorStoreBase):
         async def upsert(self, c, chunks): pass

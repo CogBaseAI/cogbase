@@ -7,7 +7,7 @@ from cogbase.core.models import Document
 from cogbase.embeddings.base import EmbeddingBase
 from cogbase.llms.base import SystemTool, ToolDefinition
 from cogbase.pipeline.ingestion.base import ChunkerBase
-from cogbase.stores.base import VectorStoreBase
+from cogbase.stores.vector.base import VectorStoreBase
 
 logger = logging.getLogger(__name__)
 

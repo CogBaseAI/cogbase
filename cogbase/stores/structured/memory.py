@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
-from cogbase.stores.base import StructuredStoreBase
+from cogbase.stores.structured.base import StructuredStoreBase
 from cogbase.stores.filters import Filter, Op, _like
 from cogbase.stores.schema import CollectionSchema, FieldType
 

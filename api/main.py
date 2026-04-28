@@ -8,7 +8,7 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
-from api.config import AppConfig
+from cogbase.config.config import AppConfig
 from api.factory import build_app, build_structured_store
 from api.app_cache import AppCache
 from api.routers.applications import router as applications_router

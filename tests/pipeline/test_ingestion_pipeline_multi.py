@@ -18,7 +18,7 @@ from cogbase.pipeline.ingestion_pipeline import (
     SummarizeCollection,
     VectorCollection,
 )
-from cogbase.stores.base import VectorCollectionSchema
+from cogbase.stores.vector.base import VectorCollectionSchema
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
@@ -442,7 +442,7 @@ class TestThreeStepPipeline:
 class TestSummarizeCollectionConfig:
     def test_parse_summarize_collection(self):
         import textwrap
-        from api.config import AppConfig
+        from cogbase.config.config import AppConfig
 
         yaml_text = textwrap.dedent("""\
             name: test-app
@@ -469,7 +469,7 @@ class TestSummarizeCollectionConfig:
 
     def test_summarize_collection_requires_embedding(self):
         import textwrap
-        from api.config import AppConfig
+        from cogbase.config.config import AppConfig
 
         yaml_text = textwrap.dedent("""\
             name: bad-app
@@ -483,7 +483,7 @@ class TestSummarizeCollectionConfig:
 
     def test_unknown_summarize_collection_in_step_raises(self):
         import textwrap
-        from api.config import AppConfig
+        from cogbase.config.config import AppConfig
 
         yaml_text = textwrap.dedent("""\
             name: bad-app

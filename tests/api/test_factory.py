@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from api.config import AppConfig, DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
+from cogbase.config.config import AppConfig
+from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
 from api.factory import build_structured_store, build_app
 from cogbase.pipeline.ingestion_pipeline import SummarizeCollection, VectorCollection
 from cogbase.stores.document.local_fs import LocalFSDocumentStore

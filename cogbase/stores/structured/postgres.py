@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from cogbase.stores.base import StructuredStoreBase
+from cogbase.stores.structured.base import StructuredStoreBase
 from cogbase.stores.filters import Filter, Op
 from cogbase.stores.schema import CollectionSchema, FieldType
 

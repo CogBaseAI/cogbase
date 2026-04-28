@@ -21,7 +21,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel
 
-from api.config import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
+from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
 
 
 class SystemConfig(BaseModel):

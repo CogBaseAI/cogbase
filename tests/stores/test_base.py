@@ -2,7 +2,8 @@ import pytest
 from pydantic import BaseModel
 
 from cogbase.core.models import Chunk
-from cogbase.stores.base import StructuredStoreBase, VectorStoreBase
+from cogbase.stores.structured.base import StructuredStoreBase
+from cogbase.stores.vector.base import VectorStoreBase
 from cogbase.stores.filters import Filter
 from cogbase.stores.schema import CollectionSchema
 

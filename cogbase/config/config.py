@@ -8,6 +8,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
+
 
 class LLMConfig(BaseModel):
     provider: Literal["openai"] = "openai"
@@ -25,48 +27,6 @@ class EmbeddingConfig(BaseModel):
     dimensions: int | None = None
 
 
-class StructuredStoreConfig(BaseModel):
-    type: Literal["sqlite", "postgres", "memory"] = "memory"
-    path: str | None = None  # sqlite only
-    url: str | None = None   # postgres only
-
-    @model_validator(mode="after")
-    def _validate(self) -> "StructuredStoreConfig":
-        if self.type == "sqlite" and not self.path:
-            raise ValueError("structured_store.path is required for sqlite type")
-        if self.type == "postgres" and not self.url:
-            raise ValueError("structured_store.url is required for postgres type")
-        return self
-
-
-class VectorStoreConfig(BaseModel):
-    type: Literal["faiss", "pgvector"] = "faiss"
-    dim: int = 1536
-    url: str | None = None  # pgvector only
-
-    @model_validator(mode="after")
-    def _validate(self) -> "VectorStoreConfig":
-        if self.type == "pgvector" and not self.url:
-            raise ValueError("vector_store.url is required for pgvector type")
-        return self
-
-
-class DocumentStoreConfig(BaseModel):
-    type: Literal["local", "s3"] = "local"
-    path: str | None = None      # local only
-    bucket: str | None = None    # s3 only
-    prefix: str = ""             # s3 only
-    region: str | None = None    # s3 only
-
-    @model_validator(mode="after")
-    def _validate(self) -> "DocumentStoreConfig":
-        if self.type == "local" and not self.path:
-            raise ValueError("document_store.path is required for local type")
-        if self.type == "s3" and not self.bucket:
-            raise ValueError("document_store.bucket is required for s3 type")
-        return self
-
-
 class ChunkerConfig(BaseModel):
     type: Literal["fixed", "langchain"] = "fixed"
     chunk_size: int = 512
@@ -81,41 +41,27 @@ class VectorCollectionConfig(BaseModel):
 
 class ExtractorConfig(BaseModel):
     type: Literal["llm"] = "llm"
-    # Prompt prefix for the LLM system message; the JSON schema is appended
-    # automatically.  When omitted LLMExtractor uses its built-in default.
-    prompt: str | None = None  # resolved from filename ref at upload time
+    prompt: str | None = None
 
 
 class StructuredCollectionConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str
-    schema_: str = Field(alias="schema")  # JSON Schema string; resolved from filename ref at upload time
+    schema_: str = Field(alias="schema")
     extractor: ExtractorConfig
 
 
 class SummarizeCollectionConfig(BaseModel):
-    """Configuration for a summarize-embed-upsert vector collection.
-
-    Each ingested document produces one chunk: an LLM-generated summary of
-    its full text.  Useful for high-level semantic search over document topics.
-
-    Args:
-        name:       Collection name; referenced by ``summarize-embed-upsert`` steps.
-        prompt:     System prompt for the summarisation LLM call.  Defaults to
-                    ``"Summarize this document in 2–3 sentences."`` when omitted.
-        max_tokens: Maximum tokens for the generated summary.  Defaults to 1024.
-    """
-
     name: str
     description: str = ""
-    prompt: str | None = None   # uses SummarizeCollection default when None
+    prompt: str | None = None
     max_tokens: int = 1024
 
 
 class PipelineStepConfig(BaseModel):
     tool: Literal["chunk-embed-upsert", "extract-structured", "summarize-embed-upsert"]
-    collection: str       # must match a collection name of the corresponding type
+    collection: str
 
 
 class PipelineConfig(BaseModel):

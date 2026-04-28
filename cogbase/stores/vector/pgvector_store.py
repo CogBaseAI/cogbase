@@ -33,7 +33,7 @@ import logging
 from typing import Any
 
 from cogbase.core.models import Chunk
-from cogbase.stores.base import VectorCollectionSchema, VectorStoreBase
+from cogbase.stores.vector.base import VectorCollectionSchema, VectorStoreBase
 from cogbase.stores.filters import Filter, Op
 
 logger = logging.getLogger(__name__)

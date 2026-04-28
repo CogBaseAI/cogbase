@@ -1,4 +1,4 @@
-"""Unit tests for api/config.py."""
+"""Unit tests for cogbase/config/config.py."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import textwrap
 
 import pytest
 
-from api.config import (
+from cogbase.config.config import (
     AppConfig,
     ChunkerConfig,
     EmbeddingConfig,
@@ -353,4 +353,3 @@ class TestSummarizeCollectionConfig:
         )
         assert cfg.prompt == "One sentence please."
         assert cfg.max_tokens == 64
-

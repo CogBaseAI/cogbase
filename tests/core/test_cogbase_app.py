@@ -21,11 +21,11 @@ from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import LLMBase
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
-from cogbase.stores.base import VectorCollectionSchema
+from cogbase.stores.vector.base import VectorCollectionSchema
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
+from examples.contract_analyst_demo.demo import _CONTRACTS_COLLECTION
 from examples.contract_analyst_demo.schema import (
-    CONTRACTS_COLLECTION,
     ContractExtraction,
     Party,
     PaymentTerms,
@@ -94,7 +94,7 @@ def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        collection_name=CONTRACTS_COLLECTION,
+        collection_name=_CONTRACTS_COLLECTION,
     )
 
 
@@ -144,7 +144,7 @@ class TestCogBaseAppConstruction:
         app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
         assert app._ingest_pipeline.name == "legal"
         assert app._ingest_pipeline._structured_by_name
-        assert CONTRACTS_COLLECTION in app._ingest_pipeline._structured_by_name
+        assert _CONTRACTS_COLLECTION in app._ingest_pipeline._structured_by_name
         assert app._ingest_pipeline._vector_by_name == {}
 
     def test_full_mode_builds(self):
@@ -171,7 +171,7 @@ class TestCogBaseAppConstruction:
         app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
         schemas = app.structured_schemas
         assert len(schemas) == 1
-        assert schemas[0].name == CONTRACTS_COLLECTION
+        assert schemas[0].name == _CONTRACTS_COLLECTION
 
     def test_ingestion_pipeline_and_query_runner_accessible(self):
         app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
@@ -189,7 +189,7 @@ class TestCogBaseAppLifecycle:
         store = InMemoryStructuredStore()
         app = _make_app(_make_llm("{}"), store)
         await app.setup()
-        rows = await store.query(CONTRACTS_COLLECTION)
+        rows = await store.query(_CONTRACTS_COLLECTION)
         assert rows == []
 
     @pytest.mark.asyncio
@@ -205,7 +205,7 @@ class TestCogBaseAppLifecycle:
         app = _make_app(_make_llm(_contract_payload(contract_type="SaaS")), store)
         await app.setup()
         await app.ingest_documents([Document(doc_id="c-001", text="Some contract text.")])
-        rows = await store.query(CONTRACTS_COLLECTION)
+        rows = await store.query(_CONTRACTS_COLLECTION)
         assert len(rows) == 1
         assert rows[0]["contract_type"] == "SaaS"
 
@@ -215,7 +215,7 @@ class TestCogBaseAppLifecycle:
         app = _make_app(_make_llm("{}"), store)
         await app.setup()
         await app.ingest_documents([Document(doc_id="c-empty", text="")])
-        rows = await store.query(CONTRACTS_COLLECTION)
+        rows = await store.query(_CONTRACTS_COLLECTION)
         assert rows == []
 
     @pytest.mark.asyncio
@@ -227,7 +227,7 @@ class TestCogBaseAppLifecycle:
             Document(doc_id="c-001", text="contract one text"),
             Document(doc_id="c-002", text="contract two text"),
         ])
-        rows = await store.query(CONTRACTS_COLLECTION)
+        rows = await store.query(_CONTRACTS_COLLECTION)
         assert len(rows) == 2
         doc_ids = {r["doc_id"] for r in rows}
         assert doc_ids == {"c-001", "c-002"}
@@ -305,7 +305,7 @@ class TestCogBaseAppQuery:
                     "tool_calls": [{
                         "id": "call_1",
                         "name": "structured_lookup",
-                        "arguments": json.dumps({"collection": CONTRACTS_COLLECTION, "filters": []}),
+                        "arguments": json.dumps({"collection": _CONTRACTS_COLLECTION, "filters": []}),
                     }],
                 }
             return {"content": "Found NDA contracts: Acme Corp and Supplier Ltd.", "tool_calls": None}
@@ -328,7 +328,7 @@ class TestCogBaseAppQuery:
             parties=[Party(name="Acme Corp", role="discloser"), Party(name="Supplier Ltd", role="recipient")],
             payment_terms=PaymentTerms(schedule="net-30", verbatim="Payment is due within 30 days."),
         )
-        await store.save(CONTRACTS_COLLECTION, [record])
+        await store.save(_CONTRACTS_COLLECTION, [record])
 
         result = await _drain_query(app, "list NDA contracts")
         assert isinstance(result, QueryResult)
