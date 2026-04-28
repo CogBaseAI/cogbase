@@ -6,7 +6,7 @@ import logging
 from cogbase.core.models import Document
 from cogbase.llms.base import SystemTool, ToolDefinition
 from cogbase.pipeline.extraction.base import ExtractorBase
-from cogbase.stores.structured.base import StructuredStoreBase
+from cogbase.stores import StructuredStoreBase
 
 logger = logging.getLogger(__name__)
 

@@ -10,12 +10,17 @@ from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
 from cogbase.embeddings import EmbeddingBase
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
-from cogbase.stores.structured.base import StructuredStoreBase
-from cogbase.stores.vector.base import VectorCollectionSchema, VectorStoreBase
-from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
-from cogbase.stores.structured.memory import InMemoryStructuredStore
-from cogbase.stores.vector.faiss_store import FAISSVectorStore
-from cogbase.stores.filters import Filter
+from cogbase.stores import (
+    CollectionSchema,
+    FAISSVectorStore,
+    FieldSchema,
+    FieldType,
+    Filter,
+    InMemoryStructuredStore,
+    StructuredStoreBase,
+    VectorCollectionSchema,
+    VectorStoreBase,
+)
 
 
 # ---------------------------------------------------------------------------

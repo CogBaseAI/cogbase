@@ -32,7 +32,7 @@ from api.system_config import SystemConfig
 from api.system_store import SystemStore
 from cogbase.skills.registry import SkillRegistry
 from cogbase.skills.skill import Skill
-from cogbase.stores.structured.memory import InMemoryStructuredStore
+from cogbase.stores import InMemoryStructuredStore
 
 
 # ---------------------------------------------------------------------------

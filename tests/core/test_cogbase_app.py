@@ -21,9 +21,7 @@ from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import LLMBase
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
-from cogbase.stores.vector.base import VectorCollectionSchema
-from cogbase.stores.structured.memory import InMemoryStructuredStore
-from cogbase.stores.vector.faiss_store import FAISSVectorStore
+from cogbase.stores import FAISSVectorStore, InMemoryStructuredStore, VectorCollectionSchema
 from examples.contract_analyst_demo.demo import _CONTRACTS_COLLECTION
 from examples.contract_analyst_demo.schema import (
     ContractExtraction,

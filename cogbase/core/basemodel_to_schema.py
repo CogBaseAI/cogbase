@@ -2,7 +2,7 @@ import types as _types
 from pydantic import BaseModel
 from typing import List, Union, get_origin, get_args, Type, Dict
 
-from cogbase.stores.schema import FieldSchema, FieldType
+from cogbase.stores import FieldSchema, FieldType
 
 
 def _unwrap_optional(t):

@@ -5,7 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from cogbase.stores.schema import FieldType
+from cogbase.stores import FieldType
 from cogbase.core.basemodel_to_schema import cls_generate_schema, cls_json_schema_for_llm
 
 

@@ -39,8 +39,7 @@ from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
 from cogbase.core.models import Document
 from cogbase.core.runner import RunResult, Runner
 from cogbase.llms import LLMBase
-from cogbase.stores.document.base import DocumentStoreBase
-from cogbase.stores.schema import CollectionSchema
+from cogbase.stores import CollectionSchema, DocumentStoreBase
 
 logger = logging.getLogger(__name__)
 

@@ -7,9 +7,10 @@ from typing import Any
 
 from cogbase.config.config import AppConfig, ChunkerConfig, EmbeddingConfig
 from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
-from cogbase.stores.structured.base import StructuredStoreBase
-from cogbase.stores.vector.base import VectorCollectionSchema, VectorStoreBase
-from cogbase.stores.factory import (
+from cogbase.stores import (
+    StructuredStoreBase,
+    VectorCollectionSchema,
+    VectorStoreBase,
     build_document_store as _build_document_store,
     build_structured_store as _build_structured_store,
     build_vector_store as _build_vector_store,

@@ -2,7 +2,7 @@
 
 import pytest
 
-from cogbase.stores.document import DocumentStoreBase, LocalFSDocumentStore
+from cogbase.stores import DocumentStoreBase, LocalFSDocumentStore
 
 
 def test_document_store_base_cannot_be_instantiated():

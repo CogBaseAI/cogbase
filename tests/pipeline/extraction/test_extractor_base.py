@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from cogbase.core.models import Document
 from cogbase.pipeline.extraction.base import ExtractorBase
-from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
+from cogbase.stores import CollectionSchema, FieldSchema, FieldType
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ import asyncio
 from pydantic import BaseModel
 
 from cogbase.core.models import Document
-from cogbase.stores.schema import CollectionSchema
+from cogbase.stores import CollectionSchema
 
 
 class ExtractorBase(abc.ABC):

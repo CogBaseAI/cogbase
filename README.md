@@ -133,10 +133,7 @@ The LLM calls tools as needed to gather evidence, then synthesises a grounded an
 CogBase defines clean adapter interfaces for both stores. Swap backends via config — no application code changes required.
 
 ```python
-from cogbase.stores import StructuredStoreBase, VectorStoreBase
-from cogbase.stores.schema import CollectionSchema
-from cogbase.stores import VectorCollectionSchema
-from cogbase.stores.filters import Filter
+from cogbase.stores import StructuredStoreBase, VectorStoreBase, CollectionSchema, VectorCollectionSchema, Filter
 from cogbase.core.models import Chunk
 
 class MyStructuredStore(StructuredStoreBase):

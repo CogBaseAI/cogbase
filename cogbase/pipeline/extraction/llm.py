@@ -33,7 +33,7 @@ from pydantic import BaseModel, ValidationError, create_model
 from cogbase.core.models import Document
 from cogbase.llms import LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
-from cogbase.stores.schema import CollectionSchema
+from cogbase.stores import CollectionSchema
 from cogbase.core.basemodel_to_schema import cls_generate_schema, cls_json_schema_for_llm
 
 logger = logging.getLogger(__name__)

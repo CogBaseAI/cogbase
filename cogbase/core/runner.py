@@ -60,10 +60,7 @@ from pydantic import BaseModel
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, LLMBase, SystemTool, ToolDefinition
-from cogbase.stores.structured.base import StructuredStoreBase
-from cogbase.stores.vector.base import VectorStoreBase
-from cogbase.stores.filters import Filter, Op
-from cogbase.stores.schema import CollectionSchema
+from cogbase.stores import CollectionSchema, Filter, Op, StructuredStoreBase, VectorStoreBase
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 
-from cogbase.stores.structured.memory import InMemoryStructuredStore
+from cogbase.stores import InMemoryStructuredStore
 from api.system_store import AppRecord, SystemStore
 
 

@@ -4,8 +4,7 @@ import uuid
 
 import pytest
 
-from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
-from cogbase.stores.structured import InMemoryStructuredStore, SQLiteStructuredStore
+from cogbase.stores import CollectionSchema, FieldSchema, FieldType, InMemoryStructuredStore, SQLiteStructuredStore
 
 # ---------------------------------------------------------------------------
 # Shared collection schemas used across tests
@@ -141,7 +140,7 @@ async def postgres_store(postgres_container):
 
     Tables are dropped and recreated between tests so each test starts clean.
     """
-    from cogbase.stores.structured.postgres import PostgresStructuredStore
+    from cogbase.stores import PostgresStructuredStore
 
     store = PostgresStructuredStore(dsn=postgres_container)
     await store.connect()

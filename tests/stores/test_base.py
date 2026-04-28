@@ -2,10 +2,7 @@ import pytest
 from pydantic import BaseModel
 
 from cogbase.core.models import Chunk
-from cogbase.stores.structured.base import StructuredStoreBase
-from cogbase.stores.vector.base import VectorStoreBase
-from cogbase.stores.filters import Filter
-from cogbase.stores.schema import CollectionSchema
+from cogbase.stores import CollectionSchema, Filter, StructuredStoreBase, VectorStoreBase
 
 
 def test_structured_store_cannot_be_instantiated():
