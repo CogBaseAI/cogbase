@@ -241,7 +241,8 @@ async def test_run_retrieval_direct_answer():
 async def test_run_retrieval_structured_lookup_populates_records():
     """structured_lookup results are accumulated in RunResult.structured_records."""
     from pydantic import BaseModel as PydanticModel
-    from cogbase.stores import CollectionSchema, FieldSchema, FieldType, InMemoryStructuredStore
+    from cogbase.stores import CollectionSchema, FieldSchema, FieldType
+    from cogbase.stores.structured.memory import InMemoryStructuredStore
 
     class Fact(PydanticModel):
         title: str
@@ -272,7 +273,8 @@ async def test_run_retrieval_structured_lookup_populates_records():
 async def test_run_retrieval_passthrough_when_records_exceed_threshold():
     """structured_lookup with large result bypasses LLM synthesis."""
     from pydantic import BaseModel as PydanticModel
-    from cogbase.stores import CollectionSchema, FieldSchema, FieldType, InMemoryStructuredStore
+    from cogbase.stores import CollectionSchema, FieldSchema, FieldType
+    from cogbase.stores.structured.memory import InMemoryStructuredStore
 
     class BigRecord(PydanticModel):
         data: str
@@ -341,7 +343,7 @@ async def test_run_retrieval_vector_search_populates_chunks():
 # ---------------------------------------------------------------------------
 
 def test_tool_defs_structured_only():
-    from cogbase.stores import InMemoryStructuredStore
+    from cogbase.stores.structured.memory import InMemoryStructuredStore
     runner = Runner(MagicMock(), structured_store=InMemoryStructuredStore())
     names = [t["name"] for t in runner._tool_defs]
     assert "structured_lookup" in names

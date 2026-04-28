@@ -8,7 +8,8 @@ import uuid
 import pytest
 
 from cogbase.core.models import Chunk
-from cogbase.stores import Col, PGVectorStore, VectorCollectionSchema
+from cogbase.stores import Col, VectorCollectionSchema
+from cogbase.stores.vector.pgvector_store import PGVectorStore
 
 
 # ---------------------------------------------------------------------------

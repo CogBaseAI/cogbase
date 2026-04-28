@@ -18,14 +18,9 @@ from cogbase.pipeline.ingestion_pipeline import (
     SummarizeCollection,
     VectorCollection,
 )
-from cogbase.stores import (
-    CollectionSchema,
-    FAISSVectorStore,
-    FieldSchema,
-    FieldType,
-    InMemoryStructuredStore,
-    VectorCollectionSchema,
-)
+from cogbase.stores import CollectionSchema, FieldSchema, FieldType, VectorCollectionSchema
+from cogbase.stores.structured.memory import InMemoryStructuredStore
+from cogbase.stores.vector.faiss_store import FAISSVectorStore
 
 
 # ---------------------------------------------------------------------------

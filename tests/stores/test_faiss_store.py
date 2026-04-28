@@ -7,7 +7,8 @@ import numpy as np
 import pytest
 
 from cogbase.core.models import Chunk
-from cogbase.stores import Col, FAISSVectorStore
+from cogbase.stores import Col
+from cogbase.stores.vector.faiss_store import FAISSVectorStore
 
 COLLECTION = "chunks"
 

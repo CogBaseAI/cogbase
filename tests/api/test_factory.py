@@ -10,7 +10,10 @@ from cogbase.config.config import AppConfig
 from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
 from api.factory import build_structured_store, build_app
 from cogbase.pipeline.ingestion_pipeline import SummarizeCollection, VectorCollection
-from cogbase.stores import FAISSVectorStore, InMemoryStructuredStore, LocalFSDocumentStore, SQLiteStructuredStore
+from cogbase.stores.document.local_fs import LocalFSDocumentStore
+from cogbase.stores.structured.memory import InMemoryStructuredStore
+from cogbase.stores.structured.sqlite import SQLiteStructuredStore
+from cogbase.stores.vector.faiss_store import FAISSVectorStore
 
 
 # ---------------------------------------------------------------------------

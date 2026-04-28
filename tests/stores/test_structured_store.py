@@ -4,7 +4,8 @@ import pytest
 from pydantic import BaseModel
 
 from cogbase.core.models import Contradiction, Event, Fact
-from cogbase.stores import Col, CollectionSchema, FieldSchema, FieldType, InMemoryStructuredStore
+from cogbase.stores import Col, CollectionSchema, FieldSchema, FieldType
+from cogbase.stores.structured import InMemoryStructuredStore
 
 
 # ------------------------------------------------------------------

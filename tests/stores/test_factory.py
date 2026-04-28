@@ -5,14 +5,10 @@ from types import SimpleNamespace
 import pytest
 
 from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
-from cogbase.stores import (
-    FAISSVectorStore,
-    InMemoryStructuredStore,
-    LocalFSDocumentStore,
-    build_document_store,
-    build_structured_store,
-    build_vector_store,
-)
+from cogbase.stores import build_document_store, build_structured_store, build_vector_store
+from cogbase.stores.document.local_fs import LocalFSDocumentStore
+from cogbase.stores.structured.memory import InMemoryStructuredStore
+from cogbase.stores.vector.faiss_store import FAISSVectorStore
 
 
 def test_build_structured_store_memory():
