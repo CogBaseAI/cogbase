@@ -5,7 +5,6 @@ Implement ``EmbeddingBase`` to plug in a custom embedding backend.
 """
 
 from cogbase.embeddings.base import EmbeddingBase
-from cogbase.embeddings.huggingface import SentenceTransformersEmbedding
-from cogbase.embeddings.openai import OpenAIEmbedding
+from cogbase.embeddings.factory import build_embedding
 
-__all__ = ["EmbeddingBase", "OpenAIEmbedding", "SentenceTransformersEmbedding"]
+__all__ = ["EmbeddingBase", "build_embedding"]

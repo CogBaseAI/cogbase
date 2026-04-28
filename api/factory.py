@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
-from cogbase.config.config import AppConfig, ChunkerConfig, EmbeddingConfig
+from cogbase.config.config import AppConfig, ChunkerConfig
 from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
+from cogbase.embeddings import build_embedding as _build_embedder
 from cogbase.stores import (
     StructuredStoreBase,
     VectorCollectionSchema,
@@ -49,22 +49,6 @@ def build_document_store(cfg: DocumentStoreConfig) -> Any:
 def build_structured_store(cfg: StructuredStoreConfig) -> Any:
     """Instantiate a structured store from its config."""
     return _build_structured_store(cfg)
-
-
-def _build_embedder(cfg: EmbeddingConfig, llm_client: Any) -> Any:
-    if cfg.provider == "openai":
-        from cogbase.embeddings.openai import OpenAIEmbedding
-        kwargs: dict[str, Any] = {}
-        if cfg.dimensions is not None:
-            kwargs["dimensions"] = cfg.dimensions
-        api_key = cfg.api_key or os.environ.get("OPENAI_API_KEY")
-        import openai
-        client = openai.AsyncOpenAI(api_key=api_key)
-        return OpenAIEmbedding(client, model=cfg.model, **kwargs)
-    if cfg.provider == "sentence-transformers":
-        from cogbase.embeddings.huggingface import SentenceTransformersEmbedding
-        return SentenceTransformersEmbedding(model_name=cfg.model)
-    raise ValueError(f"Unsupported embedding provider: {cfg.provider!r}")
 
 
 def _build_chunker(cfg: ChunkerConfig) -> Any:
@@ -133,7 +117,7 @@ def build_app(
                 "chunk-embed-upsert / summarize-embed-upsert steps require an embedding config"
             )
         vector_store = _build_vector_store(vector_store_cfg)
-        embedder = _build_embedder(config.embedding, llm)
+        embedder = _build_embedder(config.embedding)
 
     structured_store: StructuredStoreBase | None = None
     needs_structured = any(s.tool == "extract-structured" for s in steps)

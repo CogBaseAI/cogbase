@@ -1,4 +1,5 @@
-from cogbase.config.config import AppConfig, ChunkerConfig, EmbeddingConfig, LLMConfig
+from cogbase.config.config import AppConfig, ChunkerConfig
+from cogbase.config.models import EmbeddingConfig, LLMConfig
 from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
 
 __all__ = [

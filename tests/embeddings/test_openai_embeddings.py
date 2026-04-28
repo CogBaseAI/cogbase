@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from cogbase.embeddings import EmbeddingBase, OpenAIEmbedding
+from cogbase.embeddings import EmbeddingBase
+from cogbase.embeddings.openai import OpenAIEmbedding
 from tests.embeddings.test_embeddings import make_chunks, assert_embedder_contract
 
 # Load .env from the repo root so OPENAI_API_KEY is available when present.

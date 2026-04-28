@@ -2,7 +2,8 @@
 
 import pytest
 
-from cogbase.embeddings import EmbeddingBase, SentenceTransformersEmbedding
+from cogbase.embeddings import EmbeddingBase
+from cogbase.embeddings.huggingface import SentenceTransformersEmbedding
 from tests.embeddings.test_embeddings import make_chunks, assert_embedder_contract
 
 

@@ -9,22 +9,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
-
-
-class LLMConfig(BaseModel):
-    provider: Literal["openai"] = "openai"
-    model: str
-    api_key: str | None = None
-
-    def resolved_api_key(self) -> str | None:
-        return self.api_key or os.environ.get("OPENAI_API_KEY")
-
-
-class EmbeddingConfig(BaseModel):
-    provider: Literal["openai", "sentence-transformers"] = "openai"
-    model: str = "text-embedding-3-small"
-    api_key: str | None = None
-    dimensions: int | None = None
+from cogbase.config.models import LLMConfig, EmbeddingConfig
 
 
 class ChunkerConfig(BaseModel):
