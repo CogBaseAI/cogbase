@@ -39,11 +39,12 @@ class S3DocumentStore(DocumentStoreBase):
         self._s3 = boto3.client("s3", region_name=region)
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
-    def _key(self, doc_id: str) -> str:
-        return f"{self._prefix}/{doc_id}" if self._prefix else doc_id
+    def _key(self, collection: str, doc_id: str) -> str:
+        parts = [self._prefix, collection, doc_id] if self._prefix else [collection, doc_id]
+        return "/".join(parts)
 
-    async def save(self, doc_id: str, content: str) -> None:
-        key = self._key(doc_id)
+    async def save(self, collection: str, doc_id: str, content: str) -> None:
+        key = self._key(collection, doc_id)
         body = content.encode("utf-8")
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
@@ -56,8 +57,8 @@ class S3DocumentStore(DocumentStoreBase):
             ),
         )
 
-    async def load(self, doc_id: str) -> str:
-        key = self._key(doc_id)
+    async def load(self, collection: str, doc_id: str) -> str:
+        key = self._key(collection, doc_id)
         loop = asyncio.get_event_loop()
         try:
             response = await loop.run_in_executor(
@@ -71,16 +72,16 @@ class S3DocumentStore(DocumentStoreBase):
         except self._s3.exceptions.NoSuchKey:
             raise KeyError(doc_id)
 
-    async def delete(self, doc_id: str) -> None:
-        key = self._key(doc_id)
+    async def delete(self, collection: str, doc_id: str) -> None:
+        key = self._key(collection, doc_id)
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             self._executor,
             lambda: self._s3.delete_object(Bucket=self._bucket, Key=key),
         )
 
-    async def exists(self, doc_id: str) -> bool:
-        key = self._key(doc_id)
+    async def exists(self, collection: str, doc_id: str) -> bool:
+        key = self._key(collection, doc_id)
         loop = asyncio.get_event_loop()
         try:
             await loop.run_in_executor(

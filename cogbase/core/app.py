@@ -113,7 +113,7 @@ class CogBaseApp:
         if self._document_store is not None:
             import asyncio
             await asyncio.gather(*(
-                self._document_store.save(doc.doc_id, doc.text) for doc in documents
+                self._document_store.save(self.name, doc.doc_id, doc.text) for doc in documents
             ))
         results = await self._ingest_pipeline.ingest_documents(documents, concurrency=concurrency)
         failures = sum(1 for r in results if not r.success)

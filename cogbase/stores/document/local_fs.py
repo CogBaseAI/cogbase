@@ -23,32 +23,32 @@ class LocalFSDocumentStore(DocumentStoreBase):
     def __init__(self, root: str | pathlib.Path) -> None:
         self._root = pathlib.Path(root).resolve()
 
-    def _path(self, doc_id: str) -> pathlib.Path:
-        candidate = (self._root / doc_id).resolve()
+    def _path(self, collection: str, doc_id: str) -> pathlib.Path:
+        candidate = (self._root / collection / doc_id).resolve()
         if not str(candidate).startswith(str(self._root)):
-            raise ValueError(f"doc_id {doc_id!r} escapes the store root")
+            raise ValueError(f"collection/doc_id {collection!r}/{doc_id!r} escapes the store root")
         return candidate
 
-    async def save(self, doc_id: str, content: str) -> None:
-        path = self._path(doc_id)
+    async def save(self, collection: str, doc_id: str, content: str) -> None:
+        path = self._path(collection, doc_id)
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._write, path, content)
 
-    async def load(self, doc_id: str) -> str:
-        path = self._path(doc_id)
+    async def load(self, collection: str, doc_id: str) -> str:
+        path = self._path(collection, doc_id)
         loop = asyncio.get_event_loop()
         try:
             return await loop.run_in_executor(None, path.read_text, "utf-8")
         except FileNotFoundError:
             raise KeyError(doc_id)
 
-    async def delete(self, doc_id: str) -> None:
-        path = self._path(doc_id)
+    async def delete(self, collection: str, doc_id: str) -> None:
+        path = self._path(collection, doc_id)
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._unlink, path)
 
-    async def exists(self, doc_id: str) -> bool:
-        path = self._path(doc_id)
+    async def exists(self, collection: str, doc_id: str) -> bool:
+        path = self._path(collection, doc_id)
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, path.is_file)
 
