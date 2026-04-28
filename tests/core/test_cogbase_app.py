@@ -403,7 +403,7 @@ class TestVectorOnlyMode:
 
     def _make_vector_only_app(self, llm: MagicMock) -> CogBaseApp:
         vc = VectorCollection(
-            schema=VectorCollectionSchema(name="vector-only", dimensions=4),
+            schema=VectorCollectionSchema(name="vector_only", dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),

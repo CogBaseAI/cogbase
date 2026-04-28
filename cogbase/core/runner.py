@@ -643,9 +643,9 @@ class Runner:
         if self._vector_store is None or self._embedder is None:
             return [], "vector_search is unavailable (no vector store configured)"
 
+        collection = str(inputs.get("collection") or self._default_vector_collection or "")
         query_text = str(inputs.get("query", ""))
         top_k = min(int(inputs.get("top_k") or 5), 20)
-        collection = str(inputs.get("collection") or self._default_vector_collection or "")
 
         if not collection:
             return [], "vector_search error: no collection specified and no default collection configured"

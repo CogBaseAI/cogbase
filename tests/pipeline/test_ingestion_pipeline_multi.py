@@ -289,7 +289,7 @@ class TestSummarizeEmbedUpsert:
         pipeline, vector_store = self._make_pipeline_with_summary("Summary text.")
         await pipeline.setup()
         await pipeline._ingest(Document(doc_id="doc-42", text="Some text."))
-        chunks = await vector_store.search("summaries", [0.1] * 4, top_k=1)
+        chunks = await vector_store.search("summaries", "", [0.1] * 4, top_k=1)
         assert len(chunks) == 1
         assert chunks[0].chunk_id == "doc-42__summary"
         assert chunks[0].doc_id == "doc-42"
@@ -299,7 +299,7 @@ class TestSummarizeEmbedUpsert:
         pipeline, vector_store = self._make_pipeline_with_summary("The parties agree to NDA terms.")
         await pipeline.setup()
         await pipeline._ingest(Document(doc_id="d-001", text="contract text"))
-        chunks = await vector_store.search("summaries", [0.1] * 4, top_k=1)
+        chunks = await vector_store.search("summaries", "", [0.1] * 4, top_k=1)
         assert chunks[0].text == "The parties agree to NDA terms."
 
     @pytest.mark.asyncio

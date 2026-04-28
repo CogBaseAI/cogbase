@@ -1,53 +1,13 @@
 """IngestionPipeline — ordered steps over multiple vector and structured collections.
 
-An ``IngestionPipeline`` is the primary entry point for configuring CogBase
-ingestion.  It supports three step types:
+Supports three step types:
 
-- ``chunk-embed-upsert``   — chunk document text, embed, upsert to a vector collection
-- ``extract-structured``   — LLM extraction → save to a structured collection
+- ``chunk-embed-upsert``     — chunk document text, embed, upsert to a vector collection
+- ``extract-structured``     — LLM extraction → save to a structured collection
 - ``summarize-embed-upsert`` — LLM summary of the full document → embed → upsert to
                                a vector collection (one chunk per document)
 
-Steps run in declaration order.  Multiple vector collections and structured
-collections may be used in the same pipeline.
-
-Example::
-
-    from cogbase.pipeline.ingestion_pipeline import (
-        IngestionPipeline, VectorCollection, StructuredCollection, SummarizeCollection,
-    )
-
-    pipeline = IngestionPipeline(
-        name="legal",
-        steps=[
-            ("chunk-embed-upsert",     "document_chunks"),
-            ("extract-structured",     "contract_extraction"),
-            ("summarize-embed-upsert", "document_summary"),
-        ],
-        vector_collections=[
-            VectorCollection(
-                schema=VectorCollectionSchema(name="document_chunks", dimensions=1536),
-                store=FAISSVectorStore(dim=1536),
-                embedder=OpenAIEmbedding(...),
-                chunker=FixedSizeChunker(chunk_size=512, overlap=64),
-            ),
-        ],
-        structured_collections=[
-            StructuredCollection(
-                schema=contracts_schema,
-                store=SQLiteStructuredStore("data.db"),
-                extractor=ContractExtractor(),
-            ),
-        ],
-        summarize_collections=[
-            SummarizeCollection(
-                schema=VectorCollectionSchema(name="document_summary", dimensions=1536),
-                store=FAISSVectorStore(dim=1536),  # typically the same store instance
-                embedder=OpenAIEmbedding(...),
-                llm=llm,
-            ),
-        ],
-    )
+Steps run in declaration order.  For config-driven construction see ``api/factory.py``.
 """
 
 from __future__ import annotations

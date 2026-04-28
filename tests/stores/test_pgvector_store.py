@@ -102,7 +102,7 @@ async def store(pgvector_container):
 
 @pytest.mark.asyncio
 async def test_empty_store_returns_no_results(store):
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5)
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5)
     assert results == []
 
 
@@ -110,7 +110,7 @@ async def test_empty_store_returns_no_results(store):
 async def test_upsert_and_search_returns_chunk(store):
     chunk = make_chunk(embedding=[1.0, 0.0, 0.0, 0.0])
     await store.upsert(COLLECTION, [chunk])
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=1)
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=1)
     assert len(results) == 1
     assert results[0].chunk_id == chunk.chunk_id
 
@@ -122,7 +122,7 @@ async def test_search_returns_nearest_neighbour(store):
     c = make_chunk(doc_id="doc-c", embedding=[0.0, 0.0, 1.0, 0.0])
     await store.upsert(COLLECTION, [a, b, c])
 
-    results = await store.search(COLLECTION, [0.1, 0.9, 0.1, 0.0], top_k=1)
+    results = await store.search(COLLECTION, "", [0.1, 0.9, 0.1, 0.0], top_k=1)
     assert results[0].chunk_id == b.chunk_id
 
 
@@ -130,7 +130,7 @@ async def test_search_returns_nearest_neighbour(store):
 async def test_search_top_k_limits_results(store):
     chunks = [make_chunk(embedding=[float(i), 0.0, 0.0, 0.0]) for i in range(1, 6)]
     await store.upsert(COLLECTION, chunks)
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=3)
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=3)
     assert len(results) == 3
 
 
@@ -140,7 +140,7 @@ async def test_search_top_k_larger_than_index_returns_all(store):
         make_chunk(embedding=[1.0, 0.0, 0.0, 0.0]),
         make_chunk(embedding=[0.0, 1.0, 0.0, 0.0]),
     ])
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=100)
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=100)
     assert len(results) == 2
 
 
@@ -151,7 +151,7 @@ async def test_cosine_order(store):
     b = make_chunk(doc_id="b", embedding=unit([0.1, 0.9, 0.0, 0.0]))
     await store.upsert(COLLECTION, [a, b])
 
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=2)
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=2)
     assert results[0].chunk_id == a.chunk_id
     assert results[1].chunk_id == b.chunk_id
 
@@ -164,7 +164,7 @@ async def test_cosine_order(store):
 async def test_metadata_is_preserved(store):
     chunk = make_chunk(embedding=[1.0, 0.0, 0.0, 0.0], metadata={"source": "contract.pdf", "page": "3"})
     await store.upsert(COLLECTION, [chunk])
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=1)
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=1)
     assert results[0].metadata == {"source": "contract.pdf", "page": "3"}
 
 
@@ -177,7 +177,7 @@ async def test_chunks_without_embedding_are_skipped(store):
     no_emb = make_chunk(embedding=None)
     with_emb = make_chunk(embedding=[1.0, 0.0, 0.0, 0.0])
     await store.upsert(COLLECTION, [no_emb, with_emb])
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5)
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5)
     assert len(results) == 1
     assert results[0].chunk_id == with_emb.chunk_id
 
@@ -185,7 +185,7 @@ async def test_chunks_without_embedding_are_skipped(store):
 @pytest.mark.asyncio
 async def test_all_chunks_without_embeddings_is_a_no_op(store):
     await store.upsert(COLLECTION, [make_chunk(embedding=None)])
-    assert await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5) == []
+    assert await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5) == []
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +205,7 @@ async def test_upsert_replaces_existing_chunk(store):
     )
     await store.upsert(COLLECTION, [updated])
 
-    results = await store.search(COLLECTION, [0.0, 1.0, 0.0, 0.0], top_k=1)
+    results = await store.search(COLLECTION, "", [0.0, 1.0, 0.0, 0.0], top_k=1)
     assert results[0].doc_id == "doc-updated"
     assert results[0].text == "updated text"
 
@@ -216,7 +216,7 @@ async def test_upsert_does_not_duplicate(store):
     await store.upsert(COLLECTION, [chunk])
     await store.upsert(COLLECTION, [chunk])
 
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=10)
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=10)
     assert len(results) == 1
 
 
@@ -232,7 +232,7 @@ async def test_delete_removes_doc_chunks(store):
         make_chunk(doc_id="doc-2", embedding=[0.0, 1.0, 0.0, 0.0]),
     ])
     await store.delete(COLLECTION, "doc-1")
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=10)
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=10)
     assert all(r.doc_id == "doc-2" for r in results)
     assert len(results) == 1
 
@@ -242,7 +242,7 @@ async def test_delete_unknown_doc_is_a_no_op(store):
     chunk = make_chunk(embedding=[1.0, 0.0, 0.0, 0.0])
     await store.upsert(COLLECTION, [chunk])
     await store.delete(COLLECTION, "nonexistent-doc")
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5)
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5)
     assert len(results) == 1
 
 
@@ -250,7 +250,7 @@ async def test_delete_unknown_doc_is_a_no_op(store):
 async def test_delete_all_chunks_leaves_empty_store(store):
     await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0])])
     await store.delete(COLLECTION, "doc-1")
-    assert await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5) == []
+    assert await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5) == []
 
 
 @pytest.mark.asyncio
@@ -259,7 +259,7 @@ async def test_upsert_after_delete_works(store):
     await store.delete(COLLECTION, "doc-1")
     new_chunk = make_chunk(doc_id="doc-2", embedding=[0.0, 1.0, 0.0, 0.0])
     await store.upsert(COLLECTION, [new_chunk])
-    results = await store.search(COLLECTION, [0.0, 1.0, 0.0, 0.0], top_k=1)
+    results = await store.search(COLLECTION, "", [0.0, 1.0, 0.0, 0.0], top_k=1)
     assert results[0].chunk_id == new_chunk.chunk_id
 
 
@@ -273,7 +273,7 @@ async def test_delete_collection_drops_table(store):
     await store.delete_collection(COLLECTION)
     # Table is gone — recreate and verify it's empty
     await store.create_collection(VectorCollectionSchema(name=COLLECTION, dimensions=DIM))
-    assert await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5) == []
+    assert await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5) == []
 
 
 @pytest.mark.asyncio
@@ -290,7 +290,7 @@ async def test_delete_collection_leaves_other_collections_intact(store):
         chunk = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0])
         await store.upsert(other, [chunk])
         await store.delete_collection(COLLECTION)
-        results = await store.search(other, [1.0, 0.0, 0.0, 0.0], top_k=5)
+        results = await store.search(other, "", [1.0, 0.0, 0.0, 0.0], top_k=5)
         assert len(results) == 1
     finally:
         await store.delete_collection(other)
@@ -326,7 +326,7 @@ async def test_search_filter_by_doc_id(store):
     b = make_chunk(doc_id="doc-2", embedding=[0.9, 0.1, 0.0, 0.0])
     await store.upsert(COLLECTION, [a, b])
 
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5,
                                  filters=[Col("doc_id") == "doc-1"])
     assert len(results) == 1
     assert results[0].chunk_id == a.chunk_id
@@ -338,7 +338,7 @@ async def test_search_filter_by_metadata_eq(store):
     b = make_chunk(doc_id="doc-1", embedding=[0.9, 0.1, 0.0, 0.0], metadata={"section": "body"})
     await store.upsert(COLLECTION, [a, b])
 
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5,
                                  filters=[Col("metadata.section") == "intro"])
     assert len(results) == 1
     assert results[0].chunk_id == a.chunk_id
@@ -351,7 +351,7 @@ async def test_search_filter_in_operator(store):
     c = make_chunk(doc_id="doc-3", embedding=[0.1, 0.9, 0.0, 0.0])
     await store.upsert(COLLECTION, [a, b, c])
 
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5,
                                  filters=[Col("doc_id").in_(["doc-1", "doc-2"])])
     assert len(results) == 2
     assert {r.doc_id for r in results} == {"doc-1", "doc-2"}
@@ -365,7 +365,7 @@ async def test_search_filter_metadata_like(store):
                    metadata={"source": "invoice.pdf"})
     await store.upsert(COLLECTION, [a, b])
 
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5,
                                  filters=[Col("metadata.source").like("contract%")])
     assert len(results) == 1
     assert results[0].chunk_id == a.chunk_id
@@ -378,7 +378,7 @@ async def test_search_filter_metadata_numeric_gte(store):
     c = make_chunk(doc_id="doc-1", embedding=[0.8, 0.2, 0.0, 0.0], metadata={"page": 5})
     await store.upsert(COLLECTION, [a, b, c])
 
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5,
                                  filters=[Col("metadata.page") >= 3])
     assert len(results) == 2
     assert {r.metadata["page"] for r in results} == {3, 5}
@@ -390,7 +390,7 @@ async def test_search_filter_metadata_is_null(store):
     b = make_chunk(doc_id="doc-1", embedding=[0.9, 0.1, 0.0, 0.0], metadata={})
     await store.upsert(COLLECTION, [a, b])
 
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5,
                                  filters=[Col("metadata.page").is_null()])
     assert len(results) == 1
     assert results[0].chunk_id == b.chunk_id
@@ -399,7 +399,7 @@ async def test_search_filter_metadata_is_null(store):
 @pytest.mark.asyncio
 async def test_search_filter_no_match_returns_empty(store):
     await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0])])
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5,
                                  filters=[Col("doc_id") == "no-such-doc"])
     assert results == []
 
@@ -410,7 +410,7 @@ async def test_search_filter_respects_top_k(store):
     await store.upsert(COLLECTION, [
         make_chunk(doc_id="doc-1", embedding=[float(i), 0.0, 0.0, 0.0]) for i in range(1, 6)
     ])
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=2,
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=2,
                                  filters=[Col("doc_id") == "doc-1"])
     assert len(results) == 2
 
@@ -422,7 +422,7 @@ async def test_search_multiple_filters_are_anded(store):
     c = make_chunk(doc_id="doc-2", embedding=[0.8, 0.2, 0.0, 0.0], metadata={"section": "intro"})
     await store.upsert(COLLECTION, [a, b, c])
 
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5, filters=[
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5, filters=[
         Col("doc_id") == "doc-1",
         Col("metadata.section") == "intro",
     ])
@@ -438,7 +438,7 @@ async def test_search_multiple_filters_are_anded(store):
 async def test_search_fields_omits_embedding(store):
     chunk = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0], metadata={"k": "v"})
     await store.upsert(COLLECTION, [chunk])
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=1,
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=1,
                                  fields=["chunk_id", "doc_id", "text", "metadata"])
     assert results[0].embedding is None
     assert results[0].metadata == {"k": "v"}
@@ -448,7 +448,7 @@ async def test_search_fields_omits_embedding(store):
 async def test_search_fields_omits_metadata(store):
     chunk = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0], metadata={"k": "v"})
     await store.upsert(COLLECTION, [chunk])
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=1,
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=1,
                                  fields=["chunk_id", "doc_id", "text", "embedding"])
     assert results[0].metadata == {}
     assert results[0].embedding is not None
@@ -458,7 +458,7 @@ async def test_search_fields_omits_metadata(store):
 async def test_search_fields_none_returns_all(store):
     chunk = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0], metadata={"k": "v"})
     await store.upsert(COLLECTION, [chunk])
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=1, fields=None)
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=1, fields=None)
     assert results[0].embedding is not None
     assert results[0].metadata == {"k": "v"}
 
@@ -469,7 +469,7 @@ async def test_search_filters_and_fields_combined(store):
     b = make_chunk(doc_id="doc-2", embedding=[0.9, 0.1, 0.0, 0.0], metadata={"section": "body"})
     await store.upsert(COLLECTION, [a, b])
 
-    results = await store.search(COLLECTION, [1.0, 0.0, 0.0, 0.0], top_k=5,
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5,
                                  filters=[Col("doc_id") == "doc-1"],
                                  fields=["chunk_id", "doc_id", "text", "metadata"])
     assert len(results) == 1

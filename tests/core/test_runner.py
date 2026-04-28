@@ -315,7 +315,7 @@ async def test_run_retrieval_vector_search_populates_chunks():
 
     class _FakeVectorStore(VectorStoreBase):
         async def upsert(self, collection, chunks): pass
-        async def search(self, collection, embedding, top_k):
+        async def search(self, collection, query_text, embedding, top_k):
             return [Chunk(chunk_id="c1", doc_id="d1", text="relevant passage", embedding=[0.1]*4)]
         async def delete(self, collection, doc_id): pass
         async def delete_collection(self, collection): pass

@@ -135,7 +135,7 @@ CogBase defines clean adapter interfaces for both stores. Swap backends via conf
 ```python
 from cogbase.stores import StructuredStoreBase, VectorStoreBase
 from cogbase.stores.schema import CollectionSchema
-from cogbase.stores.base import VectorCollectionSchema
+from cogbase.stores import VectorCollectionSchema
 from cogbase.stores.filters import Filter
 from cogbase.core.models import Chunk
 

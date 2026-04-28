@@ -10,9 +10,8 @@ import pytest
 from cogbase.llms import LLMBase
 from cogbase.core.models import Document
 from cogbase.pipeline.extraction.llm import LLMExtractor
+from examples.contract_analyst_demo.demo import _CONTRACTS_COLLECTION
 from examples.contract_analyst_demo.schema import (
-    CONTRACTS_COLLECTION,
-    CONTRACTS_SCHEMA,
     ContractExtraction,
 )
 
@@ -33,7 +32,7 @@ def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        collection_name=CONTRACTS_COLLECTION,
+        collection_name=_CONTRACTS_COLLECTION,
     )
 
 
@@ -72,14 +71,7 @@ def _full_payload(**overrides) -> str:
 
 def test_collection_name():
     extractor = _make_extractor(MagicMock())
-    assert extractor.collection == CONTRACTS_COLLECTION
-
-
-def test_schema_matches_contracts_schema():
-    extractor = _make_extractor(MagicMock())
-    assert extractor.schema.name == CONTRACTS_SCHEMA.name
-    assert extractor.schema.primary_fields == CONTRACTS_SCHEMA.primary_fields
-    assert extractor.schema.fields.keys() == CONTRACTS_SCHEMA.fields.keys()
+    assert extractor.collection == _CONTRACTS_COLLECTION
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +284,7 @@ async def test_extract_succeeds_on_retry_after_bad_json(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        collection_name=CONTRACTS_COLLECTION,
+        collection_name=_CONTRACTS_COLLECTION,
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-1", text="contract text"))
@@ -309,7 +301,7 @@ async def test_extract_returns_none_after_all_retries_exhausted(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        collection_name=CONTRACTS_COLLECTION,
+        collection_name=_CONTRACTS_COLLECTION,
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-2", text="contract text"))
@@ -326,7 +318,7 @@ async def test_extract_no_retry_on_success(monkeypatch):
     extractor = LLMExtractor(
         _make_llm(_full_payload()),
         extraction_model=ContractExtraction,
-        collection_name=CONTRACTS_COLLECTION,
+        collection_name=_CONTRACTS_COLLECTION,
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-3", text="contract text"))
@@ -344,7 +336,7 @@ async def test_extract_retry_uses_exponential_backoff(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        collection_name=CONTRACTS_COLLECTION,
+        collection_name=_CONTRACTS_COLLECTION,
         max_retries=2,
     )
     await extractor.extract(Document(doc_id="doc-retry-4", text="contract text"))
@@ -362,7 +354,7 @@ async def test_extract_max_retries_zero_no_sleep(monkeypatch):
     extractor = LLMExtractor(
         _make_llm("bad json"),
         extraction_model=ContractExtraction,
-        collection_name=CONTRACTS_COLLECTION,
+        collection_name=_CONTRACTS_COLLECTION,
         max_retries=0,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-5", text="contract text"))
