@@ -23,7 +23,7 @@ from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
     StructuredCollection,
     SummarizeCollection,
-    VectorCollection,
+    ChunkCollection,
 )
 from cogbase.core.basemodel_to_schema import cls_json_schema_for_llm
 
@@ -120,7 +120,7 @@ def build_app(
             )
 
     # --- Build collection objects (deduplicated per name) ---
-    vector_collections: list[VectorCollection] = []
+    vector_collections: list[ChunkCollection] = []
     structured_collections: list[StructuredCollection] = []
     summarize_collections: list[SummarizeCollection] = []
     built_vc: set[str] = set()
@@ -131,7 +131,7 @@ def build_app(
         if step.tool == "chunk-embed-upsert" and step.collection not in built_vc:
             vc_cfg = vc_by_name[step.collection]
             chunker = _build_chunker(vc_cfg.chunker)
-            vector_collections.append(VectorCollection(
+            vector_collections.append(ChunkCollection(
                 schema=VectorCollectionSchema(
                     name=vc_cfg.name,
                     dimensions=vector_store_cfg.dim,  # type: ignore[union-attr]

@@ -1,10 +1,10 @@
-"""Tests for IngestionPipeline, VectorCollection, and StructuredCollection."""
+"""Tests for IngestionPipeline, ChunkCollection, and StructuredCollection."""
 
 import pytest
 from pydantic import ValidationError
 from pydantic import BaseModel
 
-from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult, StructuredCollection, VectorCollection
+from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult, StructuredCollection, ChunkCollection
 from cogbase.core.models import Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
@@ -116,7 +116,7 @@ class TestIngestionPipelineConstruction:
         assert app.structured_schemas == []
 
     def test_vector_only(self):
-        vc = VectorCollection(
+        vc = ChunkCollection(
             schema=VectorCollectionSchema(name="docs", dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
@@ -191,7 +191,7 @@ class TestIngestionPipelineIngest:
     def _make_app(self) -> tuple[IngestionPipeline, FAISSVectorStore, InMemoryStructuredStore]:
         vector_store = FAISSVectorStore(dim=4)
         structured_store = InMemoryStructuredStore()
-        vc = VectorCollection(
+        vc = ChunkCollection(
             schema=VectorCollectionSchema(name="docs", dimensions=4),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
@@ -249,7 +249,7 @@ class TestIngestionPipelineIngest:
     @pytest.mark.asyncio
     async def test_vector_only_app_ingest_returns_zero(self):
         vector_store = FAISSVectorStore(dim=4)
-        vc = VectorCollection(
+        vc = ChunkCollection(
             schema=VectorCollectionSchema(name="docs", dimensions=4),
             store=vector_store,
             embedder=StubEmbedding(dim=4),

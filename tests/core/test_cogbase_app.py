@@ -14,7 +14,7 @@ from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
     IngestResult,
     StructuredCollection,
-    VectorCollection,
+    ChunkCollection,
 )
 from cogbase.core.models import Document
 from cogbase.embeddings import EmbeddingBase
@@ -113,7 +113,7 @@ def _make_pipeline(
     vc = None
     if vector_store is not None:
         assert embedder is not None and chunker is not None
-        vc = VectorCollection(schema=VectorCollectionSchema(name=name, dimensions=4), store=vector_store, embedder=embedder, chunker=chunker)
+        vc = ChunkCollection(schema=VectorCollectionSchema(name=name, dimensions=4), store=vector_store, embedder=embedder, chunker=chunker)
 
     return IngestionPipeline(
         name=name,
@@ -402,7 +402,7 @@ class TestVectorOnlyMode:
     """CogBaseApp with no structured collection skips extraction entirely."""
 
     def _make_vector_only_app(self, llm: MagicMock) -> CogBaseApp:
-        vc = VectorCollection(
+        vc = ChunkCollection(
             schema=VectorCollectionSchema(name="vector_only", dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
@@ -442,7 +442,7 @@ class TestVectorOnlyMode:
     @pytest.mark.asyncio
     async def test_ingest_populates_vector_store_not_structured(self):
         vector_store = FAISSVectorStore(dim=4)
-        vc = VectorCollection(
+        vc = ChunkCollection(
             schema=VectorCollectionSchema(name="testapp", dimensions=4),
             store=vector_store,
             embedder=StubEmbedding(dim=4),

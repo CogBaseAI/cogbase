@@ -53,7 +53,7 @@ _DEFAULT_VC_DESCRIPTIONS: dict[str, str] = {
 
 
 @dataclass
-class VectorCollection:
+class ChunkCollection:
     """A vector collection backed by a store, embedder, and chunker.
 
     Args:
@@ -149,7 +149,7 @@ class IngestionPipeline:
 
     Each step maps a tool name to a named collection:
 
-    - ``"chunk-embed-upsert"``     → :class:`VectorCollection`
+    - ``"chunk-embed-upsert"``     → :class:`ChunkCollection`
     - ``"extract-structured"``     → :class:`StructuredCollection`
     - ``"summarize-embed-upsert"`` → :class:`SummarizeCollection`
 
@@ -168,17 +168,17 @@ class IngestionPipeline:
         self,
         name: str,
         steps: list[tuple[str, str]] | None = None,
-        vector_collections: list[VectorCollection] | None = None,
+        vector_collections: list[ChunkCollection] | None = None,
         structured_collections: list[StructuredCollection] | None = None,
         summarize_collections: list[SummarizeCollection] | None = None,
     ) -> None:
         self.name = name
 
-        _vcs: list[VectorCollection] = list(vector_collections or [])
+        _vcs: list[ChunkCollection] = list(vector_collections or [])
         _scs: list[StructuredCollection] = list(structured_collections or [])
         _smcs: list[SummarizeCollection] = list(summarize_collections or [])
 
-        self._vector_by_name: dict[str, VectorCollection] = {vc.name: vc for vc in _vcs}
+        self._vector_by_name: dict[str, ChunkCollection] = {vc.name: vc for vc in _vcs}
         self._structured_by_name: dict[str, StructuredCollection] = {sc.name: sc for sc in _scs}
         self._summarize_by_name: dict[str, SummarizeCollection] = {smc.name: smc for smc in _smcs}
 

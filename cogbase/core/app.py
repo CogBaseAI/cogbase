@@ -9,7 +9,7 @@ Typical usage::
     from cogbase.core.app import CogBaseApp
     from cogbase.core.models import Document
     from cogbase.pipeline.ingestion_pipeline import (
-        IngestionPipeline, VectorCollection, StructuredCollection, SummarizeCollection,
+        IngestionPipeline, ChunkCollection, StructuredCollection, SummarizeCollection,
     )
 
     pipeline = IngestionPipeline(
@@ -19,7 +19,7 @@ Typical usage::
             ("extract-structured",     "contracts"),
             ("summarize-embed-upsert", "document_summary"),
         ],
-        vector_collections=[VectorCollection(schema=VectorCollectionSchema(name="document_chunks", dimensions=1536), ...)],
+        vector_collections=[ChunkCollection(schema=VectorCollectionSchema(name="document_chunks", dimensions=1536), ...)],
         structured_collections=[StructuredCollection(schema=..., ...)],
         summarize_collections=[SummarizeCollection(schema=VectorCollectionSchema(name="document_summary", dimensions=1536), ...)],
     )

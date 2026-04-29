@@ -356,7 +356,7 @@ cogbase/
 │   ├── pipeline/             # Knowledge Pipeline
 │   │   ├── ingestion/        # chunkers (fixed-size, langchain)
 │   │   ├── extraction/       # LLM extractor base + implementation
-│   │   └── ingestion_pipeline.py  # VectorCollection, StructuredCollection, SummarizeCollection
+│   │   └── ingestion_pipeline.py  # ChunkCollection, StructuredCollection, SummarizeCollection
 │   ├── stores/               # Store adapter interfaces + built-in adapters
 │   │   ├── base.py           # StructuredStoreBase, VectorStoreBase, VectorCollectionSchema
 │   │   ├── schema.py         # CollectionSchema, FieldSchema, FieldType

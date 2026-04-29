@@ -16,7 +16,7 @@ from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
     StructuredCollection,
     SummarizeCollection,
-    VectorCollection,
+    ChunkCollection,
 )
 from cogbase.stores import CollectionSchema, FieldSchema, FieldType, VectorCollectionSchema
 from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -107,8 +107,8 @@ class TestSummarizeCollection:
 # ---------------------------------------------------------------------------
 
 class TestMultiCollectionPipelineConstruction:
-    def _make_vc(self, name: str = "chunks") -> VectorCollection:
-        return VectorCollection(
+    def _make_vc(self, name: str = "chunks") -> ChunkCollection:
+        return ChunkCollection(
             schema=VectorCollectionSchema(name=name, dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
@@ -209,7 +209,7 @@ class TestRunnerResources:
     def test_returns_first_chunk_embed_store(self):
         store = FAISSVectorStore(dim=4)
         emb = StubEmbedding(dim=4)
-        vc = VectorCollection(
+        vc = ChunkCollection(
             schema=VectorCollectionSchema(name="chunks", dimensions=4),
             store=store,
             embedder=emb,
@@ -355,7 +355,7 @@ class TestThreeStepPipeline:
         summary_store = FAISSVectorStore(dim=4)
         struct_store = InMemoryStructuredStore()
 
-        vc = VectorCollection(
+        vc = ChunkCollection(
             schema=VectorCollectionSchema(name="chunks", dimensions=4),
             store=chunk_store,
             embedder=StubEmbedding(dim=4),

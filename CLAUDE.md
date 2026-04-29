@@ -80,7 +80,7 @@ pipeline = IngestionPipeline(
         ("extract-structured",     "contracts"),
         ("summarize-embed-upsert", "document_summary"),
     ],
-    vector_collections=[VectorCollection(schema=VectorCollectionSchema(name="document_chunks", ...), ...)],
+    vector_collections=[ChunkCollection(schema=VectorCollectionSchema(name="document_chunks", ...), ...)],
     structured_collections=[StructuredCollection(schema=..., extractor=...)],
     summarize_collections=[SummarizeCollection(schema=VectorCollectionSchema(name="document_summary", ...), ...)],
 )
