@@ -169,7 +169,7 @@ class IngestionPipeline:
         name:                   Logical name for this pipeline.
         steps:                  Ordered list of ``(tool, collection_name)`` tuples.
                                 Auto-generated from provided collections when omitted.
-        vector_collections:     Vector collections available to steps.
+        chunk_collections:      Chunk collections available to steps.
         structured_collections: Structured collections available to steps.
         document_collections:   Document-level vector collections available to steps.
     """
@@ -178,17 +178,17 @@ class IngestionPipeline:
         self,
         name: str,
         steps: list[tuple[str, str]] | None = None,
-        vector_collections: list[ChunkCollection] | None = None,
+        chunk_collections: list[ChunkCollection] | None = None,
         structured_collections: list[StructuredCollection] | None = None,
         document_collections: list[DocumentCollection] | None = None,
     ) -> None:
         self.name = name
 
-        _vcs: list[ChunkCollection] = list(vector_collections or [])
+        _vcs: list[ChunkCollection] = list(chunk_collections or [])
         _scs: list[StructuredCollection] = list(structured_collections or [])
         _dcs: list[DocumentCollection] = list(document_collections or [])
 
-        self._vector_by_name: dict[str, ChunkCollection] = {vc.name: vc for vc in _vcs}
+        self._chunk_by_name: dict[str, ChunkCollection] = {vc.name: vc for vc in _vcs}
         self._structured_by_name: dict[str, StructuredCollection] = {sc.name: sc for sc in _scs}
         self._document_by_name: dict[str, DocumentCollection] = {dc.name: dc for dc in _dcs}
 
@@ -243,7 +243,7 @@ class IngestionPipeline:
             if name in seen_names:
                 continue
             seen_names.add(name)
-            col = self._vector_by_name.get(name) or self._document_by_name.get(name)
+            col = self._chunk_by_name.get(name) or self._document_by_name.get(name)
             explicit = col.description if col is not None else ""
             desc = explicit or _DEFAULT_VC_DESCRIPTIONS.get(name, name)
             seen.append((name, desc))
@@ -262,8 +262,8 @@ class IngestionPipeline:
         default_vc: str | None = None
 
         for tool, name in self._steps:
-            if tool == "chunk-embed-upsert" and name in self._vector_by_name:
-                vc = self._vector_by_name[name]
+            if tool == "chunk-embed-upsert" and name in self._chunk_by_name:
+                vc = self._chunk_by_name[name]
                 vector_store, embedder, default_vc = vc.store, vc.embedder, vc.name
                 break
 
@@ -324,7 +324,7 @@ class IngestionPipeline:
         return records_extracted
 
     async def _run_chunk_embed_upsert(self, doc: Document, collection_name: str) -> int:
-        vc = self._vector_by_name.get(collection_name)
+        vc = self._chunk_by_name.get(collection_name)
         if vc is None:
             logger.warning(
                 "ingestion_pipeline.chunk_embed_upsert.unknown_collection name=%s collection=%s",

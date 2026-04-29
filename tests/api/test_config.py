@@ -152,7 +152,7 @@ _FULL_YAML = textwrap.dedent("""\
     embedding:
       provider: openai
       model: text-embedding-3-small
-    vector_collections:
+    chunk_collections:
       - name: doc_chunks
         chunker:
           type: fixed
@@ -169,14 +169,14 @@ class TestAppConfig:
         assert cfg.structured_store is None
         assert cfg.vector_store is None
         assert cfg.embedding is None
-        assert cfg.vector_collections == []
+        assert cfg.chunk_collections == []
 
     def test_from_yaml_full(self):
         cfg = AppConfig.from_yaml(_FULL_YAML)
         assert cfg.name == "full-app"
         assert cfg.embedding is not None
-        assert len(cfg.vector_collections) == 1
-        assert cfg.vector_collections[0].chunker.chunk_size == 256
+        assert len(cfg.chunk_collections) == 1
+        assert cfg.chunk_collections[0].chunker.chunk_size == 256
 
     def test_from_yaml_with_explicit_store(self):
         yaml_text = textwrap.dedent("""\
@@ -192,7 +192,7 @@ class TestAppConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            vector_collections:
+            chunk_collections:
               - name: doc_chunks
                 chunker:
                   type: fixed
@@ -209,14 +209,14 @@ class TestAppConfig:
             name: bad-app
             llm:
               model: gpt-4o-mini
-            vector_collections:
+            chunk_collections:
               - name: doc_chunks
                 chunker:
                   type: fixed
                   chunk_size: 512
                   overlap: 64
         """)
-        with pytest.raises(Exception, match="embedding is required when vector_collections"):
+        with pytest.raises(Exception, match="embedding is required when chunk_collections"):
             AppConfig.from_yaml(yaml_text)
 
     def test_embedding_alone_is_valid(self):
@@ -230,7 +230,7 @@ class TestAppConfig:
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         assert cfg.embedding is not None
-        assert cfg.vector_collections == []
+        assert cfg.chunk_collections == []
 
     def test_from_yaml_non_mapping_raises(self):
         with pytest.raises(ValueError, match="mapping"):
@@ -297,7 +297,7 @@ class TestAppConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            vector_collections:
+            chunk_collections:
               - name: document_chunks
                 chunker:
                   type: fixed
@@ -323,7 +323,7 @@ class TestAppConfig:
                   collection: document_summary
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        assert len(cfg.vector_collections) == 1
+        assert len(cfg.chunk_collections) == 1
         assert len(cfg.structured_collections) == 1
         assert len(cfg.document_collections) == 1
         assert cfg.document_collections[0].name == "document_summary"

@@ -117,7 +117,7 @@ def _make_pipeline(
 
     return IngestionPipeline(
         name=name,
-        vector_collections=[vc] if vc is not None else None,
+        chunk_collections=[vc] if vc is not None else None,
         structured_collections=[sc],
     )
 
@@ -145,7 +145,7 @@ class TestCogBaseAppConstruction:
         assert app._ingest_pipeline.name == "legal"
         assert app._ingest_pipeline._structured_by_name
         assert _CONTRACTS_COLLECTION in app._ingest_pipeline._structured_by_name
-        assert app._ingest_pipeline._vector_by_name == {}
+        assert app._ingest_pipeline._chunk_by_name == {}
 
     def test_full_mode_builds(self):
         app = _make_app(
@@ -155,8 +155,8 @@ class TestCogBaseAppConstruction:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=64, overlap=0),
         )
-        assert app._ingest_pipeline._vector_by_name
-        assert "legal" in app._ingest_pipeline._vector_by_name
+        assert app._ingest_pipeline._chunk_by_name
+        assert "legal" in app._ingest_pipeline._chunk_by_name
 
     def test_pipeline_wired_to_app(self):
         pipeline = _make_pipeline(_make_llm("{}"), InMemoryStructuredStore())
@@ -408,7 +408,7 @@ class TestVectorOnlyMode:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
-        pipeline = IngestionPipeline(name="vector-only", vector_collections=[vc])
+        pipeline = IngestionPipeline(name="vector-only", chunk_collections=[vc])
         return CogBaseApp("vector-only", llm, pipeline)
 
     def _tool_names(self, app: CogBaseApp) -> list[str]:
@@ -420,7 +420,7 @@ class TestVectorOnlyMode:
 
     def test_vector_collection_present(self):
         app = self._make_vector_only_app(_make_llm("{}"))
-        assert app._ingest_pipeline._vector_by_name
+        assert app._ingest_pipeline._chunk_by_name
 
     def test_structured_schemas_empty(self):
         app = self._make_vector_only_app(_make_llm("{}"))
@@ -448,7 +448,7 @@ class TestVectorOnlyMode:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
-        pipeline = IngestionPipeline(name="testapp", vector_collections=[vc])
+        pipeline = IngestionPipeline(name="testapp", chunk_collections=[vc])
         app = CogBaseApp("testapp", _make_llm("{}"), pipeline)
         await app.setup()
         results = await app.ingest_documents([Document(doc_id="d-001", text="word " * 20)])

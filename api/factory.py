@@ -81,7 +81,7 @@ def build_app(
     llm = _build_llm(config.llm)
 
     steps = config.pipeline.steps if config.pipeline else []
-    vc_by_name = {vc.name: vc for vc in config.vector_collections}
+    vc_by_name = {vc.name: vc for vc in config.chunk_collections}
     sc_by_name = {sc.name: sc for sc in config.structured_collections}
     dc_by_name = {dc.name: dc for dc in config.document_collections}
 
@@ -120,7 +120,7 @@ def build_app(
             )
 
     # --- Build collection objects (deduplicated per name) ---
-    vector_collections: list[ChunkCollection] = []
+    chunk_collections: list[ChunkCollection] = []
     structured_collections: list[StructuredCollection] = []
     document_collections: list[DocumentCollection] = []
     built_vc: set[str] = set()
@@ -131,7 +131,7 @@ def build_app(
         if step.tool == "chunk-embed-upsert" and step.collection not in built_vc:
             vc_cfg = vc_by_name[step.collection]
             chunker = _build_chunker(vc_cfg.chunker)
-            vector_collections.append(ChunkCollection(
+            chunk_collections.append(ChunkCollection(
                 schema=VectorCollectionSchema(
                     name=vc_cfg.name,
                     dimensions=vector_store_cfg.dim,  # type: ignore[union-attr]
@@ -184,7 +184,7 @@ def build_app(
     pipeline = IngestionPipeline(
         name=config.name,
         steps=[(s.tool, s.collection) for s in steps],
-        vector_collections=vector_collections or None,
+        chunk_collections=chunk_collections or None,
         structured_collections=structured_collections or None,
         document_collections=document_collections or None,
     )

@@ -9,7 +9,7 @@
 # POST the ZIP to POST /applications to create an application.
 #
 # Required: name, llm
-# Optional: embedding (required when vector_collections or document_collections are defined)
+# Optional: embedding (required when chunk_collections or document_collections are defined)
 #
 # Store backends (structured_store, vector_store) are not set here —
 # the service automatically uses the stores defined in cogbase_system.yaml.
@@ -26,7 +26,7 @@ embedding:                   # shared across all vector and summarize collection
   model: text-embedding-3-small
   # dimensions: 512          # optional: truncate to smaller vectors
 
-vector_collections:
+chunk_collections:
   - name: document_chunks    # full-text passage index
     chunker:
       type: fixed            # fixed | langchain

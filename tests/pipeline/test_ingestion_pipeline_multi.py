@@ -160,7 +160,7 @@ class TestMultiCollectionPipelineConstruction:
                 ("extract-structured",    "tags"),
                 ("document-embed-upsert", "document_summary"),
             ],
-            vector_collections=[vc],
+            chunk_collections=[vc],
             structured_collections=[sc],
             document_collections=[dc],
         )
@@ -176,7 +176,7 @@ class TestMultiCollectionPipelineConstruction:
 
         pipeline = IngestionPipeline(
             name="app",
-            vector_collections=[vc],
+            chunk_collections=[vc],
             structured_collections=[sc],
             document_collections=[dc],
         )
@@ -195,7 +195,7 @@ class TestMultiCollectionPipelineConstruction:
                 ("chunk-embed-upsert", "col_a"),
                 ("chunk-embed-upsert", "col_b"),
             ],
-            vector_collections=[vc1, vc2],
+            chunk_collections=[vc1, vc2],
         )
 
         assert pipeline.vector_collection_names == ["col_a", "col_b"]
@@ -210,7 +210,7 @@ class TestMultiCollectionPipelineConstruction:
                 ("document-embed-upsert", "summaries"),
                 ("chunk-embed-upsert",    "chunks"),
             ],
-            vector_collections=[vc],
+            chunk_collections=[vc],
             document_collections=[dc],
         )
 
@@ -231,7 +231,7 @@ class TestRunnerResources:
             embedder=emb,
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
-        pipeline = IngestionPipeline(name="app", vector_collections=[vc])
+        pipeline = IngestionPipeline(name="app", chunk_collections=[vc])
 
         ss, vs, embedder, default = pipeline.runner_resources()
         assert vs is store
@@ -437,7 +437,7 @@ class TestThreeStepPipeline:
                 ("extract-structured",    "tags"),
                 ("document-embed-upsert", "summaries"),
             ],
-            vector_collections=[vc],
+            chunk_collections=[vc],
             structured_collections=[sc],
             document_collections=[dc],
         )

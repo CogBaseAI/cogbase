@@ -76,13 +76,13 @@ All public/abstract methods are async. CPU-bound implementations use `run_in_exe
 pipeline = IngestionPipeline(
     name="legal",
     steps=[
-        ("chunk-embed-upsert",     "document_chunks"),
-        ("extract-structured",     "contracts"),
-        ("summarize-embed-upsert", "document_summary"),
+        ("chunk-embed-upsert",    "document_chunks"),
+        ("extract-structured",    "contracts"),
+        ("document-embed-upsert", "document_summary"),
     ],
-    vector_collections=[ChunkCollection(schema=VectorCollectionSchema(name="document_chunks", ...), ...)],
+    chunk_collections=[ChunkCollection(schema=VectorCollectionSchema(name="document_chunks", ...), ...)],
     structured_collections=[StructuredCollection(schema=..., extractor=...)],
-    summarize_collections=[SummarizeCollection(schema=VectorCollectionSchema(name="document_summary", ...), ...)],
+    document_collections=[DocumentCollection(schema=VectorCollectionSchema(name="document_summary", ...), ...)],
 )
 ```
 

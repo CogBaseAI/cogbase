@@ -39,7 +39,7 @@ CogBase is organized into three layers with clean boundaries between them.
 ║  Steps run in order:                                      ║
 ║    chunk-embed-upsert     → passage chunks + embeddings   ║
 ║    extract-structured     → typed records via LLM         ║
-║    summarize-embed-upsert → one summary vector/doc        ║
+║    document-embed-upsert  → one vector/doc like summary   ║
 ║          ↓                ↓                ↓              ║
 ║  ┌──────────────────┐  ┌──────────────────────────────┐   ║
 ║  │ Structured Store │  │       Vector Store           │   ║
@@ -80,7 +80,7 @@ CogBase is organized into three layers with clean boundaries between them.
 
 - `chunk-embed-upsert` — splits document text into overlapping passages, embeds them, and upserts into a vector collection for passage-level semantic search
 - `extract-structured` — runs a configurable LLM extractor to produce typed records stored in a structured collection
-- `summarize-embed-upsert` — generates one LLM summary per document, embeds it, and upserts into a vector collection for document-level semantic search
+- `document-embed-upsert` — generates one vector such as LLM summary per document, embeds it, and upserts into a vector collection for document-level semantic search
 
 Both stores are pluggable — swap backends without changing application code.
 
@@ -100,7 +100,7 @@ The built-in `Fact` model carries: `type`, `value`, `raw_text`, `doc_id`, `page`
 
 ### Per-document summarization
 
-Alongside passage chunks, the pipeline supports a `summarize-embed-upsert` step that generates one LLM summary per document and stores its embedding as a single vector. This gives the query runner two levels of semantic retrieval:
+Alongside passage chunks, the pipeline supports a `document-embed-upsert` step that generates one vector such as LLM summary per document and stores its embedding as a single vector. This gives the query runner two levels of semantic retrieval:
 
 - **document_chunks** — precise, passage-level retrieval for detailed or specific questions
 - **document_summary** — topic-level retrieval for high-level questions about what documents cover
@@ -226,7 +226,7 @@ embedding:                   # shared across all vector and summarize collection
   provider: openai
   model: text-embedding-3-small
 
-vector_collections:
+chunk_collections:
   - name: document_chunks
     chunker:
       type: fixed
@@ -240,7 +240,7 @@ structured_collections:
       type: llm
       prompt: extraction_prompt.txt     # filename in ZIP root; omit for built-in default
 
-summarize_collections:
+document_collections:
   - name: document_summary              # one summary vector per document
     prompt: "Summarize this document in a few sentences."
     max_tokens: 1024
@@ -251,7 +251,7 @@ pipeline:
       collection: document_chunks
     - tool: extract-structured
       collection: contract_extraction
-    - tool: summarize-embed-upsert
+    - tool: document-embed-upsert
       collection: document_summary
 ```
 
@@ -387,7 +387,7 @@ cogbase/
 
 ## Roadmap
 
-- [x] Core ingestion pipeline (chunk-embed-upsert, extract-structured, summarize-embed-upsert)
+- [x] Core ingestion pipeline (chunk-embed-upsert, extract-structured, document-embed-upsert)
 - [x] Typed fact extraction with configurable JSON schema
 - [x] Store adapter interfaces (StructuredStoreBase, VectorStoreBase)
 - [x] Built-in adapters: SQLite, Postgres, FAISS, pgvector

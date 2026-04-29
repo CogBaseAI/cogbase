@@ -19,7 +19,7 @@ Typical usage::
             ("extract-structured",    "contracts"),
             ("document-embed-upsert", "document_summary"),
         ],
-        vector_collections=[ChunkCollection(schema=VectorCollectionSchema(name="document_chunks", dimensions=1536), ...)],
+        chunk_collections=[ChunkCollection(schema=VectorCollectionSchema(name="document_chunks", dimensions=1536), ...)],
         structured_collections=[StructuredCollection(schema=..., ...)],
         document_collections=[DocumentCollection(schema=VectorCollectionSchema(name="document_summary", dimensions=1536), ...)],
     )

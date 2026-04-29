@@ -18,7 +18,7 @@ class ChunkerConfig(BaseModel):
     overlap: int = 64
 
 
-class VectorCollectionConfig(BaseModel):
+class ChunkCollectionConfig(BaseModel):
     name: str
     chunker: ChunkerConfig
     description: str = ""
@@ -62,7 +62,7 @@ class AppConfig(BaseModel):
     document_store: DocumentStoreConfig | None = None
     structured_store: StructuredStoreConfig | None = None
     vector_store: VectorStoreConfig | None = None
-    vector_collections: list[VectorCollectionConfig] = []
+    chunk_collections: list[ChunkCollectionConfig] = []
     structured_collections: list[StructuredCollectionConfig] = []
     document_collections: list[DocumentCollectionConfig] = []
     pipeline: PipelineConfig | None = None
@@ -70,12 +70,12 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> "AppConfig":
-        if self.vector_collections and self.embedding is None:
-            raise ValueError("embedding is required when vector_collections are defined")
+        if self.chunk_collections and self.embedding is None:
+            raise ValueError("embedding is required when chunk_collections are defined")
         if self.document_collections and self.embedding is None:
             raise ValueError("embedding is required when document_collections are defined")
         if self.pipeline:
-            vc_names = {vc.name for vc in self.vector_collections}
+            vc_names = {vc.name for vc in self.chunk_collections}
             sc_names = {sc.name for sc in self.structured_collections}
             dc_names = {dc.name for dc in self.document_collections}
             for step in self.pipeline.steps:

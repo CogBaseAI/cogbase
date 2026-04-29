@@ -69,7 +69,7 @@ llm:
 embedding:
   provider: openai
   model: text-embedding-3-small
-vector_collections:
+chunk_collections:
   - name: document_chunks
     chunker:
       type: fixed
@@ -138,7 +138,7 @@ class TestBuildAppVectorStoreResolution:
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
         app = build_app(cfg, system_structured_store=system_store)
-        assert app._ingest_pipeline._vector_by_name == {}
+        assert app._ingest_pipeline._chunk_by_name == {}
 
     @patch("api.factory._build_llm")
     def test_system_vector_store_cfg_used_when_chunk_step_present(self, mock_build_llm):
@@ -155,11 +155,11 @@ class TestBuildAppVectorStoreResolution:
                 system_vector_store_cfg=sys_vs_cfg,
             )
 
-        assert app._ingest_pipeline._vector_by_name
+        assert app._ingest_pipeline._chunk_by_name
 
     @patch("api.factory._build_llm")
     def test_vector_collection_name_matches_config(self, mock_build_llm):
-        """The vector collection name comes from vector_collections config, not app name."""
+        """The vector collection name comes from chunk_collections config, not app name."""
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
@@ -173,7 +173,7 @@ class TestBuildAppVectorStoreResolution:
                 system_vector_store_cfg=sys_vs_cfg,
             )
 
-        assert "document_chunks" in app._ingest_pipeline._vector_by_name
+        assert "document_chunks" in app._ingest_pipeline._chunk_by_name
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +208,7 @@ llm:
 embedding:
   provider: openai
   model: text-embedding-3-small
-vector_collections:
+chunk_collections:
   - name: document_chunks
     chunker:
       type: fixed
@@ -278,7 +278,7 @@ class TestBuildAppDocumentCollection:
                 system_vector_store_cfg=sys_vs_cfg,
             )
 
-        vc = next(iter(app._ingest_pipeline._vector_by_name.values()))
+        vc = next(iter(app._ingest_pipeline._chunk_by_name.values()))
         dc = app._ingest_pipeline._document_by_name["document_summary"]
         assert vc.store is dc.store
 
@@ -297,7 +297,7 @@ class TestBuildAppDocumentCollection:
                 system_vector_store_cfg=sys_vs_cfg,
             )
 
-        assert app._ingest_pipeline._vector_by_name
+        assert app._ingest_pipeline._chunk_by_name
         assert app._ingest_pipeline._structured_by_name
         assert "document_summary" in app._ingest_pipeline._document_by_name
 

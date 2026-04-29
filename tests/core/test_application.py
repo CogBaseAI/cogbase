@@ -111,7 +111,7 @@ class TestIngestionPipelineConstruction:
     def test_empty_application(self):
         app = IngestionPipeline(name="empty")
         assert app.name == "empty"
-        assert app._vector_by_name == {}
+        assert app._chunk_by_name == {}
         assert app._structured_by_name == {}
         assert app.structured_schemas == []
 
@@ -122,8 +122,8 @@ class TestIngestionPipelineConstruction:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
-        app = IngestionPipeline(name="app", vector_collections=[vc])
-        assert app._vector_by_name
+        app = IngestionPipeline(name="app", chunk_collections=[vc])
+        assert app._chunk_by_name
         assert app._structured_by_name == {}
 
     def test_structured_only(self):
@@ -133,7 +133,7 @@ class TestIngestionPipelineConstruction:
             extractor=StubExtractor(),
         )
         app = IngestionPipeline(name="app", structured_collections=[sc])
-        assert app._vector_by_name == {}
+        assert app._chunk_by_name == {}
         assert app._structured_by_name
 
     def test_structured_schemas_property(self):
@@ -202,7 +202,7 @@ class TestIngestionPipelineIngest:
             store=structured_store,
             extractor=StubExtractor(),
         )
-        app = IngestionPipeline(name="app", vector_collections=[vc], structured_collections=[sc])
+        app = IngestionPipeline(name="app", chunk_collections=[vc], structured_collections=[sc])
         return app, vector_store, structured_store
 
     @pytest.mark.asyncio
@@ -255,7 +255,7 @@ class TestIngestionPipelineIngest:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
-        app = IngestionPipeline(name="app", vector_collections=[vc])
+        app = IngestionPipeline(name="app", chunk_collections=[vc])
         await app.setup()
         count = await app._ingest(Document(doc_id="doc-1", text="word " * 30))
         assert vector_store.ntotal > 0

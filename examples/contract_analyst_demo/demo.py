@@ -85,7 +85,7 @@ vector_store:
   dim: {_EMBED_DIM}
 structured_store:
   type: memory
-vector_collections:
+chunk_collections:
   - name: document_chunks
     chunker:
       type: fixed
