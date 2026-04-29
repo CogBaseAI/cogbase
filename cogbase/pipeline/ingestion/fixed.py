@@ -38,13 +38,15 @@ class FixedSizeChunker(ChunkerBase):
         start = 0
 
         while start < len(doc.text):
-            end = start + self.chunk_size
+            end = min(start + self.chunk_size, len(doc.text))
             chunks.append(
                 Chunk(
                     chunk_id=f"{doc.doc_id}_{index}",
                     doc_id=doc.doc_id,
                     text=doc.text[start:end],
                     metadata={"chunk_index": str(index)},
+                    char_offset=start,
+                    char_length=end - start,
                 )
             )
             index += 1

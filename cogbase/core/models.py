@@ -52,11 +52,13 @@ class Chunk(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    chunk_id: str
+    chunk_id: str # doc_id_{chunk_index} such as doc_id_0, doc_id_1
     doc_id: str
     text: str
     embedding: list[float] | None = None
     metadata: dict = Field(default_factory=dict)
+    char_offset: int | None = None  # start character position in the source document
+    char_length: int | None = None  # number of characters in this chunk
 
 
 class Event(BaseModel):

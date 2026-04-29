@@ -460,6 +460,129 @@ async def test_execute_tool_system_tool_error_returns_message():
 
 
 # ---------------------------------------------------------------------------
+# run() — read_document tool
+# ---------------------------------------------------------------------------
+
+def _make_document_store(docs: dict[str, str]) -> MagicMock:
+    store = MagicMock()
+    async def _load(collection, doc_id):
+        if doc_id not in docs:
+            raise KeyError(doc_id)
+        return docs[doc_id]
+    store.load = AsyncMock(side_effect=_load)
+    return store
+
+
+def test_tool_defs_read_document_when_document_store_and_app_name_set():
+    store = _make_document_store({})
+    runner = Runner(MagicMock(), document_store=store, app_name="myapp")
+    names = [t["name"] for t in runner._tool_defs]
+    assert "read_document" in names
+
+
+def test_tool_defs_read_document_not_added_without_app_name():
+    store = _make_document_store({})
+    runner = Runner(MagicMock(), document_store=store, app_name=None)
+    names = [t["name"] for t in runner._tool_defs]
+    assert "read_document" not in names
+
+
+def test_tool_defs_read_document_not_added_without_document_store():
+    runner = Runner(MagicMock(), app_name="myapp")
+    names = [t["name"] for t in runner._tool_defs]
+    assert "read_document" not in names
+
+
+@pytest.mark.asyncio
+async def test_run_read_document_returns_slice():
+    text = "A" * 100 + "B" * 100 + "C" * 100
+    store = _make_document_store({"doc-1": text})
+    llm = _make_llm(
+        _tool_result("read_document", {"doc_id": "doc-1", "offset": 50, "length": 100}),
+        _text_result("Got the slice."),
+    )
+    runner = Runner(llm, document_store=store, app_name="myapp")
+    chunks = [c async for c in runner.run("read doc-1")]
+    tool_output = [m["content"] for m in []]  # inspected via store.load call count
+    store.load.assert_called_once_with("myapp", "doc-1")
+    assert _str_chunks(chunks)[-1] == "Got the slice."
+
+
+@pytest.mark.asyncio
+async def test_run_read_document_slice_content_correct():
+    text = "hello " * 50  # 300 chars
+    store = _make_document_store({"doc-1": text})
+
+    captured_tool_outputs: list[str] = []
+
+    original_run = Runner._run_read_document
+
+    async def _capturing(self, inputs):
+        result = await original_run(self, inputs)
+        captured_tool_outputs.append(result)
+        return result
+
+    llm = _make_llm(
+        _tool_result("read_document", {"doc_id": "doc-1", "offset": 0, "length": 12}),
+        _text_result("Done."),
+    )
+    runner = Runner(llm, document_store=store, app_name="myapp")
+    with patch.object(Runner, "_run_read_document", _capturing):
+        [c async for c in runner.run("read doc")]
+
+    assert len(captured_tool_outputs) == 1
+    assert "hello hello " in captured_tool_outputs[0]
+    assert "chars 0–12 of 300" in captured_tool_outputs[0]
+
+
+@pytest.mark.asyncio
+async def test_run_read_document_missing_doc_returns_error():
+    store = _make_document_store({})
+    llm = _make_llm(
+        _tool_result("read_document", {"doc_id": "missing"}),
+        _text_result("Could not find it."),
+    )
+    runner = Runner(llm, document_store=store, app_name="myapp")
+    chunks = [c async for c in runner.run("read missing")]
+    # The tool error message is passed back to the LLM; loop completes normally.
+    assert _str_chunks(chunks)[-1] == "Could not find it."
+
+
+@pytest.mark.asyncio
+async def test_run_read_document_length_capped_at_10000():
+    text = "x" * 20000
+    store = _make_document_store({"big": text})
+
+    captured: list[str] = []
+    original = Runner._run_read_document
+
+    async def _cap(self, inputs):
+        result = await original(self, inputs)
+        captured.append(result)
+        return result
+
+    llm = _make_llm(
+        _tool_result("read_document", {"doc_id": "big", "length": 99999}),
+        _text_result("Done."),
+    )
+    runner = Runner(llm, document_store=store, app_name="myapp")
+    with patch.object(Runner, "_run_read_document", _cap):
+        [c async for c in runner.run("read big")]
+
+    assert len(captured) == 1
+    # slice should be exactly 10000 chars
+    assert "chars 0–10000 of 20000" in captured[0]
+
+
+@pytest.mark.asyncio
+async def test_run_read_document_unavailable_without_store():
+    """read_document called without a configured store returns an error string."""
+    runner = Runner(MagicMock())
+    output = await runner._run_read_document({"doc_id": "doc-1"})
+    assert "unavailable" in output
+
+
+# ---------------------------------------------------------------------------
 # compact_messages()
 # ---------------------------------------------------------------------------
 

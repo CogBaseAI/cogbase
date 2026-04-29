@@ -37,13 +37,25 @@ class LangChainChunker(ChunkerBase):
     def chunk(self, doc: Document) -> list[Chunk]:
         if not doc.text:
             return []
-        return [
-            Chunk(
+        chunks: list[Chunk] = []
+        search_from = 0
+        for i, piece in enumerate(self._splitter.split_text(doc.text)):
+            if not piece:
+                continue
+            offset = doc.text.find(piece, search_from)
+            if offset == -1:
+                char_offset = None
+                char_length = None
+            else:
+                char_offset = offset
+                char_length = len(piece)
+                search_from = offset + 1
+            chunks.append(Chunk(
                 chunk_id=f"{doc.doc_id}_{i}",
                 doc_id=doc.doc_id,
                 text=piece,
                 metadata={"chunk_index": str(i)},
-            )
-            for i, piece in enumerate(self._splitter.split_text(doc.text))
-            if piece
-        ]
+                char_offset=char_offset,
+                char_length=char_length,
+            ))
+        return chunks

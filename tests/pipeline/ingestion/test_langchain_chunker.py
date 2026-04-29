@@ -55,3 +55,21 @@ class TestLangChainChunkerBehavior:
         chunks = LangChainChunker(splitter).chunk(Document(doc_id="doc-1", text="short"))
         assert len(chunks) == 1
         assert chunks[0].text == "short"
+
+    def test_char_offset_and_length_set(self):
+        splitter = CharacterTextSplitter(chunk_size=5, chunk_overlap=0, separator="")
+        text = "abcdefghij"
+        chunks = LangChainChunker(splitter).chunk(Document(doc_id="doc-1", text=text))
+        for chunk in chunks:
+            assert chunk.char_offset is not None
+            assert chunk.char_length is not None
+            assert text[chunk.char_offset : chunk.char_offset + chunk.char_length] == chunk.text
+
+    def test_char_offset_matches_text_slice_multi_chunk(self):
+        splitter = RecursiveCharacterTextSplitter(chunk_size=20, chunk_overlap=0)
+        text = "hello world foo bar baz qux quux corge grault"
+        chunks = LangChainChunker(splitter).chunk(Document(doc_id="doc-1", text=text))
+        assert len(chunks) > 1
+        for chunk in chunks:
+            if chunk.char_offset is not None:
+                assert text[chunk.char_offset : chunk.char_offset + chunk.char_length] == chunk.text

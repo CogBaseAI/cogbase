@@ -87,6 +87,8 @@ class CogBaseApp:
             passthrough_token_threshold=passthrough_token_threshold,
             max_calls=query_max_rounds,
             skills=skills,
+            document_store=document_store,
+            app_name=name,
         )
 
     # ------------------------------------------------------------------

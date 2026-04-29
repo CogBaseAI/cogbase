@@ -6,8 +6,9 @@ The runner drives an LLM agent loop that handles two complementary concerns:
                    skill-specific system prompt, and re-evaluates after every
                    tool-call round so the agent can switch skills mid-task.
 
-  Retrieval      — exposes ``structured_lookup`` and ``vector_search`` as
-                   system tools when the corresponding stores are configured.
+  Retrieval      — exposes ``structured_lookup``, ``vector_search``, and
+                   ``read_document`` as system tools when the corresponding
+                   stores are configured.
                    The passthrough rule applies: if ``structured_lookup``
                    returns results whose estimated token count exceeds
                    ``passthrough_token_threshold``, the formatted records are
@@ -60,7 +61,7 @@ from pydantic import BaseModel
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, LLMBase, SystemTool, ToolDefinition
-from cogbase.stores import CollectionSchema, Filter, Op, StructuredStoreBase, VectorStoreBase
+from cogbase.stores import CollectionSchema, DocumentStoreBase, Filter, Op, StructuredStoreBase, VectorStoreBase
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,35 @@ _STRUCTURED_LOOKUP_DEF: ToolDefinition = {
     },
 }
 
+_READ_DOCUMENT_DEF: ToolDefinition = {
+    "name": "read_document",
+    "description": (
+        "Read a slice of a document's original text by character offset. "
+        "Use after vector_search to get broader context around a relevant passage. "
+        "Chunks returned by vector_search include char_offset and char_length showing "
+        "where they appear in the source document — use those to target the right slice."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "doc_id": {
+                "type": "string",
+                "description": "Document ID to read from.",
+            },
+            "offset": {
+                "type": "integer",
+                "description": "Character offset to start reading from (default: 0).",
+            },
+            "length": {
+                "type": "integer",
+                "description": "Number of characters to read (default: 2000, max: 10000).",
+            },
+        },
+        "required": ["doc_id"],
+        "additionalProperties": False,
+    },
+}
+
 _VECTOR_SEARCH_DEF: ToolDefinition = {
     "name": "vector_search",
     "description": (
@@ -271,7 +301,10 @@ def _format_chunks(chunks: list[Chunk]) -> str:
         return "(no passages found)"
     lines = ["Passages:"]
     for i, chunk in enumerate(chunks, 1):
-        lines.append(f"  [{i}] (doc: {chunk.doc_id})\n  {chunk.text.strip()}")
+        location = f"doc: {chunk.doc_id}"
+        if chunk.char_offset is not None and chunk.char_length is not None:
+            location += f", char_offset: {chunk.char_offset}, char_length: {chunk.char_length}"
+        lines.append(f"  [{i}] ({location})\n  {chunk.text.strip()}")
     return "\n".join(lines)
 
 
@@ -320,6 +353,8 @@ class Runner:
         vector_collections: list[tuple[str, str]] | None = None,
         structured_schemas: list[CollectionSchema] | None = None,
         passthrough_token_threshold: int = 2000,
+        document_store: DocumentStoreBase | None = None,
+        app_name: str | None = None,
     ) -> None:
         self._llm = llm
         self._max_calls = max_calls
@@ -333,6 +368,8 @@ class Runner:
             structured_schemas, vector_collections
         )
         self._passthrough_token_threshold = passthrough_token_threshold
+        self._document_store = document_store
+        self._app_name = app_name
 
         # Retrieval tool definitions — exposed as _tool_defs for introspection.
         self._tool_defs: list[ToolDefinition] = []
@@ -340,6 +377,8 @@ class Runner:
             self._tool_defs.append(_STRUCTURED_LOOKUP_DEF)
         if vector_store is not None and embedder is not None:
             self._tool_defs.append(_VECTOR_SEARCH_DEF)
+        if document_store is not None and app_name is not None:
+            self._tool_defs.append(_READ_DOCUMENT_DEF)
 
     # ------------------------------------------------------------------
     # Skill selection helpers (used when skills are provided to run())
@@ -542,6 +581,8 @@ class Runner:
                 elif name == "vector_search":
                     chunks, tool_output = await self._run_vector_search(inputs)
                     all_chunks.extend(chunks)
+                elif name == "read_document":
+                    tool_output = await self._run_read_document(inputs)
                 else:
                     tool_output = await self._execute_tool(name, inputs, current_skill)
                     logger.info("[runner] execute_tool done: %s", tool_output[:300])
@@ -656,6 +697,30 @@ class Runner:
 
         logger.info("[runner] vector_search.result collection=%s chunks=%d", collection, len(chunks))
         return chunks, _format_chunks(chunks)
+
+    async def _run_read_document(self, inputs: dict) -> str:
+        if self._document_store is None or self._app_name is None:
+            return "read_document is unavailable (no document store configured)"
+
+        doc_id = str(inputs.get("doc_id", ""))
+        if not doc_id:
+            return "read_document error: doc_id is required"
+
+        offset = max(0, int(inputs.get("offset") or 0))
+        length = min(int(inputs.get("length") or 2000), 10000)
+
+        try:
+            text = await self._document_store.load(self._app_name, doc_id)
+        except KeyError:
+            return f"read_document error: document '{doc_id}' not found"
+        except Exception as exc:
+            logger.exception("[runner] read_document.error doc_id=%s", doc_id)
+            return f"read_document error: {exc}"
+
+        slice_text = text[offset : offset + length]
+        total = len(text)
+        logger.info("[runner] read_document doc_id=%s offset=%d length=%d total=%d", doc_id, offset, length, total)
+        return f"Document '{doc_id}' (chars {offset}–{offset + len(slice_text)} of {total}):\n\n{slice_text}"
 
     async def _run_python(self, code: str, env: dict) -> str:
         try:

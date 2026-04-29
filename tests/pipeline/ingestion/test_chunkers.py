@@ -113,6 +113,38 @@ class TestFixedSizeChunkerChunk:
             start = i * stride
             assert text[start : start + chunker.chunk_size] == chunk.text
 
+    def test_char_offset_and_length_set(self):
+        chunker = FixedSizeChunker(chunk_size=5, overlap=0)
+        text = "abcdefghij"
+        chunks = chunker.chunk(Document(doc_id="doc-1", text=text))
+        assert chunks[0].char_offset == 0
+        assert chunks[0].char_length == 5
+        assert chunks[1].char_offset == 5
+        assert chunks[1].char_length == 5
+
+    def test_char_offset_with_overlap(self):
+        chunker = FixedSizeChunker(chunk_size=5, overlap=2)
+        # stride=3: starts at 0, 3, 6, 9
+        text = "abcdefghij"
+        chunks = chunker.chunk(Document(doc_id="doc-1", text=text))
+        assert chunks[0].char_offset == 0
+        assert chunks[1].char_offset == 3
+
+    def test_last_chunk_char_length_does_not_exceed_text(self):
+        chunker = FixedSizeChunker(chunk_size=10, overlap=0)
+        text = "abcde"  # shorter than chunk_size
+        chunks = chunker.chunk(Document(doc_id="doc-1", text=text))
+        assert len(chunks) == 1
+        assert chunks[0].char_offset == 0
+        assert chunks[0].char_length == 5
+
+    def test_char_offset_matches_text_slice(self):
+        chunker = FixedSizeChunker(chunk_size=8, overlap=2)
+        text = "the quick brown fox"
+        chunks = chunker.chunk(Document(doc_id="doc-1", text=text))
+        for chunk in chunks:
+            assert text[chunk.char_offset : chunk.char_offset + chunk.char_length] == chunk.text
+
 
 class TestFixedSizeChunkerIsChunkerBase:
     def test_is_subclass(self):
