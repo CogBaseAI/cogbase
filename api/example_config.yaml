@@ -9,7 +9,7 @@
 # POST the ZIP to POST /applications to create an application.
 #
 # Required: name, llm
-# Optional: embedding (required when vector_collections or summarize_collections are defined)
+# Optional: embedding (required when vector_collections or document_collections are defined)
 #
 # Store backends (structured_store, vector_store) are not set here —
 # the service automatically uses the stores defined in cogbase_system.yaml.
@@ -40,10 +40,11 @@ structured_collections:
       type: llm
       prompt: extraction_prompt.txt     # filename in ZIP root; omit to use built-in default
 
-summarize_collections:
-  - name: document_summary   # one summary chunk per document
+document_collections:
+  - name: document_summary   # one vector record per document (LLM summary embedded)
     prompt: "Summarize this document in a few sentences."
     max_tokens: 1024
+    # metadata_fields: [customer_id, deal_stage]  # optional: project doc.metadata keys into chunk metadata for search filtering
 
 pipeline:
   parallel: false            # steps run sequentially top-to-bottom
@@ -54,5 +55,5 @@ pipeline:
     - tool: extract-structured
       collection: contract_extraction
 
-    - tool: summarize-embed-upsert
+    - tool: document-embed-upsert
       collection: document_summary

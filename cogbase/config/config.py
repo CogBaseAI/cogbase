@@ -37,15 +37,16 @@ class StructuredCollectionConfig(BaseModel):
     extractor: ExtractorConfig
 
 
-class SummarizeCollectionConfig(BaseModel):
+class DocumentCollectionConfig(BaseModel):
     name: str
     description: str = ""
     prompt: str | None = None
     max_tokens: int = 1024
+    metadata_fields: list[str] = []
 
 
 class PipelineStepConfig(BaseModel):
-    tool: Literal["chunk-embed-upsert", "extract-structured", "summarize-embed-upsert"]
+    tool: Literal["chunk-embed-upsert", "extract-structured", "document-embed-upsert"]
     collection: str
 
 
@@ -63,7 +64,7 @@ class AppConfig(BaseModel):
     vector_store: VectorStoreConfig | None = None
     vector_collections: list[VectorCollectionConfig] = []
     structured_collections: list[StructuredCollectionConfig] = []
-    summarize_collections: list[SummarizeCollectionConfig] = []
+    document_collections: list[DocumentCollectionConfig] = []
     pipeline: PipelineConfig | None = None
     skills: list[str] = []
 
@@ -71,12 +72,12 @@ class AppConfig(BaseModel):
     def _validate(self) -> "AppConfig":
         if self.vector_collections and self.embedding is None:
             raise ValueError("embedding is required when vector_collections are defined")
-        if self.summarize_collections and self.embedding is None:
-            raise ValueError("embedding is required when summarize_collections are defined")
+        if self.document_collections and self.embedding is None:
+            raise ValueError("embedding is required when document_collections are defined")
         if self.pipeline:
             vc_names = {vc.name for vc in self.vector_collections}
             sc_names = {sc.name for sc in self.structured_collections}
-            smc_names = {smc.name for smc in self.summarize_collections}
+            dc_names = {dc.name for dc in self.document_collections}
             for step in self.pipeline.steps:
                 if step.tool == "chunk-embed-upsert" and step.collection not in vc_names:
                     raise ValueError(
@@ -86,9 +87,9 @@ class AppConfig(BaseModel):
                     raise ValueError(
                         f"Pipeline step references unknown structured collection: {step.collection!r}"
                     )
-                if step.tool == "summarize-embed-upsert" and step.collection not in smc_names:
+                if step.tool == "document-embed-upsert" and step.collection not in dc_names:
                     raise ValueError(
-                        f"Pipeline step references unknown summarize collection: {step.collection!r}"
+                        f"Pipeline step references unknown document collection: {step.collection!r}"
                     )
         return self
 

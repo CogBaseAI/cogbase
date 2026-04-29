@@ -10,10 +10,10 @@ import pytest
 from cogbase.config.config import (
     AppConfig,
     ChunkerConfig,
+    DocumentCollectionConfig,
     EmbeddingConfig,
     LLMConfig,
     StructuredStoreConfig,
-    SummarizeCollectionConfig,
     VectorStoreConfig,
 )
 
@@ -236,11 +236,11 @@ class TestAppConfig:
         with pytest.raises(ValueError, match="mapping"):
             AppConfig.from_yaml("- item1\n- item2\n")
 
-    def test_summarize_collections_empty_by_default(self):
+    def test_document_collections_empty_by_default(self):
         cfg = AppConfig.from_yaml(_MINIMAL_YAML)
-        assert cfg.summarize_collections == []
+        assert cfg.document_collections == []
 
-    def test_pipeline_step_literal_includes_summarize(self):
+    def test_pipeline_step_literal_includes_document_embed(self):
         yaml_text = textwrap.dedent("""\
             name: ok-app
             llm:
@@ -248,29 +248,29 @@ class TestAppConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            summarize_collections:
+            document_collections:
               - name: doc_summary
             pipeline:
               steps:
-                - tool: summarize-embed-upsert
+                - tool: document-embed-upsert
                   collection: doc_summary
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        assert cfg.pipeline.steps[0].tool == "summarize-embed-upsert"
+        assert cfg.pipeline.steps[0].tool == "document-embed-upsert"
         assert cfg.pipeline.steps[0].collection == "doc_summary"
 
-    def test_summarize_without_embedding_raises(self):
+    def test_document_collections_without_embedding_raises(self):
         yaml_text = textwrap.dedent("""\
             name: bad-app
             llm:
               model: gpt-4o-mini
-            summarize_collections:
+            document_collections:
               - name: doc_summary
         """)
-        with pytest.raises(Exception, match="embedding is required when summarize_collections"):
+        with pytest.raises(Exception, match="embedding is required when document_collections"):
             AppConfig.from_yaml(yaml_text)
 
-    def test_step_references_unknown_summarize_collection_raises(self):
+    def test_step_references_unknown_document_collection_raises(self):
         yaml_text = textwrap.dedent("""\
             name: bad-app
             llm:
@@ -278,14 +278,14 @@ class TestAppConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            summarize_collections:
+            document_collections:
               - name: doc_summary
             pipeline:
               steps:
-                - tool: summarize-embed-upsert
+                - tool: document-embed-upsert
                   collection: nonexistent
         """)
-        with pytest.raises(Exception, match="unknown summarize collection"):
+        with pytest.raises(Exception, match="unknown document collection"):
             AppConfig.from_yaml(yaml_text)
 
     def test_full_three_step_config_parses(self):
@@ -308,7 +308,7 @@ class TestAppConfig:
                 schema: '{_SCHEMA}'
                 extractor:
                   type: llm
-            summarize_collections:
+            document_collections:
               - name: document_summary
                 prompt: "Summarize in one sentence."
                 max_tokens: 128
@@ -319,37 +319,45 @@ class TestAppConfig:
                   collection: document_chunks
                 - tool: extract-structured
                   collection: contract_extraction
-                - tool: summarize-embed-upsert
+                - tool: document-embed-upsert
                   collection: document_summary
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         assert len(cfg.vector_collections) == 1
         assert len(cfg.structured_collections) == 1
-        assert len(cfg.summarize_collections) == 1
-        assert cfg.summarize_collections[0].name == "document_summary"
-        assert cfg.summarize_collections[0].prompt == "Summarize in one sentence."
-        assert cfg.summarize_collections[0].max_tokens == 128
+        assert len(cfg.document_collections) == 1
+        assert cfg.document_collections[0].name == "document_summary"
+        assert cfg.document_collections[0].prompt == "Summarize in one sentence."
+        assert cfg.document_collections[0].max_tokens == 128
         assert len(cfg.pipeline.steps) == 3
         tools = [s.tool for s in cfg.pipeline.steps]
-        assert tools == ["chunk-embed-upsert", "extract-structured", "summarize-embed-upsert"]
+        assert tools == ["chunk-embed-upsert", "extract-structured", "document-embed-upsert"]
 
 
 # ---------------------------------------------------------------------------
-# SummarizeCollectionConfig
+# DocumentCollectionConfig
 # ---------------------------------------------------------------------------
 
-class TestSummarizeCollectionConfig:
+class TestDocumentCollectionConfig:
     def test_defaults(self):
-        cfg = SummarizeCollectionConfig(name="s")
+        cfg = DocumentCollectionConfig(name="s")
         assert cfg.name == "s"
         assert cfg.prompt is None
         assert cfg.max_tokens == 1024
+        assert cfg.metadata_fields == []
 
     def test_custom_values(self):
-        cfg = SummarizeCollectionConfig(
+        cfg = DocumentCollectionConfig(
             name="doc_summary",
             prompt="One sentence please.",
             max_tokens=64,
         )
         assert cfg.prompt == "One sentence please."
         assert cfg.max_tokens == 64
+
+    def test_metadata_fields(self):
+        cfg = DocumentCollectionConfig(
+            name="meetings",
+            metadata_fields=["customer_id", "deal_stage"],
+        )
+        assert cfg.metadata_fields == ["customer_id", "deal_stage"]

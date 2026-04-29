@@ -1,4 +1,4 @@
-"""Tests for multi-collection IngestionPipeline (steps, SummarizeCollection)."""
+"""Tests for multi-collection IngestionPipeline (steps, DocumentCollection)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
     StructuredCollection,
-    SummarizeCollection,
+    DocumentCollection,
     ChunkCollection,
 )
 from cogbase.stores import CollectionSchema, FieldSchema, FieldType, VectorCollectionSchema
@@ -74,23 +74,23 @@ def _make_llm(summary: str = "A short summary.") -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# SummarizeCollection dataclass
+# DocumentCollection dataclass
 # ---------------------------------------------------------------------------
 
-class TestSummarizeCollection:
+class TestDocumentCollection:
     def test_construction(self):
-        smc = SummarizeCollection(
+        dc = DocumentCollection(
             schema=VectorCollectionSchema(name="doc_summary", dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             llm=_make_llm(),
         )
-        assert smc.name == "doc_summary"
-        assert smc.max_tokens == 1024
-        assert "2" in smc.prompt or "sentence" in smc.prompt.lower()
+        assert dc.name == "doc_summary"
+        assert dc.max_tokens == 1024
+        assert "sentence" in dc.prompt.lower()
 
     def test_custom_prompt_and_tokens(self):
-        smc = SummarizeCollection(
+        dc = DocumentCollection(
             schema=VectorCollectionSchema(name="s", dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
@@ -98,8 +98,26 @@ class TestSummarizeCollection:
             prompt="One sentence only.",
             max_tokens=64,
         )
-        assert smc.prompt == "One sentence only."
-        assert smc.max_tokens == 64
+        assert dc.prompt == "One sentence only."
+        assert dc.max_tokens == 64
+
+    def test_no_llm_defaults(self):
+        dc = DocumentCollection(
+            schema=VectorCollectionSchema(name="s", dimensions=4),
+            store=FAISSVectorStore(dim=4),
+            embedder=StubEmbedding(dim=4),
+        )
+        assert dc.llm is None
+        assert dc.metadata_fields == []
+
+    def test_metadata_fields(self):
+        dc = DocumentCollection(
+            schema=VectorCollectionSchema(name="s", dimensions=4),
+            store=FAISSVectorStore(dim=4),
+            embedder=StubEmbedding(dim=4),
+            metadata_fields=["customer_id", "deal_stage"],
+        )
+        assert dc.metadata_fields == ["customer_id", "deal_stage"]
 
 
 # ---------------------------------------------------------------------------
@@ -122,8 +140,8 @@ class TestMultiCollectionPipelineConstruction:
             extractor=StubExtractor(),
         )
 
-    def _make_smc(self, name: str = "summaries") -> SummarizeCollection:
-        return SummarizeCollection(
+    def _make_dc(self, name: str = "summaries") -> DocumentCollection:
+        return DocumentCollection(
             schema=VectorCollectionSchema(name=name, dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
@@ -133,18 +151,18 @@ class TestMultiCollectionPipelineConstruction:
     def test_explicit_steps_with_all_three_types(self):
         vc = self._make_vc("document_chunks")
         sc = self._make_sc()
-        smc = self._make_smc("document_summary")
+        dc = self._make_dc("document_summary")
 
         pipeline = IngestionPipeline(
             name="app",
             steps=[
-                ("chunk-embed-upsert",     "document_chunks"),
-                ("extract-structured",     "tags"),
-                ("summarize-embed-upsert", "document_summary"),
+                ("chunk-embed-upsert",    "document_chunks"),
+                ("extract-structured",    "tags"),
+                ("document-embed-upsert", "document_summary"),
             ],
             vector_collections=[vc],
             structured_collections=[sc],
-            summarize_collections=[smc],
+            document_collections=[dc],
         )
 
         assert pipeline.vector_collection_names == ["document_chunks", "document_summary"]
@@ -154,19 +172,18 @@ class TestMultiCollectionPipelineConstruction:
     def test_auto_steps_generation_from_collections(self):
         vc = self._make_vc()
         sc = self._make_sc()
-        smc = self._make_smc()
+        dc = self._make_dc()
 
         pipeline = IngestionPipeline(
             name="app",
             vector_collections=[vc],
             structured_collections=[sc],
-            summarize_collections=[smc],
+            document_collections=[dc],
         )
 
-        # Steps auto-generated: vc first, then sc, then smc
         assert ("chunk-embed-upsert", "chunks") in pipeline._steps
         assert ("extract-structured", "tags") in pipeline._steps
-        assert ("summarize-embed-upsert", "summaries") in pipeline._steps
+        assert ("document-embed-upsert", "summaries") in pipeline._steps
 
     def test_two_vector_collections(self):
         vc1 = self._make_vc("col_a")
@@ -185,17 +202,16 @@ class TestMultiCollectionPipelineConstruction:
 
     def test_vector_collection_names_respects_step_order(self):
         vc = self._make_vc("chunks")
-        smc = self._make_smc("summaries")
+        dc = self._make_dc("summaries")
 
-        # Summary step comes before chunk step
         pipeline = IngestionPipeline(
             name="app",
             steps=[
-                ("summarize-embed-upsert", "summaries"),
-                ("chunk-embed-upsert",     "chunks"),
+                ("document-embed-upsert", "summaries"),
+                ("chunk-embed-upsert",    "chunks"),
             ],
             vector_collections=[vc],
-            summarize_collections=[smc],
+            document_collections=[dc],
         )
 
         assert pipeline.vector_collection_names == ["summaries", "chunks"]
@@ -223,8 +239,8 @@ class TestRunnerResources:
         assert default == "chunks"
         assert ss is None
 
-    def test_falls_back_to_summarize_store(self):
-        smc = SummarizeCollection(
+    def test_falls_back_to_document_store(self):
+        dc = DocumentCollection(
             schema=VectorCollectionSchema(name="summaries", dimensions=4),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
@@ -232,11 +248,11 @@ class TestRunnerResources:
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("summarize-embed-upsert", "summaries")],
-            summarize_collections=[smc],
+            steps=[("document-embed-upsert", "summaries")],
+            document_collections=[dc],
         )
         _, vs, _, default = pipeline.runner_resources()
-        assert vs is smc.store
+        assert vs is dc.store
         assert default == "summaries"
 
     def test_structured_store_returned(self):
@@ -257,13 +273,13 @@ class TestRunnerResources:
 
 
 # ---------------------------------------------------------------------------
-# summarize-embed-upsert ingestion
+# document-embed-upsert ingestion
 # ---------------------------------------------------------------------------
 
-class TestSummarizeEmbedUpsert:
-    def _make_pipeline_with_summary(self, summary_text: str) -> tuple[IngestionPipeline, FAISSVectorStore]:
+class TestDocumentEmbedUpsert:
+    def _make_pipeline_with_llm(self, summary_text: str) -> tuple[IngestionPipeline, FAISSVectorStore]:
         vector_store = FAISSVectorStore(dim=4)
-        smc = SummarizeCollection(
+        dc = DocumentCollection(
             schema=VectorCollectionSchema(name="summaries", dimensions=4),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
@@ -271,42 +287,84 @@ class TestSummarizeEmbedUpsert:
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("summarize-embed-upsert", "summaries")],
-            summarize_collections=[smc],
+            steps=[("document-embed-upsert", "summaries")],
+            document_collections=[dc],
         )
         return pipeline, vector_store
 
     @pytest.mark.asyncio
     async def test_summary_chunk_upserted(self):
-        pipeline, vector_store = self._make_pipeline_with_summary("Contract summary.")
+        pipeline, vector_store = self._make_pipeline_with_llm("Contract summary.")
         await pipeline.setup()
         await pipeline._ingest(Document(doc_id="d-001", text="Long contract text here..."))
         assert vector_store.ntotal == 1
 
     @pytest.mark.asyncio
-    async def test_summary_chunk_id_is_doc_id_with_suffix(self):
-        pipeline, vector_store = self._make_pipeline_with_summary("Summary text.")
+    async def test_chunk_id_is_doc_id_with_document_suffix(self):
+        pipeline, vector_store = self._make_pipeline_with_llm("Summary text.")
         await pipeline.setup()
         await pipeline._ingest(Document(doc_id="doc-42", text="Some text."))
         chunks = await vector_store.search("summaries", "", [0.1] * 4, top_k=1)
         assert len(chunks) == 1
-        assert chunks[0].chunk_id == "doc-42__summary"
+        assert chunks[0].chunk_id == "doc-42__document"
         assert chunks[0].doc_id == "doc-42"
 
     @pytest.mark.asyncio
     async def test_summary_text_stored_in_chunk(self):
-        pipeline, vector_store = self._make_pipeline_with_summary("The parties agree to NDA terms.")
+        pipeline, vector_store = self._make_pipeline_with_llm("The parties agree to NDA terms.")
         await pipeline.setup()
         await pipeline._ingest(Document(doc_id="d-001", text="contract text"))
         chunks = await vector_store.search("summaries", "", [0.1] * 4, top_k=1)
         assert chunks[0].text == "The parties agree to NDA terms."
 
     @pytest.mark.asyncio
+    async def test_no_llm_embeds_doc_text_directly(self):
+        vector_store = FAISSVectorStore(dim=4)
+        dc = DocumentCollection(
+            schema=VectorCollectionSchema(name="summaries", dimensions=4),
+            store=vector_store,
+            embedder=StubEmbedding(dim=4),
+        )
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[("document-embed-upsert", "summaries")],
+            document_collections=[dc],
+        )
+        await pipeline.setup()
+        await pipeline._ingest(Document(doc_id="d-001", text="raw document text"))
+        chunks = await vector_store.search("summaries", "", [0.1] * 4, top_k=1)
+        assert len(chunks) == 1
+        assert chunks[0].text == "raw document text"
+
+    @pytest.mark.asyncio
+    async def test_metadata_fields_projected_into_chunk(self):
+        vector_store = FAISSVectorStore(dim=4)
+        dc = DocumentCollection(
+            schema=VectorCollectionSchema(name="summaries", dimensions=4),
+            store=vector_store,
+            embedder=StubEmbedding(dim=4),
+            metadata_fields=["customer_id", "deal_stage"],
+        )
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[("document-embed-upsert", "summaries")],
+            document_collections=[dc],
+        )
+        await pipeline.setup()
+        await pipeline._ingest(Document(
+            doc_id="d-001",
+            text="transcript",
+            metadata={"customer_id": "acme", "deal_stage": "negotiation", "internal": "skip"},
+        ))
+        chunks = await vector_store.search("summaries", "", [0.1] * 4, top_k=1)
+        assert chunks[0].metadata == {"customer_id": "acme", "deal_stage": "negotiation"}
+
+    @pytest.mark.asyncio
     async def test_empty_llm_response_skips_upsert(self):
         vector_store = FAISSVectorStore(dim=4)
         llm = MagicMock(spec=LLMBase)
         llm.complete = AsyncMock(return_value={"content": None, "tool_calls": None})
-        smc = SummarizeCollection(
+        dc = DocumentCollection(
             schema=VectorCollectionSchema(name="summaries", dimensions=4),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
@@ -314,8 +372,8 @@ class TestSummarizeEmbedUpsert:
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("summarize-embed-upsert", "summaries")],
-            summarize_collections=[smc],
+            steps=[("document-embed-upsert", "summaries")],
+            document_collections=[dc],
         )
         await pipeline.setup()
         await pipeline._ingest(Document(doc_id="d-001", text="text"))
@@ -326,7 +384,7 @@ class TestSummarizeEmbedUpsert:
         vector_store = FAISSVectorStore(dim=4)
         llm = MagicMock(spec=LLMBase)
         llm.complete = AsyncMock(side_effect=RuntimeError("LLM down"))
-        smc = SummarizeCollection(
+        dc = DocumentCollection(
             schema=VectorCollectionSchema(name="summaries", dimensions=4),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
@@ -334,11 +392,10 @@ class TestSummarizeEmbedUpsert:
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("summarize-embed-upsert", "summaries")],
-            summarize_collections=[smc],
+            steps=[("document-embed-upsert", "summaries")],
+            document_collections=[dc],
         )
         await pipeline.setup()
-        # Must not raise even though LLM failed
         count = await pipeline._ingest(Document(doc_id="d-001", text="text"))
         assert count == 0
         assert vector_store.ntotal == 0
@@ -366,7 +423,7 @@ class TestThreeStepPipeline:
             store=struct_store,
             extractor=StubExtractor(),
         )
-        smc = SummarizeCollection(
+        dc = DocumentCollection(
             schema=VectorCollectionSchema(name="summaries", dimensions=4),
             store=summary_store,
             embedder=StubEmbedding(dim=4),
@@ -376,13 +433,13 @@ class TestThreeStepPipeline:
         pipeline = IngestionPipeline(
             name="app",
             steps=[
-                ("chunk-embed-upsert",     "chunks"),
-                ("extract-structured",     "tags"),
-                ("summarize-embed-upsert", "summaries"),
+                ("chunk-embed-upsert",    "chunks"),
+                ("extract-structured",    "tags"),
+                ("document-embed-upsert", "summaries"),
             ],
             vector_collections=[vc],
             structured_collections=[sc],
-            summarize_collections=[smc],
+            document_collections=[dc],
         )
 
         await pipeline.setup()
@@ -390,7 +447,7 @@ class TestThreeStepPipeline:
 
         assert chunk_store.ntotal > 0, "chunk-embed-upsert did not populate vector store"
         assert count == 1, "extract-structured did not produce a record"
-        assert summary_store.ntotal == 1, "summarize-embed-upsert did not upsert summary"
+        assert summary_store.ntotal == 1, "document-embed-upsert did not upsert summary"
 
     @pytest.mark.asyncio
     async def test_setup_creates_all_structured_collections(self):
@@ -435,11 +492,11 @@ class TestThreeStepPipeline:
 
 
 # ---------------------------------------------------------------------------
-# Config: SummarizeCollectionConfig and new step type
+# Config: DocumentCollectionConfig and new step type
 # ---------------------------------------------------------------------------
 
-class TestSummarizeCollectionConfig:
-    def test_parse_summarize_collection(self):
+class TestDocumentCollectionConfig:
+    def test_parse_document_collection(self):
         import textwrap
         from cogbase.config.config import AppConfig
 
@@ -451,22 +508,22 @@ class TestSummarizeCollectionConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            summarize_collections:
+            document_collections:
               - name: document_summary
                 prompt: "Summarize in one sentence."
                 max_tokens: 128
             pipeline:
               steps:
-                - tool: summarize-embed-upsert
+                - tool: document-embed-upsert
                   collection: document_summary
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        assert len(cfg.summarize_collections) == 1
-        assert cfg.summarize_collections[0].name == "document_summary"
-        assert cfg.summarize_collections[0].prompt == "Summarize in one sentence."
-        assert cfg.summarize_collections[0].max_tokens == 128
+        assert len(cfg.document_collections) == 1
+        assert cfg.document_collections[0].name == "document_summary"
+        assert cfg.document_collections[0].prompt == "Summarize in one sentence."
+        assert cfg.document_collections[0].max_tokens == 128
 
-    def test_summarize_collection_requires_embedding(self):
+    def test_document_collection_requires_embedding(self):
         import textwrap
         from cogbase.config.config import AppConfig
 
@@ -474,13 +531,13 @@ class TestSummarizeCollectionConfig:
             name: bad-app
             llm:
               model: gpt-4o-mini
-            summarize_collections:
+            document_collections:
               - name: document_summary
         """)
-        with pytest.raises(Exception, match="embedding is required when summarize_collections"):
+        with pytest.raises(Exception, match="embedding is required when document_collections"):
             AppConfig.from_yaml(yaml_text)
 
-    def test_unknown_summarize_collection_in_step_raises(self):
+    def test_unknown_document_collection_in_step_raises(self):
         import textwrap
         from cogbase.config.config import AppConfig
 
@@ -491,12 +548,12 @@ class TestSummarizeCollectionConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            summarize_collections:
+            document_collections:
               - name: document_summary
             pipeline:
               steps:
-                - tool: summarize-embed-upsert
+                - tool: document-embed-upsert
                   collection: nonexistent
         """)
-        with pytest.raises(Exception, match="unknown summarize collection"):
+        with pytest.raises(Exception, match="unknown document collection"):
             AppConfig.from_yaml(yaml_text)

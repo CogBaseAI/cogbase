@@ -22,7 +22,7 @@ from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
     StructuredCollection,
-    SummarizeCollection,
+    DocumentCollection,
     ChunkCollection,
 )
 from cogbase.core.basemodel_to_schema import cls_json_schema_for_llm
@@ -68,7 +68,7 @@ def build_app(
 
     Iterates over all ``config.pipeline.steps`` to build each referenced
     collection.  Supports ``chunk-embed-upsert``, ``extract-structured``, and
-    ``summarize-embed-upsert`` steps.
+    ``document-embed-upsert`` steps.
 
     Store backends are resolved in priority order:
 
@@ -83,25 +83,25 @@ def build_app(
     steps = config.pipeline.steps if config.pipeline else []
     vc_by_name = {vc.name: vc for vc in config.vector_collections}
     sc_by_name = {sc.name: sc for sc in config.structured_collections}
-    smc_by_name = {smc.name: smc for smc in config.summarize_collections}
+    dc_by_name = {dc.name: dc for dc in config.document_collections}
 
     # --- Shared resources (built once, referenced by multiple collections) ---
     vector_store: VectorStoreBase | None = None
     embedder = None
 
     needs_vector = any(
-        s.tool in ("chunk-embed-upsert", "summarize-embed-upsert") for s in steps
+        s.tool in ("chunk-embed-upsert", "document-embed-upsert") for s in steps
     )
     if needs_vector:
         vector_store_cfg = config.vector_store or system_vector_store_cfg
         if vector_store_cfg is None:
             raise ValueError(
-                "chunk-embed-upsert / summarize-embed-upsert steps require a vector store "
+                "chunk-embed-upsert / document-embed-upsert steps require a vector store "
                 "(configure vector_store in the app config or system config)"
             )
         if config.embedding is None:
             raise ValueError(
-                "chunk-embed-upsert / summarize-embed-upsert steps require an embedding config"
+                "chunk-embed-upsert / document-embed-upsert steps require an embedding config"
             )
         vector_store = _build_vector_store(vector_store_cfg)
         embedder = _build_embedder(config.embedding)
@@ -122,10 +122,10 @@ def build_app(
     # --- Build collection objects (deduplicated per name) ---
     vector_collections: list[ChunkCollection] = []
     structured_collections: list[StructuredCollection] = []
-    summarize_collections: list[SummarizeCollection] = []
+    document_collections: list[DocumentCollection] = []
     built_vc: set[str] = set()
     built_sc: set[str] = set()
-    built_smc: set[str] = set()
+    built_dc: set[str] = set()
 
     for step in steps:
         if step.tool == "chunk-embed-upsert" and step.collection not in built_vc:
@@ -164,28 +164,29 @@ def build_app(
             ))
             built_sc.add(sc_cfg.name)
 
-        elif step.tool == "summarize-embed-upsert" and step.collection not in built_smc:
-            smc_cfg = smc_by_name[step.collection]
-            summarize_collections.append(SummarizeCollection(
+        elif step.tool == "document-embed-upsert" and step.collection not in built_dc:
+            dc_cfg = dc_by_name[step.collection]
+            document_collections.append(DocumentCollection(
                 schema=VectorCollectionSchema(
-                    name=smc_cfg.name,
+                    name=dc_cfg.name,
                     dimensions=vector_store_cfg.dim,  # type: ignore[union-attr]
-                    description=smc_cfg.description,
+                    description=dc_cfg.description,
                 ),
                 store=vector_store,    # type: ignore[arg-type]  # validated above
                 embedder=embedder,     # type: ignore[arg-type]
                 llm=llm,
-                prompt=smc_cfg.prompt or "Summarize this document in a few sentences.",
-                max_tokens=smc_cfg.max_tokens,
+                prompt=dc_cfg.prompt or "Summarize this document in a few sentences.",
+                max_tokens=dc_cfg.max_tokens,
+                metadata_fields=dc_cfg.metadata_fields,
             ))
-            built_smc.add(smc_cfg.name)
+            built_dc.add(dc_cfg.name)
 
     pipeline = IngestionPipeline(
         name=config.name,
         steps=[(s.tool, s.collection) for s in steps],
         vector_collections=vector_collections or None,
         structured_collections=structured_collections or None,
-        summarize_collections=summarize_collections or None,
+        document_collections=document_collections or None,
     )
 
     document_store_cfg = config.document_store or system_document_store_cfg

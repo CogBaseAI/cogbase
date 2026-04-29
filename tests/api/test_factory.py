@@ -9,7 +9,7 @@ import pytest
 from cogbase.config.config import AppConfig
 from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
 from api.factory import build_structured_store, build_app
-from cogbase.pipeline.ingestion_pipeline import SummarizeCollection, ChunkCollection
+from cogbase.pipeline.ingestion_pipeline import DocumentCollection, ChunkCollection
 from cogbase.stores.document.local_fs import LocalFSDocumentStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.structured.sqlite import SQLiteStructuredStore
@@ -177,7 +177,7 @@ class TestBuildAppVectorStoreResolution:
 
 
 # ---------------------------------------------------------------------------
-# build_app — summarize-embed-upsert step
+# build_app — document-embed-upsert step
 # ---------------------------------------------------------------------------
 
 _SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'  # already defined above, reused
@@ -190,13 +190,13 @@ llm:
 embedding:
   provider: openai
   model: text-embedding-3-small
-summarize_collections:
+document_collections:
   - name: document_summary
     prompt: "Summarize in one sentence."
     max_tokens: 128
 pipeline:
   steps:
-    - tool: summarize-embed-upsert
+    - tool: document-embed-upsert
       collection: document_summary
 """
 
@@ -219,7 +219,7 @@ structured_collections:
     schema: '{_SCHEMA}'
     extractor:
       type: llm
-summarize_collections:
+document_collections:
   - name: document_summary
     prompt: "Summarize in one sentence."
     max_tokens: 128
@@ -230,14 +230,14 @@ pipeline:
       collection: document_chunks
     - tool: extract-structured
       collection: contract_extraction
-    - tool: summarize-embed-upsert
+    - tool: document-embed-upsert
       collection: document_summary
 """
 
 
-class TestBuildAppSummarizeCollection:
+class TestBuildAppDocumentCollection:
     @patch("api.factory._build_llm")
-    def test_summarize_collection_present_in_pipeline(self, mock_build_llm):
+    def test_document_collection_present_in_pipeline(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
@@ -246,10 +246,10 @@ class TestBuildAppSummarizeCollection:
             mock_emb.return_value = MagicMock()
             app = build_app(cfg, system_vector_store_cfg=sys_vs_cfg)
 
-        assert "document_summary" in app._ingest_pipeline._summarize_by_name
+        assert "document_summary" in app._ingest_pipeline._document_by_name
 
     @patch("api.factory._build_llm")
-    def test_summarize_collection_name_prompt_max_tokens(self, mock_build_llm):
+    def test_document_collection_name_prompt_max_tokens(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
@@ -258,13 +258,13 @@ class TestBuildAppSummarizeCollection:
             mock_emb.return_value = MagicMock()
             app = build_app(cfg, system_vector_store_cfg=sys_vs_cfg)
 
-        smc = app._ingest_pipeline._summarize_by_name["document_summary"]
-        assert smc.name == "document_summary"
-        assert smc.prompt == "Summarize in one sentence."
-        assert smc.max_tokens == 128
+        dc = app._ingest_pipeline._document_by_name["document_summary"]
+        assert dc.name == "document_summary"
+        assert dc.prompt == "Summarize in one sentence."
+        assert dc.max_tokens == 128
 
     @patch("api.factory._build_llm")
-    def test_summarize_collection_uses_shared_vector_store(self, mock_build_llm):
+    def test_document_collection_uses_shared_vector_store(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
@@ -279,9 +279,8 @@ class TestBuildAppSummarizeCollection:
             )
 
         vc = next(iter(app._ingest_pipeline._vector_by_name.values()))
-        smc = app._ingest_pipeline._summarize_by_name["document_summary"]
-        # Both collections share the same vector store instance
-        assert vc.store is smc.store
+        dc = app._ingest_pipeline._document_by_name["document_summary"]
+        assert vc.store is dc.store
 
     @patch("api.factory._build_llm")
     def test_three_step_pipeline_builds_all_collections(self, mock_build_llm):
@@ -300,7 +299,7 @@ class TestBuildAppSummarizeCollection:
 
         assert app._ingest_pipeline._vector_by_name
         assert app._ingest_pipeline._structured_by_name
-        assert "document_summary" in app._ingest_pipeline._summarize_by_name
+        assert "document_summary" in app._ingest_pipeline._document_by_name
 
     @patch("api.factory._build_llm")
     def test_vector_collection_names_includes_both(self, mock_build_llm):

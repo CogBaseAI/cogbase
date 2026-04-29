@@ -9,19 +9,19 @@ Typical usage::
     from cogbase.core.app import CogBaseApp
     from cogbase.core.models import Document
     from cogbase.pipeline.ingestion_pipeline import (
-        IngestionPipeline, ChunkCollection, StructuredCollection, SummarizeCollection,
+        IngestionPipeline, ChunkCollection, StructuredCollection, DocumentCollection,
     )
 
     pipeline = IngestionPipeline(
         name="legal",
         steps=[
-            ("chunk-embed-upsert",     "document_chunks"),
-            ("extract-structured",     "contracts"),
-            ("summarize-embed-upsert", "document_summary"),
+            ("chunk-embed-upsert",    "document_chunks"),
+            ("extract-structured",    "contracts"),
+            ("document-embed-upsert", "document_summary"),
         ],
         vector_collections=[ChunkCollection(schema=VectorCollectionSchema(name="document_chunks", dimensions=1536), ...)],
         structured_collections=[StructuredCollection(schema=..., ...)],
-        summarize_collections=[SummarizeCollection(schema=VectorCollectionSchema(name="document_summary", dimensions=1536), ...)],
+        document_collections=[DocumentCollection(schema=VectorCollectionSchema(name="document_summary", dimensions=1536), ...)],
     )
     app = CogBaseApp("legal", llm, pipeline)
     await app.setup()

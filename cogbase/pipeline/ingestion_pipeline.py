@@ -2,10 +2,11 @@
 
 Supports three step types:
 
-- ``chunk-embed-upsert``     — chunk document text, embed, upsert to a vector collection
-- ``extract-structured``     — LLM extraction → save to a structured collection
-- ``summarize-embed-upsert`` — LLM summary of the full document → embed → upsert to
-                               a vector collection (one chunk per document)
+- ``chunk-embed-upsert``    — chunk document text, embed, upsert to a vector collection
+- ``extract-structured``    — LLM extraction → save to a structured collection
+- ``document-embed-upsert`` — one vector record per document; embeds an LLM-generated
+                              summary (when ``llm`` is configured) or the raw document
+                              text; carries optional metadata fields for search filtering
 
 Steps run in declaration order.  For config-driven construction see ``api/factory.py``.
 """
@@ -111,29 +112,38 @@ class StructuredCollection:
 
 
 @dataclass
-class SummarizeCollection:
-    """A vector collection populated with LLM-generated per-document summaries.
+class DocumentCollection:
+    """A vector collection with exactly one record per document.
 
-    Each ingested document produces exactly one chunk: the LLM summary of its
-    full text.  This is useful for high-level semantic search over document
-    topics rather than specific passages.
+    Each ingested document produces one chunk whose text is either an
+    LLM-generated summary (when ``llm`` is supplied) or the raw document text
+    (when ``llm`` is ``None``).  Useful for document-level semantic search and
+    cross-document similarity queries.
+
+    ``metadata_fields`` lists keys to copy from ``Document.metadata`` into the
+    stored ``Chunk.metadata``, making them available as filter predicates at
+    search time (e.g. ``customer_id``, ``deal_stage``).  Only keys present in
+    the document metadata are copied; missing keys are silently skipped.
 
     Args:
-        schema:     ``VectorCollectionSchema`` carrying the collection name,
-                    dimensions, description, and optional metadata.
-        store:      ``VectorStoreBase`` that persists the summary chunks.
-        embedder:   ``EmbeddingBase`` that produces the summary embedding.
-        llm:        ``LLMBase`` used to generate the summary.
-        prompt:     System prompt for the summarisation call.
-        max_tokens: Maximum tokens for the generated summary.
+        schema:         ``VectorCollectionSchema`` carrying the collection name,
+                        dimensions, description, and optional metadata.
+        store:          ``VectorStoreBase`` that persists the chunks.
+        embedder:       ``EmbeddingBase`` that produces the embedding.
+        llm:            Optional ``LLMBase`` used to generate the summary text.
+                        When ``None`` the raw document text is embedded directly.
+        prompt:         System prompt for the LLM summarisation call.
+        max_tokens:     Maximum tokens for the generated summary.
+        metadata_fields: Document metadata keys to project into chunk metadata.
     """
 
     schema: VectorCollectionSchema
     store: VectorStoreBase
     embedder: EmbeddingBase
-    llm: LLMBase
+    llm: LLMBase | None = None
     prompt: str = "Summarize this document in a few sentences."
     max_tokens: int = 1024
+    metadata_fields: list[str] = field(default_factory=list)
 
     @property
     def name(self) -> str:
@@ -149,19 +159,19 @@ class IngestionPipeline:
 
     Each step maps a tool name to a named collection:
 
-    - ``"chunk-embed-upsert"``     → :class:`ChunkCollection`
-    - ``"extract-structured"``     → :class:`StructuredCollection`
-    - ``"summarize-embed-upsert"`` → :class:`SummarizeCollection`
+    - ``"chunk-embed-upsert"``    → :class:`ChunkCollection`
+    - ``"extract-structured"``    → :class:`StructuredCollection`
+    - ``"document-embed-upsert"`` → :class:`DocumentCollection`
 
     Steps run in declaration order.
 
     Args:
-        name:                  Logical name for this pipeline.
-        steps:                 Ordered list of ``(tool, collection_name)`` tuples.
-                               Auto-generated from provided collections when omitted.
-        vector_collections:    Vector collections available to steps.
+        name:                   Logical name for this pipeline.
+        steps:                  Ordered list of ``(tool, collection_name)`` tuples.
+                                Auto-generated from provided collections when omitted.
+        vector_collections:     Vector collections available to steps.
         structured_collections: Structured collections available to steps.
-        summarize_collections: Summarize collections available to steps.
+        document_collections:   Document-level vector collections available to steps.
     """
 
     def __init__(
@@ -170,17 +180,17 @@ class IngestionPipeline:
         steps: list[tuple[str, str]] | None = None,
         vector_collections: list[ChunkCollection] | None = None,
         structured_collections: list[StructuredCollection] | None = None,
-        summarize_collections: list[SummarizeCollection] | None = None,
+        document_collections: list[DocumentCollection] | None = None,
     ) -> None:
         self.name = name
 
         _vcs: list[ChunkCollection] = list(vector_collections or [])
         _scs: list[StructuredCollection] = list(structured_collections or [])
-        _smcs: list[SummarizeCollection] = list(summarize_collections or [])
+        _dcs: list[DocumentCollection] = list(document_collections or [])
 
         self._vector_by_name: dict[str, ChunkCollection] = {vc.name: vc for vc in _vcs}
         self._structured_by_name: dict[str, StructuredCollection] = {sc.name: sc for sc in _scs}
-        self._summarize_by_name: dict[str, SummarizeCollection] = {smc.name: smc for smc in _smcs}
+        self._document_by_name: dict[str, DocumentCollection] = {dc.name: dc for dc in _dcs}
 
         # Auto-generate steps from collection order when not explicitly provided
         if steps is None:
@@ -189,8 +199,8 @@ class IngestionPipeline:
                 _steps.append(("chunk-embed-upsert", vc.name))
             for sc in _scs:
                 _steps.append(("extract-structured", sc.name))
-            for smc in _smcs:
-                _steps.append(("summarize-embed-upsert", smc.name))
+            for dc in _dcs:
+                _steps.append(("document-embed-upsert", dc.name))
             self._steps = _steps
         else:
             self._steps = list(steps)
@@ -210,10 +220,10 @@ class IngestionPipeline:
 
     @property
     def vector_collection_names(self) -> list[str]:
-        """Names of all vector collections (chunk-embed and summarize), in step order."""
+        """Names of all vector collections (chunk-embed and document-embed), in step order."""
         seen: list[str] = []
         for tool, name in self._steps:
-            if tool in ("chunk-embed-upsert", "summarize-embed-upsert") and name not in seen:
+            if tool in ("chunk-embed-upsert", "document-embed-upsert") and name not in seen:
                 seen.append(name)
         return seen
 
@@ -228,12 +238,12 @@ class IngestionPipeline:
         seen: list[tuple[str, str]] = []
         seen_names: set[str] = set()
         for tool, name in self._steps:
-            if tool not in ("chunk-embed-upsert", "summarize-embed-upsert"):
+            if tool not in ("chunk-embed-upsert", "document-embed-upsert"):
                 continue
             if name in seen_names:
                 continue
             seen_names.add(name)
-            col = self._vector_by_name.get(name) or self._summarize_by_name.get(name)
+            col = self._vector_by_name.get(name) or self._document_by_name.get(name)
             explicit = col.description if col is not None else ""
             desc = explicit or _DEFAULT_VC_DESCRIPTIONS.get(name, name)
             seen.append((name, desc))
@@ -245,7 +255,7 @@ class IngestionPipeline:
         """Return ``(structured_store, vector_store, embedder, default_vector_collection)`` for Runner.
 
         Selects the first chunk-embed-upsert collection's store/embedder as the
-        default vector resources (falls back to summarize-embed-upsert if none).
+        default vector resources (falls back to document-embed-upsert if none).
         """
         vector_store: VectorStoreBase | None = None
         embedder: EmbeddingBase | None = None
@@ -259,9 +269,9 @@ class IngestionPipeline:
 
         if vector_store is None:
             for tool, name in self._steps:
-                if tool == "summarize-embed-upsert" and name in self._summarize_by_name:
-                    smc = self._summarize_by_name[name]
-                    vector_store, embedder, default_vc = smc.store, smc.embedder, smc.name
+                if tool == "document-embed-upsert" and name in self._document_by_name:
+                    dc = self._document_by_name[name]
+                    vector_store, embedder, default_vc = dc.store, dc.embedder, dc.name
                     break
 
         structured_store: StructuredStoreBase | None = None
@@ -300,8 +310,8 @@ class IngestionPipeline:
                 records_extracted += await self._run_chunk_embed_upsert(doc, collection_name)
             elif tool == "extract-structured":
                 records_extracted += await self._run_extract_structured(doc, collection_name)
-            elif tool == "summarize-embed-upsert":
-                await self._run_summarize_embed_upsert(doc, collection_name)
+            elif tool == "document-embed-upsert":
+                await self._run_document_embed_upsert(doc, collection_name)
             else:
                 logger.warning(
                     "ingestion_pipeline.ingest.unknown_tool name=%s tool=%s", self.name, tool
@@ -366,48 +376,52 @@ class IngestionPipeline:
         )
         return 1
 
-    async def _run_summarize_embed_upsert(self, doc: Document, collection_name: str) -> None:
-        smc = self._summarize_by_name.get(collection_name)
-        if smc is None:
+    async def _run_document_embed_upsert(self, doc: Document, collection_name: str) -> None:
+        dc = self._document_by_name.get(collection_name)
+        if dc is None:
             logger.warning(
-                "ingestion_pipeline.summarize_embed_upsert.unknown_collection name=%s collection=%s",
+                "ingestion_pipeline.document_embed_upsert.unknown_collection name=%s collection=%s",
                 self.name, collection_name,
             )
             return
 
-        summary = await self._generate_summary(doc, smc)
-        if not summary:
+        text = await self._get_document_text(doc, dc)
+        if not text:
             logger.debug(
-                "ingestion_pipeline.summarize_embed_upsert.empty_summary name=%s doc_id=%s",
+                "ingestion_pipeline.document_embed_upsert.empty_text name=%s doc_id=%s",
                 self.name, doc.doc_id,
             )
             return
 
-        (embedding,) = await smc.embedder.embed([summary])
+        (embedding,) = await dc.embedder.embed([text])
+        metadata = {k: v for k, v in doc.metadata.items() if k in dc.metadata_fields}
         chunk = Chunk(
-            chunk_id=f"{doc.doc_id}__summary",
+            chunk_id=f"{doc.doc_id}__document",
             doc_id=doc.doc_id,
-            text=summary,
+            text=text,
             embedding=embedding,
+            metadata=metadata,
         )
-        await smc.store.upsert(smc.name, [chunk])
+        await dc.store.upsert(dc.name, [chunk])
         logger.debug(
-            "ingestion_pipeline.summarize_embed_upsert.upserted name=%s doc_id=%s collection=%s",
+            "ingestion_pipeline.document_embed_upsert.upserted name=%s doc_id=%s collection=%s",
             self.name, doc.doc_id, collection_name,
         )
 
-    async def _generate_summary(self, doc: Document, smc: SummarizeCollection) -> str | None:
+    async def _get_document_text(self, doc: Document, dc: DocumentCollection) -> str | None:
+        if dc.llm is None:
+            return doc.text or None
         messages: list[ChatMessage] = [
-            {"role": "system", "content": smc.prompt},
+            {"role": "system", "content": dc.prompt},
             {"role": "user", "content": doc.text},
         ]
         try:
-            result = await smc.llm.complete(messages, max_tokens=smc.max_tokens)
+            result = await dc.llm.complete(messages, max_tokens=dc.max_tokens)
             return result.get("content") or None
         except Exception:
             logger.exception(
-                "ingestion_pipeline.generate_summary.failed name=%s doc_id=%s collection=%s",
-                self.name, doc.doc_id, smc.name,
+                "ingestion_pipeline.get_document_text.failed name=%s doc_id=%s collection=%s",
+                self.name, doc.doc_id, dc.name,
             )
             return None
 
