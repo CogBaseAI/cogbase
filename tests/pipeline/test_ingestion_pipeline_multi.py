@@ -81,7 +81,7 @@ def _make_llm(summary: str = "A short summary.") -> MagicMock:
 class TestDocumentCollection:
     def test_construction(self):
         dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="doc_summary", dimensions=4),
+            schema=VectorCollectionSchema(name="doc_summary", dimensions=4, description="Test document summaries"),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             llm=_make_llm(),
@@ -92,7 +92,7 @@ class TestDocumentCollection:
 
     def test_custom_prompt_and_tokens(self):
         dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="s", dimensions=4),
+            schema=VectorCollectionSchema(name="s", dimensions=4, description="Test summaries"),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             llm=_make_llm(),
@@ -104,7 +104,7 @@ class TestDocumentCollection:
 
     def test_no_llm_defaults(self):
         dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="s", dimensions=4),
+            schema=VectorCollectionSchema(name="s", dimensions=4, description="Test summaries"),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
         )
@@ -113,7 +113,7 @@ class TestDocumentCollection:
 
     def test_metadata_fields(self):
         dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="s", dimensions=4),
+            schema=VectorCollectionSchema(name="s", dimensions=4, description="Test summaries"),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             metadata_fields=["customer_id", "deal_stage"],
@@ -128,7 +128,7 @@ class TestDocumentCollection:
 class TestMultiCollectionPipelineConstruction:
     def _make_vc(self, name: str = "chunks") -> ChunkCollection:
         return ChunkCollection(
-            schema=VectorCollectionSchema(name=name, dimensions=4),
+            schema=VectorCollectionSchema(name=name, dimensions=4, description="Test chunks"),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
@@ -143,7 +143,7 @@ class TestMultiCollectionPipelineConstruction:
 
     def _make_dc(self, name: str = "summaries") -> DocumentCollection:
         return DocumentCollection(
-            schema=VectorCollectionSchema(name=name, dimensions=4),
+            schema=VectorCollectionSchema(name=name, dimensions=4, description="Test document summaries"),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             llm=_make_llm(),
@@ -211,7 +211,7 @@ class TestDocumentEmbedUpsert:
     def _make_pipeline_with_llm(self, summary_text: str) -> tuple[IngestionPipeline, FAISSVectorStore]:
         vector_store = FAISSVectorStore(dim=4)
         dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="summaries", dimensions=4),
+            schema=VectorCollectionSchema(name="summaries", dimensions=4, description="Test document summaries"),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             llm=_make_llm(summary=summary_text),
@@ -252,7 +252,7 @@ class TestDocumentEmbedUpsert:
     async def test_no_llm_embeds_doc_text_directly(self):
         vector_store = FAISSVectorStore(dim=4)
         dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="summaries", dimensions=4),
+            schema=VectorCollectionSchema(name="summaries", dimensions=4, description="Test document summaries"),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
         )
@@ -271,7 +271,7 @@ class TestDocumentEmbedUpsert:
     async def test_metadata_fields_projected_into_chunk(self):
         vector_store = FAISSVectorStore(dim=4)
         dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="summaries", dimensions=4),
+            schema=VectorCollectionSchema(name="summaries", dimensions=4, description="Test document summaries"),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             metadata_fields=["customer_id", "deal_stage"],
@@ -296,7 +296,7 @@ class TestDocumentEmbedUpsert:
         llm = MagicMock(spec=LLMBase)
         llm.complete = AsyncMock(return_value={"content": None, "tool_calls": None})
         dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="summaries", dimensions=4),
+            schema=VectorCollectionSchema(name="summaries", dimensions=4, description="Test document summaries"),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             llm=llm,
@@ -316,7 +316,7 @@ class TestDocumentEmbedUpsert:
         llm = MagicMock(spec=LLMBase)
         llm.complete = AsyncMock(side_effect=RuntimeError("LLM down"))
         dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="summaries", dimensions=4),
+            schema=VectorCollectionSchema(name="summaries", dimensions=4, description="Test document summaries"),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             llm=llm,
@@ -344,7 +344,7 @@ class TestThreeStepPipeline:
         struct_store = InMemoryStructuredStore()
 
         vc = ChunkCollection(
-            schema=VectorCollectionSchema(name="chunks", dimensions=4),
+            schema=VectorCollectionSchema(name="chunks", dimensions=4, description="Test chunks"),
             store=chunk_store,
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
@@ -355,7 +355,7 @@ class TestThreeStepPipeline:
             extractor=StubExtractor(),
         )
         dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="summaries", dimensions=4),
+            schema=VectorCollectionSchema(name="summaries", dimensions=4, description="Test document summaries"),
             store=summary_store,
             embedder=StubEmbedding(dim=4),
             llm=_make_llm("Short summary."),

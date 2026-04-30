@@ -114,7 +114,7 @@ def _make_pipeline(
     vc = None
     if vector_store is not None:
         assert embedder is not None and chunker is not None
-        vc = ChunkCollection(schema=VectorCollectionSchema(name=name, dimensions=4), store=vector_store, embedder=embedder, chunker=chunker)
+        vc = ChunkCollection(schema=VectorCollectionSchema(name=name, dimensions=4, description="Test chunks"), store=vector_store, embedder=embedder, chunker=chunker)
 
     return IngestionPipeline(
         name=name,
@@ -412,7 +412,7 @@ class TestVectorOnlyMode:
         vc_store = FAISSVectorStore(dim=4)
         vc_embedder = StubEmbedding(dim=4)
         vc = ChunkCollection(
-            schema=VectorCollectionSchema(name="vector_only", dimensions=4),
+            schema=VectorCollectionSchema(name="vector_only", dimensions=4, description="Test vector-only chunks"),
             store=vc_store,
             embedder=vc_embedder,
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
@@ -455,7 +455,7 @@ class TestVectorOnlyMode:
     async def test_ingest_populates_vector_store_not_structured(self):
         vector_store = FAISSVectorStore(dim=4)
         vc = ChunkCollection(
-            schema=VectorCollectionSchema(name="testapp", dimensions=4),
+            schema=VectorCollectionSchema(name="testapp", dimensions=4, description="Test chunks"),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),

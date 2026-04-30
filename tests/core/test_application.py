@@ -119,7 +119,7 @@ class TestIngestionPipelineConstruction:
 
     def test_vector_only(self):
         vc = ChunkCollection(
-            schema=VectorCollectionSchema(name="docs", dimensions=4),
+            schema=VectorCollectionSchema(name="docs", dimensions=4, description="Test document chunks"),
             store=FAISSVectorStore(dim=4),
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
@@ -183,7 +183,7 @@ class TestIngestionPipelineIngest:
         vector_store = FAISSVectorStore(dim=4)
         structured_store = InMemoryStructuredStore()
         vc = ChunkCollection(
-            schema=VectorCollectionSchema(name="docs", dimensions=4),
+            schema=VectorCollectionSchema(name="docs", dimensions=4, description="Test document chunks"),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
@@ -241,7 +241,7 @@ class TestIngestionPipelineIngest:
     async def test_vector_only_app_ingest_returns_zero(self):
         vector_store = FAISSVectorStore(dim=4)
         vc = ChunkCollection(
-            schema=VectorCollectionSchema(name="docs", dimensions=4),
+            schema=VectorCollectionSchema(name="docs", dimensions=4, description="Test document chunks"),
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),

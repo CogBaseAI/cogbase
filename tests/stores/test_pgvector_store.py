@@ -90,7 +90,7 @@ async def store(pgvector_container):
     s = PGVectorStore(dsn=pgvector_container)
     await s.connect()
     await s.delete_collection(COLLECTION)
-    await s.create_collection(VectorCollectionSchema(name=COLLECTION, dimensions=DIM))
+    await s.create_collection(VectorCollectionSchema(name=COLLECTION, dimensions=DIM, description="Test chunks"))
     yield s
     await s.close()
 
@@ -271,7 +271,7 @@ async def test_delete_collection_drops_table(store):
     await store.upsert(COLLECTION, [make_chunk(embedding=[1.0, 0.0, 0.0, 0.0])])
     await store.delete_collection(COLLECTION)
     # Table is gone — recreate and verify it's empty
-    await store.create_collection(VectorCollectionSchema(name=COLLECTION, dimensions=DIM))
+    await store.create_collection(VectorCollectionSchema(name=COLLECTION, dimensions=DIM, description="Test chunks"))
     assert await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5) == []
 
 
@@ -284,7 +284,7 @@ async def test_delete_collection_is_idempotent(store):
 @pytest.mark.asyncio
 async def test_delete_collection_leaves_other_collections_intact(store):
     other = "other_chunks"
-    await store.create_collection(VectorCollectionSchema(name=other, dimensions=DIM))
+    await store.create_collection(VectorCollectionSchema(name=other, dimensions=DIM, description="Test chunks"))
     try:
         chunk = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0])
         await store.upsert(other, [chunk])

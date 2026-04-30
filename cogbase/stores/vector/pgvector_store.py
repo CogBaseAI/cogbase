@@ -15,7 +15,7 @@ Usage::
 
     store = PGVectorStore(dsn="postgresql://user:pass@localhost/mydb")
     await store.connect()
-    schema = VectorCollectionSchema(name="chunks", dimensions=1536)
+    schema = VectorCollectionSchema(name="chunks", dimensions=1536, description="Full-text passage chunks")
     await store.create_collection(schema)
     await store.upsert("chunks", chunks)
     results = await store.search("chunks", query_text, query_embedding, top_k=10)

@@ -26,8 +26,15 @@ class VectorCollectionSchema(BaseModel):
 
     name: str
     dimensions: int
-    description: str = ""
+    description: str
     metadata: dict[str, str] = {}
+
+    @field_validator("description")
+    @classmethod
+    def _non_empty_description(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("VectorCollectionSchema.description must be set")
+        return v
 
     @field_validator("name")
     @classmethod
@@ -56,7 +63,7 @@ class VectorStoreBase(abc.ABC):
 
     Example::
 
-        schema = VectorCollectionSchema(name="legal_chunks", dimensions=1536)
+        schema = VectorCollectionSchema(name="legal_chunks", dimensions=1536, description="Full-text passage chunks")
         await store.create_collection(schema)
         await store.upsert("legal_chunks", chunks)
         results = await store.search("legal_chunks", "notice period", query_embedding, top_k=5)
