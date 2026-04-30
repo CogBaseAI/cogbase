@@ -17,6 +17,7 @@ from cogbase.stores import (
     build_vector_store as _build_vector_store,
 )
 from cogbase.core.app import CogBaseApp
+from cogbase.core.runner import Runner
 from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion_pipeline import (
@@ -189,6 +190,31 @@ def build_app(
         document_collections=document_collections or None,
     )
 
+    # Determine default vector collection: first chunk-embed then document-embed, in step order.
+    default_vc: str | None = None
+    for step in steps:
+        if step.tool == "chunk-embed-upsert":
+            default_vc = step.collection
+            break
+    if default_vc is None:
+        for step in steps:
+            if step.tool == "document-embed-upsert":
+                default_vc = step.collection
+                break
+
     document_store_cfg = config.document_store or system_document_store_cfg
     document_store = build_document_store(document_store_cfg) if document_store_cfg else None
-    return CogBaseApp(config.name, llm, pipeline, document_store=document_store)
+
+    runner = Runner(
+        llm=llm,
+        structured_store=structured_store,
+        vector_store=vector_store,
+        embedder=embedder,
+        default_vector_collection=default_vc,
+        vector_collections=pipeline.vector_collection_infos or None,
+        structured_schemas=pipeline.structured_schemas or None,
+        document_store=document_store,
+        app_name=config.name,
+    )
+
+    return CogBaseApp(config.name, pipeline, runner, document_store=document_store)

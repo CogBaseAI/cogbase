@@ -218,61 +218,6 @@ class TestMultiCollectionPipelineConstruction:
 
 
 # ---------------------------------------------------------------------------
-# runner_resources() helper
-# ---------------------------------------------------------------------------
-
-class TestRunnerResources:
-    def test_returns_first_chunk_embed_store(self):
-        store = FAISSVectorStore(dim=4)
-        emb = StubEmbedding(dim=4)
-        vc = ChunkCollection(
-            schema=VectorCollectionSchema(name="chunks", dimensions=4),
-            store=store,
-            embedder=emb,
-            chunker=FixedSizeChunker(chunk_size=50, overlap=0),
-        )
-        pipeline = IngestionPipeline(name="app", chunk_collections=[vc])
-
-        ss, vs, embedder, default = pipeline.runner_resources()
-        assert vs is store
-        assert embedder is emb
-        assert default == "chunks"
-        assert ss is None
-
-    def test_falls_back_to_document_store(self):
-        dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="summaries", dimensions=4),
-            store=FAISSVectorStore(dim=4),
-            embedder=StubEmbedding(dim=4),
-            llm=_make_llm(),
-        )
-        pipeline = IngestionPipeline(
-            name="app",
-            steps=[("document-embed-upsert", "summaries")],
-            document_collections=[dc],
-        )
-        _, vs, _, default = pipeline.runner_resources()
-        assert vs is dc.store
-        assert default == "summaries"
-
-    def test_structured_store_returned(self):
-        store = InMemoryStructuredStore()
-        sc = StructuredCollection(
-            schema=StubExtractor().schema,
-            store=store,
-            extractor=StubExtractor(),
-        )
-        pipeline = IngestionPipeline(name="app", structured_collections=[sc])
-        ss, _, _, _ = pipeline.runner_resources()
-        assert ss is store
-
-    def test_empty_pipeline_returns_all_none(self):
-        pipeline = IngestionPipeline(name="empty")
-        ss, vs, emb, default = pipeline.runner_resources()
-        assert all(v is None for v in (ss, vs, emb, default))
-
-
-# ---------------------------------------------------------------------------
 # document-embed-upsert ingestion
 # ---------------------------------------------------------------------------
 

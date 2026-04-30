@@ -3,31 +3,6 @@
 ``CogBaseApp`` wires together an ``IngestionPipeline`` (ingestion layer) and a
 ``Runner`` (query layer) behind a small interface: ``setup`` → ``ingest`` /
 ``ingest_documents`` → ``query_stream``.
-
-Typical usage::
-
-    from cogbase.core.app import CogBaseApp
-    from cogbase.core.models import Document
-    from cogbase.pipeline.ingestion_pipeline import (
-        IngestionPipeline, ChunkCollection, StructuredCollection, DocumentCollection,
-    )
-
-    pipeline = IngestionPipeline(
-        name="legal",
-        steps=[
-            ("chunk-embed-upsert",    "document_chunks"),
-            ("extract-structured",    "contracts"),
-            ("document-embed-upsert", "document_summary"),
-        ],
-        chunk_collections=[ChunkCollection(schema=VectorCollectionSchema(name="document_chunks", dimensions=1536), ...)],
-        structured_collections=[StructuredCollection(schema=..., ...)],
-        document_collections=[DocumentCollection(schema=VectorCollectionSchema(name="document_summary", dimensions=1536), ...)],
-    )
-    app = CogBaseApp("legal", llm, pipeline)
-    await app.setup()
-    await app.ingest_documents([Document(doc_id="c-001", text=contract_text)])
-    async for item in app.query_stream("which contracts expire before 2026?"):
-        ...
 """
 
 from __future__ import annotations
@@ -38,7 +13,6 @@ from typing import Sequence
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
 from cogbase.core.models import Document
 from cogbase.core.runner import RunResult, Runner
-from cogbase.llms import LLMBase
 from cogbase.stores import CollectionSchema, DocumentStoreBase
 
 logger = logging.getLogger(__name__)
@@ -48,48 +22,23 @@ class CogBaseApp:
     """CogBase application: an ingestion pipeline + query runner under one object.
 
     Args:
-        name:                        Logical name for the application.
-        llm:                         LLM for query reasoning.
-        pipeline:                    Fully configured ``IngestionPipeline`` carrying
-                                     all vector, structured, and summarize collections.
-        skills:                      Optional skills exposed to the query runner.
-        passthrough_token_threshold: Estimated token count of structured lookup results
-                                     above which records are returned directly without
-                                     LLM synthesis.  Defaults to 2000.
-        query_max_rounds:            Maximum LLM reasoning rounds per query.  Defaults to 5.
+        name:      Logical name for the application.
+        pipeline:  Fully configured ``IngestionPipeline`` (ingestion layer).
+        runner:    Pre-built ``Runner`` (query layer).
     """
 
     def __init__(
         self,
         name: str,
-        llm: LLMBase,
         pipeline: IngestionPipeline,
+        runner: Runner,
         *,
         document_store: DocumentStoreBase | None = None,
-        skills: list | None = None,
-        passthrough_token_threshold: int = 2000,
-        query_max_rounds: int = 5,
     ) -> None:
         self.name = name
         self._ingest_pipeline = pipeline
+        self._runner = runner
         self._document_store = document_store
-
-        structured_store, vector_store, embedder, default_vc = pipeline.runner_resources()
-
-        self._runner = Runner(
-            llm=llm,
-            structured_store=structured_store,
-            vector_store=vector_store,
-            embedder=embedder,
-            default_vector_collection=default_vc,
-            vector_collections=pipeline.vector_collection_infos or None,
-            structured_schemas=pipeline.structured_schemas or None,
-            passthrough_token_threshold=passthrough_token_threshold,
-            max_calls=query_max_rounds,
-            skills=skills,
-            document_store=document_store,
-            app_name=name,
-        )
 
     # ------------------------------------------------------------------
     # Lifecycle

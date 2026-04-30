@@ -249,38 +249,6 @@ class IngestionPipeline:
             seen.append((name, desc))
         return seen
 
-    def runner_resources(
-        self,
-    ) -> tuple[StructuredStoreBase | None, VectorStoreBase | None, EmbeddingBase | None, str | None]:
-        """Return ``(structured_store, vector_store, embedder, default_vector_collection)`` for Runner.
-
-        Selects the first chunk-embed-upsert collection's store/embedder as the
-        default vector resources (falls back to document-embed-upsert if none).
-        """
-        vector_store: VectorStoreBase | None = None
-        embedder: EmbeddingBase | None = None
-        default_vc: str | None = None
-
-        for tool, name in self._steps:
-            if tool == "chunk-embed-upsert" and name in self._chunk_by_name:
-                vc = self._chunk_by_name[name]
-                vector_store, embedder, default_vc = vc.store, vc.embedder, vc.name
-                break
-
-        if vector_store is None:
-            for tool, name in self._steps:
-                if tool == "document-embed-upsert" and name in self._document_by_name:
-                    dc = self._document_by_name[name]
-                    vector_store, embedder, default_vc = dc.store, dc.embedder, dc.name
-                    break
-
-        structured_store: StructuredStoreBase | None = None
-        for sc in self._structured_by_name.values():
-            structured_store = sc.store
-            break
-
-        return structured_store, vector_store, embedder, default_vc
-
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

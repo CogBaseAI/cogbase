@@ -132,7 +132,17 @@ def _make_app(
     name: str = "legal",
 ) -> CogBaseApp:
     pipeline = _make_pipeline(llm, store, vector_store=vector_store, embedder=embedder, chunker=chunker, name=name)
-    return CogBaseApp(name, llm, pipeline)
+    default_vc = name if vector_store is not None else None
+    runner = QueryRunner(
+        llm=llm,
+        structured_store=store,
+        vector_store=vector_store,
+        embedder=embedder,
+        default_vector_collection=default_vc,
+        vector_collections=pipeline.vector_collection_infos or None,
+        structured_schemas=pipeline.structured_schemas or None,
+    )
+    return CogBaseApp(name, pipeline, runner)
 
 
 # ---------------------------------------------------------------------------
@@ -159,8 +169,10 @@ class TestCogBaseAppConstruction:
         assert "legal" in app._ingest_pipeline._chunk_by_name
 
     def test_pipeline_wired_to_app(self):
-        pipeline = _make_pipeline(_make_llm("{}"), InMemoryStructuredStore())
-        app = CogBaseApp("test", _make_llm("{}"), pipeline)
+        store = InMemoryStructuredStore()
+        pipeline = _make_pipeline(_make_llm("{}"), store)
+        runner = QueryRunner(llm=_make_llm("{}"), structured_store=store, structured_schemas=pipeline.structured_schemas or None)
+        app = CogBaseApp("test", pipeline, runner)
         assert app._ingest_pipeline is pipeline
 
     def test_custom_name(self):
@@ -402,14 +414,23 @@ class TestVectorOnlyMode:
     """CogBaseApp with no structured collection skips extraction entirely."""
 
     def _make_vector_only_app(self, llm: MagicMock) -> CogBaseApp:
+        vc_store = FAISSVectorStore(dim=4)
+        vc_embedder = StubEmbedding(dim=4)
         vc = ChunkCollection(
             schema=VectorCollectionSchema(name="vector_only", dimensions=4),
-            store=FAISSVectorStore(dim=4),
-            embedder=StubEmbedding(dim=4),
+            store=vc_store,
+            embedder=vc_embedder,
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
         pipeline = IngestionPipeline(name="vector-only", chunk_collections=[vc])
-        return CogBaseApp("vector-only", llm, pipeline)
+        runner = QueryRunner(
+            llm=llm,
+            vector_store=vc_store,
+            embedder=vc_embedder,
+            default_vector_collection="vector_only",
+            vector_collections=pipeline.vector_collection_infos or None,
+        )
+        return CogBaseApp("vector-only", pipeline, runner)
 
     def _tool_names(self, app: CogBaseApp) -> list[str]:
         return [t["name"] for t in app.query_runner._tool_defs]
@@ -449,7 +470,8 @@ class TestVectorOnlyMode:
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
         pipeline = IngestionPipeline(name="testapp", chunk_collections=[vc])
-        app = CogBaseApp("testapp", _make_llm("{}"), pipeline)
+        runner = QueryRunner(llm=_make_llm("{}"), vector_store=vector_store, embedder=StubEmbedding(dim=4), default_vector_collection="testapp", vector_collections=pipeline.vector_collection_infos or None)
+        app = CogBaseApp("testapp", pipeline, runner)
         await app.setup()
         results = await app.ingest_documents([Document(doc_id="d-001", text="word " * 20)])
         assert results[0].success is True
