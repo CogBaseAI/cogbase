@@ -45,6 +45,7 @@ class ExtractorBase(abc.ABC):
             def schema(self) -> CollectionSchema:
                 return CollectionSchema(
                     name="clauses",
+                    description="Extracted contract clauses with type, text, and page reference.",
                     primary_fields=["clause_id"],
                     fields={
                         "clause_id": FieldSchema(type=FieldType.STRING),

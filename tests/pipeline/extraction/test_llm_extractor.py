@@ -33,6 +33,7 @@ def _make_extractor(llm: MagicMock) -> LLMExtractor:
         llm,
         extraction_model=ContractExtraction,
         collection_name=_CONTRACTS_COLLECTION,
+        collection_description="Extracted contract metadata: parties, dates, and governing law.",
     )
 
 
@@ -285,6 +286,7 @@ async def test_extract_succeeds_on_retry_after_bad_json(monkeypatch):
         llm,
         extraction_model=ContractExtraction,
         collection_name=_CONTRACTS_COLLECTION,
+        collection_description="Extracted contract metadata.",
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-1", text="contract text"))
@@ -302,6 +304,7 @@ async def test_extract_returns_none_after_all_retries_exhausted(monkeypatch):
         llm,
         extraction_model=ContractExtraction,
         collection_name=_CONTRACTS_COLLECTION,
+        collection_description="Extracted contract metadata.",
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-2", text="contract text"))
@@ -319,6 +322,7 @@ async def test_extract_no_retry_on_success(monkeypatch):
         _make_llm(_full_payload()),
         extraction_model=ContractExtraction,
         collection_name=_CONTRACTS_COLLECTION,
+        collection_description="Extracted contract metadata.",
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-3", text="contract text"))
@@ -337,6 +341,7 @@ async def test_extract_retry_uses_exponential_backoff(monkeypatch):
         llm,
         extraction_model=ContractExtraction,
         collection_name=_CONTRACTS_COLLECTION,
+        collection_description="Extracted contract metadata.",
         max_retries=2,
     )
     await extractor.extract(Document(doc_id="doc-retry-4", text="contract text"))
@@ -355,6 +360,7 @@ async def test_extract_max_retries_zero_no_sleep(monkeypatch):
         _make_llm("bad json"),
         extraction_model=ContractExtraction,
         collection_name=_CONTRACTS_COLLECTION,
+        collection_description="Extracted contract metadata.",
         max_retries=0,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-5", text="contract text"))

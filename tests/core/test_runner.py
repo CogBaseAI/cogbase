@@ -250,6 +250,7 @@ async def test_run_retrieval_structured_lookup_populates_records():
     store = InMemoryStructuredStore()
     schema = CollectionSchema(
         name="facts",
+        description="Test facts collection.",
         primary_fields=["title"],
         fields={"title": FieldSchema(type=FieldType.STRING)},
     )
@@ -282,6 +283,7 @@ async def test_run_retrieval_passthrough_when_records_exceed_threshold():
     store = InMemoryStructuredStore()
     schema = CollectionSchema(
         name="big",
+        description="Test collection with many records.",
         primary_fields=["data"],
         fields={"data": FieldSchema(type=FieldType.STRING)},
     )

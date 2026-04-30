@@ -13,6 +13,7 @@ from cogbase.stores.structured import InMemoryStructuredStore, SQLiteStructuredS
 
 FACTS_SCHEMA = CollectionSchema(
     name="facts",
+    description="Extracted facts with type, value, source document, and confidence.",
     primary_fields=["fact_id"],
     fields={
         "fact_id":    FieldSchema(type=FieldType.STRING,  nullable=False),
@@ -27,6 +28,7 @@ FACTS_SCHEMA = CollectionSchema(
 
 EVENTS_SCHEMA = CollectionSchema(
     name="events",
+    description="Session event log: actor actions with timestamps and JSON payloads.",
     primary_fields=["event_id"],
     fields={
         "event_id":   FieldSchema(type=FieldType.STRING, nullable=False),
@@ -40,6 +42,7 @@ EVENTS_SCHEMA = CollectionSchema(
 
 CONTRADICTIONS_SCHEMA = CollectionSchema(
     name="contradictions",
+    description="Detected contradictions between facts: conflicting fact pairs, conflict type, and resolution state.",
     primary_fields=["contradiction_id"],
     fields={
         "contradiction_id": FieldSchema(type=FieldType.STRING, nullable=False),

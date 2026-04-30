@@ -43,10 +43,12 @@ def _build_record_model(extraction_model: Type[BaseModel]) -> Type[BaseModel]:
 def _build_collection_schema(
     record_model: Type[BaseModel],
     collection_name: str,
+    description: str,
 ) -> CollectionSchema:
     """Derive a ``CollectionSchema`` from *record_model*'s fields."""
     return CollectionSchema(
         name=collection_name,
+        description=description,
         primary_fields=["doc_id"],
         fields=cls_generate_schema(record_model),
     )
@@ -63,17 +65,20 @@ class LLMExtractor(ExtractorBase):
     identity field (the document identifier passed in).
 
     Args:
-        llm:              LLM backend.
-        extraction_model: Pydantic ``BaseModel`` class describing the fields to
-                          extract.  Its field descriptions are included in the
-                          LLM prompt.
-        collection_name:  Name of the structured store collection to write to.
-        system_prompt:    Full system prompt for the LLM.  When ``None`` a
-                          generic prompt is built from *extraction_model*'s
-                          JSON schema.
-        max_tokens:       Maximum tokens for the LLM response.
-        max_retries:      Retries on unparseable JSON (passed to
-                          ``ExtractorBase``).
+        llm:                    LLM backend.
+        extraction_model:       Pydantic ``BaseModel`` class describing the fields to
+                                extract.  Its field descriptions are included in the
+                                LLM prompt.
+        collection_name:        Name of the structured store collection to write to.
+        collection_description: Short description shown to the LLM in the retrieval
+                                prompt so it understands what this collection holds
+                                and when to query it.
+        system_prompt:          Full system prompt for the LLM.  When ``None`` a
+                                generic prompt is built from *extraction_model*'s
+                                JSON schema.
+        max_tokens:             Maximum tokens for the LLM response.
+        max_retries:            Retries on unparseable JSON (passed to
+                                ``ExtractorBase``).
     """
 
     def __init__(
@@ -81,6 +86,7 @@ class LLMExtractor(ExtractorBase):
         llm: LLMBase,
         extraction_model: Type[BaseModel],
         collection_name: str,
+        collection_description: str,
         *,
         system_prompt: str | None = None,
         max_tokens: int = 16384,
@@ -92,7 +98,7 @@ class LLMExtractor(ExtractorBase):
         self._collection_name = collection_name
         self._extraction_model = extraction_model
         self._record_model = _build_record_model(extraction_model)
-        self._schema = _build_collection_schema(self._record_model, collection_name)
+        self._schema = _build_collection_schema(self._record_model, collection_name, collection_description)
         self._system_prompt = system_prompt or (
             _DEFAULT_SYSTEM_PROMPT_PREFIX + cls_json_schema_for_llm(extraction_model)
         )

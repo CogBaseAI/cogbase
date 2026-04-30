@@ -95,6 +95,7 @@ def _make_extractor(llm: MagicMock) -> LLMExtractor:
         llm,
         extraction_model=ContractExtraction,
         collection_name=_CONTRACTS_COLLECTION,
+        collection_description="Extracted contract metadata: parties, dates, and governing law.",
     )
 
 

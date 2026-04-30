@@ -45,6 +45,7 @@ class StubExtractor(ExtractorBase):
     _collection = "tags"
     _schema = CollectionSchema(
         name="tags",
+        description="Extracted document tags: tag identifier, source document, and tag value.",
         primary_fields=["tag_id"],
         fields={
             "tag_id": FieldSchema(type=FieldType.STRING),
@@ -390,14 +391,14 @@ class TestThreeStepPipeline:
             @property
             def collection(self): return "col_a"
             @property
-            def schema(self): return CollectionSchema(name="col_a", primary_fields=["tag_id"], fields=_fields)
+            def schema(self): return CollectionSchema(name="col_a", description="Test collection A.", primary_fields=["tag_id"], fields=_fields)
             async def _extract_once(self, doc): return None
 
         class ExtB(ExtractorBase):
             @property
             def collection(self): return "col_b"
             @property
-            def schema(self): return CollectionSchema(name="col_b", primary_fields=["tag_id"], fields=_fields)
+            def schema(self): return CollectionSchema(name="col_b", description="Test collection B.", primary_fields=["tag_id"], fields=_fields)
             async def _extract_once(self, doc): return None
 
         sc_a = StructuredCollection(schema=ExtA().schema, store=struct_store_a, extractor=ExtA())

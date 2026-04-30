@@ -20,6 +20,7 @@ class NounRecord(BaseModel):
 
 _NOUN_SCHEMA = CollectionSchema(
     name="nouns",
+    description="Extracted nouns with source document reference.",
     primary_fields=["noun_id"],
     fields={
         "noun_id": FieldSchema(type=FieldType.STRING),

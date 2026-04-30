@@ -43,6 +43,7 @@ def test_create_collection_invalid_name():
     with pytest.raises(Exception, match="invalid"):
         CollectionSchema(
             name="bad name!",
+            description="Test.",
             primary_fields=["id"],
             fields={"id": FieldSchema(type=FieldType.STRING)},
         )
@@ -52,6 +53,7 @@ def test_create_collection_primary_fields_must_be_in_fields():
     with pytest.raises(Exception, match="primary_fields"):
         CollectionSchema(
             name="things",
+            description="Test.",
             primary_fields=["missing_field"],
             fields={"id": FieldSchema(type=FieldType.STRING)},
         )
@@ -404,6 +406,7 @@ async def test_custom_collection_with_rich_filters(structured_store):
 
     schema = CollectionSchema(
         name="risk_flags",
+        description="Extracted risk flags with severity, score, and metadata.",
         primary_fields=["flag_id"],
         fields={
             "flag_id":     FieldSchema(type=FieldType.STRING,  nullable=False),
@@ -455,6 +458,7 @@ async def test_add_field_to_existing_collection(structured_store):
 
     schema_v2 = CollectionSchema(
         name="facts",
+        description="Extracted facts with type, value, source document, and confidence.",
         primary_fields=["fact_id"],
         fields={
             "fact_id":    FieldSchema(type=FieldType.STRING,  nullable=False),
@@ -493,6 +497,7 @@ async def test_existing_rows_get_null_for_added_field(structured_store):
 
     schema_v2 = CollectionSchema(
         name="facts",
+        description="Extracted facts with type, value, source document, and confidence.",
         primary_fields=["fact_id"],
         fields={
             "fact_id":    FieldSchema(type=FieldType.STRING, nullable=False),
@@ -519,6 +524,7 @@ async def test_remove_field_from_schema_is_ignored_on_read(structured_store):
     # New schema without the 'value' field
     schema_no_value = CollectionSchema(
         name="facts",
+        description="Extracted facts with type, source document, and confidence.",
         primary_fields=["fact_id"],
         fields={
             "fact_id":    FieldSchema(type=FieldType.STRING, nullable=False),
@@ -558,7 +564,7 @@ def _facts_schema_with(**overrides) -> CollectionSchema:
             base.pop(name, None)
         else:
             base[name] = field
-    return CollectionSchema(name="facts", primary_fields=["fact_id"], fields=base)
+    return CollectionSchema(name="facts", description="Extracted facts with type, value, source document, and confidence.", primary_fields=["fact_id"], fields=base)
 
 
 async def test_update_collection_add_field_existing_rows_get_null(structured_store):
@@ -647,6 +653,7 @@ async def test_update_collection_unknown_collection_raises(structured_store):
         await structured_store.update_collection(
             CollectionSchema(
                 name="does_not_exist",
+                description="Test.",
                 primary_fields=["fact_id"],
                 fields=FACTS_SCHEMA.fields,
             )
@@ -656,6 +663,7 @@ async def test_update_collection_unknown_collection_raises(structured_store):
 async def test_update_collection_cannot_change_primary_fields(structured_store):
     new_schema = CollectionSchema(
         name="facts",
+        description="Test.",
         primary_fields=["doc_id"],  # different primary key
         fields={
             "doc_id":     FieldSchema(type=FieldType.STRING, nullable=False),
@@ -676,6 +684,7 @@ async def test_save_upserts_by_composite_primary_key(structured_store):
 
     schema = CollectionSchema(
         name="versioned_facts",
+        description="Facts versioned by document and type, with value and confidence.",
         primary_fields=["doc_id", "type"],
         fields={
             "doc_id":     FieldSchema(type=FieldType.STRING, nullable=False),

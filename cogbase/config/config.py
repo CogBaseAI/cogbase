@@ -35,6 +35,7 @@ class StructuredCollectionConfig(BaseModel):
     name: str
     schema_: str = Field(alias="schema")
     extractor: ExtractorConfig
+    description: str = "Extracted structured records from ingested documents."
 
 
 class DocumentCollectionConfig(BaseModel):

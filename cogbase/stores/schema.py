@@ -46,7 +46,7 @@ class CollectionSchema(BaseModel):
     name: str
     primary_fields: list[str] = Field(min_length=1)
     fields: dict[str, FieldSchema]
-    description: str = ""
+    description: str
 
     @field_validator("name")
     @classmethod

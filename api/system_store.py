@@ -8,6 +8,7 @@ from cogbase.stores import Col, CollectionSchema, FieldSchema, FieldType, Struct
 
 APP_RECORDS_SCHEMA = CollectionSchema(
     name="app_records",
+    description="CogBase application registry: configuration, status, and error state per named application.",
     primary_fields=["name"],
     fields={
         "name":        FieldSchema(type=FieldType.STRING, nullable=False),

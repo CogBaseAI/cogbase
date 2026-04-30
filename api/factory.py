@@ -156,6 +156,7 @@ def build_app(
                 llm,
                 extraction_model=extraction_model,
                 collection_name=sc_cfg.name,
+                collection_description=sc_cfg.description,
                 system_prompt=system_prompt,
             )
             structured_collections.append(StructuredCollection(
