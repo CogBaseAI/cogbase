@@ -113,7 +113,6 @@ class TestIngestionPipelineConstruction:
         assert app.name == "empty"
         assert app._chunk_by_name == {}
         assert app._structured_by_name == {}
-        assert app.structured_schemas == []
 
     def test_vector_only(self):
         vc = ChunkCollection(
@@ -135,17 +134,6 @@ class TestIngestionPipelineConstruction:
         app = IngestionPipeline(name="app", structured_collections=[sc])
         assert app._chunk_by_name == {}
         assert app._structured_by_name
-
-    def test_structured_schemas_property(self):
-        sc = StructuredCollection(
-            schema=StubExtractor().schema,
-            store=InMemoryStructuredStore(),
-            extractor=StubExtractor(),
-        )
-        app = IngestionPipeline(name="app", structured_collections=[sc])
-        schemas = app.structured_schemas
-        assert len(schemas) == 1
-        assert schemas[0].name == "tags"
 
 
 # ---------------------------------------------------------------------------

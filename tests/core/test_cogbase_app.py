@@ -139,8 +139,8 @@ def _make_app(
         vector_store=vector_store,
         embedder=embedder,
         default_vector_collection=default_vc,
-        vector_collections=pipeline.vector_collection_infos or None,
-        structured_schemas=pipeline.structured_schemas or None,
+        vector_schemas=[c.schema for c in pipeline._chunk_by_name.values()] or None,
+        structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None,
     )
     return CogBaseApp(name, pipeline, runner)
 
@@ -171,19 +171,13 @@ class TestCogBaseAppConstruction:
     def test_pipeline_wired_to_app(self):
         store = InMemoryStructuredStore()
         pipeline = _make_pipeline(_make_llm("{}"), store)
-        runner = QueryRunner(llm=_make_llm("{}"), structured_store=store, structured_schemas=pipeline.structured_schemas or None)
+        runner = QueryRunner(llm=_make_llm("{}"), structured_store=store, structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None)
         app = CogBaseApp("test", pipeline, runner)
         assert app._ingest_pipeline is pipeline
 
     def test_custom_name(self):
         app = _make_app(_make_llm("{}"), InMemoryStructuredStore(), name="my-legal-app")
         assert app._ingest_pipeline.name == "my-legal-app"
-
-    def test_structured_schemas_exposed(self):
-        app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
-        schemas = app.structured_schemas
-        assert len(schemas) == 1
-        assert schemas[0].name == _CONTRACTS_COLLECTION
 
     def test_ingestion_pipeline_and_query_runner_accessible(self):
         app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
@@ -428,7 +422,7 @@ class TestVectorOnlyMode:
             vector_store=vc_store,
             embedder=vc_embedder,
             default_vector_collection="vector_only",
-            vector_collections=pipeline.vector_collection_infos or None,
+            vector_schemas=[c.schema for c in pipeline._chunk_by_name.values()] or None,
         )
         return CogBaseApp("vector-only", pipeline, runner)
 
@@ -442,10 +436,6 @@ class TestVectorOnlyMode:
     def test_vector_collection_present(self):
         app = self._make_vector_only_app(_make_llm("{}"))
         assert app._ingest_pipeline._chunk_by_name
-
-    def test_structured_schemas_empty(self):
-        app = self._make_vector_only_app(_make_llm("{}"))
-        assert app.structured_schemas == []
 
     def test_no_structured_lookup_tool(self):
         app = self._make_vector_only_app(_make_llm("{}"))
@@ -470,7 +460,7 @@ class TestVectorOnlyMode:
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
         pipeline = IngestionPipeline(name="testapp", chunk_collections=[vc])
-        runner = QueryRunner(llm=_make_llm("{}"), vector_store=vector_store, embedder=StubEmbedding(dim=4), default_vector_collection="testapp", vector_collections=pipeline.vector_collection_infos or None)
+        runner = QueryRunner(llm=_make_llm("{}"), vector_store=vector_store, embedder=StubEmbedding(dim=4), default_vector_collection="testapp", vector_schemas=[c.schema for c in pipeline._chunk_by_name.values()] or None)
         app = CogBaseApp("testapp", pipeline, runner)
         await app.setup()
         results = await app.ingest_documents([Document(doc_id="d-001", text="word " * 20)])

@@ -61,7 +61,7 @@ from pydantic import BaseModel
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, LLMBase, SystemTool, ToolDefinition
-from cogbase.stores import CollectionSchema, DocumentStoreBase, Filter, Op, StructuredStoreBase, VectorStoreBase
+from cogbase.stores import CollectionSchema, DocumentStoreBase, Filter, Op, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +258,7 @@ _VECTOR_COLLECTIONS_HEADER = "\nAvailable vector collections (pass name to vecto
 
 def _build_retrieval_prompt(
     schemas: list[CollectionSchema] | None,
-    vector_collections: list[tuple[str, str]] | None = None,
+    vector_schemas: list[VectorCollectionSchema] | None = None,
 ) -> str:
     lines = [_RETRIEVAL_BASE_PROMPT]
     if schemas:
@@ -271,10 +271,10 @@ def _build_retrieval_prompt(
             header = f"  {schema.name} ({schema.description})" if schema.description else f"  {schema.name}"
             lines.append(f"{header}: {fields_str}")
         lines.append(_FILTER_LEGEND)
-    if vector_collections:
+    if vector_schemas:
         lines.append(_VECTOR_COLLECTIONS_HEADER)
-        for vc_name, vc_desc in vector_collections:
-            lines.append(f"  - {vc_name}: {vc_desc}")
+        for vs in vector_schemas:
+            lines.append(f"  - {vs.name}: {vs.description}")
     return "\n".join(lines)
 
 
@@ -330,7 +330,7 @@ class Runner:
         embedder:                    Embedder for ``vector_search``.
         default_vector_collection:   Collection used when ``vector_search`` omits
                                      ``"collection"``.
-        vector_collections:          ``(name, description)`` pairs for all vector
+        vector_schemas:              ``VectorCollectionSchema`` list for all vector
                                      collections, injected into the retrieval system
                                      prompt so the LLM can choose the right one.
         structured_schemas:          Schema list injected into the retrieval system prompt
@@ -350,7 +350,7 @@ class Runner:
         vector_store: VectorStoreBase | None = None,
         embedder: EmbeddingBase | None = None,
         default_vector_collection: str | None = None,
-        vector_collections: list[tuple[str, str]] | None = None,
+        vector_schemas: list[VectorCollectionSchema] | None = None,
         structured_schemas: list[CollectionSchema] | None = None,
         passthrough_token_threshold: int = 2000,
         document_store: DocumentStoreBase | None = None,
@@ -365,7 +365,7 @@ class Runner:
         self._embedder = embedder
         self._default_vector_collection = default_vector_collection
         self._retrieval_system_prompt = _build_retrieval_prompt(
-            structured_schemas, vector_collections
+            structured_schemas, vector_schemas
         )
         self._passthrough_token_threshold = passthrough_token_threshold
         self._document_store = document_store

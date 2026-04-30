@@ -100,8 +100,3 @@ class CogBaseApp:
     def document_store(self) -> DocumentStoreBase | None:
         """The document store, if configured."""
         return self._document_store
-
-    @property
-    def structured_schemas(self) -> list[CollectionSchema]:
-        """Schemas for all structured collections (convenience proxy)."""
-        return self._ingest_pipeline.structured_schemas

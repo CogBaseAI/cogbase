@@ -205,14 +205,16 @@ def build_app(
     document_store_cfg = config.document_store or system_document_store_cfg
     document_store = build_document_store(document_store_cfg) if document_store_cfg else None
 
+    _vc_schemas = [c.schema for c in [*chunk_collections, *document_collections]]
+
     runner = Runner(
         llm=llm,
         structured_store=structured_store,
         vector_store=vector_store,
         embedder=embedder,
         default_vector_collection=default_vc,
-        vector_collections=pipeline.vector_collection_infos or None,
-        structured_schemas=pipeline.structured_schemas or None,
+        vector_schemas=_vc_schemas or None,
+        structured_schemas=[sc.schema for sc in structured_collections] or None,
         document_store=document_store,
         app_name=config.name,
     )

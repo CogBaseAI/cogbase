@@ -165,9 +165,9 @@ class TestMultiCollectionPipelineConstruction:
             document_collections=[dc],
         )
 
-        assert pipeline.vector_collection_names == ["document_chunks", "document_summary"]
-        assert len(pipeline.structured_schemas) == 1
-        assert pipeline.structured_schemas[0].name == "tags"
+        assert ("chunk-embed-upsert", "document_chunks") in pipeline._steps
+        assert ("document-embed-upsert", "document_summary") in pipeline._steps
+        assert "tags" in pipeline._structured_by_name
 
     def test_auto_steps_generation_from_collections(self):
         vc = self._make_vc()
@@ -198,23 +198,8 @@ class TestMultiCollectionPipelineConstruction:
             chunk_collections=[vc1, vc2],
         )
 
-        assert pipeline.vector_collection_names == ["col_a", "col_b"]
-
-    def test_vector_collection_names_respects_step_order(self):
-        vc = self._make_vc("chunks")
-        dc = self._make_dc("summaries")
-
-        pipeline = IngestionPipeline(
-            name="app",
-            steps=[
-                ("document-embed-upsert", "summaries"),
-                ("chunk-embed-upsert",    "chunks"),
-            ],
-            chunk_collections=[vc],
-            document_collections=[dc],
-        )
-
-        assert pipeline.vector_collection_names == ["summaries", "chunks"]
+        assert "col_a" in pipeline._chunk_by_name
+        assert "col_b" in pipeline._chunk_by_name
 
 
 # ---------------------------------------------------------------------------

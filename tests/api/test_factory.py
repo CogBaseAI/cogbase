@@ -316,9 +316,8 @@ class TestBuildAppDocumentCollection:
                 system_vector_store_cfg=sys_vs_cfg,
             )
 
-        names = app._ingest_pipeline.vector_collection_names
-        assert "document_chunks" in names
-        assert "document_summary" in names
+        assert "document_chunks" in app._ingest_pipeline._chunk_by_name
+        assert "document_summary" in app._ingest_pipeline._document_by_name
 
     @patch("api.factory._build_llm")
     def test_default_runner_collection_is_first_chunk_step(self, mock_build_llm):

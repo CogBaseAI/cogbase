@@ -47,11 +47,6 @@ class IngestResult:
     error: Exception | None = field(default=None, repr=False)
 
 
-_DEFAULT_VC_DESCRIPTIONS: dict[str, str] = {
-    "document_chunks": "Full-text passage chunks; use for detailed or specific questions about document content.",
-    "document_summary": "One-per-document summaries; use for topic-level or high-level questions about what documents cover.",
-}
-
 
 @dataclass
 class ChunkCollection:
@@ -204,50 +199,6 @@ class IngestionPipeline:
             self._steps = _steps
         else:
             self._steps = list(steps)
-
-    # ------------------------------------------------------------------
-    # Accessors
-    # ------------------------------------------------------------------
-
-    @property
-    def structured_schemas(self) -> list[CollectionSchema]:
-        """Schemas for all structured collections.
-
-        Pass to ``Runner(structured_schemas=...)`` so the LLM knows available
-        collection names and field types.
-        """
-        return [sc.schema for sc in self._structured_by_name.values()]
-
-    @property
-    def vector_collection_names(self) -> list[str]:
-        """Names of all vector collections (chunk-embed and document-embed), in step order."""
-        seen: list[str] = []
-        for tool, name in self._steps:
-            if tool in ("chunk-embed-upsert", "document-embed-upsert") and name not in seen:
-                seen.append(name)
-        return seen
-
-    @property
-    def vector_collection_infos(self) -> list[tuple[str, str]]:
-        """``(name, description)`` pairs for all vector collections, in step order.
-
-        The description is taken from the collection's ``description`` field, falling
-        back to ``_DEFAULT_VC_DESCRIPTIONS`` for well-known names, then the bare name.
-        Pass to ``Runner(vector_collections=...)`` so the LLM can pick the right one.
-        """
-        seen: list[tuple[str, str]] = []
-        seen_names: set[str] = set()
-        for tool, name in self._steps:
-            if tool not in ("chunk-embed-upsert", "document-embed-upsert"):
-                continue
-            if name in seen_names:
-                continue
-            seen_names.add(name)
-            col = self._chunk_by_name.get(name) or self._document_by_name.get(name)
-            explicit = col.description if col is not None else ""
-            desc = explicit or _DEFAULT_VC_DESCRIPTIONS.get(name, name)
-            seen.append((name, desc))
-        return seen
 
     # ------------------------------------------------------------------
     # Lifecycle
