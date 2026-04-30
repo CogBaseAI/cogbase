@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Callable
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,7 +20,8 @@ from cogbase.pipeline.ingestion_pipeline import (
     ChunkCollection,
 )
 from cogbase.stores import CollectionSchema, FieldSchema, FieldType, VectorCollectionSchema
-from cogbase.stores.structured.memory import InMemoryStructuredStore
+from cogbase.stores.structured.base import StructuredStoreBase
+from cogbase.stores.vector.base import VectorStoreBase
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
 
 
@@ -75,14 +77,14 @@ def _make_llm(summary: str = "A short summary.") -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# DocumentCollection dataclass
+# DocumentCollection dataclass — property-only tests, store type irrelevant
 # ---------------------------------------------------------------------------
 
 class TestDocumentCollection:
     def test_construction(self):
         dc = DocumentCollection(
             schema=VectorCollectionSchema(name="doc_summary", dimensions=4, description="Test document summaries"),
-            store=FAISSVectorStore(dim=4),
+            store=FAISSVectorStore(),
             embedder=StubEmbedding(dim=4),
             llm=_make_llm(),
         )
@@ -93,7 +95,7 @@ class TestDocumentCollection:
     def test_custom_prompt_and_tokens(self):
         dc = DocumentCollection(
             schema=VectorCollectionSchema(name="s", dimensions=4, description="Test summaries"),
-            store=FAISSVectorStore(dim=4),
+            store=FAISSVectorStore(),
             embedder=StubEmbedding(dim=4),
             llm=_make_llm(),
             prompt="One sentence only.",
@@ -105,7 +107,7 @@ class TestDocumentCollection:
     def test_no_llm_defaults(self):
         dc = DocumentCollection(
             schema=VectorCollectionSchema(name="s", dimensions=4, description="Test summaries"),
-            store=FAISSVectorStore(dim=4),
+            store=FAISSVectorStore(),
             embedder=StubEmbedding(dim=4),
         )
         assert dc.llm is None
@@ -114,7 +116,7 @@ class TestDocumentCollection:
     def test_metadata_fields(self):
         dc = DocumentCollection(
             schema=VectorCollectionSchema(name="s", dimensions=4, description="Test summaries"),
-            store=FAISSVectorStore(dim=4),
+            store=FAISSVectorStore(),
             embedder=StubEmbedding(dim=4),
             metadata_fields=["customer_id", "deal_stage"],
         )
@@ -126,33 +128,33 @@ class TestDocumentCollection:
 # ---------------------------------------------------------------------------
 
 class TestMultiCollectionPipelineConstruction:
-    def _make_vc(self, name: str = "chunks") -> ChunkCollection:
+    def _make_vc(self, make_vector_store: Callable[[], VectorStoreBase], name: str = "chunks") -> ChunkCollection:
         return ChunkCollection(
             schema=VectorCollectionSchema(name=name, dimensions=4, description="Test chunks"),
-            store=FAISSVectorStore(dim=4),
+            store=make_vector_store(),
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
 
-    def _make_sc(self) -> StructuredCollection:
+    def _make_sc(self, make_structured_store: Callable[[], StructuredStoreBase]) -> StructuredCollection:
         return StructuredCollection(
             schema=StubExtractor().schema,
-            store=InMemoryStructuredStore(),
+            store=make_structured_store(),
             extractor=StubExtractor(),
         )
 
-    def _make_dc(self, name: str = "summaries") -> DocumentCollection:
+    def _make_dc(self, make_vector_store: Callable[[], VectorStoreBase], name: str = "summaries") -> DocumentCollection:
         return DocumentCollection(
             schema=VectorCollectionSchema(name=name, dimensions=4, description="Test document summaries"),
-            store=FAISSVectorStore(dim=4),
+            store=make_vector_store(),
             embedder=StubEmbedding(dim=4),
             llm=_make_llm(),
         )
 
-    def test_explicit_steps_with_all_three_types(self):
-        vc = self._make_vc("document_chunks")
-        sc = self._make_sc()
-        dc = self._make_dc("document_summary")
+    def test_explicit_steps_with_all_three_types(self, make_vector_store, make_structured_store):
+        vc = self._make_vc(make_vector_store, "document_chunks")
+        sc = self._make_sc(make_structured_store)
+        dc = self._make_dc(make_vector_store, "document_summary")
 
         pipeline = IngestionPipeline(
             name="app",
@@ -170,10 +172,10 @@ class TestMultiCollectionPipelineConstruction:
         assert ("document-embed-upsert", "document_summary") in pipeline._steps
         assert "tags" in pipeline._structured_by_name
 
-    def test_auto_steps_generation_from_collections(self):
-        vc = self._make_vc()
-        sc = self._make_sc()
-        dc = self._make_dc()
+    def test_auto_steps_generation_from_collections(self, make_vector_store, make_structured_store):
+        vc = self._make_vc(make_vector_store)
+        sc = self._make_sc(make_structured_store)
+        dc = self._make_dc(make_vector_store)
 
         pipeline = IngestionPipeline(
             name="app",
@@ -186,9 +188,9 @@ class TestMultiCollectionPipelineConstruction:
         assert ("extract-structured", "tags") in pipeline._steps
         assert ("document-embed-upsert", "summaries") in pipeline._steps
 
-    def test_two_vector_collections(self):
-        vc1 = self._make_vc("col_a")
-        vc2 = self._make_vc("col_b")
+    def test_two_vector_collections(self, make_vector_store):
+        vc1 = self._make_vc(make_vector_store, "col_a")
+        vc2 = self._make_vc(make_vector_store, "col_b")
 
         pipeline = IngestionPipeline(
             name="app",
@@ -208,8 +210,12 @@ class TestMultiCollectionPipelineConstruction:
 # ---------------------------------------------------------------------------
 
 class TestDocumentEmbedUpsert:
-    def _make_pipeline_with_llm(self, summary_text: str) -> tuple[IngestionPipeline, FAISSVectorStore]:
-        vector_store = FAISSVectorStore(dim=4)
+    def _make_pipeline_with_llm(
+        self,
+        summary_text: str,
+        make_vector_store: Callable[[], VectorStoreBase],
+    ) -> tuple[IngestionPipeline, VectorStoreBase]:
+        vector_store = make_vector_store()
         dc = DocumentCollection(
             schema=VectorCollectionSchema(name="summaries", dimensions=4, description="Test document summaries"),
             store=vector_store,
@@ -224,15 +230,15 @@ class TestDocumentEmbedUpsert:
         return pipeline, vector_store
 
     @pytest.mark.asyncio
-    async def test_summary_chunk_upserted(self):
-        pipeline, vector_store = self._make_pipeline_with_llm("Contract summary.")
+    async def test_summary_chunk_upserted(self, make_vector_store):
+        pipeline, vector_store = self._make_pipeline_with_llm("Contract summary.", make_vector_store)
         await pipeline.setup()
         await pipeline._ingest(Document(doc_id="d-001", text="Long contract text here..."))
-        assert vector_store.ntotal == 1
+        assert vector_store.ntotal("summaries") == 1
 
     @pytest.mark.asyncio
-    async def test_chunk_id_is_doc_id_with_document_suffix(self):
-        pipeline, vector_store = self._make_pipeline_with_llm("Summary text.")
+    async def test_chunk_id_is_doc_id_with_document_suffix(self, make_vector_store):
+        pipeline, vector_store = self._make_pipeline_with_llm("Summary text.", make_vector_store)
         await pipeline.setup()
         await pipeline._ingest(Document(doc_id="doc-42", text="Some text."))
         chunks = await vector_store.search("summaries", "", [0.1] * 4, top_k=1)
@@ -241,16 +247,16 @@ class TestDocumentEmbedUpsert:
         assert chunks[0].doc_id == "doc-42"
 
     @pytest.mark.asyncio
-    async def test_summary_text_stored_in_chunk(self):
-        pipeline, vector_store = self._make_pipeline_with_llm("The parties agree to NDA terms.")
+    async def test_summary_text_stored_in_chunk(self, make_vector_store):
+        pipeline, vector_store = self._make_pipeline_with_llm("The parties agree to NDA terms.", make_vector_store)
         await pipeline.setup()
         await pipeline._ingest(Document(doc_id="d-001", text="contract text"))
         chunks = await vector_store.search("summaries", "", [0.1] * 4, top_k=1)
         assert chunks[0].text == "The parties agree to NDA terms."
 
     @pytest.mark.asyncio
-    async def test_no_llm_embeds_doc_text_directly(self):
-        vector_store = FAISSVectorStore(dim=4)
+    async def test_no_llm_embeds_doc_text_directly(self, make_vector_store):
+        vector_store = make_vector_store()
         dc = DocumentCollection(
             schema=VectorCollectionSchema(name="summaries", dimensions=4, description="Test document summaries"),
             store=vector_store,
@@ -268,8 +274,8 @@ class TestDocumentEmbedUpsert:
         assert chunks[0].text == "raw document text"
 
     @pytest.mark.asyncio
-    async def test_metadata_fields_projected_into_chunk(self):
-        vector_store = FAISSVectorStore(dim=4)
+    async def test_metadata_fields_projected_into_chunk(self, make_vector_store):
+        vector_store = make_vector_store()
         dc = DocumentCollection(
             schema=VectorCollectionSchema(name="summaries", dimensions=4, description="Test document summaries"),
             store=vector_store,
@@ -291,8 +297,8 @@ class TestDocumentEmbedUpsert:
         assert chunks[0].metadata == {"customer_id": "acme", "deal_stage": "negotiation"}
 
     @pytest.mark.asyncio
-    async def test_empty_llm_response_skips_upsert(self):
-        vector_store = FAISSVectorStore(dim=4)
+    async def test_empty_llm_response_skips_upsert(self, make_vector_store):
+        vector_store = make_vector_store()
         llm = MagicMock(spec=LLMBase)
         llm.complete = AsyncMock(return_value={"content": None, "tool_calls": None})
         dc = DocumentCollection(
@@ -308,11 +314,11 @@ class TestDocumentEmbedUpsert:
         )
         await pipeline.setup()
         await pipeline._ingest(Document(doc_id="d-001", text="text"))
-        assert vector_store.ntotal == 0
+        assert vector_store.ntotal("summaries") == 0
 
     @pytest.mark.asyncio
-    async def test_llm_failure_does_not_raise(self):
-        vector_store = FAISSVectorStore(dim=4)
+    async def test_llm_failure_does_not_raise(self, make_vector_store):
+        vector_store = make_vector_store()
         llm = MagicMock(spec=LLMBase)
         llm.complete = AsyncMock(side_effect=RuntimeError("LLM down"))
         dc = DocumentCollection(
@@ -329,7 +335,7 @@ class TestDocumentEmbedUpsert:
         await pipeline.setup()
         count = await pipeline._ingest(Document(doc_id="d-001", text="text"))
         assert count == 0
-        assert vector_store.ntotal == 0
+        assert vector_store.ntotal("summaries") == 0
 
 
 # ---------------------------------------------------------------------------
@@ -338,10 +344,10 @@ class TestDocumentEmbedUpsert:
 
 class TestThreeStepPipeline:
     @pytest.mark.asyncio
-    async def test_all_three_steps_execute(self):
-        chunk_store = FAISSVectorStore(dim=4)
-        summary_store = FAISSVectorStore(dim=4)
-        struct_store = InMemoryStructuredStore()
+    async def test_all_three_steps_execute(self, make_vector_store, make_structured_store):
+        chunk_store = make_vector_store()
+        summary_store = make_vector_store()
+        struct_store = make_structured_store()
 
         vc = ChunkCollection(
             schema=VectorCollectionSchema(name="chunks", dimensions=4, description="Test chunks"),
@@ -376,14 +382,14 @@ class TestThreeStepPipeline:
         await pipeline.setup()
         count = await pipeline._ingest(Document(doc_id="d-001", text="word " * 20))
 
-        assert chunk_store.ntotal > 0, "chunk-embed-upsert did not populate vector store"
+        assert chunk_store.ntotal("chunks") > 0, "chunk-embed-upsert did not populate vector store"
         assert count == 1, "extract-structured did not produce a record"
-        assert summary_store.ntotal == 1, "document-embed-upsert did not upsert summary"
+        assert summary_store.ntotal("summaries") == 1, "document-embed-upsert did not upsert summary"
 
     @pytest.mark.asyncio
-    async def test_setup_creates_all_structured_collections(self):
-        struct_store_a = InMemoryStructuredStore()
-        struct_store_b = InMemoryStructuredStore()
+    async def test_setup_creates_all_structured_collections(self, make_structured_store):
+        struct_store_a = make_structured_store()
+        struct_store_b = make_structured_store()
 
         _fields = {"tag_id": FieldSchema(type=FieldType.STRING), "doc_id": FieldSchema(type=FieldType.STRING), "value": FieldSchema(type=FieldType.STRING)}
 
@@ -415,7 +421,6 @@ class TestThreeStepPipeline:
 
         await pipeline.setup()
 
-        # Both collections must exist after setup
         rows_a = await struct_store_a.query("col_a")
         rows_b = await struct_store_b.query("col_b")
         assert rows_a == []
