@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 import logging
 
@@ -35,78 +36,84 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 
+@dataclass
+class _CollectionState:
+    schema: VectorCollectionSchema
+    index: faiss.Index
+    chunks: dict[str, Chunk] = field(default_factory=dict)
+    id_map: dict[str, int] = field(default_factory=dict)   # chunk_id → faiss int id
+    id_rev: dict[int, str] = field(default_factory=dict)   # faiss int id → chunk_id
+    next_id: int = 0
+
+
 class FAISSVectorStore(VectorStoreBase):
-    """Vector store backed by a FAISS IndexFlatIP index.
+    """Vector store backed by per-collection FAISS IndexFlatIP indices.
 
     Similarity metric: cosine (vectors are L2-normalised before indexing).
     Chunks without an embedding are silently skipped on ``upsert``.
 
-    Args:
-        dim: Embedding dimension. If ``None``, inferred from the first ``upsert``.
+    ``create_collection`` must be called before ``upsert``, ``search``, or
+    ``delete`` — operations on an undeclared collection raise ``KeyError``.
     """
 
-    def __init__(self, dim: int | None = None) -> None:
-        self._dim: int | None = dim
-        self._index: faiss.Index | None = None
-        if dim is not None:
-            self._index = _make_index(dim)
-
-        # chunk_id → Chunk (source of truth for all stored data)
-        self._chunks: dict[str, Chunk] = {}
-        # chunk_id → FAISS integer id
-        self._id_map: dict[str, int] = {}
-        # FAISS integer id → chunk_id
-        self._id_rev: dict[int, str] = {}
-        self._next_id: int = 0
+    def __init__(self) -> None:
+        self._collections: dict[str, _CollectionState] = {}
 
     # ------------------------------------------------------------------
     # VectorStoreBase interface
     # ------------------------------------------------------------------
 
     async def create_collection(self, schema: VectorCollectionSchema) -> None:
-        """No-op — FAISS is schema-free; the index is created lazily on first upsert."""
+        """Register a collection. Idempotent — a second call with the same name is a no-op."""
+        if schema.name not in self._collections:
+            self._collections[schema.name] = _CollectionState(
+                schema=schema,
+                index=_make_index(schema.dimensions),
+            )
 
     async def delete_collection(self, collection: str) -> None:
-        """Reset the store, discarding all chunks and the FAISS index."""
-        self._dim = None
-        self._index = None
-        self._chunks.clear()
-        self._id_map.clear()
-        self._id_rev.clear()
-        self._next_id = 0
+        """Remove a collection and all its chunks from memory."""
+        self._collections.pop(collection, None)
 
     async def upsert(self, collection: str, chunks: list[Chunk]) -> None:
-        """Add or replace chunks. Chunks without an embedding are skipped."""
+        """Add or replace chunks. Chunks without an embedding are skipped.
+
+        Raises:
+            KeyError: If *collection* has not been created via ``create_collection``.
+        """
+        state = self._get_collection(collection)
         incoming = [c for c in chunks if c.embedding is not None]
         if not incoming:
             return
 
         dim = len(incoming[0].embedding)  # type: ignore[arg-type]
-        self._ensure_index(dim)
+        if dim != state.schema.dimensions:
+            raise ValueError(
+                f"Embedding dimension mismatch for collection '{collection}': "
+                f"schema declares {state.schema.dimensions}, got {dim}"
+            )
 
-        # Separate updates (chunk_id already indexed) from new additions
-        updates = [c for c in incoming if c.chunk_id in self._id_map]
-        additions = [c for c in incoming if c.chunk_id not in self._id_map]
+        updates = [c for c in incoming if c.chunk_id in state.id_map]
+        additions = [c for c in incoming if c.chunk_id not in state.id_map]
 
         if updates:
-            # Remove stale FAISS entries for updated chunks, then re-add below
-            self._remove_faiss_ids([self._id_map[c.chunk_id] for c in updates])
+            _remove_faiss_ids(state, [state.id_map[c.chunk_id] for c in updates])
             for c in updates:
-                del self._id_rev[self._id_map.pop(c.chunk_id)]
+                del state.id_rev[state.id_map.pop(c.chunk_id)]
 
         to_add = updates + additions
         vectors = np.array([c.embedding for c in to_add], dtype=np.float32)
         faiss.normalize_L2(vectors)
 
-        faiss_ids = np.arange(self._next_id, self._next_id + len(to_add), dtype=np.int64)
-        self._index.add_with_ids(vectors, faiss_ids)  # type: ignore[union-attr]
+        faiss_ids = np.arange(state.next_id, state.next_id + len(to_add), dtype=np.int64)
+        state.index.add_with_ids(vectors, faiss_ids)
 
         for chunk, fid in zip(to_add, faiss_ids.tolist()):
-            self._chunks[chunk.chunk_id] = chunk
-            self._id_map[chunk.chunk_id] = fid
-            self._id_rev[fid] = chunk.chunk_id
+            state.chunks[chunk.chunk_id] = chunk
+            state.id_map[chunk.chunk_id] = fid
+            state.id_rev[fid] = chunk.chunk_id
 
-        self._next_id += len(to_add)
+        state.next_id += len(to_add)
 
     async def search(
         self,
@@ -117,26 +124,30 @@ class FAISSVectorStore(VectorStoreBase):
         filters: list[Filter] | None = None,
         fields: list[str] | None = None,
     ) -> list[Chunk]:
-        """Return up to ``top_k`` chunks ordered by cosine similarity (highest first)."""
-        if self._index is None or self._index.ntotal == 0:
+        """Return up to ``top_k`` chunks ordered by cosine similarity (highest first).
+
+        Raises:
+            KeyError: If *collection* has not been created via ``create_collection``.
+        """
+        state = self._get_collection(collection)
+        if state.index.ntotal == 0:
             return []
 
         active_filters = filters or []
-        # Over-fetch the full index when filtering so we don't under-return.
-        k = self._index.ntotal if active_filters else min(top_k, self._index.ntotal)
+        k = state.index.ntotal if active_filters else min(top_k, state.index.ntotal)
         q = np.array([query_embedding], dtype=np.float32)
         faiss.normalize_L2(q)
 
-        _, faiss_ids = self._index.search(q, k)
+        _, faiss_ids = state.index.search(q, k)
 
         results: list[Chunk] = []
         for fid in faiss_ids[0].tolist():
-            if fid == -1:  # FAISS sentinel for no result
+            if fid == -1:
                 continue
-            chunk_id = self._id_rev.get(fid)
+            chunk_id = state.id_rev.get(fid)
             if chunk_id is None:
                 continue
-            chunk = self._chunks[chunk_id]
+            chunk = state.chunks[chunk_id]
             if active_filters and not matches(chunk.model_dump(), active_filters):
                 continue
             results.append(_project_chunk(chunk, fields))
@@ -145,48 +156,54 @@ class FAISSVectorStore(VectorStoreBase):
         return results
 
     async def delete(self, collection: str, doc_id: str) -> None:
-        """Remove all chunks belonging to ``doc_id`` and rebuild the index."""
-        targets = [cid for cid, c in self._chunks.items() if c.doc_id == doc_id]
+        """Remove all chunks belonging to ``doc_id`` and rebuild the index.
+
+        Raises:
+            KeyError: If *collection* has not been created via ``create_collection``.
+        """
+        state = self._get_collection(collection)
+        targets = [cid for cid, c in state.chunks.items() if c.doc_id == doc_id]
         if not targets:
             return
 
-        faiss_ids = [self._id_map.pop(cid) for cid in targets]
+        faiss_ids = [state.id_map.pop(cid) for cid in targets]
         for fid in faiss_ids:
-            self._id_rev.pop(fid, None)
+            state.id_rev.pop(fid, None)
         for cid in targets:
-            self._chunks.pop(cid)
+            state.chunks.pop(cid)
 
-        self._rebuild()
+        _rebuild(state)
 
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
 
     async def save(self, path: str | Path) -> None:
-        """Persist the full store (FAISS index + chunk metadata) to *path*.
+        """Persist all collections (FAISS indices + chunk metadata) to *path*.
 
-        *path* is a directory that will be created if it does not exist.  Two
-        files are written inside it:
+        *path* is a directory that will be created if it does not exist.  For
+        each collection ``<name>`` two files are written:
 
-        * ``index.faiss`` — the FAISS index binary
-        * ``meta.json``   — chunk objects, ID mappings, and index metadata
+        * ``<name>.faiss`` — the FAISS index binary
+        * ``meta.json``    — schemas, chunk objects, and ID mappings for all collections
         """
-        if self._index is None:
-            raise RuntimeError("Nothing to save — index is empty.")
+        if not self._collections:
+            raise RuntimeError("Nothing to save — no collections registered.")
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._save_sync, Path(path))
 
     def _save_sync(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
-        faiss.write_index(self._index, str(path / "index.faiss"))
-        meta: dict = {
-            "dim": self._dim,
-            "next_id": self._next_id,
-            "id_map": self._id_map,
-            # JSON requires string keys; int keys are restored on load
-            "id_rev": {str(k): v for k, v in self._id_rev.items()},
-            "chunks": {cid: chunk.model_dump() for cid, chunk in self._chunks.items()},
-        }
+        meta: dict = {"collections": {}}
+        for name, state in self._collections.items():
+            faiss.write_index(state.index, str(path / f"{name}.faiss"))
+            meta["collections"][name] = {
+                "schema": state.schema.model_dump(),
+                "next_id": state.next_id,
+                "id_map": state.id_map,
+                "id_rev": {str(k): v for k, v in state.id_rev.items()},
+                "chunks": {cid: chunk.model_dump() for cid, chunk in state.chunks.items()},
+            }
         (path / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
 
     async def load(self, path: str | Path) -> None:
@@ -195,63 +212,66 @@ class FAISSVectorStore(VectorStoreBase):
         await loop.run_in_executor(None, self._load_sync, Path(path))
 
     def _load_sync(self, path: Path) -> None:
-        self._index = faiss.read_index(str(path / "index.faiss"))
         meta: dict = json.loads((path / "meta.json").read_text(encoding="utf-8"))
-        self._dim = meta["dim"]
-        self._next_id = meta["next_id"]
-        self._id_map = meta["id_map"]
-        self._id_rev = {int(k): v for k, v in meta["id_rev"].items()}
-        self._chunks = {cid: Chunk(**data) for cid, data in meta["chunks"].items()}
+        self._collections = {}
+        for name, data in meta["collections"].items():
+            schema = VectorCollectionSchema(**data["schema"])
+            index = faiss.read_index(str(path / f"{name}.faiss"))
+            self._collections[name] = _CollectionState(
+                schema=schema,
+                index=index,
+                chunks={cid: Chunk(**c) for cid, c in data["chunks"].items()},
+                id_map=data["id_map"],
+                id_rev={int(k): v for k, v in data["id_rev"].items()},
+                next_id=data["next_id"],
+            )
 
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
 
-    @property
-    def ntotal(self) -> int:
-        """Number of vectors currently in the index."""
-        return self._index.ntotal if self._index is not None else 0
+    def ntotal(self, collection: str) -> int:
+        """Number of vectors in *collection*. Returns 0 if the collection does not exist."""
+        state = self._collections.get(collection)
+        return state.index.ntotal if state is not None else 0
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _ensure_index(self, dim: int) -> None:
-        if self._index is None:
-            self._dim = dim
-            self._index = _make_index(dim)
-        elif dim != self._dim:
-            raise ValueError(
-                f"Embedding dimension mismatch: index expects {self._dim}, got {dim}"
+    def _get_collection(self, collection: str) -> _CollectionState:
+        state = self._collections.get(collection)
+        if state is None:
+            raise KeyError(
+                f"Collection '{collection}' not found. Call create_collection first."
             )
+        return state
 
-    def _remove_faiss_ids(self, faiss_ids: list[int]) -> None:
-        ids_arr = np.array(faiss_ids, dtype=np.int64)
-        self._index.remove_ids(faiss.IDSelectorBatch(ids_arr))  # type: ignore[union-attr]
 
-    def _rebuild(self) -> None:
-        """Rebuild the FAISS index from the current _chunks dict."""
-        if not self._index:
-            return
+def _remove_faiss_ids(state: _CollectionState, faiss_ids: list[int]) -> None:
+    ids_arr = np.array(faiss_ids, dtype=np.int64)
+    state.index.remove_ids(faiss.IDSelectorBatch(ids_arr))
 
-        self._index = _make_index(self._dim)  # type: ignore[arg-type]
-        self._id_map.clear()
-        self._id_rev.clear()
-        self._next_id = 0
 
-        chunks_with_emb = [c for c in self._chunks.values() if c.embedding is not None]
-        if not chunks_with_emb:
-            return
+def _rebuild(state: _CollectionState) -> None:
+    state.index = _make_index(state.schema.dimensions)
+    state.id_map.clear()
+    state.id_rev.clear()
+    state.next_id = 0
 
-        vectors = np.array([c.embedding for c in chunks_with_emb], dtype=np.float32)
-        faiss.normalize_L2(vectors)
-        faiss_ids = np.arange(len(chunks_with_emb), dtype=np.int64)
-        self._index.add_with_ids(vectors, faiss_ids)
+    chunks_with_emb = [c for c in state.chunks.values() if c.embedding is not None]
+    if not chunks_with_emb:
+        return
 
-        for chunk, fid in zip(chunks_with_emb, faiss_ids.tolist()):
-            self._id_map[chunk.chunk_id] = fid
-            self._id_rev[fid] = chunk.chunk_id
-        self._next_id = len(chunks_with_emb)
+    vectors = np.array([c.embedding for c in chunks_with_emb], dtype=np.float32)
+    faiss.normalize_L2(vectors)
+    faiss_ids = np.arange(len(chunks_with_emb), dtype=np.int64)
+    state.index.add_with_ids(vectors, faiss_ids)
+
+    for chunk, fid in zip(chunks_with_emb, faiss_ids.tolist()):
+        state.id_map[chunk.chunk_id] = fid
+        state.id_rev[fid] = chunk.chunk_id
+    state.next_id = len(chunks_with_emb)
 
 
 def _make_index(dim: int) -> faiss.Index:
