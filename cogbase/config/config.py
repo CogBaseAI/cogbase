@@ -21,6 +21,7 @@ class ChunkerConfig(BaseModel):
 class ChunkCollectionConfig(BaseModel):
     name: str
     chunker: ChunkerConfig
+    dimensions: int = 1536
     description: str = "Full-text passage chunks; use for detailed or specific questions about document content."
 
 
@@ -41,6 +42,7 @@ class StructuredCollectionConfig(BaseModel):
 class DocumentCollectionConfig(BaseModel):
     name: str
     prompt: str | None = None
+    dimensions: int = 1536
     description: str = "One-per-document summaries; use for topic-level or high-level questions about what documents cover."
     max_tokens: int = 1024
     metadata_fields: list[str] = []

@@ -144,7 +144,7 @@ class TestBuildAppVectorStoreResolution:
     def test_system_vector_store_cfg_used_when_chunk_step_present(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
-        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+        sys_vs_cfg = VectorStoreConfig(type="faiss")
         system_store = InMemoryStructuredStore()
 
         with patch("api.factory._build_embedder") as mock_emb:
@@ -162,7 +162,7 @@ class TestBuildAppVectorStoreResolution:
         """The vector collection name comes from chunk_collections config, not app name."""
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
-        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+        sys_vs_cfg = VectorStoreConfig(type="faiss")
         system_store = InMemoryStructuredStore()
 
         with patch("api.factory._build_embedder") as mock_emb:
@@ -240,7 +240,7 @@ class TestBuildAppDocumentCollection:
     def test_document_collection_present_in_pipeline(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
-        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+        sys_vs_cfg = VectorStoreConfig(type="faiss")
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
@@ -252,7 +252,7 @@ class TestBuildAppDocumentCollection:
     def test_document_collection_name_prompt_max_tokens(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
-        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+        sys_vs_cfg = VectorStoreConfig(type="faiss")
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
@@ -267,7 +267,7 @@ class TestBuildAppDocumentCollection:
     def test_document_collection_uses_shared_vector_store(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
-        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+        sys_vs_cfg = VectorStoreConfig(type="faiss")
         system_store = InMemoryStructuredStore()
 
         with patch("api.factory._build_embedder") as mock_emb:
@@ -286,7 +286,7 @@ class TestBuildAppDocumentCollection:
     def test_three_step_pipeline_builds_all_collections(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
-        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+        sys_vs_cfg = VectorStoreConfig(type="faiss")
         system_store = InMemoryStructuredStore()
 
         with patch("api.factory._build_embedder") as mock_emb:
@@ -305,7 +305,7 @@ class TestBuildAppDocumentCollection:
     def test_vector_collection_names_includes_both(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
-        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+        sys_vs_cfg = VectorStoreConfig(type="faiss")
         system_store = InMemoryStructuredStore()
 
         with patch("api.factory._build_embedder") as mock_emb:
@@ -324,7 +324,7 @@ class TestBuildAppDocumentCollection:
         """Runner defaults to the first chunk-embed-upsert collection, not the summary."""
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
-        sys_vs_cfg = VectorStoreConfig(type="faiss", dim=1536)
+        sys_vs_cfg = VectorStoreConfig(type="faiss")
         system_store = InMemoryStructuredStore()
 
         with patch("api.factory._build_embedder") as mock_emb:

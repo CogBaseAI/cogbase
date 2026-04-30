@@ -84,18 +84,14 @@ class TestStructuredStoreConfig:
 class TestVectorStoreConfig:
     def test_faiss_default(self):
         cfg = VectorStoreConfig(type="faiss")
-        assert cfg.dim == 1536
-
-    def test_faiss_custom_dim(self):
-        cfg = VectorStoreConfig(type="faiss", dim=512)
-        assert cfg.dim == 512
+        assert cfg.type == "faiss"
 
     def test_pgvector_requires_url(self):
         with pytest.raises(Exception, match="url is required"):
             VectorStoreConfig(type="pgvector")
 
     def test_pgvector_with_url_valid(self):
-        cfg = VectorStoreConfig(type="pgvector", url="postgresql://localhost/db", dim=768)
+        cfg = VectorStoreConfig(type="pgvector", url="postgresql://localhost/db")
         assert cfg.url == "postgresql://localhost/db"
 
 
@@ -188,7 +184,6 @@ class TestAppConfig:
               path: ./data/my.db
             vector_store:
               type: faiss
-              dim: 768
             embedding:
               provider: openai
               model: text-embedding-3-small
@@ -202,7 +197,7 @@ class TestAppConfig:
         cfg = AppConfig.from_yaml(yaml_text)
         assert cfg.structured_store.type == "sqlite"
         assert cfg.structured_store.path == "./data/my.db"
-        assert cfg.vector_store.dim == 768
+        assert cfg.vector_store.type == "faiss"
 
     def test_vector_collections_without_embedding_raises(self):
         yaml_text = textwrap.dedent("""\

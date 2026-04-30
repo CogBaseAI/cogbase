@@ -67,8 +67,10 @@ def build_app(
 ) -> Any:
     """Instantiate a CogBase application from *config*.
 
-    Iterates over all ``config.pipeline.steps`` to build each referenced
-    collection.  Supports ``chunk-embed-upsert``, ``extract-structured``, and
+    Setup all collections.
+
+    Iterates over all ``config.pipeline.steps`` to build the pipeline.
+    Supports ``chunk-embed-upsert``, ``extract-structured``, and
     ``document-embed-upsert`` steps.
 
     Store backends are resolved in priority order:
@@ -135,7 +137,7 @@ def build_app(
             chunk_collections.append(ChunkCollection(
                 schema=VectorCollectionSchema(
                     name=vc_cfg.name,
-                    dimensions=vector_store_cfg.dim,  # type: ignore[union-attr]
+                    dimensions=vc_cfg.dimensions,
                     description=vc_cfg.description,
                 ),
                 store=vector_store,  # type: ignore[arg-type]  # validated above
@@ -171,7 +173,7 @@ def build_app(
             document_collections.append(DocumentCollection(
                 schema=VectorCollectionSchema(
                     name=dc_cfg.name,
-                    dimensions=vector_store_cfg.dim,  # type: ignore[union-attr]
+                    dimensions=dc_cfg.dimensions,
                     description=dc_cfg.description,
                 ),
                 store=vector_store,    # type: ignore[arg-type]  # validated above

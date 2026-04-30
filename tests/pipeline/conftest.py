@@ -12,7 +12,7 @@ from cogbase.stores.structured.base import StructuredStoreBase
 from cogbase.stores.vector.base import VectorStoreBase
 
 _VECTOR_STORE_CONFIGS = [
-    pytest.param(VectorStoreConfig(type="faiss", dim=4), id="faiss"),
+    pytest.param(VectorStoreConfig(type="faiss"), id="faiss"),
 ]
 
 _STRUCTURED_STORE_CONFIGS = [

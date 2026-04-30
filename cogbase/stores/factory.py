@@ -33,7 +33,7 @@ def build_vector_store(cfg: VectorStoreConfig) -> VectorStoreBase:
         return FAISSVectorStore()
     if cfg.type == "pgvector":
         from cogbase.stores.vector.pgvector_store import PGVectorStore
-        return PGVectorStore(dim=cfg.dim, dsn=cfg.url)
+        return PGVectorStore(dsn=cfg.url)
     raise ValueError(f"Unknown vector_store type: {cfg.type!r}")
 
 

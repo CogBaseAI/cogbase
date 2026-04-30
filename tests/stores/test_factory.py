@@ -17,7 +17,7 @@ def test_build_structured_store_memory():
 
 
 def test_build_vector_store_faiss():
-    store = build_vector_store(VectorStoreConfig(type="faiss", dim=128))
+    store = build_vector_store(VectorStoreConfig(type="faiss"))
     assert isinstance(store, FAISSVectorStore)
 
 

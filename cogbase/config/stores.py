@@ -23,7 +23,6 @@ class StructuredStoreConfig(BaseModel):
 
 class VectorStoreConfig(BaseModel):
     type: Literal["faiss", "pgvector"] = "faiss"
-    dim: int = 1536
     url: str | None = None  # pgvector only
 
     @model_validator(mode="after")

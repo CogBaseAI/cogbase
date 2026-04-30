@@ -30,7 +30,6 @@ structured_store:
 # Remove this section to run all applications in structured-only mode.
 vector_store:
   type: faiss                   # faiss | pgvector
-  dim: 1536                     # must match the embedding model's output dimension
   # type: pgvector
   # url: postgresql://user:pass@localhost:5432/cogbase   # required for pgvector
 
