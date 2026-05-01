@@ -273,6 +273,15 @@ async def test_multiple_collections_are_independent():
     assert len(results_b) == 1 and results_b[0].doc_id == "doc-b"
 
 
+async def test_list_collections_returns_created_collections():
+    store = FAISSVectorStore()
+    await store.create_collection(make_schema("col_a", dim=2))
+    await store.create_collection(make_schema("col_b", dim=2))
+    await store.create_collection(make_schema("col_a", dim=2))
+
+    assert set(await store.list_collections()) == {"col_a", "col_b"}
+
+
 async def test_delete_one_collection_leaves_other_intact():
     store = FAISSVectorStore()
     await store.create_collection(make_schema("col_a", dim=2))
@@ -285,6 +294,16 @@ async def test_delete_one_collection_leaves_other_intact():
     assert store.ntotal("col_b") == 1
     with pytest.raises(KeyError):
         await store.search("col_a", "q", [1.0, 0.0], top_k=1)
+
+
+async def test_list_collections_excludes_deleted_collection():
+    store = FAISSVectorStore()
+    await store.create_collection(make_schema("col_a", dim=2))
+    await store.create_collection(make_schema("col_b", dim=2))
+
+    await store.delete_collection("col_a")
+
+    assert await store.list_collections() == ["col_b"]
 
 
 # ------------------------------------------------------------------

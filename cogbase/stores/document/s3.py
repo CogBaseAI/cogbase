@@ -94,3 +94,4 @@ class S3DocumentStore(DocumentStoreBase):
             if getattr(exc, "response", {}).get("Error", {}).get("Code") == "404":
                 return False
             raise
+

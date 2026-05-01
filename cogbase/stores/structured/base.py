@@ -92,6 +92,10 @@ class StructuredStoreBase(abc.ABC):
         ``None`` or ``[]`` deletes the entire collection's contents.
         """
 
+    @abc.abstractmethod
+    async def list_collections(self) -> list[str]:
+        """Return the names of all registered collections."""
+
     async def query_as(
         self,
         collection: str,

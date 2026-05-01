@@ -89,6 +89,7 @@ class PGVectorStore(VectorStoreBase):
             raise ValueError("Provide either dsn or pool, not both.")
         self._dsn = dsn
         self._pool: asyncpg.Pool | None = pool
+        self._collection_names: set[str] = set()
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -154,12 +155,17 @@ class PGVectorStore(VectorStoreBase):
                 f'CREATE INDEX IF NOT EXISTS "{schema.name}_doc_id_idx" '
                 f'ON "{schema.name}" (doc_id)'
             )
+        self._collection_names.add(schema.name)
 
     async def delete_collection(self, collection: str) -> None:
         """Drop the table for ``collection``.  Idempotent — no-op if absent."""
         pool = self._get_pool()
         async with pool.acquire() as conn:
             await conn.execute(f'DROP TABLE IF EXISTS "{collection}"')
+        self._collection_names.discard(collection)
+
+    async def list_collections(self) -> list[str]:
+        return sorted(self._collection_names)
 
     async def upsert(self, collection: str, chunks: list[Chunk]) -> None:
         """Add or replace chunks in ``collection``.

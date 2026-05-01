@@ -209,6 +209,9 @@ class SQLiteStructuredStore(StructuredStoreBase):
         self._conn.commit()
         del self._schemas[collection]
 
+    async def list_collections(self) -> list[str]:
+        return list(self._schemas.keys())
+
     async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         schema = self._get_schema(collection)
         fs = filters or []

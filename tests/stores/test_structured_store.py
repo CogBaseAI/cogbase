@@ -39,6 +39,12 @@ async def test_create_collection_is_idempotent(structured_store):
     await structured_store.create_collection(FACTS_SCHEMA)
 
 
+async def test_list_collections_returns_created_collections(structured_store):
+    collections = await structured_store.list_collections()
+
+    assert set(collections) == {"facts", "events", "contradictions"}
+
+
 def test_create_collection_invalid_name():
     with pytest.raises(Exception, match="invalid"):
         CollectionSchema(
@@ -390,6 +396,12 @@ async def test_delete_collection_leaves_other_collections_intact(structured_stor
     # "events" must still be queryable and contain its data
     results = await structured_store.query("events")
     assert len(results) == 1
+
+
+async def test_list_collections_excludes_deleted_collection(structured_store):
+    await structured_store.delete_collection("facts")
+
+    assert set(await structured_store.list_collections()) == {"events", "contradictions"}
 
 
 # ------------------------------------------------------------------

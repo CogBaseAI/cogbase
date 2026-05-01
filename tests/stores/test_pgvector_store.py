@@ -295,6 +295,27 @@ async def test_delete_collection_leaves_other_collections_intact(store):
         await store.delete_collection(other)
 
 
+@pytest.mark.asyncio
+async def test_list_collections_returns_created_collections(store):
+    other = "other_chunks"
+    await store.create_collection(VectorCollectionSchema(name=other, dimensions=DIM, description="Test chunks"))
+    try:
+        assert set(await store.list_collections()) == {COLLECTION, other}
+    finally:
+        await store.delete_collection(other)
+
+
+@pytest.mark.asyncio
+async def test_list_collections_excludes_deleted_collection(store):
+    other = "other_chunks"
+    await store.create_collection(VectorCollectionSchema(name=other, dimensions=DIM, description="Test chunks"))
+    await store.delete_collection(COLLECTION)
+    try:
+        assert await store.list_collections() == [other]
+    finally:
+        await store.delete_collection(other)
+
+
 # ---------------------------------------------------------------------------
 # Construction errors
 # ---------------------------------------------------------------------------

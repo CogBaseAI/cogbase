@@ -144,6 +144,9 @@ class InMemoryStructuredStore(StructuredStoreBase):
         mask = _build_mask(df, filters)
         self._frames[collection] = df[~mask].reset_index(drop=True)
 
+    async def list_collections(self) -> list[str]:
+        return list(self._schemas.keys())
+
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------

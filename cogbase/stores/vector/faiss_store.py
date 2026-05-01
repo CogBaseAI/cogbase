@@ -75,6 +75,9 @@ class FAISSVectorStore(VectorStoreBase):
         """Remove a collection and all its chunks from memory."""
         self._collections.pop(collection, None)
 
+    async def list_collections(self) -> list[str]:
+        return list(self._collections.keys())
+
     async def upsert(self, collection: str, chunks: list[Chunk]) -> None:
         """Add or replace chunks. Chunks without an embedding are skipped.
 
