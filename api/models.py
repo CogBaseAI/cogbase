@@ -87,3 +87,30 @@ class AddSkillRequest(BaseModel):
 class AppSkillsResponse(BaseModel):
     app_name: str
     skills: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Collections / structured store models
+# ---------------------------------------------------------------------------
+
+
+class CollectionsResponse(BaseModel):
+    structured: list[str]
+    vector: list[str]
+
+
+class FilterRequest(BaseModel):
+    field: str
+    op: str
+    value: Any = None
+
+
+class CollectionQueryRequest(BaseModel):
+    filters: list[FilterRequest] = []
+    fields: list[str] | None = None
+
+
+class CollectionQueryResponse(BaseModel):
+    collection: str
+    records: list[dict]
+    total: int

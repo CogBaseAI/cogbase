@@ -1,4 +1,4 @@
-"""FAISS implementation of VectorStoreBase.
+"""FAISS implementations of VectorStoreBase.
 
 Uses IndexFlatIP (inner product) with L2-normalised vectors, which is equivalent
 to cosine similarity — the standard metric for text embeddings.
@@ -6,14 +6,15 @@ to cosine similarity — the standard metric for text embeddings.
 Install the extra dependency before use:
     pip install "cogbase[faiss]"
 
-Not thread-safe. Embeddings are stored in-memory alongside the FAISS index;
-data is lost when the process exits unless you call ``save`` / ``load``.
+Not thread-safe. ``FAISSMemoryVectorStore`` stores data only in memory.
+``FAISSVectorStore`` is file-backed and persists each mutation to disk.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 import logging
@@ -46,8 +47,8 @@ class _CollectionState:
     next_id: int = 0
 
 
-class FAISSVectorStore(VectorStoreBase):
-    """Vector store backed by per-collection FAISS IndexFlatIP indices.
+class FAISSMemoryVectorStore(VectorStoreBase):
+    """In-memory vector store backed by per-collection FAISS IndexFlatIP indices.
 
     Similarity metric: cosine (vectors are L2-normalised before indexing).
     Chunks without an embedding are silently skipped on ``upsert``.
@@ -70,10 +71,12 @@ class FAISSVectorStore(VectorStoreBase):
                 schema=schema,
                 index=_make_index(schema.dimensions),
             )
+            await self._after_mutation()
 
     async def delete_collection(self, collection: str) -> None:
         """Remove a collection and all its chunks from memory."""
-        self._collections.pop(collection, None)
+        if self._collections.pop(collection, None) is not None:
+            await self._after_mutation()
 
     async def list_collections(self) -> list[str]:
         return list(self._collections.keys())
@@ -117,6 +120,7 @@ class FAISSVectorStore(VectorStoreBase):
             state.id_rev[fid] = chunk.chunk_id
 
         state.next_id += len(to_add)
+        await self._after_mutation()
 
     async def search(
         self,
@@ -176,58 +180,7 @@ class FAISSVectorStore(VectorStoreBase):
             state.chunks.pop(cid)
 
         _rebuild(state)
-
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
-
-    async def save(self, path: str | Path) -> None:
-        """Persist all collections (FAISS indices + chunk metadata) to *path*.
-
-        *path* is a directory that will be created if it does not exist.  For
-        each collection ``<name>`` two files are written:
-
-        * ``<name>.faiss`` — the FAISS index binary
-        * ``meta.json``    — schemas, chunk objects, and ID mappings for all collections
-        """
-        if not self._collections:
-            raise RuntimeError("Nothing to save — no collections registered.")
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._save_sync, Path(path))
-
-    def _save_sync(self, path: Path) -> None:
-        path.mkdir(parents=True, exist_ok=True)
-        meta: dict = {"collections": {}}
-        for name, state in self._collections.items():
-            faiss.write_index(state.index, str(path / f"{name}.faiss"))
-            meta["collections"][name] = {
-                "schema": state.schema.model_dump(),
-                "next_id": state.next_id,
-                "id_map": state.id_map,
-                "id_rev": {str(k): v for k, v in state.id_rev.items()},
-                "chunks": {cid: chunk.model_dump() for cid, chunk in state.chunks.items()},
-            }
-        (path / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
-
-    async def load(self, path: str | Path) -> None:
-        """Load a previously saved store from *path* (a directory written by ``save``)."""
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._load_sync, Path(path))
-
-    def _load_sync(self, path: Path) -> None:
-        meta: dict = json.loads((path / "meta.json").read_text(encoding="utf-8"))
-        self._collections = {}
-        for name, data in meta["collections"].items():
-            schema = VectorCollectionSchema(**data["schema"])
-            index = faiss.read_index(str(path / f"{name}.faiss"))
-            self._collections[name] = _CollectionState(
-                schema=schema,
-                index=index,
-                chunks={cid: Chunk(**c) for cid, c in data["chunks"].items()},
-                id_map=data["id_map"],
-                id_rev={int(k): v for k, v in data["id_rev"].items()},
-                next_id=data["next_id"],
-            )
+        await self._after_mutation()
 
     # ------------------------------------------------------------------
     # Properties
@@ -249,6 +202,142 @@ class FAISSVectorStore(VectorStoreBase):
                 f"Collection '{collection}' not found. Call create_collection first."
             )
         return state
+
+    async def _after_mutation(self) -> None:
+        """Hook for persistent subclasses."""
+
+
+class FAISSVectorStore(FAISSMemoryVectorStore):
+    """File-backed FAISS vector store that persists every mutation.
+
+    Args:
+        path: Directory containing ``meta.json`` and one ``<collection>.faiss``
+              file per collection. If omitted, a temporary directory is used.
+
+    Existing data is loaded lazily before the first operation, so callers do not
+    need to call ``load`` explicitly.
+    """
+
+    def __init__(self, path: str | Path | None = None, *, dim: int | None = None) -> None:
+        super().__init__()
+        # Kept for older callers that passed a default FAISS dimension. Per-collection
+        # dimensions now come from VectorCollectionSchema.
+        _ = dim
+        self.path = (
+            Path(path)
+            if path is not None
+            else Path(tempfile.mkdtemp(prefix="cogbase_faiss_"))
+        )
+        self._loaded = False
+        self._persisting = False
+
+    async def create_collection(self, schema: VectorCollectionSchema) -> None:
+        await self._ensure_loaded()
+        await super().create_collection(schema)
+
+    async def delete_collection(self, collection: str) -> None:
+        await self._ensure_loaded()
+        await super().delete_collection(collection)
+
+    async def list_collections(self) -> list[str]:
+        await self._ensure_loaded()
+        return await super().list_collections()
+
+    async def upsert(self, collection: str, chunks: list[Chunk]) -> None:
+        await self._ensure_loaded()
+        await super().upsert(collection, chunks)
+
+    async def search(
+        self,
+        collection: str,
+        query: str,
+        query_embedding: list[float],
+        top_k: int,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
+    ) -> list[Chunk]:
+        await self._ensure_loaded()
+        return await super().search(collection, query, query_embedding, top_k, filters, fields)
+
+    async def delete(self, collection: str, doc_id: str) -> None:
+        await self._ensure_loaded()
+        await super().delete(collection, doc_id)
+
+    async def save(self, path: str | Path | None = None) -> None:
+        """Persist all collections (FAISS indices + chunk metadata) to disk.
+
+        When *path* is omitted, writes to the store's configured ``path``.  For
+        each collection ``<name>`` two files are written:
+
+        * ``<name>.faiss`` — the FAISS index binary
+        * ``meta.json``    — schemas, chunk objects, and ID mappings for all collections
+        """
+        if not self._collections:
+            raise RuntimeError("Nothing to save — no collections registered.")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._save_sync, Path(self.path if path is None else path))
+
+    def _save_sync(self, path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        expected_index_files = {f"{name}.faiss" for name in self._collections}
+        for index_file in path.glob("*.faiss"):
+            if index_file.name not in expected_index_files:
+                index_file.unlink()
+        meta: dict = {"collections": {}}
+        for name, state in self._collections.items():
+            faiss.write_index(state.index, str(path / f"{name}.faiss"))
+            meta["collections"][name] = {
+                "schema": state.schema.model_dump(),
+                "next_id": state.next_id,
+                "id_map": state.id_map,
+                "id_rev": {str(k): v for k, v in state.id_rev.items()},
+                "chunks": {cid: chunk.model_dump() for cid, chunk in state.chunks.items()},
+            }
+        (path / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    async def load(self, path: str | Path | None = None) -> None:
+        """Load a previously saved store from disk."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._load_sync, Path(self.path if path is None else path))
+        self._loaded = True
+
+    def _load_sync(self, path: Path) -> None:
+        meta: dict = json.loads((path / "meta.json").read_text(encoding="utf-8"))
+        self._collections = {}
+        for name, data in meta["collections"].items():
+            schema = VectorCollectionSchema(**data["schema"])
+            index = faiss.read_index(str(path / f"{name}.faiss"))
+            self._collections[name] = _CollectionState(
+                schema=schema,
+                index=index,
+                chunks={cid: Chunk(**c) for cid, c in data["chunks"].items()},
+                id_map=data["id_map"],
+                id_rev={int(k): v for k, v in data["id_rev"].items()},
+                next_id=data["next_id"],
+            )
+
+    def ntotal(self, collection: str) -> int:
+        if not self._loaded and (self.path / "meta.json").exists():
+            self._load_sync(self.path)
+            self._loaded = True
+        return super().ntotal(collection)
+
+    async def _after_mutation(self) -> None:
+        if self._persisting:
+            return
+        self._persisting = True
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._save_sync, self.path)
+        finally:
+            self._persisting = False
+
+    async def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        if (self.path / "meta.json").exists():
+            await self.load()
+        self._loaded = True
 
 
 def _remove_faiss_ids(state: _CollectionState, faiss_ids: list[int]) -> None:

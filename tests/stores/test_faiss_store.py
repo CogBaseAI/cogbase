@@ -7,10 +7,12 @@ import pytest
 
 from cogbase.core.models import Chunk
 from cogbase.stores import Col, VectorCollectionSchema
-from cogbase.stores.vector.faiss_store import FAISSVectorStore
+from cogbase.stores.vector.faiss_store import FAISSMemoryVectorStore, FAISSVectorStore
 
 COLLECTION = "chunks"
 
+# Most tests exercise the in-memory contract. File-backed persistence is covered
+# explicitly at the end of the file.
 
 # ------------------------------------------------------------------
 # Helpers
@@ -36,25 +38,25 @@ def make_chunk(doc_id: str = "doc-1", embedding: list[float] | None = None, **kw
 # ------------------------------------------------------------------
 
 async def test_upsert_without_create_collection_raises():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     with pytest.raises(KeyError, match=COLLECTION):
         await store.upsert(COLLECTION, [make_chunk(embedding=[1.0, 0.0])])
 
 
 async def test_search_without_create_collection_raises():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     with pytest.raises(KeyError, match=COLLECTION):
         await store.search(COLLECTION, "q", [1.0, 0.0], top_k=5)
 
 
 async def test_delete_without_create_collection_raises():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     with pytest.raises(KeyError, match=COLLECTION):
         await store.delete(COLLECTION, "doc-1")
 
 
 async def test_create_collection_is_idempotent():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     schema = make_schema(COLLECTION, dim=2)
     await store.create_collection(schema)
     await store.create_collection(schema)  # second call must not raise or reset state
@@ -69,13 +71,13 @@ async def test_create_collection_is_idempotent():
 # ------------------------------------------------------------------
 
 async def test_empty_store_returns_no_results():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=4))
     assert await store.search(COLLECTION, "q", [1.0, 0.0, 0.0, 0.0], top_k=5) == []
 
 
 async def test_upsert_and_search_returns_chunk():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=4))
     chunk = make_chunk(embedding=[1.0, 0.0, 0.0, 0.0])
     await store.upsert(COLLECTION, [chunk])
@@ -85,7 +87,7 @@ async def test_upsert_and_search_returns_chunk():
 
 
 async def test_search_returns_nearest_neighbour():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=3))
     a = make_chunk(doc_id="doc-a", embedding=[1.0, 0.0, 0.0])
     b = make_chunk(doc_id="doc-b", embedding=[0.0, 1.0, 0.0])
@@ -97,7 +99,7 @@ async def test_search_returns_nearest_neighbour():
 
 
 async def test_search_top_k_limits_results():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=3))
     await store.upsert(COLLECTION, [make_chunk(embedding=[float(i), 0.0, 0.0]) for i in range(1, 6)])
     results = await store.search(COLLECTION, "q", [1.0, 0.0, 0.0], top_k=3)
@@ -105,7 +107,7 @@ async def test_search_top_k_limits_results():
 
 
 async def test_search_top_k_larger_than_index_returns_all():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(embedding=[1.0, 0.0]), make_chunk(embedding=[0.0, 1.0])])
     results = await store.search(COLLECTION, "q", [1.0, 0.0], top_k=100)
@@ -114,7 +116,7 @@ async def test_search_top_k_larger_than_index_returns_all():
 
 async def test_cosine_order():
     """Verify results are ordered highest cosine similarity first."""
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     a = make_chunk(doc_id="a", embedding=unit([0.9, 0.1]))
     b = make_chunk(doc_id="b", embedding=unit([0.1, 0.9]))
@@ -130,7 +132,7 @@ async def test_cosine_order():
 # ------------------------------------------------------------------
 
 async def test_chunks_without_embedding_are_skipped():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     no_emb = make_chunk(embedding=None)
     with_emb = make_chunk(embedding=[1.0, 0.0])
@@ -139,7 +141,7 @@ async def test_chunks_without_embedding_are_skipped():
 
 
 async def test_all_chunks_without_embeddings_is_a_no_op():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(embedding=None)])
     assert store.ntotal(COLLECTION) == 0
@@ -151,7 +153,7 @@ async def test_all_chunks_without_embeddings_is_a_no_op():
 # ------------------------------------------------------------------
 
 async def test_upsert_replaces_existing_chunk():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=3))
     chunk = make_chunk(embedding=[1.0, 0.0, 0.0])
     await store.upsert(COLLECTION, [chunk])
@@ -174,7 +176,7 @@ async def test_upsert_replaces_existing_chunk():
 # ------------------------------------------------------------------
 
 async def test_delete_removes_doc_chunks():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [
         make_chunk(doc_id="doc-1", embedding=[1.0, 0.0]),
@@ -188,7 +190,7 @@ async def test_delete_removes_doc_chunks():
 
 
 async def test_delete_unknown_doc_is_a_no_op():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(embedding=[1.0, 0.0])])
     await store.delete(COLLECTION, "nonexistent-doc")
@@ -196,7 +198,7 @@ async def test_delete_unknown_doc_is_a_no_op():
 
 
 async def test_delete_all_chunks_leaves_empty_store():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])])
     await store.delete(COLLECTION, "doc-1")
@@ -205,7 +207,7 @@ async def test_delete_all_chunks_leaves_empty_store():
 
 
 async def test_upsert_after_delete_works():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])])
     await store.delete(COLLECTION, "doc-1")
@@ -216,7 +218,7 @@ async def test_upsert_after_delete_works():
 
 
 async def test_delete_collection_clears_collection():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [
         make_chunk(doc_id="doc-1", embedding=[1.0, 0.0]),
@@ -229,7 +231,7 @@ async def test_delete_collection_clears_collection():
 
 
 async def test_delete_collection_then_recreate_and_upsert_works():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])])
     await store.delete_collection(COLLECTION)
@@ -245,7 +247,7 @@ async def test_delete_collection_then_recreate_and_upsert_works():
 # ------------------------------------------------------------------
 
 async def test_dimension_mismatch_raises():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(embedding=[1.0, 0.0])])
     with pytest.raises(ValueError, match="dimension"):
@@ -257,7 +259,7 @@ async def test_dimension_mismatch_raises():
 # ------------------------------------------------------------------
 
 async def test_multiple_collections_are_independent():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema("col_a", dim=2))
     await store.create_collection(make_schema("col_b", dim=2))
 
@@ -274,7 +276,7 @@ async def test_multiple_collections_are_independent():
 
 
 async def test_list_collections_returns_created_collections():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema("col_a", dim=2))
     await store.create_collection(make_schema("col_b", dim=2))
     await store.create_collection(make_schema("col_a", dim=2))
@@ -283,7 +285,7 @@ async def test_list_collections_returns_created_collections():
 
 
 async def test_delete_one_collection_leaves_other_intact():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema("col_a", dim=2))
     await store.create_collection(make_schema("col_b", dim=2))
     await store.upsert("col_a", [make_chunk(embedding=[1.0, 0.0])])
@@ -297,13 +299,20 @@ async def test_delete_one_collection_leaves_other_intact():
 
 
 async def test_list_collections_excludes_deleted_collection():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema("col_a", dim=2))
     await store.create_collection(make_schema("col_b", dim=2))
 
     await store.delete_collection("col_a")
 
     assert await store.list_collections() == ["col_b"]
+
+
+def test_memory_store_does_not_expose_persistence_methods():
+    store = FAISSMemoryVectorStore()
+
+    assert not hasattr(store, "save")
+    assert not hasattr(store, "load")
 
 
 # ------------------------------------------------------------------
@@ -439,7 +448,7 @@ async def test_save_and_load_multiple_collections(tmp_path):
 # ------------------------------------------------------------------
 
 async def test_search_filter_by_doc_id():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=3))
     a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0])
     b = make_chunk(doc_id="doc-2", embedding=[0.9, 0.1, 0.0])
@@ -452,7 +461,7 @@ async def test_search_filter_by_doc_id():
 
 
 async def test_search_filter_by_metadata_eq():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0], metadata={"section": "intro"})
     b = make_chunk(doc_id="doc-1", embedding=[0.9, 0.1], metadata={"section": "body"})
@@ -465,7 +474,7 @@ async def test_search_filter_by_metadata_eq():
 
 
 async def test_search_filter_in_operator():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])
     b = make_chunk(doc_id="doc-2", embedding=[0.9, 0.1])
@@ -479,7 +488,7 @@ async def test_search_filter_in_operator():
 
 
 async def test_search_filter_metadata_numeric_gte():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0], metadata={"page": 1})
     b = make_chunk(doc_id="doc-1", embedding=[0.9, 0.1], metadata={"page": 3})
@@ -493,7 +502,7 @@ async def test_search_filter_metadata_numeric_gte():
 
 
 async def test_search_filter_metadata_is_null():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0], metadata={"page": 1})
     b = make_chunk(doc_id="doc-1", embedding=[0.9, 0.1], metadata={})
@@ -506,7 +515,7 @@ async def test_search_filter_metadata_is_null():
 
 
 async def test_search_filter_no_match_returns_empty():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])])
     results = await store.search(COLLECTION, "q", [1.0, 0.0], top_k=5,
@@ -516,7 +525,7 @@ async def test_search_filter_no_match_returns_empty():
 
 async def test_search_filter_respects_top_k():
     """top_k is applied after filtering."""
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [
         make_chunk(doc_id="doc-1", embedding=[float(i), 0.0]) for i in range(1, 6)
@@ -527,7 +536,7 @@ async def test_search_filter_respects_top_k():
 
 
 async def test_search_multiple_filters_are_anded():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0], metadata={"section": "intro"})
     b = make_chunk(doc_id="doc-1", embedding=[0.9, 0.1], metadata={"section": "body"})
@@ -547,7 +556,7 @@ async def test_search_multiple_filters_are_anded():
 # ------------------------------------------------------------------
 
 async def test_search_fields_omits_embedding():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0],
                                                metadata={"k": "v"})])
@@ -558,7 +567,7 @@ async def test_search_fields_omits_embedding():
 
 
 async def test_search_fields_omits_metadata():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0],
                                                metadata={"k": "v"})])
@@ -569,7 +578,7 @@ async def test_search_fields_omits_metadata():
 
 
 async def test_search_fields_none_returns_all():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0],
                                                metadata={"k": "v"})])
@@ -579,7 +588,7 @@ async def test_search_fields_none_returns_all():
 
 
 async def test_search_filters_and_fields_combined():
-    store = FAISSVectorStore()
+    store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0], metadata={"section": "intro"})
     b = make_chunk(doc_id="doc-2", embedding=[0.9, 0.1], metadata={"section": "body"})
@@ -592,3 +601,47 @@ async def test_search_filters_and_fields_combined():
     assert results[0].chunk_id == a.chunk_id
     assert results[0].embedding is None
     assert results[0].metadata == {"section": "intro"}
+
+
+# ------------------------------------------------------------------
+# File-backed persistence
+# ------------------------------------------------------------------
+
+async def test_file_store_persists_create_and_upsert(tmp_path):
+    path = tmp_path / "faiss_store"
+    store = FAISSVectorStore(path=path)
+    await store.create_collection(make_schema(COLLECTION, dim=2))
+    chunk = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])
+    await store.upsert(COLLECTION, [chunk])
+
+    assert (path / "meta.json").exists()
+    assert (path / f"{COLLECTION}.faiss").exists()
+
+    loaded = FAISSVectorStore(path=path)
+    results = await loaded.search(COLLECTION, "q", [1.0, 0.0], top_k=1)
+    assert len(results) == 1
+    assert results[0].chunk_id == chunk.chunk_id
+
+
+async def test_file_store_persists_delete_collection(tmp_path):
+    path = tmp_path / "faiss_store"
+    store = FAISSVectorStore(path=path)
+    await store.create_collection(make_schema("col_a", dim=2))
+    await store.create_collection(make_schema("col_b", dim=2))
+    await store.delete_collection("col_a")
+
+    loaded = FAISSVectorStore(path=path)
+    assert await loaded.list_collections() == ["col_b"]
+    assert not (path / "col_a.faiss").exists()
+
+
+async def test_file_store_persists_deleting_last_collection(tmp_path):
+    path = tmp_path / "faiss_store"
+    store = FAISSVectorStore(path=path)
+    await store.create_collection(make_schema(COLLECTION, dim=2))
+
+    await store.delete_collection(COLLECTION)
+
+    loaded = FAISSVectorStore(path=path)
+    assert await loaded.list_collections() == []
+    assert not (path / f"{COLLECTION}.faiss").exists()

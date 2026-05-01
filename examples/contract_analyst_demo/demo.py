@@ -14,13 +14,16 @@ Set COGBASE_API_URL to override the default http://localhost:8000.
 
 Commands (interactive loop)
 ---------------------------
-    list                 List all applications
-    create               Create the contract-analyst application
-    delete <name>        Delete an application by name
-    ingest saas          Ingest the built-in 5 SaaS contract fixtures
-    ingest <path>        Ingest a plain-text contract file from disk
-    reset                Delete the application and start fresh
-    q / quit / exit      Exit
+    list                        List all applications
+    create                      Create the contract-analyst application
+    delete <name>               Delete an application by name
+    ingest saas                 Ingest the built-in 5 SaaS contract fixtures
+    ingest <path>               Ingest a plain-text contract file from disk
+    list collections            List all structured collections for the application
+    query structured            Query the default contracts collection (all records)
+    query structured <name>     Query a named structured collection (all records)
+    reset                       Delete the application and start fresh
+    q / quit / exit             Exit
 """
 
 from __future__ import annotations
@@ -83,11 +86,6 @@ embedding:
   provider: openai
   model: {_EMBED_MODEL}
   dimensions: {_EMBED_DIM}
-vector_store:
-  type: faiss
-  dim: {_EMBED_DIM}
-structured_store:
-  type: memory
 chunk_collections:
   - name: document_chunks
     chunker:
@@ -199,6 +197,22 @@ async def _query_stream(client: httpx.AsyncClient, text: str) -> None:
         print()
 
 
+async def _list_collections(client: httpx.AsyncClient) -> list[str]:
+    resp = await client.get(f"{_API_BASE}/applications/{_APP_NAME}/collections", timeout=10)
+    resp.raise_for_status()
+    return resp.json()["collections"]
+
+
+async def _query_structured(client: httpx.AsyncClient, collection: str) -> list[dict]:
+    resp = await client.post(
+        f"{_API_BASE}/applications/{_APP_NAME}/collections/{collection}/query",
+        json={"filters": [], "fields": None},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["records"]
+
+
 # ---------------------------------------------------------------------------
 # Main async loop
 # ---------------------------------------------------------------------------
@@ -229,7 +243,7 @@ async def main() -> None:
             print(f"Application '{_APP_NAME}' already exists (status: {app_info['status']})")
         print()
 
-        print("Commands: list | create | delete <name> | ingest saas | ingest <file> | reset | q")
+        print("Commands: list | create | delete <name> | ingest saas | ingest <file> | list collections | query structured [<name>] | reset | q")
         print()
 
         while True:
@@ -321,6 +335,39 @@ async def main() -> None:
                         print(f"  {r['doc_id']:<12}  OK  ({r['records_extracted']} record extracted)")
                     else:
                         print(f"  {r['doc_id']:<12}  FAILED: {r['error']}")
+                continue
+
+            # ---- list collections ---------------------------------------
+            if lower == "list collections":
+                try:
+                    cols = await _list_collections(client)
+                except httpx.HTTPStatusError as exc:
+                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+                    continue
+                if not cols:
+                    print("  No structured collections found.")
+                else:
+                    for c in cols:
+                        print(f"  {c}")
+                continue
+
+            # ---- query structured [<collection>] ------------------------
+            if lower == "query structured" or lower.startswith("query structured "):
+                collection = (
+                    raw[len("query structured "):].strip()
+                    if lower.startswith("query structured ")
+                    else _CONTRACTS_COLLECTION
+                )
+                print(f"Querying structured collection '{collection}'...")
+                try:
+                    records = await _query_structured(client, collection)
+                except httpx.HTTPStatusError as exc:
+                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+                    continue
+                if not records:
+                    print("  No records found.")
+                else:
+                    print(json.dumps(records, indent=2))
                 continue
 
             # ---- ingest <file> ------------------------------------------

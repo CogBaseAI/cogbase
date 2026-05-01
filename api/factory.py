@@ -28,6 +28,9 @@ from cogbase.pipeline.ingestion_pipeline import (
 )
 from cogbase.core.basemodel_to_schema import cls_json_schema_for_llm
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 def build_document_store(cfg: DocumentStoreConfig) -> Any:
     """Instantiate a document store from its config."""
@@ -172,10 +175,13 @@ async def build_app(
     # --- Create collections in their backing stores (idempotent) ---
     for cc in chunk_collections:
         await cc.store.create_collection(cc.schema)
+        logger.info("created chunk collection=%s, app=%s", cc.schema, config.name)
     for sc in structured_collections:
         await sc.store.create_collection(sc.schema)
+        logger.info("created structured collection=%s, app=%s", sc.schema, config.name)
     for dc in document_collections:
         await dc.store.create_collection(dc.schema)
+        logger.info("created document collection=%s, app=%s", dc.schema, config.name)
 
     # --- Pipeline (references already-built collections) ---
     steps = config.pipeline.steps if config.pipeline else []

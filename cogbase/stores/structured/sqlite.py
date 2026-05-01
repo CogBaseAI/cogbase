@@ -31,6 +31,9 @@ class SQLiteStructuredStore(StructuredStoreBase):
     """
 
     def __init__(self, path: str | Path = ":memory:") -> None:
+        p = Path(path)
+        if str(path) != ":memory:" and p.parent != Path("."):
+            p.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._schemas: dict[str, CollectionSchema] = {}

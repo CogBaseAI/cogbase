@@ -377,6 +377,20 @@ class QueryRunner:
             self._tool_defs.append(_READ_DOCUMENT_DEF)
 
     # ------------------------------------------------------------------
+    # Accessors
+    # ------------------------------------------------------------------
+
+    @property
+    def structured_store(self):
+        """The structured store, if configured."""
+        return self._structured_store
+
+    @property
+    def vector_store(self):
+        """The vector store, if configured."""
+        return self._vector_store
+
+    # ------------------------------------------------------------------
     # Skill selection helpers (used when skills are provided to run())
     # ------------------------------------------------------------------
 

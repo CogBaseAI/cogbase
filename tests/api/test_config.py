@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import textwrap
 
 import pytest
@@ -85,6 +84,10 @@ class TestVectorStoreConfig:
     def test_faiss_default(self):
         cfg = VectorStoreConfig(type="faiss")
         assert cfg.type == "faiss"
+
+    def test_faiss_path_valid(self):
+        cfg = VectorStoreConfig(type="faiss", path="/tmp/faiss-store")
+        assert cfg.path == "/tmp/faiss-store"
 
     def test_pgvector_requires_url(self):
         with pytest.raises(Exception, match="url is required"):

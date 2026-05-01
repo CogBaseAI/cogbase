@@ -30,7 +30,7 @@ def build_vector_store(cfg: VectorStoreConfig) -> VectorStoreBase:
     """Instantiate a vector store from config."""
     if cfg.type == "faiss":
         from cogbase.stores.vector.faiss_store import FAISSVectorStore
-        return FAISSVectorStore()
+        return FAISSVectorStore(path=cfg.path)
     if cfg.type == "pgvector":
         from cogbase.stores.vector.pgvector_store import PGVectorStore
         return PGVectorStore(dsn=cfg.url)

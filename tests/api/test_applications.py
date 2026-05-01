@@ -855,3 +855,215 @@ class TestQueryApplicationStream:
         error_events = [json.loads(e) for e in events if e != "[DONE]" and "error" in json.loads(e)]
         assert len(error_events) == 1
         assert events[-1] == "[DONE]"
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared by collection endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def _mock_collections_app(
+    structured_collections: list[str] | None = None,
+    vector_collections: list[str] | None = None,
+    structured_records: list[dict] | None = None,
+) -> MagicMock:
+    """Build a mock CogBaseApp for collection endpoint tests."""
+    inst = MagicMock()
+    runner = MagicMock()
+    inst.query_runner = runner
+
+    if structured_collections is not None:
+        store = MagicMock()
+        store.list_collections = AsyncMock(return_value=structured_collections)
+        store.query = AsyncMock(return_value=structured_records or [])
+        runner.structured_store = store
+    else:
+        runner.structured_store = None
+
+    if vector_collections is not None:
+        store = MagicMock()
+        store.list_collections = AsyncMock(return_value=vector_collections)
+        runner.vector_store = store
+    else:
+        runner.vector_store = None
+
+    return inst
+
+
+# ---------------------------------------------------------------------------
+# GET /applications/{app_name}/collections
+# ---------------------------------------------------------------------------
+
+
+class TestListCollections:
+    @pytest.mark.asyncio
+    async def test_returns_structured_and_vector(self, client):
+        mock_app = _mock_collections_app(
+            structured_collections=["contracts", "parties"],
+            vector_collections=["doc_chunks"],
+        )
+        await _create_app(client, mock_app)
+
+        resp = await client.get("/applications/my-contract-analyzer/collections")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body["structured"]) == {"contracts", "parties"}
+        assert body["vector"] == ["doc_chunks"]
+
+    @pytest.mark.asyncio
+    async def test_no_structured_store_returns_empty_structured(self, client):
+        mock_app = _mock_collections_app(vector_collections=["doc_chunks"])
+        await _create_app(client, mock_app)
+
+        resp = await client.get("/applications/my-contract-analyzer/collections")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["structured"] == []
+        assert body["vector"] == ["doc_chunks"]
+
+    @pytest.mark.asyncio
+    async def test_no_vector_store_returns_empty_vector(self, client):
+        mock_app = _mock_collections_app(structured_collections=["contracts"])
+        await _create_app(client, mock_app)
+
+        resp = await client.get("/applications/my-contract-analyzer/collections")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["structured"] == ["contracts"]
+        assert body["vector"] == []
+
+    @pytest.mark.asyncio
+    async def test_no_stores_returns_empty_lists(self, client):
+        mock_app = _mock_collections_app()
+        await _create_app(client, mock_app)
+
+        resp = await client.get("/applications/my-contract-analyzer/collections")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["structured"] == []
+        assert body["vector"] == []
+
+    @pytest.mark.asyncio
+    async def test_404_when_app_not_found(self, client):
+        resp = await client.get("/applications/nonexistent/collections")
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /applications/{app_name}/collections/{collection}/query
+# ---------------------------------------------------------------------------
+
+
+class TestQueryCollection:
+    @pytest.mark.asyncio
+    async def test_returns_records_for_structured_collection(self, client):
+        records = [{"type": "NDA", "doc_id": "c-001"}, {"type": "NDA", "doc_id": "c-002"}]
+        mock_app = _mock_collections_app(
+            structured_collections=["contracts"],
+            structured_records=records,
+        )
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/collections/contracts/query",
+            json={},
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["collection"] == "contracts"
+        assert body["records"] == records
+        assert body["total"] == 2
+
+    @pytest.mark.asyncio
+    async def test_passes_filters_to_store(self, client):
+        mock_app = _mock_collections_app(
+            structured_collections=["contracts"],
+            structured_records=[{"type": "NDA", "doc_id": "c-001"}],
+        )
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/collections/contracts/query",
+            json={"filters": [{"field": "type", "op": "=", "value": "NDA"}]},
+        )
+
+        assert resp.status_code == 200
+        call_args = mock_app.query_runner.structured_store.query.call_args[0]
+        filters_passed = call_args[1]
+        assert len(filters_passed) == 1
+        assert filters_passed[0].field == "type"
+        assert filters_passed[0].value == "NDA"
+
+    @pytest.mark.asyncio
+    async def test_passes_fields_to_store(self, client):
+        mock_app = _mock_collections_app(
+            structured_collections=["contracts"],
+            structured_records=[{"type": "NDA"}],
+        )
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/collections/contracts/query",
+            json={"fields": ["type"]},
+        )
+
+        assert resp.status_code == 200
+        call_args = mock_app.query_runner.structured_store.query.call_args[0]
+        assert call_args[2] == ["type"]
+
+    @pytest.mark.asyncio
+    async def test_empty_filters_passes_none_to_store(self, client):
+        mock_app = _mock_collections_app(structured_collections=["contracts"])
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/collections/contracts/query",
+            json={},
+        )
+
+        assert resp.status_code == 200
+        call_args = mock_app.query_runner.structured_store.query.call_args[0]
+        assert call_args[1] is None  # empty filters → None
+        assert call_args[2] is None  # absent fields → None
+
+    @pytest.mark.asyncio
+    async def test_vector_collection_returns_400(self, client):
+        mock_app = _mock_collections_app(vector_collections=["doc_chunks"])
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/collections/doc_chunks/query",
+            json={},
+        )
+
+        assert resp.status_code == 400
+        assert "vector" in resp.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_unknown_collection_returns_404(self, client):
+        mock_app = _mock_collections_app(
+            structured_collections=["contracts"],
+            vector_collections=["doc_chunks"],
+        )
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/collections/nonexistent/query",
+            json={},
+        )
+
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_404_when_app_not_found(self, client):
+        resp = await client.post(
+            "/applications/nonexistent/collections/contracts/query",
+            json={},
+        )
+        assert resp.status_code == 404

@@ -23,15 +23,20 @@ from api.models import (
     AppSkillsResponse,
     ApplicationListResponse,
     ApplicationResponse,
+    CollectionsResponse,
+    FilterRequest,
     IngestDocumentsRequest,
     IngestDocumentsResponse,
     IngestResultResponse,
     QueryRequest,
     QueryResponse,
+    CollectionQueryRequest,
+    CollectionQueryResponse,
 )
 from api.system_config import SystemConfig
 from api.system_store import AppRecord, SystemStore
 from cogbase.core.models import Document
+from cogbase.stores.filters import Filter, Op
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 
@@ -104,6 +109,14 @@ def _parse_bundle(raw: bytes) -> tuple[str, AppConfig]:
     # by_alias=True preserves "schema" as the YAML key (field name is schema_).
     stored_yaml = yaml.dump(config.model_dump(by_alias=True), allow_unicode=True, default_flow_style=False)
     return stored_yaml, config
+
+
+def _to_filter(fr: FilterRequest) -> Filter:
+    try:
+        op = Op(fr.op)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Unknown filter op: {fr.op!r}")
+    return Filter(field=fr.field, op=op, value=fr.value)
 
 
 def _validate_skills(skill_names: list[str], skill_registry) -> None:
@@ -514,3 +527,60 @@ async def remove_application_skill(
     )
     await system_store.save_app(updated_record)
     logger.info("Removed skill '%s' from application '%s'", skill_name, app_name)
+
+
+@router.get("/{app_name}/collections", response_model=CollectionsResponse)
+async def list_collections(
+    app_name: str,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_config: SystemConfigDep,
+    system_structured_store: SystemStructuredStoreDep,
+) -> CollectionsResponse:
+    """List all structured and vector collections registered for an application."""
+    app = await _get_active_app(app_name, app_cache, system_store, system_config, system_structured_store)
+    runner = app.query_runner
+
+    structured: list[str] = []
+    if runner.structured_store is not None:
+        structured = await runner.structured_store.list_collections()
+
+    vector: list[str] = []
+    if runner.vector_store is not None:
+        vector = await runner.vector_store.list_collections()
+
+    return CollectionsResponse(structured=structured, vector=vector)
+
+
+@router.post("/{app_name}/collections/{collection}/query", response_model=CollectionQueryResponse)
+async def query_collection(
+    app_name: str,
+    collection: str,
+    body: CollectionQueryRequest,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_config: SystemConfigDep,
+    system_structured_store: SystemStructuredStoreDep,
+) -> CollectionQueryResponse:
+    """Query a collection directly, bypassing the LLM agent loop.
+
+    Structured collections support field filtering and field selection.
+    Vector collections do not yet support direct querying.
+    """
+    app = await _get_active_app(app_name, app_cache, system_store, system_config, system_structured_store)
+    runner = app.query_runner
+
+    if runner.structured_store is not None:
+        if collection in await runner.structured_store.list_collections():
+            filters = [_to_filter(f) for f in body.filters]
+            records = await runner.structured_store.query(collection, filters or None, body.fields or None)
+            return CollectionQueryResponse(collection=collection, records=records, total=len(records))
+
+    if runner.vector_store is not None:
+        if collection in await runner.vector_store.list_collections():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"'{collection}' is a vector collection; direct querying is not yet supported. Use POST /{app_name}/query instead.",
+            )
+
+    raise HTTPException(status_code=404, detail=f"Collection '{collection}' not found")

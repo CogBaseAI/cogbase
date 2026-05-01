@@ -30,6 +30,7 @@ structured_store:
 # Remove this section to run all applications in structured-only mode.
 vector_store:
   type: faiss                   # faiss | pgvector
+  path: ./data/faiss_vector_store # optional for faiss; defaults to a temp directory
   # type: pgvector
   # url: postgresql://user:pass@localhost:5432/cogbase   # required for pgvector
 

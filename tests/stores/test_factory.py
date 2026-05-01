@@ -21,6 +21,13 @@ def test_build_vector_store_faiss():
     assert isinstance(store, FAISSVectorStore)
 
 
+def test_build_vector_store_faiss_uses_path(tmp_path):
+    path = tmp_path / "faiss"
+    store = build_vector_store(VectorStoreConfig(type="faiss", path=str(path)))
+    assert isinstance(store, FAISSVectorStore)
+    assert store.path == path
+
+
 def test_build_document_store_local(tmp_path):
     cfg = DocumentStoreConfig(type="local", path=str(tmp_path / "docs"))
     store = build_document_store(cfg)

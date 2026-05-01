@@ -75,8 +75,11 @@ class SystemConfig(BaseModel):
             A fully resolved ``SystemConfig`` instance.
         """
         config_path = path or os.environ.get("COGBASE_CONFIG")
-        if config_path is None and Path("./cogbase_system.yaml").exists():
-            config_path = "./cogbase_system.yaml"
+        if config_path is None:
+            for candidate in ("./cogbase_system.yaml", "./api/example_system_config.yaml"):
+                if Path(candidate).exists():
+                    config_path = candidate
+                    break
 
         if config_path and Path(config_path).exists():
             raw: dict = yaml.safe_load(Path(config_path).read_text()) or {}
