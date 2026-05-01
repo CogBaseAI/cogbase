@@ -29,7 +29,7 @@ from api.main import app
 from api.app_cache import AppCache
 from api.system_config import SystemConfig
 from api.system_store import SystemStore
-from cogbase.core.runner import RunResult as QueryResult
+from cogbase.core.query_runner import QueryResult
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 
 

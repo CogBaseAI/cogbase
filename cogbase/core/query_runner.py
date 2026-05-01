@@ -1,4 +1,4 @@
-"""Runner — unified LLM agent loop with skill routing and retrieval tools.
+"""QueryRunner — unified LLM agent loop with skill routing and retrieval tools.
 
 The runner drives an LLM agent loop that handles two complementary concerns:
 
@@ -21,11 +21,11 @@ Either concern can be used alone:
   - Both — skill-driven agents that can also query structured/vector data.
 
 The loop yields ``str`` tokens during execution followed by a final
-``RunResult`` that carries accumulated records, chunks, and a passthrough flag.
+``QueryResult`` that carries accumulated records, chunks, and a passthrough flag.
 
 Usage (retrieval mode)::
 
-    runner = Runner(
+    runner = QueryRunner(
         llm=llm,
         structured_store=structured_store,
         vector_store=vector_store,
@@ -40,7 +40,7 @@ Usage (retrieval mode)::
 
 Usage (skill mode)::
 
-    runner = Runner(llm=llm, skills=skills)
+    runner = QueryRunner(llm=llm, skills=skills)
     async for item in runner.run("What's the weather in NYC?"):
         if isinstance(item, str):
             print(item, end="", flush=True)
@@ -73,8 +73,8 @@ _TOOL_TIMEOUT = 30  # seconds
 # ---------------------------------------------------------------------------
 
 
-class RunResult(BaseModel):
-    """Final result of a Runner invocation.
+class QueryResult(BaseModel):
+    """Final result of a QueryRunner invocation.
 
     Attributes:
         answer:              Full response text.
@@ -309,11 +309,11 @@ def _format_chunks(chunks: list[Chunk]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Runner
+# QueryRunner
 # ---------------------------------------------------------------------------
 
 
-class Runner:
+class QueryRunner:
     """Unified LLM agent loop with skill routing and retrieval tools.
 
     Args:
@@ -478,8 +478,8 @@ class Runner:
         history: list[ChatMessage] | None = None,
         base_prompt: str = "You are a helpful assistant.",
         runtime_context: dict | None = None,
-    ) -> AsyncGenerator[str | RunResult, None]:
-        """Drive the agent loop, yielding str tokens then a final RunResult.
+    ) -> AsyncGenerator[str | QueryResult, None]:
+        """Drive the agent loop, yielding str tokens then a final QueryResult.
 
         Args:
             user_input:      The user's request.
@@ -511,7 +511,7 @@ class Runner:
                     )
                     answer = result.get("content") or ""
                     yield answer
-                    yield RunResult(
+                    yield QueryResult(
                         answer=answer,
                         structured_records=all_records,
                         chunks=all_chunks,
@@ -537,7 +537,7 @@ class Runner:
             if not tool_calls:
                 answer = result.get("content") or ""
                 yield answer
-                yield RunResult(
+                yield QueryResult(
                     answer=answer,
                     structured_records=all_records,
                     chunks=all_chunks,
@@ -571,7 +571,7 @@ class Runner:
                     all_records.extend(records)
                     if passthrough:
                         yield tool_output
-                        yield RunResult(
+                        yield QueryResult(
                             answer=tool_output,
                             structured_records=all_records,
                             chunks=all_chunks,
@@ -599,7 +599,7 @@ class Runner:
             "Please try a simpler or more specific request."
         )
         yield answer
-        yield RunResult(
+        yield QueryResult(
             answer=answer,
             structured_records=all_records,
             chunks=all_chunks,

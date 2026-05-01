@@ -1,7 +1,7 @@
 """Generic CogBase application — bundles ingestion and query under one object.
 
 ``CogBaseApp`` wires together an ``IngestionPipeline`` (ingestion layer) and a
-``Runner`` (query layer) behind a small interface: ``ingest_documents`` →
+``QueryRunner`` (query layer) behind a small interface: ``ingest_documents`` →
 ``query_stream``.
 """
 
@@ -12,7 +12,7 @@ from typing import Sequence
 
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
 from cogbase.core.models import Document
-from cogbase.core.runner import RunResult, Runner
+from cogbase.core.query_runner import QueryResult, QueryRunner
 from cogbase.stores import DocumentStoreBase
 
 logger = logging.getLogger(__name__)
@@ -24,14 +24,14 @@ class CogBaseApp:
     Args:
         name:      Logical name for the application.
         pipeline:  Fully configured ``IngestionPipeline`` (ingestion layer).
-        runner:    Pre-built ``Runner`` (query layer).
+        runner:    Pre-built ``QueryRunner`` (query layer).
     """
 
     def __init__(
         self,
         name: str,
         pipeline: IngestionPipeline,
-        runner: Runner,
+        runner: QueryRunner,
         *,
         document_store: DocumentStoreBase | None = None,
     ) -> None:
@@ -64,7 +64,7 @@ class CogBaseApp:
         return results
 
     async def query_stream(self, text: str):
-        """Stream the answer token-by-token, then yield a final RunResult.
+        """Stream the answer token-by-token, then yield a final QueryResult.
 
         The retrieval loop runs until the LLM has enough evidence to answer or
         ``query_max_rounds`` is exhausted.  Large structured result sets are
@@ -84,8 +84,8 @@ class CogBaseApp:
         return self._ingest_pipeline
 
     @property
-    def query_runner(self) -> Runner:
-        """The underlying ``Runner`` (query layer)."""
+    def query_runner(self) -> QueryRunner:
+        """The underlying ``QueryRunner`` (query layer)."""
         return self._runner
 
     @property

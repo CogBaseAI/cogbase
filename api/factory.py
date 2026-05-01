@@ -17,7 +17,7 @@ from cogbase.stores import (
     build_vector_store as _build_vector_store,
 )
 from cogbase.core.app import CogBaseApp
-from cogbase.core.runner import Runner
+from cogbase.core.query_runner import QueryRunner
 from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion_pipeline import (
@@ -196,7 +196,7 @@ async def build_app(
 
     vc_schemas = [c.schema for c in [*chunk_collections, *document_collections]]
 
-    runner = Runner(
+    runner = QueryRunner(
         llm=llm,
         structured_store=structured_store,
         vector_store=vector_store,

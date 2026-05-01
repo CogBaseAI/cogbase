@@ -1,4 +1,4 @@
-"""Unit tests for cogbase.core.runner.Runner.
+"""Unit tests for cogbase.core.query_runner.QueryRunner.
 
 Tests are grouped by concern:
 
@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cogbase.core.runner import RunResult, Runner
+from cogbase.core.query_runner import QueryResult, QueryRunner as Runner
 from cogbase.llms.base import ChatMessage, CompletionResult, SystemTool
 from cogbase.skills.skill import Skill
 
@@ -139,7 +139,7 @@ async def test_run_skill_no_tools_yields_answer_and_result():
     chunks = [c async for c in runner.run("Weather?")]
     assert any("Using skill: weather" in c for c in _str_chunks(chunks))
     assert _str_chunks(chunks)[-1] == "It is sunny."
-    assert isinstance(chunks[-1], RunResult)
+    assert isinstance(chunks[-1], QueryResult)
     assert chunks[-1].answer == "It is sunny."
 
 
@@ -204,7 +204,7 @@ async def test_run_no_skill_selected_answers_directly():
     chunks = [c async for c in runner.run("What is 2+2?")]
     assert _str_chunks(chunks)[-1] == "I don't know."
     assert not any("Using skill" in c for c in _str_chunks(chunks))
-    assert isinstance(chunks[-1], RunResult)
+    assert isinstance(chunks[-1], QueryResult)
 
 
 @pytest.mark.asyncio
@@ -219,7 +219,7 @@ async def test_run_max_calls_exceeded_yields_error():
     with patch.object(runner, "_execute_tool", new=AsyncMock(return_value="ok")):
         chunks = [c async for c in runner.run("Weather?")]
     assert any("unable to complete" in c.lower() for c in _str_chunks(chunks))
-    assert isinstance(chunks[-1], RunResult)
+    assert isinstance(chunks[-1], QueryResult)
 
 
 # ---------------------------------------------------------------------------
@@ -233,13 +233,13 @@ async def test_run_retrieval_direct_answer():
     runner = Runner(llm)
     chunks = [c async for c in runner.run("What is the answer?")]
     assert _str_chunks(chunks)[-1] == "The answer is 42."
-    assert isinstance(chunks[-1], RunResult)
+    assert isinstance(chunks[-1], QueryResult)
     assert chunks[-1].answer == "The answer is 42."
 
 
 @pytest.mark.asyncio
 async def test_run_retrieval_structured_lookup_populates_records():
-    """structured_lookup results are accumulated in RunResult.structured_records."""
+    """structured_lookup results are accumulated in QueryResult.structured_records."""
     from pydantic import BaseModel as PydanticModel
     from cogbase.stores import CollectionSchema, FieldSchema, FieldType
     from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -264,7 +264,7 @@ async def test_run_retrieval_structured_lookup_populates_records():
     runner = Runner(llm, structured_store=store)
     chunks = [c async for c in runner.run("list all facts")]
     result = chunks[-1]
-    assert isinstance(result, RunResult)
+    assert isinstance(result, QueryResult)
     assert len(result.structured_records) == 2
     assert result.passthrough is False
     assert result.answer == "Found: Foo, Bar."
@@ -297,7 +297,7 @@ async def test_run_retrieval_passthrough_when_records_exceed_threshold():
     runner = Runner(llm, structured_store=store, passthrough_token_threshold=2000)
     chunks = [c async for c in runner.run("dump big")]
     result = chunks[-1]
-    assert isinstance(result, RunResult)
+    assert isinstance(result, QueryResult)
     assert result.passthrough is True
     assert len(result.structured_records) == 400
     # LLM should NOT have been called for synthesis (only the one tool-call completion)
@@ -306,7 +306,7 @@ async def test_run_retrieval_passthrough_when_records_exceed_threshold():
 
 @pytest.mark.asyncio
 async def test_run_retrieval_vector_search_populates_chunks():
-    """vector_search results are accumulated in RunResult.chunks."""
+    """vector_search results are accumulated in QueryResult.chunks."""
     from cogbase.core.models import Chunk
     from cogbase.embeddings.base import EmbeddingBase
     from cogbase.stores import VectorStoreBase
@@ -335,7 +335,7 @@ async def test_run_retrieval_vector_search_populates_chunks():
     )
     chunks = [c async for c in runner.run("find relevant")]
     result = chunks[-1]
-    assert isinstance(result, RunResult)
+    assert isinstance(result, QueryResult)
     assert len(result.chunks) == 1
     assert result.chunks[0].text == "relevant passage"
 

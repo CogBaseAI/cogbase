@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from cogbase.core.app import CogBaseApp
-from cogbase.core.runner import RunResult as QueryResult, Runner as QueryRunner
+from cogbase.core.query_runner import QueryResult, QueryRunner
 from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
     IngestResult,
