@@ -14,6 +14,9 @@ Set COGBASE_API_URL to override the default http://localhost:8000.
 
 Commands (interactive loop)
 ---------------------------
+    list                 List all applications
+    create               Create the contract-analyst application
+    delete <name>        Delete an application by name
     ingest saas          Ingest the built-in 5 SaaS contract fixtures
     ingest <path>        Ingest a plain-text contract file from disk
     reset                Delete the application and start fresh
@@ -60,7 +63,7 @@ from examples.contract_analyst_demo.saas_contracts import CONTRACTS  # noqa: E40
 # ---------------------------------------------------------------------------
 
 _APP_NAME = "contract-analyst"
-_CHAT_MODEL = "gpt-5-mini"
+_CHAT_MODEL = "gpt-5.4-mini"
 _EMBED_MODEL = "text-embedding-3-small"
 _EMBED_DIM = 1536
 _API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000").rstrip("/")
@@ -121,6 +124,12 @@ def _build_bundle() -> bytes:
 # REST helpers
 # ---------------------------------------------------------------------------
 
+async def _list_apps(client: httpx.AsyncClient) -> list[dict]:
+    resp = await client.get(f"{_API_BASE}/applications", timeout=10)
+    resp.raise_for_status()
+    return resp.json()["applications"]
+
+
 async def _get_app(client: httpx.AsyncClient) -> dict | None:
     resp = await client.get(f"{_API_BASE}/applications/{_APP_NAME}", timeout=10)
     if resp.status_code == 404:
@@ -140,8 +149,8 @@ async def _create_app(client: httpx.AsyncClient) -> dict:
     return resp.json()
 
 
-async def _delete_app(client: httpx.AsyncClient) -> None:
-    resp = await client.delete(f"{_API_BASE}/applications/{_APP_NAME}", timeout=10)
+async def _delete_app(client: httpx.AsyncClient, name: str = _APP_NAME) -> None:
+    resp = await client.delete(f"{_API_BASE}/applications/{name}", timeout=10)
     if resp.status_code not in (204, 404):
         resp.raise_for_status()
 
@@ -220,7 +229,7 @@ async def main() -> None:
             print(f"Application '{_APP_NAME}' already exists (status: {app_info['status']})")
         print()
 
-        print("Commands: ingest saas | ingest <file> | reset | q")
+        print("Commands: list | create | delete <name> | ingest saas | ingest <file> | reset | q")
         print()
 
         while True:
@@ -238,6 +247,53 @@ async def main() -> None:
             if lower in {"q", "quit", "exit"}:
                 print("Goodbye!")
                 break
+
+            # ---- list ---------------------------------------------------
+            if lower == "list":
+                try:
+                    apps = await _list_apps(client)
+                except httpx.HTTPStatusError as exc:
+                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+                    continue
+                if not apps:
+                    print("  No applications found.")
+                else:
+                    for app in apps:
+                        print(f"  {app['name']:<24}  status: {app['status']}")
+                continue
+
+            # ---- create -------------------------------------------------
+            if lower == "create":
+                existing = await _get_app(client)
+                if existing is not None:
+                    print(f"  Application '{_APP_NAME}' already exists (status: {existing['status']})")
+                    continue
+                print(f"Creating application '{_APP_NAME}'...")
+                try:
+                    result = await _create_app(client)
+                except httpx.HTTPStatusError as exc:
+                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+                    continue
+                print(f"  status: {result['status']}")
+                if result.get("error"):
+                    print(f"  error:  {result['error']}")
+                continue
+
+            # ---- delete <name> ------------------------------------------
+            if lower.startswith("delete "):
+                name = raw[len("delete "):].strip()
+                if not name:
+                    print("  Usage: delete <name>")
+                    continue
+                confirm = input(f"  Delete application '{name}' and all its data? [y/N] ").strip().lower()
+                if confirm == "y":
+                    try:
+                        await _delete_app(client, name)
+                    except httpx.HTTPStatusError as exc:
+                        print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+                        continue
+                    print(f"  Application '{name}' deleted.")
+                continue
 
             # ---- reset --------------------------------------------------
             if lower == "reset":

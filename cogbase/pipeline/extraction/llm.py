@@ -8,6 +8,7 @@ adds a ``doc_id`` identity field to each extracted record.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Type
 
 from pydantic import BaseModel, ValidationError, create_model
@@ -113,24 +114,46 @@ class LLMExtractor(ExtractorBase):
 
     async def _extract_once(self, doc: Document) -> BaseModel | None:
         """Single LLM call; returns ``None`` when the response is unparseable."""
-        raw = await self._llm.complete(
+        t0 = time.monotonic()
+        result = await self._llm.complete(
             [
                 {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": doc.text},
             ],
             max_tokens=self._max_tokens,
         )
-        return self._parse(raw, doc.doc_id)
 
-    def _parse(self, raw: str, doc_id: str) -> BaseModel | None:
-        """Parse the LLM JSON response into a record model instance."""
+        content = result.get("content")
+        if not content:
+            logger.error(
+                "extract returns no content, doc_id=%s, elapsed=%.3fs, system_prompt=%s, result=%s",
+                doc.doc_id,
+                time.monotonic() - t0,
+                self._system_prompt,
+                result,
+            )
+            return None
+
+        logger.info(
+            "llm.complete doc_id=%s elapsed=%.3fs, content=%s",
+            doc.doc_id,
+            time.monotonic() - t0,
+            content[:50],
+        )
+
+        # Parse the LLM JSON response into a record model instance
         try:
-            extraction = self._extraction_model.model_validate_json(raw)
+            extraction = self._extraction_model.model_validate_json(content)
         except (ValidationError, ValueError):
-            logger.exception("llm_extractor.parse_failed doc_id=%s", doc_id)
+            logger.exception(
+                "llm_extractor.parse_failed doc_id=%s, system_prompt=%s, result=%s",
+                doc.doc_id,
+                self._system_prompt,
+                result,
+            )
             return None
 
         return self._record_model(
-            doc_id=doc_id,
+            doc_id=doc.doc_id,
             **extraction.model_dump(),
         )

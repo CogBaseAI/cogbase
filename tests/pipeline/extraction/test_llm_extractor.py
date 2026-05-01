@@ -19,7 +19,7 @@ from examples.contract_analyst_demo.schema import (
 def _make_llm(content: str) -> MagicMock:
     """Build a mock LLMBase returning *content* for complete() and streaming it."""
     llm = MagicMock(spec=LLMBase)
-    llm.complete = AsyncMock(return_value=content)
+    llm.complete = AsyncMock(return_value={"content": content})
 
     async def _stream(*args, **kwargs):
         yield content
@@ -268,7 +268,7 @@ async def test_extract_non_list_special_conditions_rejects_record():
 def _make_llm_with_responses(*contents: str) -> MagicMock:
     """Build a mock LLMBase that returns each content string in sequence."""
     llm = MagicMock(spec=LLMBase)
-    llm.complete = AsyncMock(side_effect=list(contents))
+    llm.complete = AsyncMock(side_effect=[{"content": c} for c in contents])
 
     async def _stream(*args, **kwargs):
         yield contents[-1]

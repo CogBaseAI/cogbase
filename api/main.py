@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -16,6 +17,10 @@ from api.routers.skills import router as skills_router
 from api.system_config import SystemConfig
 from api.system_store import SystemStore
 from cogbase.skills.registry import SkillRegistry
+
+format = '%(asctime)s [%(levelname)s] %(process)d %(threadName)s ' \
+         '%(filename)s:%(lineno)d - %(message)s'
+logging.basicConfig(stream=sys.stdout, level=logging.INFO, format=format)
 
 logger = logging.getLogger(__name__)
 

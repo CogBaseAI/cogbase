@@ -237,7 +237,7 @@ class IngestionPipeline:
             return 0
 
         chunks = vc.chunker.chunk(doc)
-        logger.debug(
+        logger.info(
             "ingestion_pipeline.chunk_embed_upsert.chunked name=%s doc_id=%s collection=%s chunks=%d",
             self.name, doc.doc_id, collection_name, len(chunks),
         )
@@ -254,7 +254,7 @@ class IngestionPipeline:
             for chunk, emb in zip(chunks, embeddings)
         ]
         await vc.store.upsert(vc.name, embedded)
-        logger.debug(
+        logger.info(
             "ingestion_pipeline.chunk_embed_upsert.upserted name=%s doc_id=%s collection=%s count=%d",
             self.name, doc.doc_id, collection_name, len(embedded),
         )
@@ -274,7 +274,7 @@ class IngestionPipeline:
             return 0
 
         await sc.store.save(sc.schema.name, [record])
-        logger.debug(
+        logger.info(
             "ingestion_pipeline.extract_structured.saved name=%s doc_id=%s collection=%s",
             self.name, doc.doc_id, collection_name,
         )
@@ -291,7 +291,7 @@ class IngestionPipeline:
 
         text = await self._get_document_text(doc, dc)
         if not text:
-            logger.debug(
+            logger.info(
                 "ingestion_pipeline.document_embed_upsert.empty_text name=%s doc_id=%s",
                 self.name, doc.doc_id,
             )
@@ -307,7 +307,7 @@ class IngestionPipeline:
             metadata=metadata,
         )
         await dc.store.upsert(dc.name, [chunk])
-        logger.debug(
+        logger.info(
             "ingestion_pipeline.document_embed_upsert.upserted name=%s doc_id=%s collection=%s",
             self.name, doc.doc_id, collection_name,
         )
