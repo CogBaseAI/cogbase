@@ -10,6 +10,7 @@ import pytest
 
 from cogbase.core.app import CogBaseApp
 from cogbase.core.query_runner import QueryResult, QueryRunner
+from cogbase.stores.document.base import DocumentStoreBase
 from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
     IngestResult,
@@ -551,6 +552,76 @@ class TestIngestMany:
 
         results = await app.ingest_documents([])
         assert results == []
+
+    @pytest.mark.asyncio
+    async def test_document_store_save_failure_recorded(self):
+        store = InMemoryStructuredStore()
+        app = await _make_app(_make_llm(_contract_payload()), store)
+
+        doc_store = MagicMock(spec=DocumentStoreBase)
+        doc_store.save = AsyncMock(side_effect=IOError("disk full"))
+        app._document_store = doc_store
+
+        results = await app.ingest_documents([Document(doc_id="c-001", text="text")])
+
+        assert len(results) == 1
+        assert results[0].success is False
+        assert isinstance(results[0].error, IOError)
+
+    @pytest.mark.asyncio
+    async def test_document_store_partial_failure_skips_failed_doc(self):
+        store = InMemoryStructuredStore()
+        app = await _make_app(_make_llm(_contract_payload()), store)
+
+        save_calls: list[str] = []
+
+        async def _save(collection: str, doc_id: str, content: str) -> None:
+            if doc_id == "c-fail":
+                raise IOError("disk full")
+            save_calls.append(doc_id)
+
+        doc_store = MagicMock(spec=DocumentStoreBase)
+        doc_store.save = AsyncMock(side_effect=_save)
+        app._document_store = doc_store
+
+        results = await app.ingest_documents([
+            Document(doc_id="c-fail", text="will fail"),
+            Document(doc_id="c-ok",   text="will succeed"),
+        ])
+
+        assert len(results) == 2
+        failed = [r for r in results if not r.success]
+        succeeded = [r for r in results if r.success]
+        assert len(failed) == 1
+        assert failed[0].doc_id == "c-fail"
+        assert isinstance(failed[0].error, IOError)
+        assert len(succeeded) == 1
+        assert succeeded[0].doc_id == "c-ok"
+        assert "c-fail" not in save_calls
+
+    @pytest.mark.asyncio
+    async def test_document_store_order_preserved_with_failure(self):
+        store = InMemoryStructuredStore()
+        app = await _make_app(_make_llm(_contract_payload()), store)
+
+        async def _save(collection: str, doc_id: str, content: str) -> None:
+            if doc_id == "c-002":
+                raise IOError("disk full")
+
+        doc_store = MagicMock(spec=DocumentStoreBase)
+        doc_store.save = AsyncMock(side_effect=_save)
+        app._document_store = doc_store
+
+        results = await app.ingest_documents([
+            Document(doc_id="c-001", text="text 1"),
+            Document(doc_id="c-002", text="text 2"),
+            Document(doc_id="c-003", text="text 3"),
+        ])
+
+        assert [r.doc_id for r in results] == ["c-001", "c-002", "c-003"]
+        assert results[0].success is True
+        assert results[1].success is False
+        assert results[2].success is True
 
     @pytest.mark.asyncio
     async def test_invalid_concurrency_raises(self):

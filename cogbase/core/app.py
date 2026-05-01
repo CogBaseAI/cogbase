@@ -48,17 +48,36 @@ class CogBaseApp:
     ) -> list[IngestResult]:
         """Ingest a batch of documents, running up to *concurrency* at a time.
 
-        A failure on one document does not abort the others — the error is
-        captured in the corresponding ``IngestResult``.  Results are returned
-        in the same order as *documents*.
+        When a document store is configured, each document is saved there first.
+        A store save failure is captured as a failed ``IngestResult`` and that
+        document is skipped by the pipeline.  A pipeline failure on one document
+        does not abort the others.  Results are returned in the same order as
+        *documents*.
         """
         logger.info("app.ingest_documents.start documents=%d concurrency=%d", len(documents), concurrency)
+
+        store_failures: dict[str, Exception] = {}
+        docs_to_process: list[Document] = list(documents)
+
         if self._document_store is not None:
-            import asyncio
-            await asyncio.gather(*(
-                self._document_store.save(self.name, doc.doc_id, doc.text) for doc in documents
-            ))
-        results = await self._ingest_pipeline.ingest_documents(documents, concurrency=concurrency)
+            docs_to_process = []
+            for doc in documents:
+                try:
+                    await self._document_store.save(self.name, doc.doc_id, doc.text)
+                    docs_to_process.append(doc)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("app.ingest_documents.store_save_failed doc_id=%s", doc.doc_id)
+                    store_failures[doc.doc_id] = exc
+
+        pipeline_results = await self._ingest_pipeline.ingest_documents(docs_to_process, concurrency=concurrency)
+        pipeline_by_id = {r.doc_id: r for r in pipeline_results}
+
+        results = [
+            IngestResult(doc_id=doc.doc_id, success=False, error=store_failures[doc.doc_id])
+            if doc.doc_id in store_failures
+            else pipeline_by_id[doc.doc_id]
+            for doc in documents
+        ]
         failures = sum(1 for r in results if not r.success)
         logger.info("app.ingest_documents.done documents=%d failures=%d", len(results), failures)
         return results
