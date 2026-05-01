@@ -320,24 +320,6 @@ class TestBuildAppDocumentCollection:
         assert "document_summary" in app._ingest_pipeline._document_by_name
 
     @patch("api.factory._build_llm")
-    async def test_default_runner_collection_is_first_chunk_step(self, mock_build_llm):
-        """Runner defaults to the first chunk-embed-upsert collection, not the summary."""
-        mock_build_llm.return_value = _mock_llm()
-        cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
-        sys_vs_cfg = VectorStoreConfig(type="faiss")
-        system_store = InMemoryStructuredStore()
-
-        with patch("api.factory._build_embedder") as mock_emb:
-            mock_emb.return_value = MagicMock()
-            app = await build_app(
-                cfg,
-                system_structured_store=system_store,
-                system_vector_store_cfg=sys_vs_cfg,
-            )
-
-        assert app._runner._default_vector_collection == "document_chunks"
-
-    @patch("api.factory._build_llm")
     @patch("api.factory._build_embedder")
     async def test_summarize_step_without_vector_store_raises(self, mock_build_embedder, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()

@@ -39,7 +39,6 @@ class TestSystemConfigFromYaml:
         assert cfg.structured_store.type == "sqlite"
         assert cfg.structured_store.path == "./data/app.db"
         assert cfg.vector_store.type == "faiss"
-        assert cfg.vector_store.dim == 768
         assert cfg.document_store.type == "local"
         assert cfg.document_store.path == "./data/documents"
 

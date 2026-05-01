@@ -211,7 +211,7 @@ _VECTOR_SEARCH_DEF: ToolDefinition = {
         "properties": {
             "collection": {
                 "type": "string",
-                "description": "Vector collection to search. Omit to use the default collection.",
+                "description": "Vector collection to search.",
             },
             "query": {
                 "type": "string",
@@ -328,8 +328,6 @@ class QueryRunner:
         vector_store:                Vector store; enables the ``vector_search`` tool
                                      (requires *embedder*).
         embedder:                    Embedder for ``vector_search``.
-        default_vector_collection:   Collection used when ``vector_search`` omits
-                                     ``"collection"``.
         vector_schemas:              ``VectorCollectionSchema`` list for all vector
                                      collections, injected into the retrieval system
                                      prompt so the LLM can choose the right one.
@@ -349,7 +347,6 @@ class QueryRunner:
         structured_store: StructuredStoreBase | None = None,
         vector_store: VectorStoreBase | None = None,
         embedder: EmbeddingBase | None = None,
-        default_vector_collection: str | None = None,
         vector_schemas: list[VectorCollectionSchema] | None = None,
         structured_schemas: list[CollectionSchema] | None = None,
         passthrough_token_threshold: int = 2000,
@@ -363,7 +360,6 @@ class QueryRunner:
         self._structured_store = structured_store
         self._vector_store = vector_store
         self._embedder = embedder
-        self._default_vector_collection = default_vector_collection
         self._retrieval_system_prompt = _build_retrieval_prompt(
             structured_schemas, vector_schemas
         )
@@ -681,12 +677,12 @@ class QueryRunner:
         if self._vector_store is None or self._embedder is None:
             return [], "vector_search is unavailable (no vector store configured)"
 
-        collection = str(inputs.get("collection") or self._default_vector_collection or "")
+        collection = str(inputs.get("collection") or "")
         query_text = str(inputs.get("query", ""))
         top_k = min(int(inputs.get("top_k") or 5), 20)
 
         if not collection:
-            return [], "vector_search error: no collection specified and no default collection configured"
+            return [], "vector_search error: no collection specified"
 
         try:
             (query_embedding,) = await self._embedder.embed([query_text])

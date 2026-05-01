@@ -187,13 +187,6 @@ async def build_app(
         document_collections=document_collections or None,
     )
 
-    # Default vector collection for the runner: first chunk-embed, then document-embed.
-    default_vc: str | None = None
-    for step in steps:
-        if step.tool in ("chunk-embed-upsert", "document-embed-upsert"):
-            default_vc = step.collection
-            break
-
     vc_schemas = [c.schema for c in [*chunk_collections, *document_collections]]
 
     runner = QueryRunner(
@@ -201,7 +194,6 @@ async def build_app(
         structured_store=structured_store,
         vector_store=vector_store,
         embedder=embedder,
-        default_vector_collection=default_vc,
         vector_schemas=vc_schemas or None,
         structured_schemas=[sc.schema for sc in structured_collections] or None,
         document_store=document_store,

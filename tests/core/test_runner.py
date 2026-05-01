@@ -331,7 +331,6 @@ async def test_run_retrieval_vector_search_populates_chunks():
         llm,
         vector_store=_FakeVectorStore(),
         embedder=_FakeEmbedder(),
-        default_vector_collection="docs",
     )
     chunks = [c async for c in runner.run("find relevant")]
     result = chunks[-1]

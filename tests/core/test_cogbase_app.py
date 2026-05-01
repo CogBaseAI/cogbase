@@ -137,13 +137,11 @@ async def _make_app(
     name: str = "legal",
 ) -> CogBaseApp:
     pipeline = await _make_pipeline(llm, store, vector_store=vector_store, embedder=embedder, chunker=chunker, name=name)
-    default_vc = name if vector_store is not None else None
     runner = QueryRunner(
         llm=llm,
         structured_store=store,
         vector_store=vector_store,
         embedder=embedder,
-        default_vector_collection=default_vc,
         vector_schemas=[c.schema for c in pipeline._chunk_by_name.values()] or None,
         structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None,
     )
@@ -405,7 +403,6 @@ class TestVectorOnlyMode:
             llm=llm,
             vector_store=vc_store,
             embedder=vc_embedder,
-            default_vector_collection="vector_only",
             vector_schemas=[c.schema for c in pipeline._chunk_by_name.values()] or None,
         )
         return CogBaseApp("vector-only", pipeline, runner)
@@ -441,7 +438,7 @@ class TestVectorOnlyMode:
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
         pipeline = IngestionPipeline(name="testapp", chunk_collections=[vc])
-        runner = QueryRunner(llm=_make_llm("{}"), vector_store=vector_store, embedder=StubEmbedding(dim=4), default_vector_collection="testapp", vector_schemas=[c.schema for c in pipeline._chunk_by_name.values()] or None)
+        runner = QueryRunner(llm=_make_llm("{}"), vector_store=vector_store, embedder=StubEmbedding(dim=4), vector_schemas=[c.schema for c in pipeline._chunk_by_name.values()] or None)
         app = CogBaseApp("testapp", pipeline, runner)
         results = await app.ingest_documents([Document(doc_id="d-001", text="word " * 20)])
         assert results[0].success is True
