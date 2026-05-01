@@ -103,45 +103,45 @@ def _mock_llm():
 
 class TestBuildAppStructuredStoreResolution:
     @patch("api.factory._build_llm")
-    def test_raises_when_no_stores(self, mock_build_llm):
+    async def test_raises_when_no_stores(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         with pytest.raises(ValueError, match="structured store"):
-            build_app(cfg)
+            await build_app(cfg)
 
     @patch("api.factory._build_llm")
-    def test_uses_system_store_when_no_app_store(self, mock_build_llm):
+    async def test_uses_system_store_when_no_app_store(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = build_app(cfg, system_structured_store=system_store)
+        app = await build_app(cfg, system_structured_store=system_store)
         structured_store = next(iter(app._ingest_pipeline._structured_by_name.values())).store
         assert structured_store is system_store
 
     @patch("api.factory._build_llm")
-    def test_app_config_store_overrides_system_store(self, mock_build_llm, tmp_path):
+    async def test_app_config_store_overrides_system_store(self, mock_build_llm, tmp_path):
         mock_build_llm.return_value = _mock_llm()
         cfg_yaml = _EXTRACT_ONLY_CONFIG_YAML + (
             "structured_store:\n  type: sqlite\n  path: \":memory:\"\n"
         )
         cfg = AppConfig.from_yaml(cfg_yaml)
         system_store = InMemoryStructuredStore()
-        app = build_app(cfg, system_structured_store=system_store)
+        app = await build_app(cfg, system_structured_store=system_store)
         structured_store = next(iter(app._ingest_pipeline._structured_by_name.values())).store
         assert isinstance(structured_store, SQLiteStructuredStore)
 
 
 class TestBuildAppVectorStoreResolution:
     @patch("api.factory._build_llm")
-    def test_no_vector_collection_when_no_chunk_step(self, mock_build_llm):
+    async def test_no_vector_collection_when_no_chunk_step(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = build_app(cfg, system_structured_store=system_store)
+        app = await build_app(cfg, system_structured_store=system_store)
         assert app._ingest_pipeline._chunk_by_name == {}
 
     @patch("api.factory._build_llm")
-    def test_system_vector_store_cfg_used_when_chunk_step_present(self, mock_build_llm):
+    async def test_system_vector_store_cfg_used_when_chunk_step_present(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss")
@@ -149,7 +149,7 @@ class TestBuildAppVectorStoreResolution:
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
-            app = build_app(
+            app = await build_app(
                 cfg,
                 system_structured_store=system_store,
                 system_vector_store_cfg=sys_vs_cfg,
@@ -158,7 +158,7 @@ class TestBuildAppVectorStoreResolution:
         assert app._ingest_pipeline._chunk_by_name
 
     @patch("api.factory._build_llm")
-    def test_vector_collection_name_matches_config(self, mock_build_llm):
+    async def test_vector_collection_name_matches_config(self, mock_build_llm):
         """The vector collection name comes from chunk_collections config, not app name."""
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
@@ -167,7 +167,7 @@ class TestBuildAppVectorStoreResolution:
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
-            app = build_app(
+            app = await build_app(
                 cfg,
                 system_structured_store=system_store,
                 system_vector_store_cfg=sys_vs_cfg,
@@ -237,26 +237,26 @@ pipeline:
 
 class TestBuildAppDocumentCollection:
     @patch("api.factory._build_llm")
-    def test_document_collection_present_in_pipeline(self, mock_build_llm):
+    async def test_document_collection_present_in_pipeline(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss")
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
-            app = build_app(cfg, system_vector_store_cfg=sys_vs_cfg)
+            app = await build_app(cfg, system_vector_store_cfg=sys_vs_cfg)
 
         assert "document_summary" in app._ingest_pipeline._document_by_name
 
     @patch("api.factory._build_llm")
-    def test_document_collection_name_prompt_max_tokens(self, mock_build_llm):
+    async def test_document_collection_name_prompt_max_tokens(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss")
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
-            app = build_app(cfg, system_vector_store_cfg=sys_vs_cfg)
+            app = await build_app(cfg, system_vector_store_cfg=sys_vs_cfg)
 
         dc = app._ingest_pipeline._document_by_name["document_summary"]
         assert dc.name == "document_summary"
@@ -264,7 +264,7 @@ class TestBuildAppDocumentCollection:
         assert dc.max_tokens == 128
 
     @patch("api.factory._build_llm")
-    def test_document_collection_uses_shared_vector_store(self, mock_build_llm):
+    async def test_document_collection_uses_shared_vector_store(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss")
@@ -272,7 +272,7 @@ class TestBuildAppDocumentCollection:
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
-            app = build_app(
+            app = await build_app(
                 cfg,
                 system_structured_store=system_store,
                 system_vector_store_cfg=sys_vs_cfg,
@@ -283,7 +283,7 @@ class TestBuildAppDocumentCollection:
         assert vc.store is dc.store
 
     @patch("api.factory._build_llm")
-    def test_three_step_pipeline_builds_all_collections(self, mock_build_llm):
+    async def test_three_step_pipeline_builds_all_collections(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss")
@@ -291,7 +291,7 @@ class TestBuildAppDocumentCollection:
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
-            app = build_app(
+            app = await build_app(
                 cfg,
                 system_structured_store=system_store,
                 system_vector_store_cfg=sys_vs_cfg,
@@ -302,7 +302,7 @@ class TestBuildAppDocumentCollection:
         assert "document_summary" in app._ingest_pipeline._document_by_name
 
     @patch("api.factory._build_llm")
-    def test_vector_collection_names_includes_both(self, mock_build_llm):
+    async def test_vector_collection_names_includes_both(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
         sys_vs_cfg = VectorStoreConfig(type="faiss")
@@ -310,7 +310,7 @@ class TestBuildAppDocumentCollection:
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
-            app = build_app(
+            app = await build_app(
                 cfg,
                 system_structured_store=system_store,
                 system_vector_store_cfg=sys_vs_cfg,
@@ -320,7 +320,7 @@ class TestBuildAppDocumentCollection:
         assert "document_summary" in app._ingest_pipeline._document_by_name
 
     @patch("api.factory._build_llm")
-    def test_default_runner_collection_is_first_chunk_step(self, mock_build_llm):
+    async def test_default_runner_collection_is_first_chunk_step(self, mock_build_llm):
         """Runner defaults to the first chunk-embed-upsert collection, not the summary."""
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
@@ -329,7 +329,7 @@ class TestBuildAppDocumentCollection:
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
-            app = build_app(
+            app = await build_app(
                 cfg,
                 system_structured_store=system_store,
                 system_vector_store_cfg=sys_vs_cfg,
@@ -338,17 +338,19 @@ class TestBuildAppDocumentCollection:
         assert app._runner._default_vector_collection == "document_chunks"
 
     @patch("api.factory._build_llm")
-    def test_summarize_step_without_vector_store_raises(self, mock_build_llm):
+    @patch("api.factory._build_embedder")
+    async def test_summarize_step_without_vector_store_raises(self, mock_build_embedder, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
+        mock_build_embedder.return_value = MagicMock()
         cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
         # No vector store supplied
         with pytest.raises(ValueError, match="vector store"):
-            build_app(cfg)
+            await build_app(cfg)
 
 
 class TestBuildAppDocumentStoreResolution:
     @patch("api.factory._build_llm")
-    def test_uses_system_document_store_when_no_app_document_store(self, mock_build_llm, tmp_path):
+    async def test_uses_system_document_store_when_no_app_document_store(self, mock_build_llm, tmp_path):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml("""\
 name: test_app
@@ -357,12 +359,12 @@ llm:
   model: gpt-4o-mini
 """)
         sys_doc_cfg = DocumentStoreConfig(type="local", path=str(tmp_path / "docs"))
-        app = build_app(cfg, system_document_store_cfg=sys_doc_cfg)
+        app = await build_app(cfg, system_document_store_cfg=sys_doc_cfg)
 
         assert isinstance(app.document_store, LocalFSDocumentStore)
 
     @patch("api.factory._build_llm")
-    def test_app_document_store_overrides_system_document_store(self, mock_build_llm, tmp_path):
+    async def test_app_document_store_overrides_system_document_store(self, mock_build_llm, tmp_path):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(f"""\
 name: test_app
@@ -374,7 +376,7 @@ document_store:
   path: {tmp_path / "app-docs"}
 """)
         sys_doc_cfg = DocumentStoreConfig(type="local", path=str(tmp_path / "system-docs"))
-        app = build_app(cfg, system_document_store_cfg=sys_doc_cfg)
+        app = await build_app(cfg, system_document_store_cfg=sys_doc_cfg)
 
         assert isinstance(app.document_store, LocalFSDocumentStore)
         assert app.document_store._root.name == "app-docs"  # type: ignore[union-attr]

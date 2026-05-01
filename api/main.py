@@ -64,13 +64,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             continue
         try:
             config = AppConfig.from_yaml(record.config_yaml)
-            instance = build_app(
+            instance = await build_app(
                 config,
                 system_structured_store=system_structured_store,
                 system_vector_store_cfg=system_cfg.vector_store,
                 system_document_store_cfg=system_cfg.document_store,
             )
-            await instance.setup()
             app_cache.add(record.name, instance)
             logger.info("restored app name=%s", record.name)
         except Exception as exc:

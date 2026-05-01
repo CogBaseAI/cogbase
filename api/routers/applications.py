@@ -167,13 +167,12 @@ async def create_application(
     logger.info("Creating application '%s'", config.name)
 
     try:
-        app = build_app(
+        app = await build_app(
             config,
             system_structured_store=system_structured_store,
             system_vector_store_cfg=system_config.vector_store,
             system_document_store_cfg=system_config.document_store,
         )
-        await app.setup()
         app_cache.add(config.name, app)
         record = record.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("Application '%s' created successfully", config.name)
@@ -256,13 +255,12 @@ async def update_application(
     logger.info("Updating application '%s'", app_name)
 
     try:
-        app = build_app(
+        app = await build_app(
             config,
             system_structured_store=system_structured_store,
             system_vector_store_cfg=system_config.vector_store,
             system_document_store_cfg=system_config.document_store,
         )
-        await app.setup()
         app_cache.add(config.name, app)
         updated = updated.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("Application '%s' updated successfully", config.name)
@@ -310,13 +308,12 @@ async def _get_active_app(
     if record is None or record.status != "active":
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found or not active")
     config = AppConfig.from_yaml(record.config_yaml)
-    app = build_app(
+    app = await build_app(
         config,
         system_structured_store=system_structured_store,
         system_vector_store_cfg=system_config.vector_store,
         system_document_store_cfg=system_config.document_store,
     )
-    await app.setup()
     app_cache.add(app_name, app)
     return app
 

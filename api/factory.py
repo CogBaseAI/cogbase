@@ -58,7 +58,7 @@ def _build_chunker(cfg: ChunkerConfig) -> Any:
     raise ValueError(f"Unknown chunker type: {cfg.type!r}")
 
 
-def build_app(
+async def build_app(
     config: AppConfig,
     *,
     system_structured_store: StructuredStoreBase | None = None,
@@ -67,124 +67,118 @@ def build_app(
 ) -> Any:
     """Instantiate a CogBase application from *config*.
 
-    Setup all collections.
-
-    Iterates over all ``config.pipeline.steps`` to build the pipeline.
-    Supports ``chunk-embed-upsert``, ``extract-structured``, and
-    ``document-embed-upsert`` steps.
-
     Store backends are resolved in priority order:
 
     1. Values declared explicitly in *config* (``structured_store``,
        ``vector_store``, ``document_store``) — full per-application isolation.
     2. System-level stores supplied via the keyword arguments — the structured
        store is shared; collection names scope records to their collection.
-    3. No fallback — raises ``ValueError`` when neither is provided.
+    3. No fallback — raises ``ValueError`` when a declared collection has no
+       backing store.
     """
+    # --- Top-level resources (independent of pipeline) ---
     llm = _build_llm(config.llm)
+    embedder = _build_embedder(config.embedding) if config.embedding else None
 
-    steps = config.pipeline.steps if config.pipeline else []
-    vc_by_name = {vc.name: vc for vc in config.chunk_collections}
-    sc_by_name = {sc.name: sc for sc in config.structured_collections}
-    dc_by_name = {dc.name: dc for dc in config.document_collections}
-
-    # --- Shared resources (built once, referenced by multiple collections) ---
-    vector_store: VectorStoreBase | None = None
-    embedder = None
-
-    needs_vector = any(
-        s.tool in ("chunk-embed-upsert", "document-embed-upsert") for s in steps
+    vector_store_cfg = config.vector_store or system_vector_store_cfg
+    vector_store: VectorStoreBase | None = (
+        _build_vector_store(vector_store_cfg) if vector_store_cfg else None
     )
-    if needs_vector:
-        vector_store_cfg = config.vector_store or system_vector_store_cfg
-        if vector_store_cfg is None:
-            raise ValueError(
-                "chunk-embed-upsert / document-embed-upsert steps require a vector store "
-                "(configure vector_store in the app config or system config)"
-            )
-        if config.embedding is None:
-            raise ValueError(
-                "chunk-embed-upsert / document-embed-upsert steps require an embedding config"
-            )
-        vector_store = _build_vector_store(vector_store_cfg)
-        embedder = _build_embedder(config.embedding)
 
-    structured_store: StructuredStoreBase | None = None
-    needs_structured = any(s.tool == "extract-structured" for s in steps)
-    if needs_structured:
-        if config.structured_store is not None:
-            structured_store = build_structured_store(config.structured_store)
-        elif system_structured_store is not None:
-            structured_store = system_structured_store
-        else:
-            raise ValueError(
-                "extract-structured steps require a structured store "
-                "(configure structured_store in the app config or system config)"
-            )
+    if config.structured_store is not None:
+        structured_store: StructuredStoreBase | None = build_structured_store(config.structured_store)
+    elif system_structured_store is not None:
+        structured_store = system_structured_store
+    else:
+        structured_store = None
 
-    # --- Build collection objects (deduplicated per name) ---
+    document_store_cfg = config.document_store or system_document_store_cfg
+    document_store = build_document_store(document_store_cfg) if document_store_cfg else None
+
+    # --- Collections (built from their own config, independent of pipeline steps) ---
     chunk_collections: list[ChunkCollection] = []
+    for vc_cfg in config.chunk_collections:
+        if vector_store is None:
+            raise ValueError(
+                f"chunk collection {vc_cfg.name!r} requires a vector store"
+                " (configure vector_store in the app config or system config)"
+            )
+        if embedder is None:
+            raise ValueError(
+                f"chunk collection {vc_cfg.name!r} requires an embedding config"
+            )
+        chunk_collections.append(ChunkCollection(
+            schema=VectorCollectionSchema(
+                name=vc_cfg.name,
+                dimensions=vc_cfg.dimensions,
+                description=vc_cfg.description,
+            ),
+            store=vector_store,
+            embedder=embedder,
+            chunker=_build_chunker(vc_cfg.chunker),
+        ))
+
     structured_collections: list[StructuredCollection] = []
+    for sc_cfg in config.structured_collections:
+        if structured_store is None:
+            raise ValueError(
+                f"structured collection {sc_cfg.name!r} requires a structured store"
+                " (configure structured_store in the app config or system config)"
+            )
+        extraction_model = build_model_from_json_schema(
+            sc_cfg.schema_, model_name=sc_cfg.name.upper()
+        )
+        system_prompt = None
+        if sc_cfg.extractor.prompt:
+            system_prompt = sc_cfg.extractor.prompt + cls_json_schema_for_llm(extraction_model)
+        extractor = LLMExtractor(
+            llm,
+            extraction_model=extraction_model,
+            collection_name=sc_cfg.name,
+            collection_description=sc_cfg.description,
+            system_prompt=system_prompt,
+        )
+        structured_collections.append(StructuredCollection(
+            schema=extractor.schema,
+            store=structured_store,
+            extractor=extractor,
+        ))
+
     document_collections: list[DocumentCollection] = []
-    built_vc: set[str] = set()
-    built_sc: set[str] = set()
-    built_dc: set[str] = set()
-
-    for step in steps:
-        if step.tool == "chunk-embed-upsert" and step.collection not in built_vc:
-            vc_cfg = vc_by_name[step.collection]
-            chunker = _build_chunker(vc_cfg.chunker)
-            chunk_collections.append(ChunkCollection(
-                schema=VectorCollectionSchema(
-                    name=vc_cfg.name,
-                    dimensions=vc_cfg.dimensions,
-                    description=vc_cfg.description,
-                ),
-                store=vector_store,  # type: ignore[arg-type]  # validated above
-                embedder=embedder,   # type: ignore[arg-type]
-                chunker=chunker,
-            ))
-            built_vc.add(vc_cfg.name)
-
-        elif step.tool == "extract-structured" and step.collection not in built_sc:
-            sc_cfg = sc_by_name[step.collection]
-            extraction_model = build_model_from_json_schema(
-                sc_cfg.schema_, model_name=sc_cfg.name.upper()
+    for dc_cfg in config.document_collections:
+        if vector_store is None:
+            raise ValueError(
+                f"document collection {dc_cfg.name!r} requires a vector store"
+                " (configure vector_store in the app config or system config)"
             )
-            system_prompt = None
-            if sc_cfg.extractor.prompt:
-                system_prompt = sc_cfg.extractor.prompt + cls_json_schema_for_llm(extraction_model)
-            extractor = LLMExtractor(
-                llm,
-                extraction_model=extraction_model,
-                collection_name=sc_cfg.name,
-                collection_description=sc_cfg.description,
-                system_prompt=system_prompt,
+        if embedder is None:
+            raise ValueError(
+                f"document collection {dc_cfg.name!r} requires an embedding config"
             )
-            structured_collections.append(StructuredCollection(
-                schema=extractor.schema,  # LLMExtractor derives the schema from the model
-                store=structured_store,   # type: ignore[arg-type]  # validated above
-                extractor=extractor,
-            ))
-            built_sc.add(sc_cfg.name)
+        document_collections.append(DocumentCollection(
+            schema=VectorCollectionSchema(
+                name=dc_cfg.name,
+                dimensions=dc_cfg.dimensions,
+                description=dc_cfg.description,
+            ),
+            store=vector_store,
+            embedder=embedder,
+            llm=llm,
+            prompt=dc_cfg.prompt or "Summarize this document in a few sentences.",
+            max_tokens=dc_cfg.max_tokens,
+            metadata_fields=dc_cfg.metadata_fields,
+        ))
 
-        elif step.tool == "document-embed-upsert" and step.collection not in built_dc:
-            dc_cfg = dc_by_name[step.collection]
-            document_collections.append(DocumentCollection(
-                schema=VectorCollectionSchema(
-                    name=dc_cfg.name,
-                    dimensions=dc_cfg.dimensions,
-                    description=dc_cfg.description,
-                ),
-                store=vector_store,    # type: ignore[arg-type]  # validated above
-                embedder=embedder,     # type: ignore[arg-type]
-                llm=llm,
-                prompt=dc_cfg.prompt or "Summarize this document in a few sentences.",
-                max_tokens=dc_cfg.max_tokens,
-                metadata_fields=dc_cfg.metadata_fields,
-            ))
-            built_dc.add(dc_cfg.name)
+    # --- Create collections in their backing stores (idempotent) ---
+    for cc in chunk_collections:
+        await cc.store.create_collection(cc.schema)
+    for sc in structured_collections:
+        await sc.store.create_collection(sc.schema)
+    for dc in document_collections:
+        await dc.store.create_collection(dc.schema)
 
+    # --- Pipeline (references already-built collections) ---
+    steps = config.pipeline.steps if config.pipeline else []
     pipeline = IngestionPipeline(
         name=config.name,
         steps=[(s.tool, s.collection) for s in steps],
@@ -193,22 +187,14 @@ def build_app(
         document_collections=document_collections or None,
     )
 
-    # Determine default vector collection: first chunk-embed then document-embed, in step order.
+    # Default vector collection for the runner: first chunk-embed, then document-embed.
     default_vc: str | None = None
     for step in steps:
-        if step.tool == "chunk-embed-upsert":
+        if step.tool in ("chunk-embed-upsert", "document-embed-upsert"):
             default_vc = step.collection
             break
-    if default_vc is None:
-        for step in steps:
-            if step.tool == "document-embed-upsert":
-                default_vc = step.collection
-                break
 
-    document_store_cfg = config.document_store or system_document_store_cfg
-    document_store = build_document_store(document_store_cfg) if document_store_cfg else None
-
-    _vc_schemas = [c.schema for c in [*chunk_collections, *document_collections]]
+    vc_schemas = [c.schema for c in [*chunk_collections, *document_collections]]
 
     runner = Runner(
         llm=llm,
@@ -216,7 +202,7 @@ def build_app(
         vector_store=vector_store,
         embedder=embedder,
         default_vector_collection=default_vc,
-        vector_schemas=_vc_schemas or None,
+        vector_schemas=vc_schemas or None,
         structured_schemas=[sc.schema for sc in structured_collections] or None,
         document_store=document_store,
         app_name=config.name,

@@ -200,33 +200,6 @@ class IngestionPipeline:
         else:
             self._steps = list(steps)
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
-    async def setup(self) -> None:
-        """Create all collections in their stores. Idempotent."""
-        logger.info("ingestion_pipeline.setup.start name=%s", self.name)
-        for cc in self._chunk_by_name.values():
-            logger.debug(
-                "ingestion_pipeline.setup.create_collection name=%s collection=%s",
-                self.name, cc.name,
-            )
-            await cc.store.create_collection(cc.schema)
-        for sc in self._structured_by_name.values():
-            logger.debug(
-                "ingestion_pipeline.setup.create_collection name=%s collection=%s",
-                self.name, sc.name,
-            )
-            await sc.store.create_collection(sc.schema)
-        for dc in self._document_by_name.values():
-            logger.debug(
-                "ingestion_pipeline.setup.create_collection name=%s collection=%s",
-                self.name, dc.name,
-            )
-            await dc.store.create_collection(dc.schema)
-        logger.info("ingestion_pipeline.setup.done name=%s", self.name)
-
     async def _ingest(self, doc: Document) -> int:
         """Ingest a document by executing each step in declaration order.
 

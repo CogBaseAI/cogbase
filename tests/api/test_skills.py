@@ -73,9 +73,7 @@ _BASE_BUNDLE = _make_bundle(_BASE_CONFIG)
 
 
 def _mock_app_instance() -> MagicMock:
-    inst = MagicMock()
-    inst.setup = AsyncMock()
-    return inst
+    return MagicMock()
 
 
 def _make_system_store() -> SystemStore:
@@ -115,7 +113,7 @@ async def client(registry):
 
 async def _create_app(client, config_yaml: str = _BASE_CONFIG) -> None:
     bundle = _make_bundle(config_yaml)
-    with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+    with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
         resp = await client.post(
             "/applications",
             files={"bundle": ("bundle.zip", bundle, "application/zip")},
@@ -304,7 +302,7 @@ class TestSkillsInConfig:
     async def test_create_with_unknown_skill_returns_422(self, client):
         config = _BASE_CONFIG + "skills:\n  - unknown-skill\n"
         bundle = _make_bundle(config)
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", bundle, "application/zip")},
@@ -319,7 +317,7 @@ class TestSkillsInConfig:
 
         config_v2 = _BASE_CONFIG + "skills:\n  - skill-beta\n"
         bundle_v2 = _make_bundle(config_v2)
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.patch(
                 "/applications/my-app",
                 files={"bundle": ("bundle.zip", bundle_v2, "application/zip")},
@@ -336,7 +334,7 @@ class TestSkillsInConfig:
         await _create_app(client)
         config_v2 = _BASE_CONFIG + "skills:\n  - ghost-skill\n"
         bundle_v2 = _make_bundle(config_v2)
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.patch(
                 "/applications/my-app",
                 files={"bundle": ("bundle.zip", bundle_v2, "application/zip")},

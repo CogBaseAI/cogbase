@@ -99,7 +99,7 @@ def _make_extractor(llm: MagicMock) -> LLMExtractor:
     )
 
 
-def _make_pipeline(
+async def _make_pipeline(
     llm: MagicMock,
     store: InMemoryStructuredStore,
     *,
@@ -109,12 +109,16 @@ def _make_pipeline(
     name: str = "legal",
 ) -> IngestionPipeline:
     extractor = _make_extractor(llm)
-    sc = StructuredCollection(schema=extractor.schema, store=store, extractor=extractor)
+    sc_schema = extractor.schema
+    await store.create_collection(sc_schema)
+    sc = StructuredCollection(schema=sc_schema, store=store, extractor=extractor)
 
     vc = None
     if vector_store is not None:
         assert embedder is not None and chunker is not None
-        vc = ChunkCollection(schema=VectorCollectionSchema(name=name, dimensions=4, description="Test chunks"), store=vector_store, embedder=embedder, chunker=chunker)
+        vc_schema = VectorCollectionSchema(name=name, dimensions=4, description="Test chunks")
+        await vector_store.create_collection(vc_schema)
+        vc = ChunkCollection(schema=vc_schema, store=vector_store, embedder=embedder, chunker=chunker)
 
     return IngestionPipeline(
         name=name,
@@ -123,7 +127,7 @@ def _make_pipeline(
     )
 
 
-def _make_app(
+async def _make_app(
     llm: MagicMock,
     store: InMemoryStructuredStore,
     *,
@@ -132,7 +136,7 @@ def _make_app(
     chunker=None,
     name: str = "legal",
 ) -> CogBaseApp:
-    pipeline = _make_pipeline(llm, store, vector_store=vector_store, embedder=embedder, chunker=chunker, name=name)
+    pipeline = await _make_pipeline(llm, store, vector_store=vector_store, embedder=embedder, chunker=chunker, name=name)
     default_vc = name if vector_store is not None else None
     runner = QueryRunner(
         llm=llm,
@@ -151,66 +155,50 @@ def _make_app(
 # ---------------------------------------------------------------------------
 
 class TestCogBaseAppConstruction:
-    def test_structured_only_builds(self):
-        app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
+    async def test_structured_only_builds(self):
+        app = await _make_app(_make_llm("{}"), InMemoryStructuredStore())
         assert app._ingest_pipeline.name == "legal"
         assert app._ingest_pipeline._structured_by_name
         assert _CONTRACTS_COLLECTION in app._ingest_pipeline._structured_by_name
         assert app._ingest_pipeline._chunk_by_name == {}
 
-    def test_full_mode_builds(self):
-        app = _make_app(
+    async def test_full_mode_builds(self):
+        app = await _make_app(
             _make_llm("{}"),
             InMemoryStructuredStore(),
-            vector_store=FAISSVectorStore(dim=4),
+            vector_store=FAISSVectorStore(),
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=64, overlap=0),
         )
         assert app._ingest_pipeline._chunk_by_name
         assert "legal" in app._ingest_pipeline._chunk_by_name
 
-    def test_pipeline_wired_to_app(self):
+    async def test_pipeline_wired_to_app(self):
         store = InMemoryStructuredStore()
-        pipeline = _make_pipeline(_make_llm("{}"), store)
+        pipeline = await _make_pipeline(_make_llm("{}"), store)
         runner = QueryRunner(llm=_make_llm("{}"), structured_store=store, structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None)
         app = CogBaseApp("test", pipeline, runner)
         assert app._ingest_pipeline is pipeline
 
-    def test_custom_name(self):
-        app = _make_app(_make_llm("{}"), InMemoryStructuredStore(), name="my-legal-app")
+    async def test_custom_name(self):
+        app = await _make_app(_make_llm("{}"), InMemoryStructuredStore(), name="my-legal-app")
         assert app._ingest_pipeline.name == "my-legal-app"
 
-    def test_ingestion_pipeline_and_query_runner_accessible(self):
-        app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
+    async def test_ingestion_pipeline_and_query_runner_accessible(self):
+        app = await _make_app(_make_llm("{}"), InMemoryStructuredStore())
         assert isinstance(app.ingestion_pipeline, IngestionPipeline)
         assert isinstance(app.query_runner, QueryRunner)
 
 
 # ---------------------------------------------------------------------------
-# setup() / ingest_documents()
+# ingest_documents()
 # ---------------------------------------------------------------------------
 
 class TestCogBaseAppLifecycle:
     @pytest.mark.asyncio
-    async def test_setup_creates_collection(self):
-        store = InMemoryStructuredStore()
-        app = _make_app(_make_llm("{}"), store)
-        await app.setup()
-        rows = await store.query(_CONTRACTS_COLLECTION)
-        assert rows == []
-
-    @pytest.mark.asyncio
-    async def test_setup_idempotent(self):
-        store = InMemoryStructuredStore()
-        app = _make_app(_make_llm("{}"), store)
-        await app.setup()
-        await app.setup()  # must not raise
-
-    @pytest.mark.asyncio
     async def test_ingest_extracts_record(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_llm(_contract_payload(contract_type="SaaS")), store)
-        await app.setup()
+        app = await _make_app(_make_llm(_contract_payload(contract_type="SaaS")), store)
         await app.ingest_documents([Document(doc_id="c-001", text="Some contract text.")])
         rows = await store.query(_CONTRACTS_COLLECTION)
         assert len(rows) == 1
@@ -219,8 +207,7 @@ class TestCogBaseAppLifecycle:
     @pytest.mark.asyncio
     async def test_ingest_empty_text_is_noop(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_llm("{}"), store)
-        await app.setup()
+        app = await _make_app(_make_llm("{}"), store)
         await app.ingest_documents([Document(doc_id="c-empty", text="")])
         rows = await store.query(_CONTRACTS_COLLECTION)
         assert rows == []
@@ -228,8 +215,7 @@ class TestCogBaseAppLifecycle:
     @pytest.mark.asyncio
     async def test_ingest_multiple_docs_accumulate(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_llm(_contract_payload()), store)
-        await app.setup()
+        app = await _make_app(_make_llm(_contract_payload()), store)
         await app.ingest_documents([
             Document(doc_id="c-001", text="contract one text"),
             Document(doc_id="c-002", text="contract two text"),
@@ -242,17 +228,16 @@ class TestCogBaseAppLifecycle:
     @pytest.mark.asyncio
     async def test_ingest_full_mode_populates_vector_store(self):
         store = InMemoryStructuredStore()
-        vector_store = FAISSVectorStore(dim=4)
-        app = _make_app(
+        vector_store = FAISSVectorStore()
+        app = await _make_app(
             _make_llm("{}"),
             store,
             vector_store=vector_store,
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
-        await app.setup()
         await app.ingest_documents([Document(doc_id="c-001", text="word " * 20)])
-        assert vector_store.ntotal > 0
+        assert vector_store.ntotal("legal") > 0
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +245,7 @@ class TestCogBaseAppLifecycle:
 # ---------------------------------------------------------------------------
 
 class TestCogBaseAppQuery:
-    def _make_app_with_runner_response(
+    async def _make_app_with_runner_response(
         self,
         runner_response: dict,
         *,
@@ -281,15 +266,14 @@ class TestCogBaseAppQuery:
             yield runner_response.get("content") or ""
 
         llm.complete_stream = _stream
-        app = _make_app(llm, store)
+        app = await _make_app(llm, store)
         return app, store
 
     @pytest.mark.asyncio
     async def test_direct_answer_returns_query_result(self):
-        app, store = self._make_app_with_runner_response(
+        app, store = await self._make_app_with_runner_response(
             {"content": "The termination notice period is 60 days.", "tool_calls": None},
         )
-        await app.setup()
         result = await _drain_query(app, "what is the termination notice period?")
         assert isinstance(result, QueryResult)
         assert "60 days" in result.answer
@@ -323,8 +307,7 @@ class TestCogBaseAppQuery:
             yield "Found NDA contracts: Acme Corp and Supplier Ltd."
 
         llm.complete_stream = _stream
-        app = _make_app(llm, store)
-        await app.setup()
+        app = await _make_app(llm, store)
 
         extractor = _make_extractor(_make_llm("{}"))
         record_model = extractor._record_model
@@ -344,10 +327,9 @@ class TestCogBaseAppQuery:
 
     @pytest.mark.asyncio
     async def test_answer_content_captured(self):
-        app, store = self._make_app_with_runner_response(
+        app, store = await self._make_app_with_runner_response(
             {"content": "Both parties have broad indemnification obligations.", "tool_calls": None},
         )
-        await app.setup()
         result = await _drain_query(app, "summarise indemnification clauses")
         assert isinstance(result, QueryResult)
         assert "indemnification" in result.answer.lower()
@@ -361,19 +343,19 @@ class TestQueryRunnerToolAvailability:
     def _tool_names(self, app: CogBaseApp) -> list[str]:
         return [t["name"] for t in app.query_runner._tool_defs]
 
-    def test_structured_only_has_no_vector_search(self):
-        app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
+    async def test_structured_only_has_no_vector_search(self):
+        app = await _make_app(_make_llm("{}"), InMemoryStructuredStore())
         assert "vector_search" not in self._tool_names(app)
 
-    def test_structured_only_has_structured_lookup(self):
-        app = _make_app(_make_llm("{}"), InMemoryStructuredStore())
+    async def test_structured_only_has_structured_lookup(self):
+        app = await _make_app(_make_llm("{}"), InMemoryStructuredStore())
         assert "structured_lookup" in self._tool_names(app)
 
-    def test_full_mode_has_both_tools(self):
-        app = _make_app(
+    async def test_full_mode_has_both_tools(self):
+        app = await _make_app(
             _make_llm("{}"),
             InMemoryStructuredStore(),
-            vector_store=FAISSVectorStore(dim=4),
+            vector_store=FAISSVectorStore(),
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=64, overlap=0),
         )
@@ -395,8 +377,7 @@ class TestQueryRunnerToolAvailability:
 
         llm.complete_stream = _stream
 
-        app = _make_app(llm, InMemoryStructuredStore())
-        await app.setup()
+        app = await _make_app(llm, InMemoryStructuredStore())
         result = await _drain_query(app, "what is the termination clause?")
         assert isinstance(result, QueryResult)
 
@@ -408,11 +389,13 @@ class TestQueryRunnerToolAvailability:
 class TestVectorOnlyMode:
     """CogBaseApp with no structured collection skips extraction entirely."""
 
-    def _make_vector_only_app(self, llm: MagicMock) -> CogBaseApp:
-        vc_store = FAISSVectorStore(dim=4)
+    async def _make_vector_only_app(self, llm: MagicMock) -> CogBaseApp:
+        vc_store = FAISSVectorStore()
         vc_embedder = StubEmbedding(dim=4)
+        vc_schema = VectorCollectionSchema(name="vector_only", dimensions=4, description="Test vector-only chunks")
+        await vc_store.create_collection(vc_schema)
         vc = ChunkCollection(
-            schema=VectorCollectionSchema(name="vector_only", dimensions=4, description="Test vector-only chunks"),
+            schema=vc_schema,
             store=vc_store,
             embedder=vc_embedder,
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
@@ -430,32 +413,29 @@ class TestVectorOnlyMode:
     def _tool_names(self, app: CogBaseApp) -> list[str]:
         return [t["name"] for t in app.query_runner._tool_defs]
 
-    def test_no_structured_collection(self):
-        app = self._make_vector_only_app(_make_llm("{}"))
+    async def test_no_structured_collection(self):
+        app = await self._make_vector_only_app(_make_llm("{}"))
         assert app._ingest_pipeline._structured_by_name == {}
 
-    def test_vector_collection_present(self):
-        app = self._make_vector_only_app(_make_llm("{}"))
+    async def test_vector_collection_present(self):
+        app = await self._make_vector_only_app(_make_llm("{}"))
         assert app._ingest_pipeline._chunk_by_name
 
-    def test_no_structured_lookup_tool(self):
-        app = self._make_vector_only_app(_make_llm("{}"))
+    async def test_no_structured_lookup_tool(self):
+        app = await self._make_vector_only_app(_make_llm("{}"))
         assert "structured_lookup" not in self._tool_names(app)
 
-    def test_has_vector_search_tool(self):
-        app = self._make_vector_only_app(_make_llm("{}"))
+    async def test_has_vector_search_tool(self):
+        app = await self._make_vector_only_app(_make_llm("{}"))
         assert "vector_search" in self._tool_names(app)
 
     @pytest.mark.asyncio
-    async def test_setup_is_noop(self):
-        app = self._make_vector_only_app(_make_llm("{}"))
-        await app.setup()  # must not raise
-
-    @pytest.mark.asyncio
     async def test_ingest_populates_vector_store_not_structured(self):
-        vector_store = FAISSVectorStore(dim=4)
+        vector_store = FAISSVectorStore()
+        vc_schema = VectorCollectionSchema(name="testapp", dimensions=4, description="Test chunks")
+        await vector_store.create_collection(vc_schema)
         vc = ChunkCollection(
-            schema=VectorCollectionSchema(name="testapp", dimensions=4, description="Test chunks"),
+            schema=vc_schema,
             store=vector_store,
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=20, overlap=0),
@@ -463,16 +443,14 @@ class TestVectorOnlyMode:
         pipeline = IngestionPipeline(name="testapp", chunk_collections=[vc])
         runner = QueryRunner(llm=_make_llm("{}"), vector_store=vector_store, embedder=StubEmbedding(dim=4), default_vector_collection="testapp", vector_schemas=[c.schema for c in pipeline._chunk_by_name.values()] or None)
         app = CogBaseApp("testapp", pipeline, runner)
-        await app.setup()
         results = await app.ingest_documents([Document(doc_id="d-001", text="word " * 20)])
         assert results[0].success is True
         assert results[0].records_extracted == 0
-        assert vector_store.ntotal > 0
+        assert vector_store.ntotal("testapp") > 0
 
     @pytest.mark.asyncio
     async def test_ingest_records_extracted_is_zero(self):
-        app = self._make_vector_only_app(_make_llm("{}"))
-        await app.setup()
+        app = await self._make_vector_only_app(_make_llm("{}"))
         results = await app.ingest_documents([Document(doc_id="d-001", text="some text " * 5)])
         assert results[0].records_extracted == 0
 
@@ -485,8 +463,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_returns_one_result_per_document(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_llm(_contract_payload()), store)
-        await app.setup()
+        app = await _make_app(_make_llm(_contract_payload()), store)
 
         documents = [
             Document(doc_id="c-001", text="contract one"),
@@ -501,8 +478,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_results_in_input_order(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_llm("{}"), store)
-        await app.setup()
+        app = await _make_app(_make_llm("{}"), store)
 
         doc_ids = [f"c-{i:03d}" for i in range(8)]
         documents = [Document(doc_id=d, text=f"text for {d}") for d in doc_ids]
@@ -513,8 +489,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_success_flag_set(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_llm(_contract_payload()), store)
-        await app.setup()
+        app = await _make_app(_make_llm(_contract_payload()), store)
 
         results = await app.ingest_documents([Document(doc_id="c-001", text="some text")])
 
@@ -524,8 +499,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_records_extracted_count(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_llm(_contract_payload()), store)
-        await app.setup()
+        app = await _make_app(_make_llm(_contract_payload()), store)
 
         results = await app.ingest_documents([Document(doc_id="c-001", text="contract text")])
 
@@ -552,8 +526,7 @@ class TestIngestMany:
 
         llm.complete_stream = _stream
 
-        app = _make_app(llm, store)
-        await app.setup()
+        app = await _make_app(llm, store)
 
         results = await app.ingest_documents(
             [
@@ -577,8 +550,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_empty_list_returns_empty(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_llm("{}"), store)
-        await app.setup()
+        app = await _make_app(_make_llm("{}"), store)
 
         results = await app.ingest_documents([])
         assert results == []
@@ -586,8 +558,7 @@ class TestIngestMany:
     @pytest.mark.asyncio
     async def test_invalid_concurrency_raises(self):
         store = InMemoryStructuredStore()
-        app = _make_app(_make_llm("{}"), store)
-        await app.setup()
+        app = await _make_app(_make_llm("{}"), store)
 
         with pytest.raises(ValueError, match="concurrency"):
             await app.ingest_documents([], concurrency=0)
@@ -619,8 +590,7 @@ class TestIngestMany:
 
         llm.complete_stream = _stream
 
-        app = _make_app(llm, store)
-        await app.setup()
+        app = await _make_app(llm, store)
 
         documents = [Document(doc_id=f"c-{i}", text="text") for i in range(10)]
         await app.ingest_documents(documents, concurrency=3)

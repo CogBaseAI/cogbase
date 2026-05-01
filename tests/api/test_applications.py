@@ -76,9 +76,7 @@ _VALID_BUNDLE = _make_bundle(_VALID_CONFIG_YAML)
 
 def _mock_app_instance() -> MagicMock:
     """Minimal mock that satisfies the build_app / app lifecycle contract."""
-    inst = MagicMock()
-    inst.setup = AsyncMock()
-    return inst
+    return MagicMock()
 
 
 @pytest_asyncio.fixture
@@ -109,7 +107,7 @@ async def client():
 class TestCreateApplication:
     @pytest.mark.asyncio
     async def test_create_returns_201(self, client):
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
@@ -122,7 +120,7 @@ class TestCreateApplication:
 
     @pytest.mark.asyncio
     async def test_create_stores_config_in_response(self, client):
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
@@ -133,7 +131,7 @@ class TestCreateApplication:
 
     @pytest.mark.asyncio
     async def test_create_conflict_returns_409(self, client):
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
@@ -176,10 +174,8 @@ class TestCreateApplication:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_create_records_error_status_when_setup_fails(self, client):
-        failing_app = MagicMock()
-        failing_app.setup = AsyncMock(side_effect=RuntimeError("setup boom"))
-        with patch("api.routers.applications.build_app", return_value=failing_app):
+    async def test_create_records_error_status_when_build_fails(self, client):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, side_effect=RuntimeError("setup boom")):
             resp = await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
@@ -228,11 +224,11 @@ class TestCreateApplication:
         )
         captured: list = []
 
-        def _capture(config, **kwargs):
+        async def _capture(config, **kwargs):
             captured.append(config)
             return _mock_app_instance()
 
-        with patch("api.routers.applications.build_app", side_effect=_capture):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, side_effect=_capture):
             resp = await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", bundle, "application/zip")},
@@ -261,7 +257,7 @@ class TestListApplications:
     async def test_list_returns_created_apps(self, client):
         bundle_a = _make_bundle(b"name: app-a\nllm:\n  model: gpt-4o-mini\n")
         bundle_b = _make_bundle(b"name: app-b\nllm:\n  model: gpt-4o-mini\n")
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post("/applications", files={"bundle": ("a.zip", bundle_a, "application/zip")})
             await client.post("/applications", files={"bundle": ("b.zip", bundle_b, "application/zip")})
         resp = await client.get("/applications")
@@ -279,7 +275,7 @@ class TestListApplications:
 class TestGetApplication:
     @pytest.mark.asyncio
     async def test_get_existing(self, client):
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
@@ -302,7 +298,7 @@ class TestGetApplication:
 class TestUpdateApplication:
     @pytest.mark.asyncio
     async def test_update_success(self, client):
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
@@ -310,7 +306,7 @@ class TestUpdateApplication:
 
         updated_yaml = _VALID_CONFIG_YAML.replace(b"gpt-4o-mini", b"gpt-4o")
         updated_bundle = _make_bundle(updated_yaml)
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.patch(
                 "/applications/my-contract-analyzer",
                 files={"bundle": ("bundle.zip", updated_bundle, "application/zip")},
@@ -330,11 +326,11 @@ class TestUpdateApplication:
     async def test_update_name_conflict_returns_409(self, client):
         bundle_a = _make_bundle(b"name: app-a\nllm:\n  model: gpt-4o-mini\n")
         bundle_b = _make_bundle(b"name: app-b\nllm:\n  model: gpt-4o-mini\n")
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post("/applications", files={"bundle": ("a.zip", bundle_a, "application/zip")})
             await client.post("/applications", files={"bundle": ("b.zip", bundle_b, "application/zip")})
 
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.patch(
                 "/applications/app-a",
                 files={"bundle": ("bundle.zip", bundle_b, "application/zip")},
@@ -343,15 +339,13 @@ class TestUpdateApplication:
 
     @pytest.mark.asyncio
     async def test_update_records_error_when_setup_fails(self, client):
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
 
-        failing_app = MagicMock()
-        failing_app.setup = AsyncMock(side_effect=RuntimeError("update boom"))
-        with patch("api.routers.applications.build_app", return_value=failing_app):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, side_effect=RuntimeError("update boom")):
             resp = await client.patch(
                 "/applications/my-contract-analyzer",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
@@ -369,7 +363,7 @@ class TestUpdateApplication:
 class TestDeleteApplication:
     @pytest.mark.asyncio
     async def test_delete_returns_204(self, client):
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
@@ -379,7 +373,7 @@ class TestDeleteApplication:
 
     @pytest.mark.asyncio
     async def test_delete_removes_from_list(self, client):
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
@@ -398,7 +392,7 @@ class TestDeleteApplication:
         app_cache = _make_app_cache()
         app.dependency_overrides[get_app_cache] = lambda: app_cache
 
-        with patch("api.routers.applications.build_app", return_value=_mock_app_instance()):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
@@ -430,7 +424,6 @@ def _mock_ingest_app(results: list[dict] | None = None) -> MagicMock:
     fake_results = [_FakeIngestResult(**r) for r in results]
 
     inst = MagicMock()
-    inst.setup = AsyncMock()
     inst.ingest_documents = AsyncMock(return_value=fake_results)
     return inst
 
@@ -514,9 +507,7 @@ class TestIngestDocuments:
 
     @pytest.mark.asyncio
     async def test_ingest_404_when_app_not_active(self, client):
-        failing = MagicMock()
-        failing.setup = AsyncMock(side_effect=RuntimeError("setup boom"))
-        with patch("api.routers.applications.build_app", return_value=failing):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, side_effect=RuntimeError("setup boom")):
             await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
@@ -569,7 +560,7 @@ class TestIngestDocuments:
         mock_app.ingest_documents = _flaky_ingest
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.build_app", return_value=mock_app):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=mock_app):
             resp = await client.post(
                 "/applications/my-contract-analyzer/ingest_documents",
                 json={"documents": [{"doc_id": "doc-1", "text": "text"}]},
@@ -620,7 +611,6 @@ def _make_query_result(
 def _mock_query_app(result: QueryResult) -> MagicMock:
     """Build a mock CogBaseApp whose query_stream yields tokens then a QueryResult."""
     inst = MagicMock()
-    inst.setup = AsyncMock()
 
     async def _query_stream(text: str):
         for token in result.answer.split():
@@ -641,7 +631,7 @@ def _parse_sse(body: str) -> list[str]:
 
 
 async def _create_app(client, mock_app: MagicMock) -> None:
-    with patch("api.routers.applications.build_app", return_value=mock_app):
+    with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=mock_app):
         resp = await client.post(
             "/applications",
             files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
@@ -709,9 +699,7 @@ class TestQueryApplication:
 
     @pytest.mark.asyncio
     async def test_404_when_app_not_active(self, client):
-        failing = MagicMock()
-        failing.setup = AsyncMock(side_effect=RuntimeError("setup boom"))
-        with patch("api.routers.applications.build_app", return_value=failing):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, side_effect=RuntimeError("setup boom")):
             await client.post(
                 "/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
@@ -742,7 +730,7 @@ class TestQueryApplication:
 
         await _create_app(client, failing_then_good)
 
-        with patch("api.routers.applications.build_app", return_value=failing_then_good):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=failing_then_good):
             resp = await client.post(
                 "/applications/my-contract-analyzer/query",
                 json={"text": "q"},
@@ -849,7 +837,6 @@ class TestQueryApplicationStream:
     @pytest.mark.asyncio
     async def test_error_event_on_stream_failure(self, client):
         inst = MagicMock()
-        inst.setup = AsyncMock()
 
         async def _failing_stream(text: str):
             raise RuntimeError("boom")

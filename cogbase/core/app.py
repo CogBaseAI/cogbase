@@ -1,8 +1,8 @@
 """Generic CogBase application — bundles ingestion and query under one object.
 
 ``CogBaseApp`` wires together an ``IngestionPipeline`` (ingestion layer) and a
-``Runner`` (query layer) behind a small interface: ``setup`` → ``ingest`` /
-``ingest_documents`` → ``query_stream``.
+``Runner`` (query layer) behind a small interface: ``ingest_documents`` →
+``query_stream``.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Sequence
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
 from cogbase.core.models import Document
 from cogbase.core.runner import RunResult, Runner
-from cogbase.stores import CollectionSchema, DocumentStoreBase
+from cogbase.stores import DocumentStoreBase
 
 logger = logging.getLogger(__name__)
 
@@ -39,14 +39,6 @@ class CogBaseApp:
         self._ingest_pipeline = pipeline
         self._runner = runner
         self._document_store = document_store
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
-    async def setup(self) -> None:
-        """Create all structured collections in their respective stores. Idempotent."""
-        await self._ingest_pipeline.setup()
 
     async def ingest_documents(
         self,
