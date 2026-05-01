@@ -335,7 +335,7 @@ class QueryRunner:
                                      so the LLM knows available collections and field types.
         passthrough_token_threshold: Estimated token count of ``structured_lookup`` results
                                      above which records are returned directly without LLM
-                                     synthesis. Defaults to 2000.
+                                     synthesis. None means disabled. Defaults None.
     """
 
     def __init__(
@@ -349,7 +349,7 @@ class QueryRunner:
         embedder: EmbeddingBase | None = None,
         vector_schemas: list[VectorCollectionSchema] | None = None,
         structured_schemas: list[CollectionSchema] | None = None,
-        passthrough_token_threshold: int = 2000,
+        passthrough_token_threshold: int | None = None,
         document_store: DocumentStoreBase | None = None,
         app_name: str | None = None,
     ) -> None:
@@ -679,18 +679,19 @@ class QueryRunner:
             return [], f"structured_lookup error: {exc}", False
 
         json_str = json.dumps(records, default=str)
-        estimated_tokens = _estimate_tokens(json_str)
         logger.info(
-            "[runner] structured_lookup.result collection=%s records=%d estimated_tokens=%d",
-            collection, len(records), estimated_tokens,
+            "[runner] structured_lookup.result collection=%s records=%d",
+            collection, len(records),
         )
 
-        if estimated_tokens > self._passthrough_token_threshold:
-            logger.info(
-                "[runner] structured_lookup.passthrough estimated_tokens=%d threshold=%d",
-                estimated_tokens, self._passthrough_token_threshold,
-            )
-            return records, _format_records_as_text(records), True
+        if self._passthrough_token_threshold:
+            estimated_tokens = _estimate_tokens(json_str)
+            if estimated_tokens > self._passthrough_token_threshold:
+                logger.info(
+                    "[runner] structured_lookup.passthrough estimated_tokens=%d threshold=%d",
+                    estimated_tokens, self._passthrough_token_threshold,
+                )
+                return records, _format_records_as_text(records), True
 
         return records, json_str, False
 

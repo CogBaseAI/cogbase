@@ -18,8 +18,14 @@ Requires `OPENAI_API_KEY` in a `.env` file at the repo root (or in the environme
 
 | Command | Description |
 |---------|-------------|
+| `list` | List all applications |
+| `create` | Create the contract-analyst application |
+| `delete <name>` | Delete an application by name (with confirmation) |
 | `ingest saas` | Ingest the 5 built-in SaaS contract fixtures |
 | `ingest <path>` | Ingest a plain-text contract file from disk |
+| `list collections` | List all structured collections for the application |
+| `query structured` | Query the default `contracts` collection (all records) |
+| `query structured <name>` | Query a named structured collection (all records) |
 | `reset` | Delete the application and all data |
 | `q` / `quit` / `exit` | Exit |
 
@@ -29,10 +35,8 @@ Any other input is sent as a query to the running application. Answers stream ba
 
 On first run the demo uploads a ZIP bundle to `POST /applications` that configures:
 
-- **LLM**: `gpt-5-mini` via OpenAI
+- **LLM**: `gpt-5.4-mini` via OpenAI
 - **Embeddings**: `text-embedding-3-small` (1536 dimensions)
-- **Vector store**: FAISS, in-memory
-- **Structured store**: in-memory
 - **Pipeline steps**:
   1. `chunk-embed-upsert` → `document_chunks` collection
   2. `extract-structured` → `contracts` collection
@@ -47,8 +51,7 @@ Each ingested document produces exactly one `ContractExtraction`. The LLM is ins
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `contract_id` | `str` | Stable unique ID: `{doc_id}_{uuid}` |
-| `doc_id` | `str` | Source document identifier |
+| `doc_id` | `str` | Source document identifier (injected by the pipeline) |
 | `contract_type` | `str \| None` | Category: `"NDA"`, `"SaaS"`, `"employment"`, `"vendor"`, `"lease"`, etc. |
 | `purpose` | `str \| None` | One sentence describing what the contract is for |
 | `effective_date` | `str \| None` | Contract start date in `YYYY-MM-DD` format |
@@ -107,7 +110,5 @@ Verbatim text copied from the contract. `null` when the clause is absent.
 
 ## Known limitations
 
-- **Template comparison** — deviation from a standard template requires a reference document concept that does not yet exist.
 - **Date format** — dates are stored as `YYYY-MM-DD` strings. Ambiguous dates (e.g. "the last day of the fiscal year") will be `null`.
 - **One record per document** — the extractor produces a single record per ingested document. Consolidated or multi-part contracts should be split before ingestion.
-- **In-memory stores** — the demo uses in-memory vector and structured stores; all data is lost when the API server restarts.
