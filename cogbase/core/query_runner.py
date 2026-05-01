@@ -557,7 +557,14 @@ class QueryRunner:
             messages.append({
                 "role": "assistant",
                 "content": result.get("content"),
-                "tool_calls": tool_calls,
+                "tool_calls": [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                    for tc in tool_calls
+                ],
             })
 
             tool_names = ", ".join(tc["name"] for tc in tool_calls)
