@@ -48,9 +48,14 @@ class DocumentCollectionConfig(BaseModel):
     metadata_fields: list[str] = []
 
 
+class WhenCondition(BaseModel):
+    metadata: dict[str, str] = {}
+
+
 class PipelineStepConfig(BaseModel):
     tool: Literal["chunk-embed-upsert", "extract-structured", "document-embed-upsert"]
     collection: str
+    when: WhenCondition | None = None
 
 
 class PipelineConfig(BaseModel):

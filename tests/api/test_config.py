@@ -336,6 +336,132 @@ class TestAppConfig:
 # DocumentCollectionConfig
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# WhenCondition / metadata-based step routing
+# ---------------------------------------------------------------------------
+
+class TestWhenCondition:
+    def test_step_without_when_is_none(self):
+        yaml_text = textwrap.dedent("""\
+            name: app
+            llm:
+              model: gpt-4o-mini
+            embedding:
+              provider: openai
+              model: text-embedding-3-small
+            chunk_collections:
+              - name: chunks
+                chunker:
+                  type: fixed
+                  chunk_size: 512
+                  overlap: 64
+            pipeline:
+              steps:
+                - tool: chunk-embed-upsert
+                  collection: chunks
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert cfg.pipeline.steps[0].when is None
+
+    def test_step_with_when_metadata_parses(self):
+        yaml_text = textwrap.dedent("""\
+            name: app
+            llm:
+              model: gpt-4o-mini
+            embedding:
+              provider: openai
+              model: text-embedding-3-small
+            chunk_collections:
+              - name: rule_chunks
+                chunker:
+                  type: fixed
+                  chunk_size: 512
+                  overlap: 64
+            pipeline:
+              steps:
+                - tool: chunk-embed-upsert
+                  collection: rule_chunks
+                  when:
+                    metadata:
+                      doc_type: rules
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        step = cfg.pipeline.steps[0]
+        assert step.when is not None
+        assert step.when.metadata == {"doc_type": "rules"}
+
+    def test_routed_ingestion_config_parses(self):
+        """Full contract-compliance routing config from the README."""
+        yaml_text = textwrap.dedent("""\
+            name: contract-compliance
+            llm:
+              model: gpt-4o-mini
+            embedding:
+              provider: openai
+              model: text-embedding-3-small
+            chunk_collections:
+              - name: rule_chunks
+                chunker:
+                  type: fixed
+                  chunk_size: 512
+                  overlap: 64
+              - name: contract_chunks
+                chunker:
+                  type: fixed
+                  chunk_size: 512
+                  overlap: 64
+            pipeline:
+              steps:
+                - tool: chunk-embed-upsert
+                  collection: rule_chunks
+                  when:
+                    metadata:
+                      doc_type: rules
+                - tool: chunk-embed-upsert
+                  collection: contract_chunks
+                  when:
+                    metadata:
+                      doc_type: contract
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert len(cfg.pipeline.steps) == 2
+
+        rule_step = cfg.pipeline.steps[0]
+        assert rule_step.collection == "rule_chunks"
+        assert rule_step.when.metadata == {"doc_type": "rules"}
+
+        contract_step = cfg.pipeline.steps[1]
+        assert contract_step.collection == "contract_chunks"
+        assert contract_step.when.metadata == {"doc_type": "contract"}
+
+    def test_when_metadata_empty_by_default(self):
+        yaml_text = textwrap.dedent("""\
+            name: app
+            llm:
+              model: gpt-4o-mini
+            embedding:
+              provider: openai
+              model: text-embedding-3-small
+            chunk_collections:
+              - name: chunks
+                chunker:
+                  type: fixed
+                  chunk_size: 512
+                  overlap: 64
+            pipeline:
+              steps:
+                - tool: chunk-embed-upsert
+                  collection: chunks
+                  when: {}
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert cfg.pipeline.steps[0].when.metadata == {}
+
+
+# ---------------------------------------------------------------------------
+# DocumentCollectionConfig
+# ---------------------------------------------------------------------------
+
 class TestDocumentCollectionConfig:
     def test_defaults(self):
         cfg = DocumentCollectionConfig(name="s")

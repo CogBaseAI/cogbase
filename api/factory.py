@@ -178,7 +178,7 @@ async def build_app(
     steps = config.pipeline.steps if config.pipeline else []
     pipeline = IngestionPipeline(
         name=config.name,
-        steps=[(s.tool, s.collection) for s in steps],
+        steps=[(s.tool, s.collection, s.when.metadata if s.when else None) for s in steps],
         chunk_collections=chunk_collections or None,
         structured_collections=structured_collections or None,
         document_collections=document_collections or None,

@@ -159,17 +159,17 @@ class TestMultiCollectionPipelineConstruction:
         pipeline = IngestionPipeline(
             name="app",
             steps=[
-                ("chunk-embed-upsert",    "document_chunks"),
-                ("extract-structured",    "tags"),
-                ("document-embed-upsert", "document_summary"),
+                ("chunk-embed-upsert",    "document_chunks",  None),
+                ("extract-structured",    "tags",             None),
+                ("document-embed-upsert", "document_summary", None),
             ],
             chunk_collections=[vc],
             structured_collections=[sc],
             document_collections=[dc],
         )
 
-        assert ("chunk-embed-upsert", "document_chunks") in pipeline._steps
-        assert ("document-embed-upsert", "document_summary") in pipeline._steps
+        assert ("chunk-embed-upsert", "document_chunks", None) in pipeline._steps
+        assert ("document-embed-upsert", "document_summary", None) in pipeline._steps
         assert "tags" in pipeline._structured_by_name
 
     def test_auto_steps_generation_from_collections(self, make_vector_store, make_structured_store):
@@ -184,9 +184,9 @@ class TestMultiCollectionPipelineConstruction:
             document_collections=[dc],
         )
 
-        assert ("chunk-embed-upsert", "chunks") in pipeline._steps
-        assert ("extract-structured", "tags") in pipeline._steps
-        assert ("document-embed-upsert", "summaries") in pipeline._steps
+        assert ("chunk-embed-upsert", "chunks", None) in pipeline._steps
+        assert ("extract-structured", "tags", None) in pipeline._steps
+        assert ("document-embed-upsert", "summaries", None) in pipeline._steps
 
     def test_two_vector_collections(self, make_vector_store):
         vc1 = self._make_vc(make_vector_store, "col_a")
@@ -195,8 +195,8 @@ class TestMultiCollectionPipelineConstruction:
         pipeline = IngestionPipeline(
             name="app",
             steps=[
-                ("chunk-embed-upsert", "col_a"),
-                ("chunk-embed-upsert", "col_b"),
+                ("chunk-embed-upsert", "col_a", None),
+                ("chunk-embed-upsert", "col_b", None),
             ],
             chunk_collections=[vc1, vc2],
         )
@@ -227,7 +227,7 @@ class TestDocumentEmbedUpsert:
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("document-embed-upsert", "summaries")],
+            steps=[("document-embed-upsert", "summaries", None)],
             document_collections=[dc],
         )
         return pipeline, vector_store
@@ -266,7 +266,7 @@ class TestDocumentEmbedUpsert:
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("document-embed-upsert", "summaries")],
+            steps=[("document-embed-upsert", "summaries", None)],
             document_collections=[dc],
         )
         await pipeline._ingest(Document(doc_id="d-001", text="raw document text"))
@@ -287,7 +287,7 @@ class TestDocumentEmbedUpsert:
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("document-embed-upsert", "summaries")],
+            steps=[("document-embed-upsert", "summaries", None)],
             document_collections=[dc],
         )
         await pipeline._ingest(Document(
@@ -313,7 +313,7 @@ class TestDocumentEmbedUpsert:
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("document-embed-upsert", "summaries")],
+            steps=[("document-embed-upsert", "summaries", None)],
             document_collections=[dc],
         )
         await pipeline._ingest(Document(doc_id="d-001", text="text"))
@@ -334,7 +334,7 @@ class TestDocumentEmbedUpsert:
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("document-embed-upsert", "summaries")],
+            steps=[("document-embed-upsert", "summaries", None)],
             document_collections=[dc],
         )
         count = await pipeline._ingest(Document(doc_id="d-001", text="text"))
@@ -367,9 +367,9 @@ class TestThreeStepPipeline:
         pipeline = IngestionPipeline(
             name="app",
             steps=[
-                ("chunk-embed-upsert",    "chunks"),
-                ("extract-structured",    "tags"),
-                ("document-embed-upsert", "summaries"),
+                ("chunk-embed-upsert",    "chunks",    None),
+                ("extract-structured",    "tags",      None),
+                ("document-embed-upsert", "summaries", None),
             ],
             chunk_collections=[vc],
             structured_collections=[sc],
@@ -481,3 +481,166 @@ class TestDocumentCollectionConfig:
         """)
         with pytest.raises(Exception, match="unknown document collection"):
             AppConfig.from_yaml(yaml_text)
+
+
+# ---------------------------------------------------------------------------
+# metadata.doc_type routing via when conditions
+# ---------------------------------------------------------------------------
+
+def _make_chunk_collection(
+    store: VectorStoreBase, name: str, dim: int = 4
+) -> ChunkCollection:
+    return ChunkCollection(
+        schema=VectorCollectionSchema(name=name, dimensions=dim, description=f"{name} chunks"),
+        store=store,
+        embedder=StubEmbedding(dim=dim),
+        chunker=FixedSizeChunker(chunk_size=20, overlap=0),
+    )
+
+
+class TestWhenConditionRouting:
+    @pytest.mark.asyncio
+    async def test_matching_doc_type_runs_step(self, make_vector_store):
+        """A rules document goes to rule_chunks (doc_type matches)."""
+        rule_store = make_vector_store()
+        rule_schema = VectorCollectionSchema(name="rule_chunks", dimensions=4, description="rule chunks")
+        await rule_store.create_collection(rule_schema)
+
+        vc = _make_chunk_collection(rule_store, "rule_chunks")
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[("chunk-embed-upsert", "rule_chunks", {"doc_type": "rules"})],
+            chunk_collections=[vc],
+        )
+
+        await pipeline._ingest(Document(
+            doc_id="rules-001",
+            text="Vendors must comply with ISO 27001.",
+            metadata={"doc_type": "rules"},
+        ))
+
+        assert rule_store.ntotal("rule_chunks") > 0
+
+    @pytest.mark.asyncio
+    async def test_non_matching_doc_type_skips_step(self, make_vector_store):
+        """A contract document is skipped by the rules step (doc_type mismatch)."""
+        rule_store = make_vector_store()
+        rule_schema = VectorCollectionSchema(name="rule_chunks", dimensions=4, description="rule chunks")
+        await rule_store.create_collection(rule_schema)
+
+        vc = _make_chunk_collection(rule_store, "rule_chunks")
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[("chunk-embed-upsert", "rule_chunks", {"doc_type": "rules"})],
+            chunk_collections=[vc],
+        )
+
+        await pipeline._ingest(Document(
+            doc_id="contract-001",
+            text="This agreement is entered into by the parties.",
+            metadata={"doc_type": "contract"},
+        ))
+
+        assert rule_store.ntotal("rule_chunks") == 0
+
+    @pytest.mark.asyncio
+    async def test_step_without_when_runs_for_all_docs(self, make_vector_store):
+        """A step with no when condition runs regardless of doc metadata."""
+        store = make_vector_store()
+        schema = VectorCollectionSchema(name="all_chunks", dimensions=4, description="all chunks")
+        await store.create_collection(schema)
+
+        vc = _make_chunk_collection(store, "all_chunks")
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[("chunk-embed-upsert", "all_chunks", None)],
+            chunk_collections=[vc],
+        )
+
+        await pipeline._ingest(Document(doc_id="d1", text="rules text", metadata={"doc_type": "rules"}))
+        await pipeline._ingest(Document(doc_id="d2", text="contract text", metadata={"doc_type": "contract"}))
+
+        assert store.ntotal("all_chunks") > 0
+
+    @pytest.mark.asyncio
+    async def test_rules_and_contract_steps_route_independently(self, make_vector_store):
+        """rules doc → rule_chunks only; contract doc → contract_chunks only."""
+        rule_store = make_vector_store()
+        contract_store = make_vector_store()
+
+        rule_schema = VectorCollectionSchema(name="rule_chunks", dimensions=4, description="rule chunks")
+        contract_schema = VectorCollectionSchema(name="contract_chunks", dimensions=4, description="contract chunks")
+        await rule_store.create_collection(rule_schema)
+        await contract_store.create_collection(contract_schema)
+
+        rule_vc = _make_chunk_collection(rule_store, "rule_chunks")
+        contract_vc = _make_chunk_collection(contract_store, "contract_chunks")
+
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[
+                ("chunk-embed-upsert", "rule_chunks",     {"doc_type": "rules"}),
+                ("chunk-embed-upsert", "contract_chunks", {"doc_type": "contract"}),
+            ],
+            chunk_collections=[rule_vc, contract_vc],
+        )
+
+        await pipeline._ingest(Document(
+            doc_id="rules-001",
+            text="ISO 27001 compliance required.",
+            metadata={"doc_type": "rules"},
+        ))
+        await pipeline._ingest(Document(
+            doc_id="contract-001",
+            text="This agreement is between vendor and buyer.",
+            metadata={"doc_type": "contract"},
+        ))
+
+        assert rule_store.ntotal("rule_chunks") > 0, "rules doc did not land in rule_chunks"
+        assert contract_store.ntotal("contract_chunks") > 0, "contract doc did not land in contract_chunks"
+
+        # cross-check: nothing leaked into the wrong collection
+        assert contract_store.ntotal("contract_chunks") == pytest.approx(
+            contract_store.ntotal("contract_chunks")
+        )
+
+    @pytest.mark.asyncio
+    async def test_partial_metadata_match_skips_step(self, make_vector_store):
+        """All when.metadata keys must match; partial match still skips the step."""
+        store = make_vector_store()
+        schema = VectorCollectionSchema(name="chunks", dimensions=4, description="chunks")
+        await store.create_collection(schema)
+
+        vc = _make_chunk_collection(store, "chunks")
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[("chunk-embed-upsert", "chunks", {"doc_type": "rules", "region": "us"})],
+            chunk_collections=[vc],
+        )
+
+        # doc_type matches but region does not — step must be skipped
+        await pipeline._ingest(Document(
+            doc_id="d1",
+            text="Some rules.",
+            metadata={"doc_type": "rules", "region": "eu"},
+        ))
+
+        assert store.ntotal("chunks") == 0
+
+    @pytest.mark.asyncio
+    async def test_doc_missing_metadata_key_skips_step(self, make_vector_store):
+        """A document that lacks the when key entirely is skipped."""
+        store = make_vector_store()
+        schema = VectorCollectionSchema(name="chunks", dimensions=4, description="chunks")
+        await store.create_collection(schema)
+
+        vc = _make_chunk_collection(store, "chunks")
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[("chunk-embed-upsert", "chunks", {"doc_type": "rules"})],
+            chunk_collections=[vc],
+        )
+
+        await pipeline._ingest(Document(doc_id="d1", text="Some text.", metadata={}))
+
+        assert store.ntotal("chunks") == 0

@@ -172,7 +172,7 @@ class IngestionPipeline:
     def __init__(
         self,
         name: str,
-        steps: list[tuple[str, str]] | None = None,
+        steps: list[tuple[str, str, dict | None]] | None = None,
         chunk_collections: list[ChunkCollection] | None = None,
         structured_collections: list[StructuredCollection] | None = None,
         document_collections: list[DocumentCollection] | None = None,
@@ -189,13 +189,13 @@ class IngestionPipeline:
 
         # Auto-generate steps from collection order when not explicitly provided
         if steps is None:
-            _steps: list[tuple[str, str]] = []
+            _steps: list[tuple[str, str, dict | None]] = []
             for vc in _vcs:
-                _steps.append(("chunk-embed-upsert", vc.name))
+                _steps.append(("chunk-embed-upsert", vc.name, None))
             for sc in _scs:
-                _steps.append(("extract-structured", sc.name))
+                _steps.append(("extract-structured", sc.name, None))
             for dc in _dcs:
-                _steps.append(("document-embed-upsert", dc.name))
+                _steps.append(("document-embed-upsert", dc.name, None))
             self._steps = _steps
         else:
             self._steps = list(steps)
@@ -209,7 +209,11 @@ class IngestionPipeline:
         logger.info("ingestion_pipeline.ingest.start name=%s doc_id=%s", self.name, doc.doc_id)
         records_extracted = 0
 
-        for tool, collection_name in self._steps:
+        for tool, collection_name, when_meta in self._steps:
+            if when_meta and not all(
+                doc.metadata.get(k) == v for k, v in when_meta.items()
+            ):
+                continue
             if tool == "chunk-embed-upsert":
                 records_extracted += await self._run_chunk_embed_upsert(doc, collection_name)
             elif tool == "extract-structured":
