@@ -200,7 +200,7 @@ async def _query_stream(client: httpx.AsyncClient, text: str) -> None:
 async def _list_collections(client: httpx.AsyncClient) -> list[str]:
     resp = await client.get(f"{_API_BASE}/applications/{_APP_NAME}/collections", timeout=10)
     resp.raise_for_status()
-    return resp.json()["collections"]
+    return resp.json()
 
 
 async def _query_structured(client: httpx.AsyncClient, collection: str) -> list[dict]:
@@ -344,11 +344,7 @@ async def main() -> None:
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     continue
-                if not cols:
-                    print("  No structured collections found.")
-                else:
-                    for c in cols:
-                        print(f"  {c}")
+                print(cols)
                 continue
 
             # ---- query structured [<collection>] ------------------------

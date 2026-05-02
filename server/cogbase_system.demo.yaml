@@ -1,0 +1,15 @@
+system_db:
+  type: sqlite
+  path: /data/cogbase_system.db
+
+structured_store:
+  type: sqlite
+  path: /data/cogbase.db
+
+vector_store:
+  type: faiss
+  path: /data/faiss_vector_store
+
+document_store:
+  type: local
+  path: /data/documents

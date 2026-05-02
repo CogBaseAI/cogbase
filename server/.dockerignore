@@ -1,0 +1,12 @@
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.claude
+.env
+.git
+.mypy_cache
+.ruff_cache
+.pytest_cache
+data/
+*.swp
+tags
