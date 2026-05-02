@@ -43,3 +43,13 @@ document_store:
   # bucket: my-cogbase-docs     # required for s3
   # prefix: app-documents       # optional
   # region: us-west-2           # optional
+
+llm:
+  provider: openai           # only "openai" supported today
+  model: gpt-5.4-mini
+  # api_key: sk-...          # omit to use OPENAI_API_KEY env var
+
+embedding:                   # shared across all vector and summarize collections
+  provider: openai
+  model: text-embedding-3-small
+  # dimensions: 1536         # optional

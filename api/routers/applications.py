@@ -15,7 +15,8 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from cogbase.config.config import AppConfig
-from api.dependencies import AppCacheDep, SkillRegistryDep, SystemStoreDep, SystemStructuredStoreDep, SystemVectorStoreDep, SystemDocumentStoreDep
+from api.dependencies import AppCacheDep, SkillRegistryDep, SystemResourcesDep, SystemStoreDep
+from api.system_resources import SystemResources
 from api.factory import build_app
 from api.app_cache import AppCache
 from api.models import (
@@ -141,9 +142,7 @@ def _serialize_config(config: AppConfig) -> str:
 async def create_application(
     system_store: SystemStoreDep,
     app_cache: AppCacheDep,
-    system_structured_store: SystemStructuredStoreDep,
-    system_vector_store: SystemVectorStoreDep,
-    system_document_store: SystemDocumentStoreDep,
+    system_resources: SystemResourcesDep,
     skill_registry: SkillRegistryDep,
     bundle: UploadFile = File(..., description="ZIP bundle containing config.yaml and referenced files"),
 ) -> ApplicationResponse:
@@ -180,12 +179,7 @@ async def create_application(
     logger.info("Creating application '%s'", config.name)
 
     try:
-        app = await build_app(
-            config,
-            system_structured_store=system_structured_store,
-            system_vector_store=system_vector_store,
-            system_document_store=system_document_store,
-        )
+        app = await build_app(config, system=system_resources)
         app_cache.add(config.name, app)
         record = record.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("Application '%s' created successfully", config.name)
@@ -224,9 +218,7 @@ async def update_application(
     app_name: str,
     system_store: SystemStoreDep,
     app_cache: AppCacheDep,
-    system_structured_store: SystemStructuredStoreDep,
-    system_vector_store: SystemVectorStoreDep,
-    system_document_store: SystemDocumentStoreDep,
+    system_resources: SystemResourcesDep,
     skill_registry: SkillRegistryDep,
     bundle: UploadFile = File(..., description="Updated ZIP bundle containing config.yaml and referenced files"),
 ) -> ApplicationResponse:
@@ -269,12 +261,7 @@ async def update_application(
     logger.info("Updating application '%s'", app_name)
 
     try:
-        app = await build_app(
-            config,
-            system_structured_store=system_structured_store,
-            system_vector_store=system_vector_store,
-            system_document_store=system_document_store,
-        )
+        app = await build_app(config, system=system_resources)
         app_cache.add(config.name, app)
         updated = updated.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("Application '%s' updated successfully", config.name)
@@ -307,9 +294,7 @@ async def _get_active_app(
     app_name: str,
     app_cache: AppCache,
     system_store: SystemStore,
-    system_structured_store: object,
-    system_vector_store: object,
-    system_document_store: object,
+    system_resources: SystemResources,
     *,
     force_refresh: bool = False,
 ) -> object:
@@ -323,12 +308,7 @@ async def _get_active_app(
     if record is None or record.status != "active":
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found or not active")
     config = AppConfig.from_yaml(record.config_yaml)
-    app = await build_app(
-        config,
-        system_structured_store=system_structured_store,
-        system_vector_store=system_vector_store,
-        system_document_store=system_document_store,
-    )
+    app = await build_app(config, system=system_resources)
     app_cache.add(app_name, app)
     return app
 
@@ -339,9 +319,7 @@ async def ingest_documents(
     body: IngestDocumentsRequest,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
-    system_structured_store: SystemStructuredStoreDep,
-    system_vector_store: SystemVectorStoreDep,
-    system_document_store: SystemDocumentStoreDep,
+    system_resources: SystemResourcesDep,
 ) -> IngestDocumentsResponse:
     """Ingest a batch of documents into an active application.
 
@@ -349,14 +327,14 @@ async def ingest_documents(
     failure on one document does not abort the others — each result carries
     ``success`` and ``error`` for per-document reporting.
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_structured_store, system_vector_store, system_document_store)
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
     documents = [Document(doc_id=d.doc_id, text=d.text, metadata=d.metadata) for d in body.documents]
     try:
         results = await app.ingest_documents(documents, concurrency=body.concurrency)
     except Exception:
         logger.exception("ingest_documents failed for app '%s', retrying with fresh app", app_name)
         app = await _get_active_app(
-            app_name, app_cache, system_store, system_structured_store, system_vector_store, system_document_store, force_refresh=True
+            app_name, app_cache, system_store, system_resources, force_refresh=True
         )
         results = await app.ingest_documents(documents, concurrency=body.concurrency)
     return IngestDocumentsResponse(
@@ -386,9 +364,7 @@ async def query_application(
     body: QueryRequest,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
-    system_structured_store: SystemStructuredStoreDep,
-    system_vector_store: SystemVectorStoreDep,
-    system_document_store: SystemDocumentStoreDep,
+    system_resources: SystemResourcesDep,
 ) -> QueryResponse:
     """Answer a natural-language query over an active application's ingested documents.
 
@@ -396,13 +372,13 @@ async def query_application(
     then synthesises a final answer.  Large structured result sets are returned
     directly (passthrough=True) without an additional synthesis step.
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_structured_store, system_vector_store, system_document_store)
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
     try:
         result = await _drain_query(app, body.text)
     except Exception:
         logger.exception("query failed for app '%s', retrying with fresh app", app_name)
         app = await _get_active_app(
-            app_name, app_cache, system_store, system_structured_store, system_vector_store, system_document_store, force_refresh=True
+            app_name, app_cache, system_store, system_resources, force_refresh=True
         )
         result = await _drain_query(app, body.text)
     return QueryResponse(
@@ -418,9 +394,7 @@ async def query_application_stream(
     body: QueryRequest,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
-    system_structured_store: SystemStructuredStoreDep,
-    system_vector_store: SystemVectorStoreDep,
-    system_document_store: SystemDocumentStoreDep,
+    system_resources: SystemResourcesDep,
 ) -> StreamingResponse:
     """Stream a natural-language query response as Server-Sent Events.
 
@@ -428,7 +402,7 @@ async def query_application_stream(
     Final event:  ``{"result": {answer, passthrough, structured_records}}``
     Sentinel:     ``data: [DONE]``
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_structured_store, system_vector_store, system_document_store)
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
 
     async def event_stream():
         try:
@@ -539,12 +513,10 @@ async def list_collections(
     app_name: str,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
-    system_structured_store: SystemStructuredStoreDep,
-    system_vector_store: SystemVectorStoreDep,
-    system_document_store: SystemDocumentStoreDep,
+    system_resources: SystemResourcesDep,
 ) -> CollectionsResponse:
     """List all structured and vector collections registered for an application."""
-    app = await _get_active_app(app_name, app_cache, system_store, system_structured_store, system_vector_store, system_document_store)
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
     runner = app.query_runner
 
     structured: list[str] = []
@@ -565,16 +537,14 @@ async def query_collection(
     body: CollectionQueryRequest,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
-    system_structured_store: SystemStructuredStoreDep,
-    system_vector_store: SystemVectorStoreDep,
-    system_document_store: SystemDocumentStoreDep,
+    system_resources: SystemResourcesDep,
 ) -> CollectionQueryResponse:
     """Query a collection directly, bypassing the LLM agent loop.
 
     Structured collections support field filtering and field selection.
     Vector collections do not yet support direct querying.
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_structured_store, system_vector_store, system_document_store)
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
     runner = app.query_runner
 
     if runner.structured_store is not None:

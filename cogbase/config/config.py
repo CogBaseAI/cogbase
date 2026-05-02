@@ -60,7 +60,7 @@ class PipelineConfig(BaseModel):
 
 class AppConfig(BaseModel):
     name: str
-    llm: LLMConfig
+    llm: LLMConfig | None = None
     embedding: EmbeddingConfig | None = None
     document_store: DocumentStoreConfig | None = None
     structured_store: StructuredStoreConfig | None = None

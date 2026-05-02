@@ -20,11 +20,10 @@ from httpx import ASGITransport, AsyncClient
 from api.dependencies import (
     get_app_cache,
     get_skill_registry,
-    get_system_document_store,
+    get_system_resources,
     get_system_store,
-    get_system_structured_store,
-    get_system_vector_store,
 )
+from api.system_resources import SystemResources
 from cogbase.skills.registry import SkillRegistry
 from api.main import app
 from api.app_cache import AppCache
@@ -81,13 +80,11 @@ async def client():
     system_store = _make_system_store()
     await system_store.setup()
     app_cache = _make_app_cache()
-    system_structured_store = InMemoryStructuredStore()
+    system_resources = SystemResources(structured_store=InMemoryStructuredStore())
 
     app.dependency_overrides[get_system_store] = lambda: system_store
     app.dependency_overrides[get_app_cache] = lambda: app_cache
-    app.dependency_overrides[get_system_structured_store] = lambda: system_structured_store
-    app.dependency_overrides[get_system_vector_store] = lambda: None
-    app.dependency_overrides[get_system_document_store] = lambda: None
+    app.dependency_overrides[get_system_resources] = lambda: system_resources
     app.dependency_overrides[get_skill_registry] = lambda: SkillRegistry()
 
     transport = ASGITransport(app=app)

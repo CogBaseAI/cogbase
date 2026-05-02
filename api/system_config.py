@@ -21,6 +21,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel
 
+from cogbase.config.models import EmbeddingConfig, LLMConfig
 from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
 
 
@@ -53,6 +54,8 @@ class SystemConfig(BaseModel):
     structured_store: StructuredStoreConfig | None = None
     vector_store: VectorStoreConfig | None = None
     document_store: DocumentStoreConfig | None = None
+    llm: LLMConfig | None = None
+    embedding: EmbeddingConfig | None = None
     skills_dir: str | None = None  # directory containing <skill_name>/SKILL.md files
 
     @classmethod

@@ -8,23 +8,13 @@
 #
 # POST the ZIP to POST /applications to create an application.
 #
-# Required: name, llm
-# Optional: embedding (required when chunk_collections or document_collections are defined)
+# Required: name
+# Optional: llm (falls back to system llm if omitted), embedding (required when chunk_collections or document_collections are defined, falls back to system embedding)
 #
-# Store backends (structured_store, vector_store) are not set here —
+# Optional: Store backends (structured_store, vector_store) are not set here —
 # the service automatically uses the stores defined in cogbase_system.yaml.
 
 name: my-contract-analyzer
-
-llm:
-  provider: openai           # only "openai" supported today
-  model: gpt-4o-mini
-  # api_key: sk-...          # omit to use OPENAI_API_KEY env var
-
-embedding:                   # shared across all vector and summarize collections
-  provider: openai
-  model: text-embedding-3-small
-  # dimensions: 512          # optional: truncate to smaller vectors
 
 chunk_collections:
   - name: document_chunks    # full-text passage index
@@ -47,7 +37,7 @@ document_collections:
     # metadata_fields: [customer_id, deal_stage]  # optional: project doc.metadata keys into chunk metadata for search filtering
 
 pipeline:
-  parallel: false            # steps run sequentially top-to-bottom
+  parallel: true             # steps run sequentially top-to-bottom
   steps:
     - tool: chunk-embed-upsert
       collection: document_chunks

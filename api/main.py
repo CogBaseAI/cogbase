@@ -11,11 +11,14 @@ from fastapi import FastAPI
 
 from cogbase.config.config import AppConfig
 from api.factory import build_app
+from cogbase.embeddings import build_embedding
+from cogbase.llms import build_llm
 from cogbase.stores import build_document_store, build_structured_store, build_vector_store
 from api.app_cache import AppCache
 from api.routers.applications import router as applications_router
 from api.routers.skills import router as skills_router
 from api.system_config import SystemConfig
+from api.system_resources import SystemResources
 from api.system_store import SystemStore
 from cogbase.skills.registry import SkillRegistry
 
@@ -48,21 +51,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     system_store = SystemStore(store=system_db_store)
     await system_store.setup()
 
-    # Build the shared structured store (None when not configured).
-    system_structured_store = None
+    system_resources = SystemResources()
+
     if system_cfg.structured_store is not None:
-        system_structured_store = build_structured_store(system_cfg.structured_store)
-        logger.info("system_structured_store type=%s", system_cfg.structured_store.type)
+        system_resources.structured_store = build_structured_store(system_cfg.structured_store)
+        logger.info("system structured_store type=%s", system_cfg.structured_store.type)
 
-    system_vector_store = None
     if system_cfg.vector_store is not None:
-        system_vector_store = build_vector_store(system_cfg.vector_store)
-        logger.info("system_vector_store type=%s", system_cfg.vector_store.type)
+        system_resources.vector_store = build_vector_store(system_cfg.vector_store)
+        logger.info("system vector_store type=%s", system_cfg.vector_store.type)
 
-    system_document_store = None
     if system_cfg.document_store is not None:
-        system_document_store = build_document_store(system_cfg.document_store)
-        logger.info("system_document_store type=%s", system_cfg.document_store.type)
+        system_resources.document_store = build_document_store(system_cfg.document_store)
+        logger.info("system document_store type=%s", system_cfg.document_store.type)
+
+    if system_cfg.llm is not None:
+        system_resources.llm = build_llm(system_cfg.llm)
+        logger.info("system llm provider=%s model=%s", system_cfg.llm.provider, system_cfg.llm.model)
+
+    if system_cfg.embedding is not None:
+        system_resources.embedder = build_embedding(system_cfg.embedding)
+        logger.info("system embedding provider=%s model=%s", system_cfg.embedding.provider, system_cfg.embedding.model)
 
     skill_registry = SkillRegistry()
     if system_cfg.skills_dir is not None:
@@ -78,33 +87,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             continue
         try:
             config = AppConfig.from_yaml(record.config_yaml)
-            instance = await build_app(
-                config,
-                system_structured_store=system_structured_store,
-                system_vector_store=system_vector_store,
-                system_document_store=system_document_store,
-            )
+            instance = await build_app(config, system=system_resources)
             app_cache.add(record.name, instance)
             logger.info("restored app name=%s", record.name)
         except Exception as exc:
             logger.warning("failed to restore app name=%s: %s", record.name, exc)
 
-    app.state.system_structured_store = system_structured_store
-    app.state.system_vector_store = system_vector_store
-    app.state.system_document_store = system_document_store
     app.state.system_store = system_store
+    app.state.system_resources = system_resources
     app.state.skill_registry = skill_registry
     app.state.app_cache = app_cache
 
     yield
 
     await _close_store(system_db_store)
-    if system_structured_store is not None:
-        await _close_store(system_structured_store)
-    if system_vector_store is not None:
-        await _close_store(system_vector_store)
-    if system_document_store is not None:
-        await _close_store(system_document_store)
+    if system_resources.structured_store is not None:
+        await _close_store(system_resources.structured_store)
+    if system_resources.vector_store is not None:
+        await _close_store(system_resources.vector_store)
+    if system_resources.document_store is not None:
+        await _close_store(system_resources.document_store)
 
 
 app = FastAPI(

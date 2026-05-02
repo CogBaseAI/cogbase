@@ -22,11 +22,10 @@ from httpx import ASGITransport, AsyncClient
 from api.dependencies import (
     get_app_cache,
     get_skill_registry,
-    get_system_document_store,
+    get_system_resources,
     get_system_store,
-    get_system_structured_store,
-    get_system_vector_store,
 )
+from api.system_resources import SystemResources
 from api.main import app
 from api.app_cache import AppCache
 from api.system_store import SystemStore
@@ -98,9 +97,7 @@ async def client(registry):
 
     app.dependency_overrides[get_system_store] = lambda: system_store
     app.dependency_overrides[get_app_cache] = lambda: AppCache()
-    app.dependency_overrides[get_system_structured_store] = lambda: InMemoryStructuredStore()
-    app.dependency_overrides[get_system_vector_store] = lambda: None
-    app.dependency_overrides[get_system_document_store] = lambda: None
+    app.dependency_overrides[get_system_resources] = lambda: SystemResources(structured_store=InMemoryStructuredStore())
     app.dependency_overrides[get_skill_registry] = lambda: registry
 
     transport = ASGITransport(app=app)

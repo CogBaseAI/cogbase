@@ -124,7 +124,7 @@ The query runner drives a multi-turn LLM agent loop with configurable retrieval 
 |---|---|
 | `structured_lookup` | Exact record query against a named collection with field filters |
 | `vector_search` | Semantic search against a named vector collection (chunks or summaries) |
-| skill tools | Custom capabilities registered with the application |
+| `skill tools` | Custom capabilities registered with the application |
 
 The LLM calls tools as needed to gather evidence, then synthesises a grounded answer. No fixed routing pattern — the model decides. When `structured_lookup` returns a large result set (above the passthrough token threshold), records are returned directly as formatted text without an additional synthesis step.
 
@@ -219,7 +219,7 @@ name: my-contract-analyzer
 
 llm:
   provider: openai
-  model: gpt-4o-mini
+  model: gpt-5.4-mini
   # api_key: sk-...          # omit to use OPENAI_API_KEY env var
 
 embedding:                   # shared across all vector and summarize collections

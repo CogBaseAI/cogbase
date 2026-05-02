@@ -9,6 +9,7 @@ import pytest
 from cogbase.config.config import AppConfig
 from cogbase.config.stores import StructuredStoreConfig
 from api.factory import build_app
+from api.system_resources import SystemResources
 from cogbase.stores import build_structured_store
 from cogbase.pipeline.ingestion_pipeline import DocumentCollection, ChunkCollection
 from cogbase.stores.document.local_fs import LocalFSDocumentStore
@@ -115,7 +116,7 @@ class TestBuildAppStructuredStoreResolution:
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system_structured_store=system_store)
+        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
         structured_store = next(iter(app._ingest_pipeline._structured_by_name.values())).store
         assert structured_store is system_store
 
@@ -127,7 +128,7 @@ class TestBuildAppStructuredStoreResolution:
         )
         cfg = AppConfig.from_yaml(cfg_yaml)
         system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system_structured_store=system_store)
+        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
         structured_store = next(iter(app._ingest_pipeline._structured_by_name.values())).store
         assert isinstance(structured_store, SQLiteStructuredStore)
 
@@ -138,7 +139,7 @@ class TestBuildAppVectorStoreResolution:
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system_structured_store=system_store)
+        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
         assert app._ingest_pipeline._chunk_by_name == {}
 
     @patch("api.factory._build_llm")
@@ -152,8 +153,7 @@ class TestBuildAppVectorStoreResolution:
             mock_emb.return_value = MagicMock()
             app = await build_app(
                 cfg,
-                system_structured_store=system_store,
-                system_vector_store=sys_vs,
+                system=SystemResources(structured_store=system_store, vector_store=sys_vs),
             )
 
         assert app._ingest_pipeline._chunk_by_name
@@ -170,8 +170,7 @@ class TestBuildAppVectorStoreResolution:
             mock_emb.return_value = MagicMock()
             app = await build_app(
                 cfg,
-                system_structured_store=system_store,
-                system_vector_store=sys_vs,
+                system=SystemResources(structured_store=system_store, vector_store=sys_vs),
             )
 
         assert "document_chunks" in app._ingest_pipeline._chunk_by_name
@@ -245,7 +244,7 @@ class TestBuildAppDocumentCollection:
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
-            app = await build_app(cfg, system_vector_store=sys_vs)
+            app = await build_app(cfg, system=SystemResources(vector_store=sys_vs))
 
         assert "document_summary" in app._ingest_pipeline._document_by_name
 
@@ -257,7 +256,7 @@ class TestBuildAppDocumentCollection:
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
-            app = await build_app(cfg, system_vector_store=sys_vs)
+            app = await build_app(cfg, system=SystemResources(vector_store=sys_vs))
 
         dc = app._ingest_pipeline._document_by_name["document_summary"]
         assert dc.name == "document_summary"
@@ -275,8 +274,7 @@ class TestBuildAppDocumentCollection:
             mock_emb.return_value = MagicMock()
             app = await build_app(
                 cfg,
-                system_structured_store=system_store,
-                system_vector_store=sys_vs,
+                system=SystemResources(structured_store=system_store, vector_store=sys_vs),
             )
 
         vc = next(iter(app._ingest_pipeline._chunk_by_name.values()))
@@ -294,8 +292,7 @@ class TestBuildAppDocumentCollection:
             mock_emb.return_value = MagicMock()
             app = await build_app(
                 cfg,
-                system_structured_store=system_store,
-                system_vector_store=sys_vs,
+                system=SystemResources(structured_store=system_store, vector_store=sys_vs),
             )
 
         assert app._ingest_pipeline._chunk_by_name
@@ -313,8 +310,7 @@ class TestBuildAppDocumentCollection:
             mock_emb.return_value = MagicMock()
             app = await build_app(
                 cfg,
-                system_structured_store=system_store,
-                system_vector_store=sys_vs,
+                system=SystemResources(structured_store=system_store, vector_store=sys_vs),
             )
 
         assert "document_chunks" in app._ingest_pipeline._chunk_by_name
@@ -342,7 +338,7 @@ llm:
   model: gpt-4o-mini
 """)
         sys_doc = LocalFSDocumentStore(tmp_path / "docs")
-        app = await build_app(cfg, system_document_store=sys_doc)
+        app = await build_app(cfg, system=SystemResources(document_store=sys_doc))
 
         assert app.document_store is sys_doc
 
@@ -359,7 +355,7 @@ document_store:
   path: {tmp_path / "app-docs"}
 """)
         sys_doc = LocalFSDocumentStore(tmp_path / "system-docs")
-        app = await build_app(cfg, system_document_store=sys_doc)
+        app = await build_app(cfg, system=SystemResources(document_store=sys_doc))
 
         assert isinstance(app.document_store, LocalFSDocumentStore)
         assert app.document_store._root.name == "app-docs"  # type: ignore[union-attr]

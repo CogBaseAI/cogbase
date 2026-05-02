@@ -28,6 +28,7 @@ from cogbase.pipeline.ingestion_pipeline import (
     ChunkCollection,
 )
 from cogbase.core.basemodel_to_schema import cls_json_schema_for_llm
+from api.system_resources import SystemResources
 
 import logging
 logger = logging.getLogger(__name__)
@@ -55,38 +56,37 @@ def _build_chunker(cfg: ChunkerConfig) -> Any:
 async def build_app(
     config: AppConfig,
     *,
-    system_structured_store: StructuredStoreBase | None = None,
-    system_vector_store: VectorStoreBase | None = None,
-    system_document_store: DocumentStoreBase | None = None,
+    system: SystemResources | None = None,
 ) -> Any:
     """Instantiate a CogBase application from *config*.
 
-    Store backends are resolved in priority order:
+    Resources are resolved in priority order:
 
-    1. Values declared explicitly in *config* (``structured_store``,
-       ``vector_store``, ``document_store``) — full per-application isolation.
-    2. System-level store instances supplied via the keyword arguments — shared
-       across applications; collection names scope records to their collection.
-    3. No fallback — raises ``ValueError`` when a declared collection has no
-       backing store.
+    1. Values declared explicitly in *config* — full per-application isolation.
+    2. System-level resources supplied via *system* — shared across applications.
+    3. No fallback — raises ``ValueError`` when a required resource is absent.
     """
+    sys = system or SystemResources()
+
     # --- Top-level resources (independent of pipeline) ---
-    llm = _build_llm(config.llm)
-    embedder = _build_embedder(config.embedding) if config.embedding else None
+    llm = _build_llm(config.llm) if config.llm else sys.llm
+    if llm is None:
+        raise ValueError(
+            "llm is required: set it in the app config or in the system config"
+        )
+
+    embedder = _build_embedder(config.embedding) if config.embedding else sys.embedder
 
     vector_store: VectorStoreBase | None = (
-        _build_vector_store(config.vector_store) if config.vector_store else system_vector_store
+        _build_vector_store(config.vector_store) if config.vector_store else sys.vector_store
     )
 
-    if config.structured_store is not None:
-        structured_store: StructuredStoreBase | None = _build_structured_store(config.structured_store)
-    elif system_structured_store is not None:
-        structured_store = system_structured_store
-    else:
-        structured_store = None
+    structured_store: StructuredStoreBase | None = (
+        _build_structured_store(config.structured_store) if config.structured_store else sys.structured_store
+    )
 
     document_store = (
-        _build_document_store(config.document_store) if config.document_store else system_document_store
+        _build_document_store(config.document_store) if config.document_store else sys.document_store
     )
 
     # --- Collections (built from their own config, independent of pipeline steps) ---
