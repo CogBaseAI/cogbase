@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from cogbase.config.config import AppConfig, ChunkerConfig
-from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
+from cogbase.config.stores import StructuredStoreConfig
 from cogbase.embeddings import build_embedding as _build_embedder
 from cogbase.llms import build_llm as _build_llm
 from cogbase.stores import (
+    DocumentStoreBase,
     StructuredStoreBase,
     VectorCollectionSchema,
     VectorStoreBase,
@@ -30,16 +31,6 @@ from cogbase.core.basemodel_to_schema import cls_json_schema_for_llm
 
 import logging
 logger = logging.getLogger(__name__)
-
-
-def build_document_store(cfg: DocumentStoreConfig) -> Any:
-    """Instantiate a document store from its config."""
-    return _build_document_store(cfg)
-
-
-def build_structured_store(cfg: StructuredStoreConfig) -> Any:
-    """Instantiate a structured store from its config."""
-    return _build_structured_store(cfg)
 
 
 def _build_chunker(cfg: ChunkerConfig) -> Any:
@@ -65,8 +56,8 @@ async def build_app(
     config: AppConfig,
     *,
     system_structured_store: StructuredStoreBase | None = None,
-    system_vector_store_cfg: VectorStoreConfig | None = None,
-    system_document_store_cfg: DocumentStoreConfig | None = None,
+    system_vector_store: VectorStoreBase | None = None,
+    system_document_store: DocumentStoreBase | None = None,
 ) -> Any:
     """Instantiate a CogBase application from *config*.
 
@@ -74,8 +65,8 @@ async def build_app(
 
     1. Values declared explicitly in *config* (``structured_store``,
        ``vector_store``, ``document_store``) — full per-application isolation.
-    2. System-level stores supplied via the keyword arguments — the structured
-       store is shared; collection names scope records to their collection.
+    2. System-level store instances supplied via the keyword arguments — shared
+       across applications; collection names scope records to their collection.
     3. No fallback — raises ``ValueError`` when a declared collection has no
        backing store.
     """
@@ -83,20 +74,20 @@ async def build_app(
     llm = _build_llm(config.llm)
     embedder = _build_embedder(config.embedding) if config.embedding else None
 
-    vector_store_cfg = config.vector_store or system_vector_store_cfg
     vector_store: VectorStoreBase | None = (
-        _build_vector_store(vector_store_cfg) if vector_store_cfg else None
+        _build_vector_store(config.vector_store) if config.vector_store else system_vector_store
     )
 
     if config.structured_store is not None:
-        structured_store: StructuredStoreBase | None = build_structured_store(config.structured_store)
+        structured_store: StructuredStoreBase | None = _build_structured_store(config.structured_store)
     elif system_structured_store is not None:
         structured_store = system_structured_store
     else:
         structured_store = None
 
-    document_store_cfg = config.document_store or system_document_store_cfg
-    document_store = build_document_store(document_store_cfg) if document_store_cfg else None
+    document_store = (
+        _build_document_store(config.document_store) if config.document_store else system_document_store
+    )
 
     # --- Collections (built from their own config, independent of pipeline steps) ---
     chunk_collections: list[ChunkCollection] = []

@@ -10,7 +10,8 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 
 from cogbase.config.config import AppConfig
-from api.factory import build_app, build_structured_store
+from api.factory import build_app
+from cogbase.stores import build_document_store, build_structured_store, build_vector_store
 from api.app_cache import AppCache
 from api.routers.applications import router as applications_router
 from api.routers.skills import router as skills_router
@@ -51,9 +52,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     system_structured_store = None
     if system_cfg.structured_store is not None:
         system_structured_store = build_structured_store(system_cfg.structured_store)
-        logger.info(
-            "system_structured_store type=%s", system_cfg.structured_store.type
-        )
+        logger.info("system_structured_store type=%s", system_cfg.structured_store.type)
+
+    system_vector_store = None
+    if system_cfg.vector_store is not None:
+        system_vector_store = build_vector_store(system_cfg.vector_store)
+        logger.info("system_vector_store type=%s", system_cfg.vector_store.type)
+
+    system_document_store = None
+    if system_cfg.document_store is not None:
+        system_document_store = build_document_store(system_cfg.document_store)
+        logger.info("system_document_store type=%s", system_cfg.document_store.type)
 
     skill_registry = SkillRegistry()
     if system_cfg.skills_dir is not None:
@@ -72,16 +81,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             instance = await build_app(
                 config,
                 system_structured_store=system_structured_store,
-                system_vector_store_cfg=system_cfg.vector_store,
-                system_document_store_cfg=system_cfg.document_store,
+                system_vector_store=system_vector_store,
+                system_document_store=system_document_store,
             )
             app_cache.add(record.name, instance)
             logger.info("restored app name=%s", record.name)
         except Exception as exc:
             logger.warning("failed to restore app name=%s: %s", record.name, exc)
 
-    app.state.system_config = system_cfg
     app.state.system_structured_store = system_structured_store
+    app.state.system_vector_store = system_vector_store
+    app.state.system_document_store = system_document_store
     app.state.system_store = system_store
     app.state.skill_registry = skill_registry
     app.state.app_cache = app_cache
@@ -91,6 +101,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _close_store(system_db_store)
     if system_structured_store is not None:
         await _close_store(system_structured_store)
+    if system_vector_store is not None:
+        await _close_store(system_vector_store)
+    if system_document_store is not None:
+        await _close_store(system_document_store)
 
 
 app = FastAPI(

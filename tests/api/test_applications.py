@@ -20,14 +20,14 @@ from httpx import ASGITransport, AsyncClient
 from api.dependencies import (
     get_app_cache,
     get_skill_registry,
-    get_system_config,
+    get_system_document_store,
     get_system_store,
     get_system_structured_store,
+    get_system_vector_store,
 )
 from cogbase.skills.registry import SkillRegistry
 from api.main import app
 from api.app_cache import AppCache
-from api.system_config import SystemConfig
 from api.system_store import SystemStore
 from cogbase.core.query_runner import QueryResult
 from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -60,10 +60,6 @@ def _make_app_cache() -> AppCache:
     return AppCache()
 
 
-def _system_config() -> SystemConfig:
-    return SystemConfig.model_validate({"system_db": {"type": "memory"}})
-
-
 _VALID_CONFIG_YAML = textwrap.dedent("""\
     name: my-contract-analyzer
     llm:
@@ -89,8 +85,9 @@ async def client():
 
     app.dependency_overrides[get_system_store] = lambda: system_store
     app.dependency_overrides[get_app_cache] = lambda: app_cache
-    app.dependency_overrides[get_system_config] = lambda: _system_config()
     app.dependency_overrides[get_system_structured_store] = lambda: system_structured_store
+    app.dependency_overrides[get_system_vector_store] = lambda: None
+    app.dependency_overrides[get_system_document_store] = lambda: None
     app.dependency_overrides[get_skill_registry] = lambda: SkillRegistry()
 
     transport = ASGITransport(app=app)

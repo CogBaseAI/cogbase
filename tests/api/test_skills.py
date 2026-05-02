@@ -22,13 +22,13 @@ from httpx import ASGITransport, AsyncClient
 from api.dependencies import (
     get_app_cache,
     get_skill_registry,
-    get_system_config,
+    get_system_document_store,
     get_system_store,
     get_system_structured_store,
+    get_system_vector_store,
 )
 from api.main import app
 from api.app_cache import AppCache
-from api.system_config import SystemConfig
 from api.system_store import SystemStore
 from cogbase.skills.registry import SkillRegistry
 from cogbase.skills.skill import Skill
@@ -98,10 +98,9 @@ async def client(registry):
 
     app.dependency_overrides[get_system_store] = lambda: system_store
     app.dependency_overrides[get_app_cache] = lambda: AppCache()
-    app.dependency_overrides[get_system_config] = lambda: SystemConfig.model_validate(
-        {"system_db": {"type": "memory"}}
-    )
     app.dependency_overrides[get_system_structured_store] = lambda: InMemoryStructuredStore()
+    app.dependency_overrides[get_system_vector_store] = lambda: None
+    app.dependency_overrides[get_system_document_store] = lambda: None
     app.dependency_overrides[get_skill_registry] = lambda: registry
 
     transport = ASGITransport(app=app)
