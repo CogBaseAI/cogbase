@@ -85,7 +85,8 @@ async def test_extract_returns_one_record():
     result = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
 
     assert result is not None
-    assert hasattr(result, "doc_id")
+    assert len(result) == 1
+    assert hasattr(result[0], "doc_id")
 
 
 @pytest.mark.asyncio
@@ -93,13 +94,13 @@ async def test_extract_doc_id_set():
     extractor = _make_extractor(_make_llm(_full_payload()))
     result = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
 
-    assert result.doc_id == "doc-001"
+    assert result[0].doc_id == "doc-001"
 
 
 @pytest.mark.asyncio
 async def test_extract_contract_basics():
     extractor = _make_extractor(_make_llm(_full_payload()))
-    r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
+    r = (await extractor.extract(Document(doc_id="doc-001", text="contract text")))[0]
 
     assert r.contract_type == "NDA"
     assert r.effective_date == "2024-03-01"
@@ -113,7 +114,7 @@ async def test_extract_contract_basics():
 @pytest.mark.asyncio
 async def test_extract_common_clause_text_verbatim():
     extractor = _make_extractor(_make_llm(_full_payload()))
-    r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
+    r = (await extractor.extract(Document(doc_id="doc-001", text="contract text")))[0]
 
     assert r.termination == "Either party may terminate with 30 days written notice."
     assert r.governing_law == "This agreement is governed by the laws of England and Wales."
@@ -123,7 +124,7 @@ async def test_extract_common_clause_text_verbatim():
 @pytest.mark.asyncio
 async def test_extract_absent_clauses_are_none():
     extractor = _make_extractor(_make_llm(_full_payload()))
-    r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
+    r = (await extractor.extract(Document(doc_id="doc-001", text="contract text")))[0]
 
     assert r.payment_terms is None
     assert r.indemnification is None
@@ -135,7 +136,7 @@ async def test_extract_absent_clauses_are_none():
 @pytest.mark.asyncio
 async def test_extract_notice_period_days():
     extractor = _make_extractor(_make_llm(_full_payload(notice_period_days=30)))
-    r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
+    r = (await extractor.extract(Document(doc_id="doc-001", text="contract text")))[0]
 
     assert r.notice_period_days == 30
 
@@ -143,7 +144,7 @@ async def test_extract_notice_period_days():
 @pytest.mark.asyncio
 async def test_extract_key_terms():
     extractor = _make_extractor(_make_llm(_full_payload()))
-    r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
+    r = (await extractor.extract(Document(doc_id="doc-001", text="contract text")))[0]
 
     assert len(r.key_terms) == 1
     assert isinstance(r.key_terms[0], str)
@@ -157,7 +158,7 @@ async def test_extract_special_conditions():
         "Obligations survive termination for 5 years.",
     ])
     extractor = _make_extractor(_make_llm(payload))
-    r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
+    r = (await extractor.extract(Document(doc_id="doc-001", text="contract text")))[0]
 
     assert len(r.special_conditions) == 2
     assert "supersedes" in r.special_conditions[0]
@@ -167,7 +168,7 @@ async def test_extract_special_conditions():
 async def test_extract_contract_value_and_currency():
     payload = _full_payload(contract_value=250000.0, currency="USD")
     extractor = _make_extractor(_make_llm(payload))
-    r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
+    r = (await extractor.extract(Document(doc_id="doc-001", text="contract text")))[0]
 
     assert r.contract_value == 250000.0
     assert r.currency == "USD"
@@ -177,7 +178,7 @@ async def test_extract_contract_value_and_currency():
 async def test_extract_liability_cap():
     payload = _full_payload(liability_cap=500000.0, currency="GBP")
     extractor = _make_extractor(_make_llm(payload))
-    r = await extractor.extract(Document(doc_id="doc-001", text="contract text"))
+    r = (await extractor.extract(Document(doc_id="doc-001", text="contract text")))[0]
 
     assert r.liability_cap == 500000.0
 
@@ -215,10 +216,11 @@ async def test_extract_missing_fields_default_to_none_or_empty():
     result = await extractor.extract(Document(doc_id="doc-005", text="contract text"))
 
     assert result is not None
-    assert result.contract_type is None
-    assert result.parties == []
-    assert result.key_terms == []
-    assert result.special_conditions == []
+    r = result[0]
+    assert r.contract_type is None
+    assert r.parties == []
+    assert r.key_terms == []
+    assert r.special_conditions == []
 
 
 @pytest.mark.asyncio
@@ -235,7 +237,7 @@ async def test_extract_invalid_numeric_fields_rejects_record():
 async def test_extract_explicit_null_fields():
     payload = _full_payload(parties=[], effective_date=None)
     extractor = _make_extractor(_make_llm(payload))
-    r = await extractor.extract(Document(doc_id="doc-007", text="contract text"))
+    r = (await extractor.extract(Document(doc_id="doc-007", text="contract text")))[0]
 
     assert r.parties == []
     assert r.effective_date is None
@@ -291,7 +293,7 @@ async def test_extract_succeeds_on_retry_after_bad_json(monkeypatch):
     )
     result = await extractor.extract(Document(doc_id="doc-retry-1", text="contract text"))
 
-    assert result is not None
+    assert result is not None and len(result) == 1
     assert llm.complete.call_count == 2
 
 
@@ -327,7 +329,7 @@ async def test_extract_no_retry_on_success(monkeypatch):
     )
     result = await extractor.extract(Document(doc_id="doc-retry-3", text="contract text"))
 
-    assert result is not None
+    assert result is not None and len(result) == 1
     sleep_mock.assert_not_called()
 
 
@@ -367,3 +369,190 @@ async def test_extract_max_retries_zero_no_sleep(monkeypatch):
 
     assert result is None
     sleep_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# extract_as_list=True — helpers
+# ---------------------------------------------------------------------------
+
+from pydantic import BaseModel, Field as PydanticField  # noqa: E402
+
+
+class _Clause(BaseModel):
+    clause_type: str | None = None
+    text: str = ""
+
+
+_LIST_COLLECTION = "clauses"
+_LIST_DESCRIPTION = "Extracted contract clauses, one row per clause."
+
+
+def _make_list_extractor(llm: MagicMock, list_field: str = "clauses") -> LLMExtractor:
+    return LLMExtractor(
+        llm,
+        extraction_model=_Clause,
+        collection_name=_LIST_COLLECTION,
+        collection_description=_LIST_DESCRIPTION,
+        extract_as_list=True,
+        list_field=list_field,
+    )
+
+
+def _list_payload(*clauses: dict, field: str = "clauses") -> str:
+    return json.dumps({field: list(clauses)})
+
+
+# ---------------------------------------------------------------------------
+# extract_as_list — schema
+# ---------------------------------------------------------------------------
+
+def test_list_extractor_schema_primary_key_is_item_id():
+    extractor = _make_list_extractor(MagicMock())
+    assert extractor.schema.primary_fields == ["item_id"]
+
+
+def test_list_extractor_schema_has_doc_id_and_item_id_fields():
+    extractor = _make_list_extractor(MagicMock())
+    assert "doc_id" in extractor.schema.fields
+    assert "item_id" in extractor.schema.fields
+
+
+def test_list_extractor_collection_name():
+    extractor = _make_list_extractor(MagicMock())
+    assert extractor.collection == _LIST_COLLECTION
+
+
+# ---------------------------------------------------------------------------
+# extract_as_list — happy path
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_list_extract_returns_multiple_records():
+    payload = _list_payload(
+        {"clause_type": "liability", "text": "Neither party is liable for indirect damages."},
+        {"clause_type": "termination", "text": "Either party may terminate with 30 days notice."},
+    )
+    extractor = _make_list_extractor(_make_llm(payload))
+    result = await extractor.extract(Document(doc_id="doc-L1", text="contract text"))
+
+    assert result is not None
+    assert len(result) == 2
+
+
+@pytest.mark.asyncio
+async def test_list_extract_item_fields():
+    payload = _list_payload(
+        {"clause_type": "liability", "text": "Neither party is liable for indirect damages."},
+        {"clause_type": "termination", "text": "Either party may terminate with 30 days notice."},
+    )
+    extractor = _make_list_extractor(_make_llm(payload))
+    result = await extractor.extract(Document(doc_id="doc-L1", text="contract text"))
+
+    assert result[0].clause_type == "liability"
+    assert result[0].text == "Neither party is liable for indirect damages."
+    assert result[1].clause_type == "termination"
+
+
+@pytest.mark.asyncio
+async def test_list_extract_doc_id_set_on_all_items():
+    payload = _list_payload(
+        {"clause_type": "payment", "text": "Payment due within 30 days."},
+        {"clause_type": "privacy", "text": "Data shall not be shared with third parties."},
+    )
+    extractor = _make_list_extractor(_make_llm(payload))
+    result = await extractor.extract(Document(doc_id="doc-L2", text="contract text"))
+
+    assert all(r.doc_id == "doc-L2" for r in result)
+
+
+@pytest.mark.asyncio
+async def test_list_extract_item_id_sequential():
+    payload = _list_payload(
+        {"clause_type": "a", "text": "first"},
+        {"clause_type": "b", "text": "second"},
+        {"clause_type": "c", "text": "third"},
+    )
+    extractor = _make_list_extractor(_make_llm(payload))
+    result = await extractor.extract(Document(doc_id="doc-L3", text="contract text"))
+
+    assert result[0].item_id == "doc-L3__0000"
+    assert result[1].item_id == "doc-L3__0001"
+    assert result[2].item_id == "doc-L3__0002"
+
+
+@pytest.mark.asyncio
+async def test_list_extract_single_item():
+    payload = _list_payload({"clause_type": "governing_law", "text": "Laws of England and Wales."})
+    extractor = _make_list_extractor(_make_llm(payload))
+    result = await extractor.extract(Document(doc_id="doc-L4", text="contract text"))
+
+    assert len(result) == 1
+    assert result[0].clause_type == "governing_law"
+
+
+@pytest.mark.asyncio
+async def test_list_extract_empty_array_returns_empty_list():
+    """LLM returns an empty array — valid result, not a parse failure."""
+    payload = _list_payload(field="clauses")  # no items
+    extractor = _make_list_extractor(_make_llm(payload))
+    result = await extractor.extract(Document(doc_id="doc-L5", text="contract text"))
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_list_extract_custom_list_field():
+    payload = json.dumps({"items": [{"clause_type": "ip", "text": "All IP is retained by licensor."}]})
+    extractor = _make_list_extractor(_make_llm(payload), list_field="items")
+    result = await extractor.extract(Document(doc_id="doc-L6", text="contract text"))
+
+    assert len(result) == 1
+    assert result[0].clause_type == "ip"
+
+
+# ---------------------------------------------------------------------------
+# extract_as_list — error cases
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_list_extract_invalid_json_returns_none():
+    extractor = _make_list_extractor(_make_llm("not json"))
+    result = await extractor.extract(Document(doc_id="doc-LE1", text="contract text"))
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_list_extract_wrong_wrapper_key_returns_none():
+    """JSON has a different key than expected — Pydantic validation fails."""
+    payload = json.dumps({"wrong_key": [{"clause_type": "payment", "text": "..."}]})
+    extractor = _make_list_extractor(_make_llm(payload))
+    result = await extractor.extract(Document(doc_id="doc-LE2", text="contract text"))
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_list_extract_blank_text_returns_none():
+    extractor = _make_list_extractor(_make_llm(_list_payload()))
+    result = await extractor.extract(Document(doc_id="doc-LE3", text="   "))
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_list_extract_retry_on_bad_json(monkeypatch):
+    """First call returns bad JSON; second succeeds — retry works in list mode."""
+    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    payload = _list_payload({"clause_type": "termination", "text": "30 days notice."})
+    llm = _make_llm_with_responses("bad json", payload)
+    extractor = LLMExtractor(
+        llm,
+        extraction_model=_Clause,
+        collection_name=_LIST_COLLECTION,
+        collection_description=_LIST_DESCRIPTION,
+        extract_as_list=True,
+        list_field="clauses",
+        max_retries=1,
+    )
+    result = await extractor.extract(Document(doc_id="doc-LR1", text="contract text"))
+
+    assert result is not None and len(result) == 1
+    assert llm.complete.call_count == 2

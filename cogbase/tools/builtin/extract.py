@@ -41,17 +41,18 @@ class ExtractTool(SystemTool):
                 _extractor.collection,
             )
 
-            record = await _extractor.extract(doc)
-            if record is None:
+            records = await _extractor.extract(doc)
+            if not records:
                 logger.debug("extract-structured.no-record doc_id=%s", doc.doc_id)
                 return json.dumps({"doc_id": doc.doc_id, "extracted": False})
 
-            await _structured_store.save(_extractor.collection, [record])
+            await _structured_store.save(_extractor.collection, records)
 
             logger.info(
-                "extract-structured.done doc_id=%s collection=%s",
+                "extract-structured.done doc_id=%s collection=%s count=%d",
                 doc.doc_id,
                 _extractor.collection,
+                len(records),
             )
             return json.dumps({"doc_id": doc.doc_id, "extracted": True})
 

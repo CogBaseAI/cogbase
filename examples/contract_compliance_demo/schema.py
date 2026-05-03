@@ -42,12 +42,6 @@ class Party(BaseModel):
 class ContractClause(BaseModel):
     """One extracted clause stored in the contract_clauses collection."""
 
-    clause_id: str = Field(
-        description=(
-            "Stable identifier for this clause within the contract. "
-            "Construct as '{doc_id}:c{sequential_integer}' starting at 1."
-        )
-    )
     clause_type: str | None = Field(
         default=None,
         description=(
@@ -55,8 +49,6 @@ class ContractClause(BaseModel):
             "payment, privacy, confidentiality, ip, governing_law, other."
         ),
     )
-    title: str | None = Field(default=None, description="Clause heading when present in the contract")
-    section_number: str | None = Field(default=None, description="Section number as it appears in the contract, e.g. '5.1'")
     text: str = Field(description="Verbatim clause text copied from the contract without paraphrasing")
 
 

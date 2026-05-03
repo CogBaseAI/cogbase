@@ -39,7 +39,7 @@ from examples.contract_analyst_demo.schema import (
 
 def _make_llm(content: str) -> MagicMock:
     llm = MagicMock(spec=LLMBase)
-    llm.complete = AsyncMock(return_value=content)
+    llm.complete = AsyncMock(return_value={"content": content})
 
     async def _stream(*args, **kwargs):
         yield content
@@ -515,7 +515,7 @@ class TestIngestMany:
             call_n += 1
             if call_n == 1:
                 raise RuntimeError("LLM unavailable")
-            return _contract_payload()
+            return {"content": _contract_payload(), "tool_calls": None}
 
         llm.complete = AsyncMock(side_effect=_complete)
 

@@ -28,7 +28,7 @@ class StubExtractor:
         self.collection = "test-col"
 
     async def extract(self, doc: Document):
-        return self._record
+        return [self._record] if self._record is not None else None
 
 
 class StubStructuredStore:

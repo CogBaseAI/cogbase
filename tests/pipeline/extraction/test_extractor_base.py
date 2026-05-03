@@ -45,9 +45,9 @@ class StubExtractor(ExtractorBase):
     def schema(self) -> CollectionSchema:
         return _NOUN_SCHEMA
 
-    async def _extract_once(self, doc: Document) -> NounRecord:
+    async def _extract_once(self, doc: Document) -> list[BaseModel] | None:
         self._calls.append((doc.text, doc.doc_id))
-        return NounRecord(noun_id=f"{doc.doc_id}-0", doc_id=doc.doc_id, text=doc.text)
+        return [NounRecord(noun_id=f"{doc.doc_id}-0", doc_id=doc.doc_id, text=doc.text)]
 
 
 class NullExtractor(ExtractorBase):
@@ -118,9 +118,11 @@ class TestExtract:
         extractor = StubExtractor()
         doc = Document(doc_id="d2", text="some text")
         result = await extractor.extract(doc)
-        assert isinstance(result, NounRecord)
-        assert result.doc_id == "d2"
-        assert result.text == "some text"
+        assert result is not None
+        assert len(result) == 1
+        assert isinstance(result[0], NounRecord)
+        assert result[0].doc_id == "d2"
+        assert result[0].text == "some text"
 
     @pytest.mark.asyncio
     async def test_extract_returns_none_for_blank_text(self):
@@ -148,5 +150,5 @@ class TestExtract:
         extractor = StubExtractor()
         doc = Document(doc_id="d6", text="stop early")
         result = await extractor.extract(doc)
-        assert result is not None
+        assert result is not None and len(result) == 1
         assert len(extractor._calls) == 1

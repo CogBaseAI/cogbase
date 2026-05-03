@@ -55,10 +55,10 @@ class StubExtractor(ExtractorBase):
     def schema(self) -> CollectionSchema:
         return self._schema
 
-    async def _extract_once(self, doc: Document) -> TagRecord | None:
+    async def _extract_once(self, doc: Document) -> list[TagRecord] | None:
         if not doc.text.strip():
             return None
-        return TagRecord(tag_id=f"{doc.doc_id}-0", doc_id=doc.doc_id, value=doc.text[:10])
+        return [TagRecord(tag_id=f"{doc.doc_id}-0", doc_id=doc.doc_id, value=doc.text[:10])]
 
 
 # ---------------------------------------------------------------------------
@@ -313,12 +313,12 @@ class TestIngestionPipelineIngestMany:
             def schema(self) -> CollectionSchema:
                 return StubExtractor._schema
 
-            async def _extract_once(self, doc: Document) -> TagRecord:
+            async def _extract_once(self, doc: Document) -> list[TagRecord]:
                 nonlocal call_count
                 call_count += 1
                 if call_count == 1:
                     raise RuntimeError("extractor failed")
-                return TagRecord(tag_id=f"{doc.doc_id}-0", doc_id=doc.doc_id, value=doc.text[:10])
+                return [TagRecord(tag_id=f"{doc.doc_id}-0", doc_id=doc.doc_id, value=doc.text[:10])]
 
         structured_store = InMemoryStructuredStore()
         sc_schema = StubExtractor().schema

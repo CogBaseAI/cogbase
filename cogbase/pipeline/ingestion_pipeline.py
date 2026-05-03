@@ -273,16 +273,16 @@ class IngestionPipeline:
             )
             return 0
 
-        record = await sc.extractor.extract(doc)
-        if record is None:
+        records = await sc.extractor.extract(doc)
+        if not records:
             return 0
 
-        await sc.store.save(sc.schema.name, [record])
+        await sc.store.save(sc.schema.name, records)
         logger.info(
-            "ingestion_pipeline.extract_structured.saved name=%s doc_id=%s collection=%s",
-            self.name, doc.doc_id, collection_name,
+            "ingestion_pipeline.extract_structured.saved name=%s doc_id=%s collection=%s count=%d",
+            self.name, doc.doc_id, collection_name, len(records),
         )
-        return 1
+        return len(records)
 
     async def _run_document_embed_upsert(self, doc: Document, collection_name: str) -> None:
         dc = self._document_by_name.get(collection_name)

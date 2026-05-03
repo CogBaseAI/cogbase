@@ -79,31 +79,30 @@ class ExtractorBase(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def _extract_once(self, doc: Document) -> BaseModel | None:
+    async def _extract_once(self, doc: Document) -> list[BaseModel] | None:
         """Single extraction attempt for *doc*.
 
-        Called by ``extract``; do not call directly.  Implement the LLM call (or
-        any other extraction logic) here and return a Pydantic record on success or
-        ``None`` on parse failure.  Return ``None`` only when the output is
-        unparseable — not when the document simply contains no matching data (return
-        an appropriate empty/default record or an empty list instead).
+        Called by ``extract``; do not call directly.  Return a list of Pydantic
+        records on success, an empty list when the document contains no matching
+        data, or ``None`` on parse failure (triggers a retry).
 
         Args:
             doc: Source document whose ``text`` is passed to the extractor and
-                 whose ``doc_id`` should be propagated onto the returned record.
+                 whose ``doc_id`` should be propagated onto the returned records.
 
         Returns:
-            A single Pydantic record whose fields match ``self.schema``, or
-            ``None`` when the extractor cannot produce a valid result.
+            A list of Pydantic records whose fields match ``self.schema``,
+            an empty list when no data is found, or ``None`` on parse failure.
         """
 
-    async def extract(self, doc: Document) -> BaseModel | None:
-        """Extract a record from *doc*, retrying on parse failures.
+    async def extract(self, doc: Document) -> list[BaseModel] | None:
+        """Extract records from *doc*, retrying on parse failures.
 
         Returns ``None`` immediately for blank ``doc.text``.  Otherwise calls
         ``_extract_once`` up to ``max_retries + 1`` times, sleeping
         ``2^(attempt-1)`` seconds between attempts.  Returns the first non-None
-        result, or ``None`` after all attempts are exhausted.
+        result (including an empty list), or ``None`` after all attempts are
+        exhausted.
         """
         if not doc.text.strip():
             return None

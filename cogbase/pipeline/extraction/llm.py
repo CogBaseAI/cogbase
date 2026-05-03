@@ -31,12 +31,32 @@ _DEFAULT_SYSTEM_PROMPT_PREFIX = (
     "Return a single JSON object with these fields:\n\n"
 )
 
+_DEFAULT_LIST_SYSTEM_PROMPT_PREFIX = (
+    "Extract all matching items from the document provided by the user.\n\n"
+    "Rules:\n"
+    "- Copy all text verbatim — do not paraphrase or summarise.\n"
+    "- Do not invent information not present in the document.\n"
+    "- Use null for any field not found.\n"
+    "- Return an empty array when no items are found.\n"
+    "- Return ONLY the JSON object — no explanation, no markdown fences.\n\n"
+)
+
 
 def _build_record_model(extraction_model: Type[BaseModel]) -> Type[BaseModel]:
     """Extend *extraction_model* with a ``doc_id`` identity field."""
     return create_model(
         "_RecordModel",
         doc_id=(str, ...),
+        __base__=extraction_model,
+    )
+
+
+def _build_list_record_model(extraction_model: Type[BaseModel]) -> Type[BaseModel]:
+    """Extend *extraction_model* with ``doc_id`` and ``item_id`` identity fields."""
+    return create_model(
+        "_ListItemRecordModel",
+        doc_id=(str, ...),
+        item_id=(str, ...),
         __base__=extraction_model,
     )
 
@@ -55,25 +75,42 @@ def _build_collection_schema(
     )
 
 
+def _build_list_collection_schema(
+    record_model: Type[BaseModel],
+    collection_name: str,
+    description: str,
+) -> CollectionSchema:
+    """Derive a ``CollectionSchema`` for list extraction (primary key is ``item_id``)."""
+    return CollectionSchema(
+        name=collection_name,
+        description=description,
+        primary_fields=["item_id"],
+        fields=cls_generate_schema(record_model),
+    )
+
+
 class LLMExtractor(ExtractorBase):
     """Extracts structured records from documents using an LLM.
 
-    Each call to ``extract`` produces one record for the document or ``None``
-    when the text is blank or the LLM returns unparseable output after all
-    retries.
-
-    The returned record type extends *extraction_model* with a ``doc_id``
-    identity field (the document identifier passed in).
+    In single-record mode (default) each call to ``extract`` produces one record
+    per document.  In list mode (``extract_as_list=True``) the LLM returns a JSON
+    object whose ``list_field`` key holds an array of items; each item becomes a
+    separate row with an auto-generated ``item_id`` (``"{doc_id}__{i:04d}"``).
 
     Args:
         llm:                    LLM backend.
         extraction_model:       Pydantic ``BaseModel`` class describing the fields to
-                                extract.  Its field descriptions are included in the
-                                LLM prompt.
+                                extract.  In list mode this is the *item* type (e.g.
+                                ``ContractClause``), not a wrapper model.
         collection_name:        Name of the structured store collection to write to.
         collection_description: Short description shown to the LLM in the retrieval
                                 prompt so it understands what this collection holds
                                 and when to query it.
+        extract_as_list:        When ``True`` the LLM is asked to return a JSON
+                                object with a single array key; each element becomes
+                                one row.  Default: ``False``.
+        list_field:             The JSON key that wraps the array when
+                                ``extract_as_list`` is ``True``.  Default: ``"items"``.
         system_prompt:          Full system prompt for the LLM.  When ``None`` a
                                 generic prompt is built from *extraction_model*'s
                                 JSON schema.
@@ -89,6 +126,8 @@ class LLMExtractor(ExtractorBase):
         collection_name: str,
         collection_description: str,
         *,
+        extract_as_list: bool = False,
+        list_field: str = "items",
         system_prompt: str | None = None,
         max_tokens: int = 16384,
         max_retries: int = 2,
@@ -98,11 +137,28 @@ class LLMExtractor(ExtractorBase):
         self._max_tokens = max_tokens
         self._collection_name = collection_name
         self._extraction_model = extraction_model
-        self._record_model = _build_record_model(extraction_model)
-        self._schema = _build_collection_schema(self._record_model, collection_name, collection_description)
-        self._system_prompt = system_prompt or (
-            _DEFAULT_SYSTEM_PROMPT_PREFIX + cls_json_schema_for_llm(extraction_model)
-        )
+        self._extract_as_list = extract_as_list
+        self._list_field = list_field
+
+        if extract_as_list:
+            self._record_model = _build_list_record_model(extraction_model)
+            self._schema = _build_list_collection_schema(self._record_model, collection_name, collection_description)
+            self._wrapper_model: Type[BaseModel] = create_model(
+                "_WrapperModel",
+                **{list_field: (list[extraction_model], ...)},  # type: ignore[call-overload]
+            )
+            self._system_prompt = system_prompt or (
+                _DEFAULT_LIST_SYSTEM_PROMPT_PREFIX
+                + f'Return a JSON object with a single key "{list_field}" whose value is an array.\n'
+                + "Each element must have these fields:\n\n"
+                + cls_json_schema_for_llm(extraction_model)
+            )
+        else:
+            self._record_model = _build_record_model(extraction_model)
+            self._schema = _build_collection_schema(self._record_model, collection_name, collection_description)
+            self._system_prompt = system_prompt or (
+                _DEFAULT_SYSTEM_PROMPT_PREFIX + cls_json_schema_for_llm(extraction_model)
+            )
 
     @property
     def collection(self) -> str:
@@ -112,7 +168,7 @@ class LLMExtractor(ExtractorBase):
     def schema(self) -> CollectionSchema:
         return self._schema
 
-    async def _extract_once(self, doc: Document) -> BaseModel | None:
+    async def _extract_once(self, doc: Document) -> list[BaseModel] | None:
         """Single LLM call; returns ``None`` when the response is unparseable."""
         t0 = time.monotonic()
         result = await self._llm.complete(
@@ -141,19 +197,40 @@ class LLMExtractor(ExtractorBase):
             content[:50],
         )
 
-        # Parse the LLM JSON response into a record model instance
+        if self._extract_as_list:
+            return self._parse_list(doc.doc_id, content, result)
+        return self._parse_single(doc.doc_id, content, result)
+
+    def _parse_single(self, doc_id: str, content: str, raw_result: dict) -> list[BaseModel] | None:
         try:
             extraction = self._extraction_model.model_validate_json(content)
         except (ValidationError, ValueError):
             logger.exception(
                 "llm_extractor.parse_failed doc_id=%s, system_prompt=%s, result=%s",
-                doc.doc_id,
+                doc_id,
                 self._system_prompt,
-                result,
+                raw_result,
             )
             return None
+        return [self._record_model(doc_id=doc_id, **extraction.model_dump())]
 
-        return self._record_model(
-            doc_id=doc.doc_id,
-            **extraction.model_dump(),
-        )
+    def _parse_list(self, doc_id: str, content: str, raw_result: dict) -> list[BaseModel] | None:
+        try:
+            wrapper = self._wrapper_model.model_validate_json(content)
+        except (ValidationError, ValueError):
+            logger.exception(
+                "llm_extractor.parse_failed doc_id=%s, system_prompt=%s, result=%s",
+                doc_id,
+                self._system_prompt,
+                raw_result,
+            )
+            return None
+        items = getattr(wrapper, self._list_field)
+        return [
+            self._record_model(
+                doc_id=doc_id,
+                item_id=f"{doc_id}__{i:04d}",
+                **item.model_dump(),
+            )
+            for i, item in enumerate(items)
+        ]
