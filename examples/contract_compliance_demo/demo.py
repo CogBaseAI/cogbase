@@ -11,10 +11,11 @@ Usage
 Requires OPENAI_API_KEY in a .env file at the repo root (or in the environment).
 Set COGBASE_API_URL to override the default http://localhost:8000.
 
-NOTE: The check, report, and alerts commands, and clause extraction during ingest,
-require persistent store backends (SQLite + FAISS).  Configure cogbase_system.yaml
-with structured_store.type=sqlite and vector_store.type=faiss, or set
-COGBASE_CONFIG to point to your system config file.
+NOTE: The check, report, and alerts commands require persistent store backends
+(SQLite + FAISS).  Configure cogbase_system.yaml with structured_store.type=sqlite
+and vector_store.type=faiss, or set COGBASE_CONFIG to point to your system config.
+Clause extraction runs as a pipeline step during ingest and does not require the
+local store to be configured separately.
 
 Commands (interactive loop)
 ---------------------------
@@ -67,8 +68,6 @@ if str(_REPO_ROOT) not in sys.path:
 import httpx  # noqa: E402
 
 from examples.contract_compliance_demo.compliance_skill import (  # noqa: E402
-    ContractClauseRecord,
-    extract_clauses,
     run_compliance_check,
 )
 from examples.contract_compliance_demo.contracts_data import (  # noqa: E402
@@ -76,8 +75,8 @@ from examples.contract_compliance_demo.contracts_data import (  # noqa: E402
 )
 from examples.contract_compliance_demo.rules_data import RULES_DOCUMENTS  # noqa: E402
 from examples.contract_compliance_demo.schema import (  # noqa: E402
-    CONTRACT_CLAUSES_SCHEMA,
     CLAUSE_COMPLIANCE_FINDINGS_SCHEMA,
+    ContractClause,
     ContractMetadata,
 )
 
@@ -107,6 +106,16 @@ _CONTRACT_METADATA_SYSTEM_PROMPT = (
     "- For parties, return an array where each element has 'name' (legal name) "
     "and 'role' (role in the agreement, e.g. vendor, customer) keys.\n\n"
     "Return a single JSON object with these fields:\n\n"
+)
+
+_CONTRACT_CLAUSES_SYSTEM_PROMPT = (
+    "You are a legal contract analyst. Extract every distinct clause from the provided contract.\n\n"
+    "Rules:\n"
+    "- Copy all clause text verbatim — do not paraphrase or summarise.\n"
+    "- Do not invent clauses not present in the contract.\n"
+    "- Assign clause_type from: liability, indemnification, termination, payment, "
+    "privacy, confidentiality, ip, governing_law, other. Use null when unclear.\n"
+    "- Return ONLY the JSON object — no explanation, no markdown fences.\n\n"
 )
 
 _CONFIG_YAML = f"""\
@@ -144,6 +153,18 @@ structured_collections:
     extractor:
       type: llm
       prompt: contract_metadata_prompt.txt
+  - name: contract_clauses
+    description: >-
+      Individual clauses extracted from contracts. Each record is one clause with
+      its type and verbatim text. Filter by doc_id to retrieve all clauses for a
+      contract, or filter by clause_type to find clauses of a specific category.
+    schema: contract_clauses_schema.json
+    extractor:
+      type: llm
+      extract_as_list: true
+      list_field: clauses
+      item_id_field: clause_id
+      prompt: contract_clauses_prompt.txt
 pipeline:
   steps:
     - tool: chunk-embed-upsert
@@ -161,17 +182,23 @@ pipeline:
       when:
         metadata:
           doc_type: contract
+    - tool: extract-structured
+      collection: contract_clauses
+      when:
+        metadata:
+          doc_type: contract
 """
 
 
 def _build_bundle() -> bytes:
-    """Build an in-memory ZIP bundle: config.yaml + metadata schema + extraction prompt."""
-    schema_json = json.dumps(ContractMetadata.model_json_schema(), indent=2)
+    """Build an in-memory ZIP bundle: config.yaml + schemas + extraction prompts."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("config.yaml", _CONFIG_YAML)
-        zf.writestr("contract_metadata_schema.json", schema_json)
+        zf.writestr("contract_metadata_schema.json", json.dumps(ContractMetadata.model_json_schema(), indent=2))
         zf.writestr("contract_metadata_prompt.txt", _CONTRACT_METADATA_SYSTEM_PROMPT)
+        zf.writestr("contract_clauses_schema.json", json.dumps(ContractClause.model_json_schema(), indent=2))
+        zf.writestr("contract_clauses_prompt.txt", _CONTRACT_CLAUSES_SYSTEM_PROMPT)
     return buf.getvalue()
 
 
@@ -334,39 +361,13 @@ def _init_local_stores() -> bool:
 
 
 async def _ensure_collections() -> None:
-    """Create contract_clauses and clause_compliance_findings collections if absent."""
+    """Create clause_compliance_findings collection if absent.
+
+    contract_clauses is created by the pipeline when the application is registered.
+    """
     if _structured_store is None:
         return
-    await _structured_store.create_collection(CONTRACT_CLAUSES_SCHEMA)
     await _structured_store.create_collection(CLAUSE_COMPLIANCE_FINDINGS_SCHEMA)
-
-
-# ---------------------------------------------------------------------------
-# Clause extraction — runs locally using the shared structured store
-# ---------------------------------------------------------------------------
-
-
-async def _ingest_clauses(doc_id: str, text: str) -> int:
-    """Extract clauses from *text* and save to contract_clauses.
-
-    Returns the number of clauses saved (0 on failure).
-    """
-    if not _local_ok or _structured_store is None or _llm_local is None:
-        return 0
-
-    from cogbase.core.models import Document
-
-    doc = Document(doc_id=doc_id, text=text)
-    clauses = await extract_clauses(doc, _llm_local)
-    if not clauses:
-        return 0
-
-    records = [
-        ContractClauseRecord(doc_id=doc_id, **clause.model_dump())
-        for clause in clauses
-    ]
-    await _structured_store.save("contract_clauses", records)
-    return len(records)
 
 
 # ---------------------------------------------------------------------------
@@ -521,8 +522,8 @@ async def main() -> None:
                 )
                 print(f"Querying structured collection '{collection}'...")
 
-                # contract_clauses and clause_compliance_findings are local
-                if collection in {"contract_clauses", "clause_compliance_findings"}:
+                # clause_compliance_findings is stored in the local persistent store
+                if collection in {"clause_compliance_findings"}:
                     if not _local_ok:
                         print("  Persistent stores required. See startup notes.")
                         continue
@@ -594,25 +595,14 @@ async def main() -> None:
 
                 for r in results:
                     if r["success"]:
-                        print(f"  {r['doc_id']:<14}  OK  ({r['records_extracted']} metadata record extracted)")
+                        print(f"  {r['doc_id']:<14}  OK  ({r['records_extracted']} records extracted)")
                     else:
                         print(f"  {r['doc_id']:<14}  FAILED: {r['error']}")
 
-                # Clause extraction requires persistent stores
                 if not _local_ok:
                     print()
-                    print("  NOTE: Clause extraction skipped (persistent stores not configured).")
-                    print("        Run with cogbase_system.yaml to enable check/report/alerts.")
-                    continue
-
-                print()
-                print("Extracting clauses (local LLM call)...")
-                for doc in CONTRACTS_DOCUMENTS:
-                    n = await _ingest_clauses(doc.doc_id, doc.text)
-                    if n > 0:
-                        print(f"  {doc.doc_id:<14}  {n} clauses saved to contract_clauses")
-                    else:
-                        print(f"  {doc.doc_id:<14}  clause extraction failed")
+                    print("  NOTE: check / report / alerts require persistent stores.")
+                    print("        Configure cogbase_system.yaml to enable them.")
                 continue
 
             # ---- ingest contract <path> -------------------------------------
@@ -635,18 +625,9 @@ async def main() -> None:
                     continue
                 r = results[0]
                 if r["success"]:
-                    print(f"  {doc_id}  OK  ({r['records_extracted']} metadata record extracted)")
+                    print(f"  {doc_id}  OK  ({r['records_extracted']} records extracted)")
                 else:
                     print(f"  {doc_id}  FAILED: {r['error']}")
-                    continue
-
-                if _local_ok:
-                    print("Extracting clauses...")
-                    n = await _ingest_clauses(doc_id, text)
-                    if n > 0:
-                        print(f"  {doc_id}  {n} clauses saved to contract_clauses")
-                    else:
-                        print(f"  {doc_id}  clause extraction failed")
                 continue
 
             # ---- check <doc_id> ---------------------------------------------

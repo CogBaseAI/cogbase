@@ -28,6 +28,9 @@ class ChunkCollectionConfig(BaseModel):
 class ExtractorConfig(BaseModel):
     type: Literal["llm"] = "llm"
     prompt: str | None = None
+    extract_as_list: bool = False
+    list_field: str = "items"
+    item_id_field: str = "item_id"
 
 
 class StructuredCollectionConfig(BaseModel):

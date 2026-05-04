@@ -327,6 +327,161 @@ class TestBuildAppDocumentCollection:
             await build_app(cfg)
 
 
+# ---------------------------------------------------------------------------
+# build_app — list extractor (extract_as_list / item_id_field)
+# ---------------------------------------------------------------------------
+
+_LIST_EXTRACTOR_CONFIG_YAML = f"""\
+name: test_app
+llm:
+  provider: openai
+  model: gpt-4o-mini
+structured_collections:
+  - name: contract_clauses
+    schema: '{_SCHEMA}'
+    extractor:
+      type: llm
+      extract_as_list: true
+      list_field: clauses
+      item_id_field: clause_id
+pipeline:
+  steps:
+    - tool: extract-structured
+      collection: contract_clauses
+"""
+
+_LIST_EXTRACTOR_WITH_PROMPT_CONFIG_YAML = f"""\
+name: test_app
+llm:
+  provider: openai
+  model: gpt-4o-mini
+structured_collections:
+  - name: contract_clauses
+    schema: '{_SCHEMA}'
+    extractor:
+      type: llm
+      extract_as_list: true
+      list_field: clauses
+      item_id_field: clause_id
+      prompt: "Extract all clauses.\\n\\n"
+pipeline:
+  steps:
+    - tool: extract-structured
+      collection: contract_clauses
+"""
+
+_SINGLE_EXTRACTOR_WITH_PROMPT_CONFIG_YAML = f"""\
+name: test_app
+llm:
+  provider: openai
+  model: gpt-4o-mini
+structured_collections:
+  - name: contract_metadata
+    schema: '{_SCHEMA}'
+    extractor:
+      type: llm
+      prompt: "Extract metadata.\\n\\n"
+pipeline:
+  steps:
+    - tool: extract-structured
+      collection: contract_metadata
+"""
+
+
+class TestBuildAppListExtractor:
+    def _get_extractor(self, app, collection: str):
+        return app._ingest_pipeline._structured_by_name[collection].extractor
+
+    @patch("api.factory._build_llm")
+    async def test_list_extractor_extract_as_list_true(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_LIST_EXTRACTOR_CONFIG_YAML)
+        system_store = InMemoryStructuredStore()
+        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+
+        extractor = self._get_extractor(app, "contract_clauses")
+        assert extractor._extract_as_list is True
+
+    @patch("api.factory._build_llm")
+    async def test_list_extractor_custom_item_id_field(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_LIST_EXTRACTOR_CONFIG_YAML)
+        system_store = InMemoryStructuredStore()
+        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+
+        extractor = self._get_extractor(app, "contract_clauses")
+        assert extractor._item_id_field == "clause_id"
+
+    @patch("api.factory._build_llm")
+    async def test_list_extractor_schema_primary_key_is_custom_field(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_LIST_EXTRACTOR_CONFIG_YAML)
+        system_store = InMemoryStructuredStore()
+        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+
+        extractor = self._get_extractor(app, "contract_clauses")
+        assert extractor.schema.primary_fields == ["clause_id"]
+
+    @patch("api.factory._build_llm")
+    async def test_list_extractor_custom_list_field(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_LIST_EXTRACTOR_CONFIG_YAML)
+        system_store = InMemoryStructuredStore()
+        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+
+        extractor = self._get_extractor(app, "contract_clauses")
+        assert extractor._list_field == "clauses"
+
+    @patch("api.factory._build_llm")
+    async def test_list_extractor_with_prompt_includes_list_field_instruction(self, mock_build_llm):
+        """Custom prompt for a list extractor must contain the list_field wrapper instruction."""
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_LIST_EXTRACTOR_WITH_PROMPT_CONFIG_YAML)
+        system_store = InMemoryStructuredStore()
+        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+
+        extractor = self._get_extractor(app, "contract_clauses")
+        assert '"clauses"' in extractor._system_prompt
+        assert "Extract all clauses." in extractor._system_prompt
+
+    @patch("api.factory._build_llm")
+    async def test_list_extractor_no_prompt_uses_default(self, mock_build_llm):
+        """Without a prompt, the extractor uses the default list system prompt."""
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_LIST_EXTRACTOR_CONFIG_YAML)
+        system_store = InMemoryStructuredStore()
+        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+
+        extractor = self._get_extractor(app, "contract_clauses")
+        # Default list prompt includes the list_field key name
+        assert '"clauses"' in extractor._system_prompt
+
+    @patch("api.factory._build_llm")
+    async def test_single_extractor_with_prompt_does_not_include_list_instruction(self, mock_build_llm):
+        """Single-record extractor must not include the list-wrapper instruction."""
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_SINGLE_EXTRACTOR_WITH_PROMPT_CONFIG_YAML)
+        system_store = InMemoryStructuredStore()
+        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+
+        extractor = self._get_extractor(app, "contract_metadata")
+        assert extractor._extract_as_list is False
+        assert "Extract metadata." in extractor._system_prompt
+        assert "whose value is an array" not in extractor._system_prompt
+
+    @patch("api.factory._build_llm")
+    async def test_single_extractor_default_item_id_field(self, mock_build_llm):
+        """Single-record extractor keeps the default item_id_field even though it's irrelevant."""
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
+        system_store = InMemoryStructuredStore()
+        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+
+        extractor = self._get_extractor(app, "contract_extraction")
+        assert extractor._extract_as_list is False
+        assert extractor._item_id_field == "item_id"
+
+
 class TestBuildAppDocumentStoreResolution:
     @patch("api.factory._build_llm")
     async def test_uses_system_document_store_when_no_app_document_store(self, mock_build_llm, tmp_path):

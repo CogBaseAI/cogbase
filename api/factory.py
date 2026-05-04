@@ -122,14 +122,28 @@ async def build_app(
         extraction_model = build_model_from_json_schema(
             sc_cfg.schema_, model_name=sc_cfg.name.upper()
         )
+        extract_as_list = sc_cfg.extractor.extract_as_list
+        list_field = sc_cfg.extractor.list_field
+        item_id_field = sc_cfg.extractor.item_id_field
         system_prompt = None
         if sc_cfg.extractor.prompt:
-            system_prompt = sc_cfg.extractor.prompt + cls_json_schema_for_llm(extraction_model)
+            if extract_as_list:
+                system_prompt = (
+                    sc_cfg.extractor.prompt
+                    + f'\nReturn a JSON object with a single key "{list_field}" whose value is an array.\n'
+                    + "Each element must have these fields:\n\n"
+                    + cls_json_schema_for_llm(extraction_model)
+                )
+            else:
+                system_prompt = sc_cfg.extractor.prompt + cls_json_schema_for_llm(extraction_model)
         extractor = LLMExtractor(
             llm,
             extraction_model=extraction_model,
             collection_name=sc_cfg.name,
             collection_description=sc_cfg.description,
+            extract_as_list=extract_as_list,
+            list_field=list_field,
+            item_id_field=item_id_field,
             system_prompt=system_prompt,
         )
         structured_collections.append(StructuredCollection(

@@ -2,9 +2,6 @@
 
 Exports
 -------
-extract_clauses(doc, llm) -> list[ContractClause]
-    Extract all substantive clauses from a contract using the LLM.
-
 run_compliance_check(doc_id, *, vector_store, structured_store, embedder, llm, ...)
     Async generator. For each clause in ``contract_clauses``, retrieves matching
     rule passages from ``rule_chunks``, calls the LLM judge, saves the finding to
@@ -26,54 +23,10 @@ from cogbase.stores import Col, StructuredStoreBase, VectorStoreBase
 
 from examples.contract_compliance_demo.schema import (
     CLAUSE_COMPLIANCE_FINDINGS_SCHEMA,
-    CONTRACT_CLAUSES_SCHEMA,
     ClauseComplianceFinding,
-    ContractClause,
-    ContractClausesExtractionResult,
 )
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# ContractClauseRecord — ContractClause extended with doc_id for storage
-# ---------------------------------------------------------------------------
-
-ContractClauseRecord = create_model(
-    "ContractClauseRecord",
-    doc_id=(str, ...),
-    __base__=ContractClause,
-)
-
-# ---------------------------------------------------------------------------
-# Prompts
-# ---------------------------------------------------------------------------
-
-_CLAUSE_EXTRACTION_PROMPT_TEMPLATE = """\
-Extract all substantive clauses from the contract provided.
-
-Rules:
-- Include every clause that carries a binding obligation, right, or restriction.
-- Copy clause text verbatim — do not paraphrase or summarise.
-- Assign each clause a clause_id in the format '{doc_id}:c{{n}}' where n starts at 1.
-- Set clause_type to one of: liability, indemnification, termination, payment, privacy,
-  confidentiality, ip, governing_law, other. Choose the closest match.
-- Set title to the section heading when present in the contract, otherwise null.
-- Set section_number to the number as it appears (e.g. '5.1'), otherwise null.
-- Return ONLY valid JSON — no markdown fences, no explanation.
-
-Return a JSON object with exactly this structure:
-{{
-  "clauses": [
-    {{
-      "clause_id": "{doc_id}:c1",
-      "clause_type": "...",
-      "title": "...",
-      "section_number": "...",
-      "text": "verbatim clause text here"
-    }}
-  ]
-}}
-"""
 
 _JUDGE_SYSTEM_PROMPT = """\
 You are a contract compliance reviewer. Determine whether a contract clause complies
@@ -91,36 +44,6 @@ Rules:
 _FINDING_SCHEMA_HINT = cls_json_schema_for_llm(ClauseComplianceFinding)
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
-async def extract_clauses(doc: Document, llm: LLMBase) -> list[ContractClause]:
-    """Call the LLM to extract all substantive clauses from *doc*.
-
-    Returns an empty list when the LLM returns no content or unparseable JSON.
-    """
-    prompt = _CLAUSE_EXTRACTION_PROMPT_TEMPLATE.format(doc_id=doc.doc_id)
-    result = await llm.complete(
-        [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": doc.text},
-        ],
-        temperature=0.0,
-    )
-    content = result["content"]
-    if not content:
-        logger.error("extract_clauses: no content returned for doc_id=%s", doc.doc_id)
-        return []
-    try:
-        parsed = ContractClausesExtractionResult.model_validate_json(content)
-        return parsed.clauses
-    except (ValidationError, ValueError):
-        logger.exception("extract_clauses: parse failed for doc_id=%s", doc.doc_id)
-        return []
-
-
 async def run_compliance_check(
     doc_id: str,
     *,
@@ -128,7 +51,6 @@ async def run_compliance_check(
     structured_store: StructuredStoreBase,
     embedder: EmbeddingBase,
     llm: LLMBase,
-    ruleset_id: str = "company_rules_v1",
     top_k: int = 5,
 ) -> AsyncGenerator[ClauseComplianceFinding, None]:
     """Yield one ClauseComplianceFinding per clause in ``contract_clauses`` for *doc_id*.
@@ -180,9 +102,8 @@ async def run_compliance_check(
             f"Company policy excerpts ({len(rule_chunks)} chunks retrieved):\n"
             f"{rule_context}\n\n"
             f"---\n\n"
-            f"Return a JSON compliance finding. "
-            f"Set finding_id = \"{doc_id}:{clause_id}:{ruleset_id}\".\n\n"
-            f"Required JSON structure:\n{_FINDING_SCHEMA_HINT}"
+            f"Return a JSON compliance finding:\n"
+            f"{_FINDING_SCHEMA_HINT}"
         )
 
         result = await llm.complete(

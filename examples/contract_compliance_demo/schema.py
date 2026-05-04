@@ -52,38 +52,6 @@ class ContractClause(BaseModel):
     text: str = Field(description="Verbatim clause text copied from the contract without paraphrasing")
 
 
-class ContractClausesExtractionResult(BaseModel):
-    """LLM response wrapper for the multi-clause extractor.
-
-    The LLM returns a single JSON object with a ``clauses`` list.  The extractor
-    unpacks it and saves each element as an individual record in contract_clauses.
-    """
-
-    clauses: list[ContractClause] = Field(
-        description="All substantive clauses extracted from the contract"
-    )
-
-
-CONTRACT_CLAUSES_SCHEMA = CollectionSchema(
-    name="contract_clauses",
-    description=(
-        "Extracted contract clauses with type, title, section reference, and verbatim text. "
-        "Query by doc_id to retrieve all clauses for a specific contract, or filter by "
-        "clause_type to find clauses of a given category across contracts."
-    ),
-    primary_fields=["clause_id"],
-    fields={
-        "clause_id":      FieldSchema(type=FieldType.STRING),
-        "doc_id":         FieldSchema(type=FieldType.STRING, index=True),
-        "clause_type":    FieldSchema(type=FieldType.STRING, nullable=True, index=True),
-        "title":          FieldSchema(type=FieldType.STRING, nullable=True),
-        "section_number": FieldSchema(type=FieldType.STRING, nullable=True),
-        "page":           FieldSchema(type=FieldType.INTEGER, nullable=True),
-        "text":           FieldSchema(type=FieldType.STRING),
-    },
-)
-
-
 # ---------------------------------------------------------------------------
 # contract_metadata
 # ---------------------------------------------------------------------------
@@ -126,27 +94,6 @@ class ContractMetadata(BaseModel):
         default=None,
         description="Number of days of written notice required to terminate for convenience",
     )
-
-
-CONTRACT_METADATA_SCHEMA = CollectionSchema(
-    name="contract_metadata",
-    description=(
-        "Key facts extracted from each contract: parties, dates, contract value, "
-        "governing law, and termination notice period. One record per contract document."
-    ),
-    primary_fields=["doc_id"],
-    fields={
-        "doc_id":                   FieldSchema(type=FieldType.STRING),
-        "contract_type":            FieldSchema(type=FieldType.STRING, nullable=True),
-        "parties":                  FieldSchema(type=FieldType.JSON),
-        "effective_date":           FieldSchema(type=FieldType.STRING, nullable=True),
-        "expiry_date":              FieldSchema(type=FieldType.STRING, nullable=True),
-        "contract_value":           FieldSchema(type=FieldType.FLOAT, nullable=True),
-        "currency":                 FieldSchema(type=FieldType.STRING, nullable=True),
-        "governing_law":            FieldSchema(type=FieldType.STRING, nullable=True, index=True),
-        "termination_notice_days":  FieldSchema(type=FieldType.INTEGER, nullable=True),
-    },
-)
 
 
 # ---------------------------------------------------------------------------

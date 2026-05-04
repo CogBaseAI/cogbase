@@ -387,7 +387,11 @@ _LIST_COLLECTION = "clauses"
 _LIST_DESCRIPTION = "Extracted contract clauses, one row per clause."
 
 
-def _make_list_extractor(llm: MagicMock, list_field: str = "clauses") -> LLMExtractor:
+def _make_list_extractor(
+    llm: MagicMock,
+    list_field: str = "clauses",
+    item_id_field: str = "item_id",
+) -> LLMExtractor:
     return LLMExtractor(
         llm,
         extraction_model=_Clause,
@@ -395,6 +399,7 @@ def _make_list_extractor(llm: MagicMock, list_field: str = "clauses") -> LLMExtr
         collection_description=_LIST_DESCRIPTION,
         extract_as_list=True,
         list_field=list_field,
+        item_id_field=item_id_field,
     )
 
 
@@ -475,9 +480,9 @@ async def test_list_extract_item_id_sequential():
     extractor = _make_list_extractor(_make_llm(payload))
     result = await extractor.extract(Document(doc_id="doc-L3", text="contract text"))
 
-    assert result[0].item_id == "doc-L3__0000"
-    assert result[1].item_id == "doc-L3__0001"
-    assert result[2].item_id == "doc-L3__0002"
+    assert getattr(result[0], "item_id") == "doc-L3__0000"
+    assert getattr(result[1], "item_id") == "doc-L3__0001"
+    assert getattr(result[2], "item_id") == "doc-L3__0002"
 
 
 @pytest.mark.asyncio
@@ -556,3 +561,53 @@ async def test_list_extract_retry_on_bad_json(monkeypatch):
 
     assert result is not None and len(result) == 1
     assert llm.complete.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# item_id_field customisation
+# ---------------------------------------------------------------------------
+
+def test_custom_item_id_field_schema_primary_key():
+    extractor = _make_list_extractor(MagicMock(), item_id_field="clause_id")
+    assert extractor.schema.primary_fields == ["clause_id"]
+
+
+def test_custom_item_id_field_present_in_schema_fields():
+    extractor = _make_list_extractor(MagicMock(), item_id_field="clause_id")
+    assert "clause_id" in extractor.schema.fields
+
+
+def test_custom_item_id_field_default_not_present_in_schema():
+    """When a custom id field is used, 'item_id' should not appear in the schema."""
+    extractor = _make_list_extractor(MagicMock(), item_id_field="clause_id")
+    assert "item_id" not in extractor.schema.fields
+
+
+def test_default_item_id_field_schema_primary_key():
+    extractor = _make_list_extractor(MagicMock())
+    assert extractor.schema.primary_fields == ["item_id"]
+
+
+@pytest.mark.asyncio
+async def test_custom_item_id_field_on_extracted_records():
+    payload = _list_payload(
+        {"clause_type": "liability", "text": "Clause A."},
+        {"clause_type": "termination", "text": "Clause B."},
+    )
+    extractor = _make_list_extractor(_make_llm(payload), item_id_field="clause_id")
+    result = await extractor.extract(Document(doc_id="doc-CID1", text="contract text"))
+
+    assert result is not None and len(result) == 2
+    assert getattr(result[0], "clause_id") == "doc-CID1__0000"
+    assert getattr(result[1], "clause_id") == "doc-CID1__0001"
+
+
+@pytest.mark.asyncio
+async def test_custom_item_id_field_records_have_no_item_id_attr():
+    """Records built with clause_id should not have an item_id attribute."""
+    payload = _list_payload({"clause_type": "ip", "text": "All IP retained by licensor."})
+    extractor = _make_list_extractor(_make_llm(payload), item_id_field="clause_id")
+    result = await extractor.extract(Document(doc_id="doc-CID2", text="contract text"))
+
+    assert result is not None
+    assert not hasattr(result[0], "item_id")

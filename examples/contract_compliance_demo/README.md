@@ -198,23 +198,21 @@ Judge constraints:
 - Copy relevant clause and rule excerpts verbatim where fields require evidence.
 - Use `temperature=0` for repeatability.
 
-## Schemas
+## Extraction Schemas
 
 ### `contract_clauses`
-
+ 
 | Field | Type | Description |
 |-------|------|-------------|
-| `clause_id` | `str` | Stable identifier for the clause within the contract |
 | `clause_type` | `str \| null` | Clause category, such as `termination`, `liability`, `privacy`, or `payment` |
-| `title` | `str \| null` | Clause heading when present |
-| `section_number` | `str \| null` | Contract section number when present |
 | `text` | `str` | Verbatim clause text |
 
 ### `contract_metadata`
+Structured information extracted by the LLM from a contract document.
+``doc_id`` is injected by the LLMExtractor; do not include it here.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `doc_id` | `str` | Source contract document ID |
 | `contract_type` | `str \| null` | Contract category |
 | `parties` | `list[Party]` | Named parties and roles |
 | `effective_date` | `str \| null` | Start date in `YYYY-MM-DD` format |
@@ -226,15 +224,8 @@ Judge constraints:
 
 ### `clause_compliance_findings`
 
-`finding_id` is the primary key. Use a stable value such as:
-
-```text
-{doc_id}:{clause_id}:{ruleset_id}
-```
-
 | Field | Type | Description |
 |-------|------|-------------|
-| `finding_id` | `str` | Stable primary key for idempotent upsert |
 | `doc_id` | `str` | Source contract document ID |
 | `clause_id` | `str` | Reviewed clause ID |
 | `clause_type` | `str \| null` | Reviewed clause category |
@@ -242,7 +233,6 @@ Judge constraints:
 | `severity` | `str` | `low`, `medium`, `high`, or `critical` |
 | `summary` | `str` | Short human-readable finding |
 | `contract_clause_text` | `str` | Verbatim reviewed clause text |
-| `matched_rule_ids` | `list[str]` | Rule chunk IDs used as evidence |
 | `matched_rule_quotes` | `list[str]` | Verbatim excerpts from matched rules |
 | `reasoning` | `str` | Explanation grounded in matched rules |
 | `recommended_redline` | `str \| null` | Suggested replacement or fallback language |

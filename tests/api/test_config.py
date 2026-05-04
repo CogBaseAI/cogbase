@@ -11,6 +11,7 @@ from cogbase.config.config import (
     ChunkerConfig,
     DocumentCollectionConfig,
     EmbeddingConfig,
+    ExtractorConfig,
     LLMConfig,
     StructuredStoreConfig,
     VectorStoreConfig,
@@ -330,6 +331,71 @@ class TestAppConfig:
         assert len(cfg.pipeline.steps) == 3
         tools = [s.tool for s in cfg.pipeline.steps]
         assert tools == ["chunk-embed-upsert", "extract-structured", "document-embed-upsert"]
+
+
+# ---------------------------------------------------------------------------
+# ExtractorConfig
+# ---------------------------------------------------------------------------
+
+class TestExtractorConfig:
+    def test_defaults(self):
+        cfg = ExtractorConfig()
+        assert cfg.type == "llm"
+        assert cfg.prompt is None
+        assert cfg.extract_as_list is False
+        assert cfg.list_field == "items"
+        assert cfg.item_id_field == "item_id"
+
+    def test_custom_item_id_field(self):
+        cfg = ExtractorConfig(item_id_field="clause_id")
+        assert cfg.item_id_field == "clause_id"
+
+    def test_extract_as_list_true(self):
+        cfg = ExtractorConfig(extract_as_list=True, list_field="clauses", item_id_field="clause_id")
+        assert cfg.extract_as_list is True
+        assert cfg.list_field == "clauses"
+        assert cfg.item_id_field == "clause_id"
+
+    def test_yaml_list_extractor_parses(self):
+        _SCHEMA = '{"type":"object","properties":{"text":{"type":"string"}}}'
+        yaml_text = textwrap.dedent(f"""\
+            name: clauses-app
+            llm:
+              model: gpt-4o-mini
+            structured_collections:
+              - name: contract_clauses
+                schema: '{_SCHEMA}'
+                extractor:
+                  type: llm
+                  extract_as_list: true
+                  list_field: clauses
+                  item_id_field: clause_id
+                  prompt: contract_clauses_prompt.txt
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        ext = cfg.structured_collections[0].extractor
+        assert ext.extract_as_list is True
+        assert ext.list_field == "clauses"
+        assert ext.item_id_field == "clause_id"
+        assert ext.prompt == "contract_clauses_prompt.txt"
+
+    def test_yaml_extractor_defaults_when_omitted(self):
+        _SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
+        yaml_text = textwrap.dedent(f"""\
+            name: simple-app
+            llm:
+              model: gpt-4o-mini
+            structured_collections:
+              - name: records
+                schema: '{_SCHEMA}'
+                extractor:
+                  type: llm
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        ext = cfg.structured_collections[0].extractor
+        assert ext.extract_as_list is False
+        assert ext.list_field == "items"
+        assert ext.item_id_field == "item_id"
 
 
 # ---------------------------------------------------------------------------

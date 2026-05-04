@@ -51,12 +51,12 @@ def _build_record_model(extraction_model: Type[BaseModel]) -> Type[BaseModel]:
     )
 
 
-def _build_list_record_model(extraction_model: Type[BaseModel]) -> Type[BaseModel]:
-    """Extend *extraction_model* with ``doc_id`` and ``item_id`` identity fields."""
+def _build_list_record_model(extraction_model: Type[BaseModel], item_id_field: str) -> Type[BaseModel]:
+    """Extend *extraction_model* with ``doc_id`` and a configurable item-id identity field."""
     return create_model(
         "_ListItemRecordModel",
         doc_id=(str, ...),
-        item_id=(str, ...),
+        **{item_id_field: (str, ...)},
         __base__=extraction_model,
     )
 
@@ -79,12 +79,13 @@ def _build_list_collection_schema(
     record_model: Type[BaseModel],
     collection_name: str,
     description: str,
+    item_id_field: str,
 ) -> CollectionSchema:
-    """Derive a ``CollectionSchema`` for list extraction (primary key is ``item_id``)."""
+    """Derive a ``CollectionSchema`` for list extraction."""
     return CollectionSchema(
         name=collection_name,
         description=description,
-        primary_fields=["item_id"],
+        primary_fields=[item_id_field],
         fields=cls_generate_schema(record_model),
     )
 
@@ -111,6 +112,10 @@ class LLMExtractor(ExtractorBase):
                                 one row.  Default: ``False``.
         list_field:             The JSON key that wraps the array when
                                 ``extract_as_list`` is ``True``.  Default: ``"items"``.
+        item_id_field:          Name of the per-item primary-key field added to each
+                                extracted row in list mode.  Default: ``"item_id"``.
+                                Use a domain name such as ``"clause_id"`` to make the
+                                collection schema more descriptive.
         system_prompt:          Full system prompt for the LLM.  When ``None`` a
                                 generic prompt is built from *extraction_model*'s
                                 JSON schema.
@@ -128,6 +133,7 @@ class LLMExtractor(ExtractorBase):
         *,
         extract_as_list: bool = False,
         list_field: str = "items",
+        item_id_field: str = "item_id",
         system_prompt: str | None = None,
         max_tokens: int = 16384,
         max_retries: int = 2,
@@ -139,10 +145,11 @@ class LLMExtractor(ExtractorBase):
         self._extraction_model = extraction_model
         self._extract_as_list = extract_as_list
         self._list_field = list_field
+        self._item_id_field = item_id_field
 
         if extract_as_list:
-            self._record_model = _build_list_record_model(extraction_model)
-            self._schema = _build_list_collection_schema(self._record_model, collection_name, collection_description)
+            self._record_model = _build_list_record_model(extraction_model, item_id_field)
+            self._schema = _build_list_collection_schema(self._record_model, collection_name, collection_description, item_id_field)
             self._wrapper_model: Type[BaseModel] = create_model(
                 "_WrapperModel",
                 **{list_field: (list[extraction_model], ...)},  # type: ignore[call-overload]
@@ -229,7 +236,7 @@ class LLMExtractor(ExtractorBase):
         return [
             self._record_model(
                 doc_id=doc_id,
-                item_id=f"{doc_id}__{i:04d}",
+                **{self._item_id_field: f"{doc_id}__{i:04d}"},
                 **item.model_dump(),
             )
             for i, item in enumerate(items)
