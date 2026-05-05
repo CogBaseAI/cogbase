@@ -135,7 +135,7 @@ embedding:
   provider: openai
   model: {_EMBED_MODEL}
   dimensions: {_EMBED_DIM}
-chunk_collections:
+vector_collections:
   - name: rule_chunks
     description: >-
       Company policy and vendor contract standard passages. Use to retrieve rules,

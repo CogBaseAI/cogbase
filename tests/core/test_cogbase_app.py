@@ -15,7 +15,8 @@ from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
     IngestResult,
     StructuredCollection,
-    ChunkCollection,
+    VectorCollection,
+    PipelineStep,
 )
 from cogbase.core.models import Document
 from cogbase.embeddings import EmbeddingBase
@@ -114,16 +115,20 @@ async def _make_pipeline(
     await store.create_collection(sc_schema)
     sc = StructuredCollection(schema=sc_schema, store=store, extractor=extractor)
 
-    vc = None
+    steps = [PipelineStep(tool="extract-structured", collection=sc.name)]
+    vector_collections = None
     if vector_store is not None:
         assert embedder is not None and chunker is not None
         vc_schema = VectorCollectionSchema(name=name, dimensions=4, description="Test chunks")
         await vector_store.create_collection(vc_schema)
-        vc = ChunkCollection(schema=vc_schema, store=vector_store, embedder=embedder, chunker=chunker)
+        vc = VectorCollection(schema=vc_schema, store=vector_store, embedder=embedder)
+        vector_collections = [vc]
+        steps.insert(0, PipelineStep(tool="chunk-embed-upsert", collection=name, chunker=chunker))
 
     return IngestionPipeline(
         name=name,
-        chunk_collections=[vc] if vc is not None else None,
+        steps=steps,
+        vector_collections=vector_collections,
         structured_collections=[sc],
     )
 
@@ -143,7 +148,7 @@ async def _make_app(
         structured_store=store,
         vector_store=vector_store,
         embedder=embedder,
-        vector_schemas=[c.schema for c in pipeline._chunk_by_name.values()] or None,
+        vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None,
         structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None,
     )
     return CogBaseApp(name, pipeline, runner)
@@ -159,7 +164,7 @@ class TestCogBaseAppConstruction:
         assert app._ingest_pipeline.name == "legal"
         assert app._ingest_pipeline._structured_by_name
         assert _CONTRACTS_COLLECTION in app._ingest_pipeline._structured_by_name
-        assert app._ingest_pipeline._chunk_by_name == {}
+        assert app._ingest_pipeline._vector_by_name == {}
 
     async def test_full_mode_builds(self):
         app = await _make_app(
@@ -169,8 +174,8 @@ class TestCogBaseAppConstruction:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=64, overlap=0),
         )
-        assert app._ingest_pipeline._chunk_by_name
-        assert "legal" in app._ingest_pipeline._chunk_by_name
+        assert app._ingest_pipeline._vector_by_name
+        assert "legal" in app._ingest_pipeline._vector_by_name
 
     async def test_pipeline_wired_to_app(self):
         store = InMemoryStructuredStore()
@@ -393,18 +398,21 @@ class TestVectorOnlyMode:
         vc_embedder = StubEmbedding(dim=4)
         vc_schema = VectorCollectionSchema(name="vector_only", dimensions=4, description="Test vector-only chunks")
         await vc_store.create_collection(vc_schema)
-        vc = ChunkCollection(
+        vc = VectorCollection(
             schema=vc_schema,
             store=vc_store,
             embedder=vc_embedder,
-            chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
-        pipeline = IngestionPipeline(name="vector-only", chunk_collections=[vc])
+        pipeline = IngestionPipeline(
+            name="vector-only",
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="vector_only", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
+            vector_collections=[vc],
+        )
         runner = QueryRunner(
             llm=llm,
             vector_store=vc_store,
             embedder=vc_embedder,
-            vector_schemas=[c.schema for c in pipeline._chunk_by_name.values()] or None,
+            vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None,
         )
         return CogBaseApp("vector-only", pipeline, runner)
 
@@ -417,7 +425,7 @@ class TestVectorOnlyMode:
 
     async def test_vector_collection_present(self):
         app = await self._make_vector_only_app(_make_llm("{}"))
-        assert app._ingest_pipeline._chunk_by_name
+        assert app._ingest_pipeline._vector_by_name
 
     async def test_no_structured_lookup_tool(self):
         app = await self._make_vector_only_app(_make_llm("{}"))
@@ -432,14 +440,17 @@ class TestVectorOnlyMode:
         vector_store = FAISSVectorStore()
         vc_schema = VectorCollectionSchema(name="testapp", dimensions=4, description="Test chunks")
         await vector_store.create_collection(vc_schema)
-        vc = ChunkCollection(
+        vc = VectorCollection(
             schema=vc_schema,
             store=vector_store,
             embedder=StubEmbedding(dim=4),
-            chunker=FixedSizeChunker(chunk_size=20, overlap=0),
         )
-        pipeline = IngestionPipeline(name="testapp", chunk_collections=[vc])
-        runner = QueryRunner(llm=_make_llm("{}"), vector_store=vector_store, embedder=StubEmbedding(dim=4), vector_schemas=[c.schema for c in pipeline._chunk_by_name.values()] or None)
+        pipeline = IngestionPipeline(
+            name="testapp",
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="testapp", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
+            vector_collections=[vc],
+        )
+        runner = QueryRunner(llm=_make_llm("{}"), vector_store=vector_store, embedder=StubEmbedding(dim=4), vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None)
         app = CogBaseApp("testapp", pipeline, runner)
         results = await app.ingest_documents([Document(doc_id="d-001", text="word " * 20)])
         assert results[0].success is True

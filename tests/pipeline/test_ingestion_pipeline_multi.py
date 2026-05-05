@@ -1,4 +1,4 @@
-"""Tests for multi-collection IngestionPipeline (steps, DocumentCollection)."""
+"""Tests for multi-collection IngestionPipeline (steps, VectorCollection)."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
     StructuredCollection,
-    DocumentCollection,
-    ChunkCollection,
+    VectorCollection,
+    PipelineStep,
 )
 from cogbase.stores import CollectionSchema, FieldSchema, FieldType, VectorCollectionSchema
 from cogbase.stores.structured.base import StructuredStoreBase
@@ -77,50 +77,18 @@ def _make_llm(summary: str = "A short summary.") -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# DocumentCollection dataclass — property-only tests, store type irrelevant
+# VectorCollection dataclass
 # ---------------------------------------------------------------------------
 
-class TestDocumentCollection:
+class TestVectorCollection:
     def test_construction(self):
-        dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="doc_summary", dimensions=4, description="Test document summaries"),
-            store=FAISSVectorStore(),
-            embedder=StubEmbedding(dim=4),
-            llm=_make_llm(),
-        )
-        assert dc.name == "doc_summary"
-        assert dc.max_tokens == 1024
-        assert "sentence" in dc.prompt.lower()
-
-    def test_custom_prompt_and_tokens(self):
-        dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="s", dimensions=4, description="Test summaries"),
-            store=FAISSVectorStore(),
-            embedder=StubEmbedding(dim=4),
-            llm=_make_llm(),
-            prompt="One sentence only.",
-            max_tokens=64,
-        )
-        assert dc.prompt == "One sentence only."
-        assert dc.max_tokens == 64
-
-    def test_no_llm_defaults(self):
-        dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="s", dimensions=4, description="Test summaries"),
+        vc = VectorCollection(
+            schema=VectorCollectionSchema(name="doc_summary", dimensions=4, description="Test summaries"),
             store=FAISSVectorStore(),
             embedder=StubEmbedding(dim=4),
         )
-        assert dc.llm is None
-        assert dc.metadata_fields == []
-
-    def test_metadata_fields(self):
-        dc = DocumentCollection(
-            schema=VectorCollectionSchema(name="s", dimensions=4, description="Test summaries"),
-            store=FAISSVectorStore(),
-            embedder=StubEmbedding(dim=4),
-            metadata_fields=["customer_id", "deal_stage"],
-        )
-        assert dc.metadata_fields == ["customer_id", "deal_stage"]
+        assert vc.name == "doc_summary"
+        assert vc.description == "Test summaries"
 
 
 # ---------------------------------------------------------------------------
@@ -128,12 +96,11 @@ class TestDocumentCollection:
 # ---------------------------------------------------------------------------
 
 class TestMultiCollectionPipelineConstruction:
-    def _make_vc(self, make_vector_store: Callable[[], VectorStoreBase], name: str = "chunks") -> ChunkCollection:
-        return ChunkCollection(
+    def _make_vc(self, make_vector_store: Callable[[], VectorStoreBase], name: str = "chunks") -> VectorCollection:
+        return VectorCollection(
             schema=VectorCollectionSchema(name=name, dimensions=4, description="Test chunks"),
             store=make_vector_store(),
             embedder=StubEmbedding(dim=4),
-            chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
 
     def _make_sc(self, make_structured_store: Callable[[], StructuredStoreBase]) -> StructuredCollection:
@@ -143,50 +110,38 @@ class TestMultiCollectionPipelineConstruction:
             extractor=StubExtractor(),
         )
 
-    def _make_dc(self, make_vector_store: Callable[[], VectorStoreBase], name: str = "summaries") -> DocumentCollection:
-        return DocumentCollection(
-            schema=VectorCollectionSchema(name=name, dimensions=4, description="Test document summaries"),
-            store=make_vector_store(),
-            embedder=StubEmbedding(dim=4),
-            llm=_make_llm(),
-        )
-
     def test_explicit_steps_with_all_three_types(self, make_vector_store, make_structured_store):
-        vc = self._make_vc(make_vector_store, "document_chunks")
+        vc_chunks = self._make_vc(make_vector_store, "document_chunks")
+        vc_summary = self._make_vc(make_vector_store, "document_summary")
         sc = self._make_sc(make_structured_store)
-        dc = self._make_dc(make_vector_store, "document_summary")
 
         pipeline = IngestionPipeline(
             name="app",
             steps=[
-                ("chunk-embed-upsert",    "document_chunks",  None),
-                ("extract-structured",    "tags",             None),
-                ("document-embed-upsert", "document_summary", None),
+                PipelineStep(tool="chunk-embed-upsert",    collection="document_chunks",  chunker=FixedSizeChunker()),
+                PipelineStep(tool="extract-structured",    collection="tags"),
+                PipelineStep(tool="document-embed-upsert", collection="document_summary"),
             ],
-            chunk_collections=[vc],
+            vector_collections=[vc_chunks, vc_summary],
             structured_collections=[sc],
-            document_collections=[dc],
         )
 
-        assert ("chunk-embed-upsert", "document_chunks", None) in pipeline._steps
-        assert ("document-embed-upsert", "document_summary", None) in pipeline._steps
+        tools = [s.tool for s in pipeline._steps]
+        assert "chunk-embed-upsert" in tools
+        assert "document-embed-upsert" in tools
         assert "tags" in pipeline._structured_by_name
 
-    def test_auto_steps_generation_from_collections(self, make_vector_store, make_structured_store):
-        vc = self._make_vc(make_vector_store)
+    def test_auto_steps_generation_from_structured_collection(self, make_structured_store):
         sc = self._make_sc(make_structured_store)
-        dc = self._make_dc(make_vector_store)
 
         pipeline = IngestionPipeline(
             name="app",
-            chunk_collections=[vc],
             structured_collections=[sc],
-            document_collections=[dc],
         )
 
-        assert ("chunk-embed-upsert", "chunks", None) in pipeline._steps
-        assert ("extract-structured", "tags", None) in pipeline._steps
-        assert ("document-embed-upsert", "summaries", None) in pipeline._steps
+        assert len(pipeline._steps) == 1
+        assert pipeline._steps[0].tool == "extract-structured"
+        assert pipeline._steps[0].collection == "tags"
 
     def test_two_vector_collections(self, make_vector_store):
         vc1 = self._make_vc(make_vector_store, "col_a")
@@ -195,14 +150,14 @@ class TestMultiCollectionPipelineConstruction:
         pipeline = IngestionPipeline(
             name="app",
             steps=[
-                ("chunk-embed-upsert", "col_a", None),
-                ("chunk-embed-upsert", "col_b", None),
+                PipelineStep(tool="chunk-embed-upsert", collection="col_a", chunker=FixedSizeChunker()),
+                PipelineStep(tool="chunk-embed-upsert", collection="col_b", chunker=FixedSizeChunker()),
             ],
-            chunk_collections=[vc1, vc2],
+            vector_collections=[vc1, vc2],
         )
 
-        assert "col_a" in pipeline._chunk_by_name
-        assert "col_b" in pipeline._chunk_by_name
+        assert "col_a" in pipeline._vector_by_name
+        assert "col_b" in pipeline._vector_by_name
 
 
 # ---------------------------------------------------------------------------
@@ -219,16 +174,15 @@ class TestDocumentEmbedUpsert:
     ) -> tuple[IngestionPipeline, VectorStoreBase]:
         vector_store = make_vector_store()
         await vector_store.create_collection(self._SUMMARIES_SCHEMA)
-        dc = DocumentCollection(
+        vc = VectorCollection(
             schema=self._SUMMARIES_SCHEMA,
             store=vector_store,
             embedder=StubEmbedding(dim=4),
-            llm=_make_llm(summary=summary_text),
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("document-embed-upsert", "summaries", None)],
-            document_collections=[dc],
+            steps=[PipelineStep(tool="document-embed-upsert", collection="summaries", llm=_make_llm(summary=summary_text))],
+            vector_collections=[vc],
         )
         return pipeline, vector_store
 
@@ -257,17 +211,16 @@ class TestDocumentEmbedUpsert:
     @pytest.mark.asyncio
     async def test_no_llm_embeds_doc_text_directly(self, make_vector_store):
         vector_store = make_vector_store()
-        schema = self._SUMMARIES_SCHEMA
-        await vector_store.create_collection(schema)
-        dc = DocumentCollection(
-            schema=schema,
+        await vector_store.create_collection(self._SUMMARIES_SCHEMA)
+        vc = VectorCollection(
+            schema=self._SUMMARIES_SCHEMA,
             store=vector_store,
             embedder=StubEmbedding(dim=4),
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("document-embed-upsert", "summaries", None)],
-            document_collections=[dc],
+            steps=[PipelineStep(tool="document-embed-upsert", collection="summaries")],
+            vector_collections=[vc],
         )
         await pipeline._ingest(Document(doc_id="d-001", text="raw document text"))
         chunks = await vector_store.search("summaries", "", [0.1] * 4, top_k=1)
@@ -277,18 +230,20 @@ class TestDocumentEmbedUpsert:
     @pytest.mark.asyncio
     async def test_metadata_fields_projected_into_chunk(self, make_vector_store):
         vector_store = make_vector_store()
-        schema = self._SUMMARIES_SCHEMA
-        await vector_store.create_collection(schema)
-        dc = DocumentCollection(
-            schema=schema,
+        await vector_store.create_collection(self._SUMMARIES_SCHEMA)
+        vc = VectorCollection(
+            schema=self._SUMMARIES_SCHEMA,
             store=vector_store,
             embedder=StubEmbedding(dim=4),
-            metadata_fields=["customer_id", "deal_stage"],
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("document-embed-upsert", "summaries", None)],
-            document_collections=[dc],
+            steps=[PipelineStep(
+                tool="document-embed-upsert",
+                collection="summaries",
+                metadata_fields=["customer_id", "deal_stage"],
+            )],
+            vector_collections=[vc],
         )
         await pipeline._ingest(Document(
             doc_id="d-001",
@@ -301,20 +256,18 @@ class TestDocumentEmbedUpsert:
     @pytest.mark.asyncio
     async def test_empty_llm_response_skips_upsert(self, make_vector_store):
         vector_store = make_vector_store()
-        schema = self._SUMMARIES_SCHEMA
-        await vector_store.create_collection(schema)
+        await vector_store.create_collection(self._SUMMARIES_SCHEMA)
         llm = MagicMock(spec=LLMBase)
         llm.complete = AsyncMock(return_value={"content": None, "tool_calls": None})
-        dc = DocumentCollection(
-            schema=schema,
+        vc = VectorCollection(
+            schema=self._SUMMARIES_SCHEMA,
             store=vector_store,
             embedder=StubEmbedding(dim=4),
-            llm=llm,
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("document-embed-upsert", "summaries", None)],
-            document_collections=[dc],
+            steps=[PipelineStep(tool="document-embed-upsert", collection="summaries", llm=llm)],
+            vector_collections=[vc],
         )
         await pipeline._ingest(Document(doc_id="d-001", text="text"))
         assert vector_store.ntotal("summaries") == 0
@@ -322,20 +275,18 @@ class TestDocumentEmbedUpsert:
     @pytest.mark.asyncio
     async def test_llm_failure_does_not_raise(self, make_vector_store):
         vector_store = make_vector_store()
-        schema = self._SUMMARIES_SCHEMA
-        await vector_store.create_collection(schema)
+        await vector_store.create_collection(self._SUMMARIES_SCHEMA)
         llm = MagicMock(spec=LLMBase)
         llm.complete = AsyncMock(side_effect=RuntimeError("LLM down"))
-        dc = DocumentCollection(
-            schema=schema,
+        vc = VectorCollection(
+            schema=self._SUMMARIES_SCHEMA,
             store=vector_store,
             embedder=StubEmbedding(dim=4),
-            llm=llm,
         )
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("document-embed-upsert", "summaries", None)],
-            document_collections=[dc],
+            steps=[PipelineStep(tool="document-embed-upsert", collection="summaries", llm=llm)],
+            vector_collections=[vc],
         )
         count = await pipeline._ingest(Document(doc_id="d-001", text="text"))
         assert count == 0
@@ -360,20 +311,19 @@ class TestThreeStepPipeline:
         await summary_store.create_collection(dc_schema)
         await struct_store.create_collection(sc_schema)
 
-        vc = ChunkCollection(schema=vc_schema, store=chunk_store, embedder=StubEmbedding(dim=4), chunker=FixedSizeChunker(chunk_size=20, overlap=0))
+        vc_chunks = VectorCollection(schema=vc_schema, store=chunk_store, embedder=StubEmbedding(dim=4))
+        vc_summary = VectorCollection(schema=dc_schema, store=summary_store, embedder=StubEmbedding(dim=4))
         sc = StructuredCollection(schema=sc_schema, store=struct_store, extractor=StubExtractor())
-        dc = DocumentCollection(schema=dc_schema, store=summary_store, embedder=StubEmbedding(dim=4), llm=_make_llm("Short summary."))
 
         pipeline = IngestionPipeline(
             name="app",
             steps=[
-                ("chunk-embed-upsert",    "chunks",    None),
-                ("extract-structured",    "tags",      None),
-                ("document-embed-upsert", "summaries", None),
+                PipelineStep(tool="chunk-embed-upsert",    collection="chunks",    chunker=FixedSizeChunker(chunk_size=20, overlap=0)),
+                PipelineStep(tool="extract-structured",    collection="tags"),
+                PipelineStep(tool="document-embed-upsert", collection="summaries", llm=_make_llm("Short summary.")),
             ],
-            chunk_collections=[vc],
+            vector_collections=[vc_chunks, vc_summary],
             structured_collections=[sc],
-            document_collections=[dc],
         )
 
         count = await pipeline._ingest(Document(doc_id="d-001", text="word " * 20))
@@ -416,11 +366,11 @@ class TestThreeStepPipeline:
 
 
 # ---------------------------------------------------------------------------
-# Config: DocumentCollectionConfig and new step type
+# Config: VectorCollectionConfig and step-level prompt/max_tokens
 # ---------------------------------------------------------------------------
 
-class TestDocumentCollectionConfig:
-    def test_parse_document_collection(self):
+class TestVectorCollectionConfig:
+    def test_parse_vector_collection_with_step_prompt(self):
         import textwrap
         from cogbase.config.config import AppConfig
 
@@ -432,22 +382,23 @@ class TestDocumentCollectionConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            document_collections:
+            vector_collections:
               - name: document_summary
-                prompt: "Summarize in one sentence."
-                max_tokens: 128
             pipeline:
               steps:
                 - tool: document-embed-upsert
                   collection: document_summary
+                  prompt: "Summarize in one sentence."
+                  max_tokens: 128
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        assert len(cfg.document_collections) == 1
-        assert cfg.document_collections[0].name == "document_summary"
-        assert cfg.document_collections[0].prompt == "Summarize in one sentence."
-        assert cfg.document_collections[0].max_tokens == 128
+        assert len(cfg.vector_collections) == 1
+        assert cfg.vector_collections[0].name == "document_summary"
+        step = cfg.pipeline.steps[0]
+        assert step.prompt == "Summarize in one sentence."
+        assert step.max_tokens == 128
 
-    def test_document_collection_requires_embedding(self):
+    def test_vector_collection_requires_embedding(self):
         import textwrap
         from cogbase.config.config import AppConfig
 
@@ -455,13 +406,13 @@ class TestDocumentCollectionConfig:
             name: bad-app
             llm:
               model: gpt-4o-mini
-            document_collections:
+            vector_collections:
               - name: document_summary
         """)
-        with pytest.raises(Exception, match="embedding is required when document_collections"):
+        with pytest.raises(Exception, match="embedding is required when vector_collections"):
             AppConfig.from_yaml(yaml_text)
 
-    def test_unknown_document_collection_in_step_raises(self):
+    def test_unknown_vector_collection_in_step_raises(self):
         import textwrap
         from cogbase.config.config import AppConfig
 
@@ -472,14 +423,14 @@ class TestDocumentCollectionConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            document_collections:
+            vector_collections:
               - name: document_summary
             pipeline:
               steps:
                 - tool: document-embed-upsert
                   collection: nonexistent
         """)
-        with pytest.raises(Exception, match="unknown document collection"):
+        with pytest.raises(Exception, match="unknown vector collection"):
             AppConfig.from_yaml(yaml_text)
 
 
@@ -487,14 +438,13 @@ class TestDocumentCollectionConfig:
 # metadata.doc_type routing via when conditions
 # ---------------------------------------------------------------------------
 
-def _make_chunk_collection(
+def _make_vector_collection(
     store: VectorStoreBase, name: str, dim: int = 4
-) -> ChunkCollection:
-    return ChunkCollection(
+) -> VectorCollection:
+    return VectorCollection(
         schema=VectorCollectionSchema(name=name, dimensions=dim, description=f"{name} chunks"),
         store=store,
         embedder=StubEmbedding(dim=dim),
-        chunker=FixedSizeChunker(chunk_size=20, overlap=0),
     )
 
 
@@ -506,11 +456,11 @@ class TestWhenConditionRouting:
         rule_schema = VectorCollectionSchema(name="rule_chunks", dimensions=4, description="rule chunks")
         await rule_store.create_collection(rule_schema)
 
-        vc = _make_chunk_collection(rule_store, "rule_chunks")
+        vc = _make_vector_collection(rule_store, "rule_chunks")
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("chunk-embed-upsert", "rule_chunks", {"doc_type": "rules"})],
-            chunk_collections=[vc],
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="rule_chunks", when={"doc_type": "rules"}, chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
+            vector_collections=[vc],
         )
 
         await pipeline._ingest(Document(
@@ -528,11 +478,11 @@ class TestWhenConditionRouting:
         rule_schema = VectorCollectionSchema(name="rule_chunks", dimensions=4, description="rule chunks")
         await rule_store.create_collection(rule_schema)
 
-        vc = _make_chunk_collection(rule_store, "rule_chunks")
+        vc = _make_vector_collection(rule_store, "rule_chunks")
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("chunk-embed-upsert", "rule_chunks", {"doc_type": "rules"})],
-            chunk_collections=[vc],
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="rule_chunks", when={"doc_type": "rules"}, chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
+            vector_collections=[vc],
         )
 
         await pipeline._ingest(Document(
@@ -550,11 +500,11 @@ class TestWhenConditionRouting:
         schema = VectorCollectionSchema(name="all_chunks", dimensions=4, description="all chunks")
         await store.create_collection(schema)
 
-        vc = _make_chunk_collection(store, "all_chunks")
+        vc = _make_vector_collection(store, "all_chunks")
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("chunk-embed-upsert", "all_chunks", None)],
-            chunk_collections=[vc],
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="all_chunks", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
+            vector_collections=[vc],
         )
 
         await pipeline._ingest(Document(doc_id="d1", text="rules text", metadata={"doc_type": "rules"}))
@@ -573,16 +523,16 @@ class TestWhenConditionRouting:
         await rule_store.create_collection(rule_schema)
         await contract_store.create_collection(contract_schema)
 
-        rule_vc = _make_chunk_collection(rule_store, "rule_chunks")
-        contract_vc = _make_chunk_collection(contract_store, "contract_chunks")
+        rule_vc = _make_vector_collection(rule_store, "rule_chunks")
+        contract_vc = _make_vector_collection(contract_store, "contract_chunks")
 
         pipeline = IngestionPipeline(
             name="app",
             steps=[
-                ("chunk-embed-upsert", "rule_chunks",     {"doc_type": "rules"}),
-                ("chunk-embed-upsert", "contract_chunks", {"doc_type": "contract"}),
+                PipelineStep(tool="chunk-embed-upsert", collection="rule_chunks",     when={"doc_type": "rules"},    chunker=FixedSizeChunker(chunk_size=20, overlap=0)),
+                PipelineStep(tool="chunk-embed-upsert", collection="contract_chunks", when={"doc_type": "contract"}, chunker=FixedSizeChunker(chunk_size=20, overlap=0)),
             ],
-            chunk_collections=[rule_vc, contract_vc],
+            vector_collections=[rule_vc, contract_vc],
         )
 
         await pipeline._ingest(Document(
@@ -599,26 +549,24 @@ class TestWhenConditionRouting:
         assert rule_store.ntotal("rule_chunks") > 0, "rules doc did not land in rule_chunks"
         assert contract_store.ntotal("contract_chunks") > 0, "contract doc did not land in contract_chunks"
 
-        # cross-check: nothing leaked into the wrong collection
         assert contract_store.ntotal("contract_chunks") == pytest.approx(
             contract_store.ntotal("contract_chunks")
         )
 
     @pytest.mark.asyncio
     async def test_partial_metadata_match_skips_step(self, make_vector_store):
-        """All when.metadata keys must match; partial match still skips the step."""
+        """All when keys must match; partial match still skips the step."""
         store = make_vector_store()
         schema = VectorCollectionSchema(name="chunks", dimensions=4, description="chunks")
         await store.create_collection(schema)
 
-        vc = _make_chunk_collection(store, "chunks")
+        vc = _make_vector_collection(store, "chunks")
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("chunk-embed-upsert", "chunks", {"doc_type": "rules", "region": "us"})],
-            chunk_collections=[vc],
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="chunks", when={"doc_type": "rules", "region": "us"}, chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
+            vector_collections=[vc],
         )
 
-        # doc_type matches but region does not — step must be skipped
         await pipeline._ingest(Document(
             doc_id="d1",
             text="Some rules.",
@@ -634,11 +582,11 @@ class TestWhenConditionRouting:
         schema = VectorCollectionSchema(name="chunks", dimensions=4, description="chunks")
         await store.create_collection(schema)
 
-        vc = _make_chunk_collection(store, "chunks")
+        vc = _make_vector_collection(store, "chunks")
         pipeline = IngestionPipeline(
             name="app",
-            steps=[("chunk-embed-upsert", "chunks", {"doc_type": "rules"})],
-            chunk_collections=[vc],
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="chunks", when={"doc_type": "rules"}, chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
+            vector_collections=[vc],
         )
 
         await pipeline._ingest(Document(doc_id="d1", text="Some text.", metadata={}))

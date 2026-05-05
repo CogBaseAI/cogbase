@@ -13,15 +13,15 @@ from cogbase.config.models import LLMConfig, EmbeddingConfig
 
 
 class ChunkerConfig(BaseModel):
-    type: Literal["fixed", "langchain"] = "fixed"
-    chunk_size: int = 512
-    overlap: int = 64
+    type: Literal["fixed", "langchain"] = "langchain"
+    chunk_size: int = 1024
+    overlap: int = 128
 
 
-class ChunkCollectionConfig(BaseModel):
+class VectorCollectionConfig(BaseModel):
     name: str
     dimensions: int = 1536
-    description: str = "Full-text passage chunks; use for detailed or specific questions about document content."
+    description: str = "Vector collection for passage chunks or document summaries."
 
 
 class ExtractorConfig(BaseModel):
@@ -41,15 +41,6 @@ class StructuredCollectionConfig(BaseModel):
     description: str = "Structured records; use for exact lookups or field-filtered queries."
 
 
-class DocumentCollectionConfig(BaseModel):
-    name: str
-    prompt: str | None = None
-    dimensions: int = 1536
-    description: str = "One-per-document summaries; use for topic-level or high-level questions about what documents cover."
-    max_tokens: int = 1024
-    metadata_fields: list[str] = []
-
-
 class WhenCondition(BaseModel):
     metadata: dict[str, str] = {}
 
@@ -60,6 +51,9 @@ class PipelineStepConfig(BaseModel):
     when: WhenCondition | None = None
     chunker: ChunkerConfig | None = None
     extractor: ExtractorConfig | None = None
+    prompt: str | None = None
+    max_tokens: int = 1024
+    metadata_fields: list[str] = []
 
 
 class PipelineConfig(BaseModel):
@@ -121,25 +115,21 @@ class AppConfig(BaseModel):
     document_store: DocumentStoreConfig | None = None
     structured_store: StructuredStoreConfig | None = None
     vector_store: VectorStoreConfig | None = None
-    chunk_collections: list[ChunkCollectionConfig] = []
+    vector_collections: list[VectorCollectionConfig] = []
     structured_collections: list[StructuredCollectionConfig] = []
-    document_collections: list[DocumentCollectionConfig] = []
     pipeline: PipelineConfig | None = None
     skills: list[str] = []
     workflows: list[WorkflowConfig] = []
 
     @model_validator(mode="after")
     def _validate(self) -> "AppConfig":
-        if self.chunk_collections and self.embedding is None:
-            raise ValueError("embedding is required when chunk_collections are defined")
-        if self.document_collections and self.embedding is None:
-            raise ValueError("embedding is required when document_collections are defined")
+        if self.vector_collections and self.embedding is None:
+            raise ValueError("embedding is required when vector_collections are defined")
         if self.pipeline:
-            vc_names = {vc.name for vc in self.chunk_collections}
+            vc_names = {vc.name for vc in self.vector_collections}
             sc_names = {sc.name for sc in self.structured_collections}
-            dc_names = {dc.name for dc in self.document_collections}
             for step in self.pipeline.steps:
-                if step.tool == "chunk-embed-upsert" and step.collection not in vc_names:
+                if step.tool in ("chunk-embed-upsert", "document-embed-upsert") and step.collection not in vc_names:
                     raise ValueError(
                         f"Pipeline step references unknown vector collection: {step.collection!r}"
                     )
@@ -150,10 +140,6 @@ class AppConfig(BaseModel):
                 if step.tool == "extract-structured" and step.extractor is None:
                     raise ValueError(
                         f"Pipeline step for {step.collection!r} is missing 'extractor'"
-                    )
-                if step.tool == "document-embed-upsert" and step.collection not in dc_names:
-                    raise ValueError(
-                        f"Pipeline step references unknown document collection: {step.collection!r}"
                     )
         return self
 

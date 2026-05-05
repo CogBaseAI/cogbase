@@ -1,10 +1,10 @@
-"""Tests for IngestionPipeline, ChunkCollection, and StructuredCollection."""
+"""Tests for IngestionPipeline, VectorCollection, and StructuredCollection."""
 
 import pytest
 from pydantic import ValidationError
 from pydantic import BaseModel
 
-from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult, StructuredCollection, ChunkCollection
+from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult, StructuredCollection, VectorCollection, PipelineStep
 from cogbase.core.models import Document
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.ingestion.base import ChunkerBase
@@ -114,18 +114,22 @@ class TestIngestionPipelineConstruction:
     def test_empty_application(self):
         app = IngestionPipeline(name="empty")
         assert app.name == "empty"
-        assert app._chunk_by_name == {}
+        assert app._vector_by_name == {}
         assert app._structured_by_name == {}
 
     def test_vector_only(self):
-        vc = ChunkCollection(
+        vc = VectorCollection(
             schema=VectorCollectionSchema(name="docs", dimensions=4, description="Test document chunks"),
             store=FAISSVectorStore(),
             embedder=StubEmbedding(dim=4),
-            chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
-        app = IngestionPipeline(name="app", chunk_collections=[vc])
-        assert app._chunk_by_name
+        chunker = FixedSizeChunker(chunk_size=50, overlap=0)
+        app = IngestionPipeline(
+            name="app",
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="docs", chunker=chunker)],
+            vector_collections=[vc],
+        )
+        assert app._vector_by_name
         assert app._structured_by_name == {}
 
     def test_structured_only(self):
@@ -135,7 +139,7 @@ class TestIngestionPipelineConstruction:
             extractor=StubExtractor(),
         )
         app = IngestionPipeline(name="app", structured_collections=[sc])
-        assert app._chunk_by_name == {}
+        assert app._vector_by_name == {}
         assert app._structured_by_name
 
 
@@ -152,18 +156,25 @@ class TestIngestionPipelineIngest:
         sc_schema = StubExtractor().schema
         await vector_store.create_collection(vc_schema)
         await structured_store.create_collection(sc_schema)
-        vc = ChunkCollection(
+        vc = VectorCollection(
             schema=vc_schema,
             store=vector_store,
             embedder=StubEmbedding(dim=4),
-            chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
         sc = StructuredCollection(
             schema=sc_schema,
             store=structured_store,
             extractor=StubExtractor(),
         )
-        app = IngestionPipeline(name="app", chunk_collections=[vc], structured_collections=[sc])
+        app = IngestionPipeline(
+            name="app",
+            steps=[
+                PipelineStep(tool="chunk-embed-upsert", collection="docs", chunker=FixedSizeChunker(chunk_size=50, overlap=0)),
+                PipelineStep(tool="extract-structured", collection="tags"),
+            ],
+            vector_collections=[vc],
+            structured_collections=[sc],
+        )
         return app, vector_store, structured_store
 
     @pytest.mark.asyncio
@@ -207,13 +218,16 @@ class TestIngestionPipelineIngest:
         vector_store = FAISSVectorStore()
         vc_schema = VectorCollectionSchema(name="docs", dimensions=4, description="Test document chunks")
         await vector_store.create_collection(vc_schema)
-        vc = ChunkCollection(
+        vc = VectorCollection(
             schema=vc_schema,
             store=vector_store,
             embedder=StubEmbedding(dim=4),
-            chunker=FixedSizeChunker(chunk_size=50, overlap=0),
         )
-        app = IngestionPipeline(name="app", chunk_collections=[vc])
+        app = IngestionPipeline(
+            name="app",
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="docs", chunker=FixedSizeChunker(chunk_size=50, overlap=0))],
+            vector_collections=[vc],
+        )
         count = await app._ingest(Document(doc_id="doc-1", text="word " * 30))
         assert vector_store.ntotal("docs") > 0
         assert count == 0  # no structured collection

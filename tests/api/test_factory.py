@@ -11,7 +11,7 @@ from cogbase.config.stores import StructuredStoreConfig
 from api.factory import build_app
 from api.system_resources import SystemResources
 from cogbase.stores import build_structured_store
-from cogbase.pipeline.ingestion_pipeline import DocumentCollection, ChunkCollection
+from cogbase.pipeline.ingestion_pipeline import VectorCollection, PipelineStep
 from cogbase.stores.document.local_fs import LocalFSDocumentStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.structured.sqlite import SQLiteStructuredStore
@@ -71,7 +71,7 @@ llm:
 embedding:
   provider: openai
   model: text-embedding-3-small
-chunk_collections:
+vector_collections:
   - name: document_chunks
 structured_collections:
   - name: contract_extraction
@@ -140,7 +140,7 @@ class TestBuildAppVectorStoreResolution:
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
         app = await build_app(cfg, system=SystemResources(structured_store=system_store))
-        assert app._ingest_pipeline._chunk_by_name == {}
+        assert app._ingest_pipeline._vector_by_name == {}
 
     @patch("api.factory._build_llm")
     async def test_system_vector_store_used_when_chunk_step_present(self, mock_build_llm):
@@ -156,11 +156,11 @@ class TestBuildAppVectorStoreResolution:
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs),
             )
 
-        assert app._ingest_pipeline._chunk_by_name
+        assert app._ingest_pipeline._vector_by_name
 
     @patch("api.factory._build_llm")
     async def test_vector_collection_name_matches_config(self, mock_build_llm):
-        """The vector collection name comes from chunk_collections config, not app name."""
+        """The vector collection name comes from vector_collections config, not app name."""
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
         sys_vs = FAISSVectorStore()
@@ -173,7 +173,7 @@ class TestBuildAppVectorStoreResolution:
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs),
             )
 
-        assert "document_chunks" in app._ingest_pipeline._chunk_by_name
+        assert "document_chunks" in app._ingest_pipeline._vector_by_name
 
 
 # ---------------------------------------------------------------------------
@@ -190,14 +190,14 @@ llm:
 embedding:
   provider: openai
   model: text-embedding-3-small
-document_collections:
+vector_collections:
   - name: document_summary
-    prompt: "Summarize in one sentence."
-    max_tokens: 128
 pipeline:
   steps:
     - tool: document-embed-upsert
       collection: document_summary
+      prompt: "Summarize in one sentence."
+      max_tokens: 128
 """
 
 _THREE_STEP_CONFIG_YAML = f"""\
@@ -208,15 +208,12 @@ llm:
 embedding:
   provider: openai
   model: text-embedding-3-small
-chunk_collections:
+vector_collections:
   - name: document_chunks
+  - name: document_summary
 structured_collections:
   - name: contract_extraction
     schema: '{_SCHEMA}'
-document_collections:
-  - name: document_summary
-    prompt: "Summarize in one sentence."
-    max_tokens: 128
 pipeline:
   parallel: false
   steps:
@@ -232,6 +229,8 @@ pipeline:
         type: llm
     - tool: document-embed-upsert
       collection: document_summary
+      prompt: "Summarize in one sentence."
+      max_tokens: 128
 """
 
 
@@ -246,10 +245,10 @@ class TestBuildAppDocumentCollection:
             mock_emb.return_value = MagicMock()
             app = await build_app(cfg, system=SystemResources(vector_store=sys_vs))
 
-        assert "document_summary" in app._ingest_pipeline._document_by_name
+        assert "document_summary" in app._ingest_pipeline._vector_by_name
 
     @patch("api.factory._build_llm")
-    async def test_document_collection_name_prompt_max_tokens(self, mock_build_llm):
+    async def test_document_step_prompt_and_max_tokens(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
         sys_vs = FAISSVectorStore()
@@ -258,13 +257,14 @@ class TestBuildAppDocumentCollection:
             mock_emb.return_value = MagicMock()
             app = await build_app(cfg, system=SystemResources(vector_store=sys_vs))
 
-        dc = app._ingest_pipeline._document_by_name["document_summary"]
-        assert dc.name == "document_summary"
-        assert dc.prompt == "Summarize in one sentence."
-        assert dc.max_tokens == 128
+        vc = app._ingest_pipeline._vector_by_name["document_summary"]
+        assert vc.name == "document_summary"
+        step = next(s for s in app._ingest_pipeline._steps if s.collection == "document_summary")
+        assert step.prompt == "Summarize in one sentence."
+        assert step.max_tokens == 128
 
     @patch("api.factory._build_llm")
-    async def test_document_collection_uses_shared_vector_store(self, mock_build_llm):
+    async def test_all_vector_collections_share_vector_store(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_THREE_STEP_CONFIG_YAML)
         sys_vs = FAISSVectorStore()
@@ -277,9 +277,8 @@ class TestBuildAppDocumentCollection:
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs),
             )
 
-        vc = next(iter(app._ingest_pipeline._chunk_by_name.values()))
-        dc = app._ingest_pipeline._document_by_name["document_summary"]
-        assert vc.store is dc.store
+        stores = {vc.store for vc in app._ingest_pipeline._vector_by_name.values()}
+        assert len(stores) == 1, "all vector collections should share the same store"
 
     @patch("api.factory._build_llm")
     async def test_three_step_pipeline_builds_all_collections(self, mock_build_llm):
@@ -295,9 +294,9 @@ class TestBuildAppDocumentCollection:
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs),
             )
 
-        assert app._ingest_pipeline._chunk_by_name
+        assert app._ingest_pipeline._vector_by_name
         assert app._ingest_pipeline._structured_by_name
-        assert "document_summary" in app._ingest_pipeline._document_by_name
+        assert "document_summary" in app._ingest_pipeline._vector_by_name
 
     @patch("api.factory._build_llm")
     async def test_vector_collection_names_includes_both(self, mock_build_llm):
@@ -313,8 +312,8 @@ class TestBuildAppDocumentCollection:
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs),
             )
 
-        assert "document_chunks" in app._ingest_pipeline._chunk_by_name
-        assert "document_summary" in app._ingest_pipeline._document_by_name
+        assert "document_chunks" in app._ingest_pipeline._vector_by_name
+        assert "document_summary" in app._ingest_pipeline._vector_by_name
 
     @patch("api.factory._build_llm")
     @patch("api.factory._build_embedder")

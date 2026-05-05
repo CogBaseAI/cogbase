@@ -26,8 +26,8 @@ from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
     StructuredCollection,
-    DocumentCollection,
-    ChunkCollection,
+    VectorCollection,
+    PipelineStep,
 )
 from cogbase.workflows.runner import WorkflowRunner
 from api.system_resources import SystemResources
@@ -91,26 +91,19 @@ async def build_app(
         _build_document_store(config.document_store) if config.document_store else sys.document_store
     )
 
-    # Build step-config lookup keyed by collection name for chunker/extractor resolution
-    step_by_col: dict[str, Any] = {}
-    for s in (config.pipeline.steps if config.pipeline else []):
-        step_by_col.setdefault(s.collection, s)
-
-    # --- Collections (built from their own config, independent of pipeline steps) ---
-    chunk_collections: list[ChunkCollection] = []
-    for vc_cfg in config.chunk_collections:
+    # --- Vector collections ---
+    vector_collections: list[VectorCollection] = []
+    for vc_cfg in config.vector_collections:
         if vector_store is None:
             raise ValueError(
-                f"chunk collection {vc_cfg.name!r} requires a vector store"
+                f"vector collection {vc_cfg.name!r} requires a vector store"
                 " (configure vector_store in the app config or system config)"
             )
         if embedder is None:
             raise ValueError(
-                f"chunk collection {vc_cfg.name!r} requires an embedding config"
+                f"vector collection {vc_cfg.name!r} requires an embedding config"
             )
-        step = step_by_col.get(vc_cfg.name)
-        chunker_cfg = (step.chunker if step else None) or ChunkerConfig()
-        chunk_collections.append(ChunkCollection(
+        vector_collections.append(VectorCollection(
             schema=VectorCollectionSchema(
                 name=vc_cfg.name,
                 dimensions=vc_cfg.dimensions,
@@ -118,11 +111,11 @@ async def build_app(
             ),
             store=vector_store,
             embedder=embedder,
-            chunker=_build_chunker(chunker_cfg),
         ))
 
+    # --- Structured collections ---
     structured_collections: list[StructuredCollection] = []
-    all_structured_schemas: list[CollectionSchema] = []
+    structured_schemas: list[CollectionSchema] = []
     for sc_cfg in config.structured_collections:
         if structured_store is None:
             raise ValueError(
@@ -132,6 +125,9 @@ async def build_app(
         extraction_model = build_model_from_json_schema(
             sc_cfg.schema_, model_name=sc_cfg.name.upper()
         )
+        step_by_col: dict[str, Any] = {}
+        for s in (config.pipeline.steps if config.pipeline else []):
+            step_by_col.setdefault(s.collection, s)
         step = step_by_col.get(sc_cfg.name)
         ext_cfg: ExtractorConfig | None = step.extractor if step else None
         if ext_cfg is not None:
@@ -172,55 +168,43 @@ async def build_app(
                 fields=cls_generate_schema(extraction_model),
                 description=sc_cfg.description,
             )
-        all_structured_schemas.append(sc_schema)
+        structured_schemas.append(sc_schema)
 
-    document_collections: list[DocumentCollection] = []
-    for dc_cfg in config.document_collections:
-        if vector_store is None:
-            raise ValueError(
-                f"document collection {dc_cfg.name!r} requires a vector store"
-                " (configure vector_store in the app config or system config)"
-            )
-        if embedder is None:
-            raise ValueError(
-                f"document collection {dc_cfg.name!r} requires an embedding config"
-            )
-        document_collections.append(DocumentCollection(
-            schema=VectorCollectionSchema(
-                name=dc_cfg.name,
-                dimensions=dc_cfg.dimensions,
-                description=dc_cfg.description,
-            ),
-            store=vector_store,
-            embedder=embedder,
-            llm=llm,
-            prompt=dc_cfg.prompt or "Summarize this document in a few sentences.",
-            max_tokens=dc_cfg.max_tokens,
-            metadata_fields=dc_cfg.metadata_fields,
-        ))
-
-    # --- Create collections in their backing stores (idempotent) ---
-    for cc in chunk_collections:
-        await cc.store.create_collection(cc.schema)
-        logger.info("created chunk collection=%s, app=%s", cc.schema, config.name)
-    for sc_schema in all_structured_schemas:
+    # --- Create collections in backing stores (idempotent) ---
+    for vc in vector_collections:
+        await vc.store.create_collection(vc.schema)
+        logger.info("created vector collection=%s, app=%s", vc.schema, config.name)
+    for sc_schema in structured_schemas:
         await structured_store.create_collection(sc_schema)
         logger.info("created structured collection=%s, app=%s", sc_schema, config.name)
-    for dc in document_collections:
-        await dc.store.create_collection(dc.schema)
-        logger.info("created document collection=%s, app=%s", dc.schema, config.name)
 
-    # --- Pipeline (references already-built collections) ---
-    steps = config.pipeline.steps if config.pipeline else []
+    # --- Pipeline steps ---
+    raw_steps = config.pipeline.steps if config.pipeline else []
+    pipeline_steps: list[PipelineStep] = []
+    for s in raw_steps:
+        ps = PipelineStep(
+            tool=s.tool,
+            collection=s.collection,
+            when=s.when.metadata if s.when else None,
+        )
+        if s.tool == "chunk-embed-upsert":
+            chunker_cfg = s.chunker or ChunkerConfig()
+            ps.chunker = _build_chunker(chunker_cfg)
+        elif s.tool == "document-embed-upsert":
+            ps.llm = llm
+            ps.prompt = s.prompt or "Summarize this document in a few sentences."
+            ps.max_tokens = s.max_tokens
+            ps.metadata_fields = s.metadata_fields
+        pipeline_steps.append(ps)
+
     pipeline = IngestionPipeline(
         name=config.name,
-        steps=[(s.tool, s.collection, s.when.metadata if s.when else None) for s in steps],
-        chunk_collections=chunk_collections or None,
+        steps=pipeline_steps,
+        vector_collections=vector_collections or None,
         structured_collections=structured_collections or None,
-        document_collections=document_collections or None,
     )
 
-    vc_schemas = [c.schema for c in [*chunk_collections, *document_collections]]
+    vc_schemas = [vc.schema for vc in vector_collections]
 
     qrunner = QueryRunner(
         llm=llm,
@@ -228,7 +212,7 @@ async def build_app(
         vector_store=vector_store,
         embedder=embedder,
         vector_schemas=vc_schemas or None,
-        structured_schemas=all_structured_schemas or None,
+        structured_schemas=structured_schemas or None,
         document_store=document_store,
         app_name=config.name,
     )

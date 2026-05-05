@@ -9,25 +9,23 @@
 # POST the ZIP to POST /applications to create an application.
 #
 # Required: name
-# Optional: llm (falls back to system llm if omitted), embedding (required when chunk_collections or document_collections are defined, falls back to system embedding)
+# Optional:
+#   - llm, if you need a llm different than system llm
+#   - embedding, if you need an embedding model different than system embedding model
 #
 # Optional: Store backends (structured_store, vector_store) are not set here —
 # the service automatically uses the stores defined in cogbase_system.yaml.
 
 name: my-contract-analyzer
 
-chunk_collections:
+vector_collections:
   - name: document_chunks    # full-text passage index
+  - name: document_summary   # one vector record per document (LLM summary embedded)
+    description: "One-per-document summaries; use for topic-level or high-level questions about what documents cover."
 
 structured_collections:
   - name: contract_extraction
     schema: extraction_schema.json      # filename in ZIP root (resolved at upload time)
-
-document_collections:
-  - name: document_summary   # one vector record per document (LLM summary embedded)
-    prompt: "Summarize this document in a few sentences."
-    max_tokens: 1024
-    # metadata_fields: [customer_id, deal_stage]  # optional: project doc.metadata keys into chunk metadata for search filtering
 
 pipeline:
   parallel: true             # steps run sequentially top-to-bottom
@@ -47,3 +45,6 @@ pipeline:
 
     - tool: document-embed-upsert
       collection: document_summary
+      prompt: "Summarize this document in a few sentences."
+      max_tokens: 1024
+      # metadata_fields: [customer_id, deal_stage]  # optional: project doc.metadata keys into chunk metadata

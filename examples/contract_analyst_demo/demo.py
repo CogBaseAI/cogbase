@@ -86,7 +86,7 @@ embedding:
   provider: openai
   model: {_EMBED_MODEL}
   dimensions: {_EMBED_DIM}
-chunk_collections:
+vector_collections:
   - name: document_chunks
 structured_collections:
   - name: {_CONTRACTS_COLLECTION}

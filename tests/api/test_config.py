@@ -9,7 +9,7 @@ import pytest
 from cogbase.config.config import (
     AppConfig,
     ChunkerConfig,
-    DocumentCollectionConfig,
+    VectorCollectionConfig,
     EmbeddingConfig,
     ExtractorConfig,
     LLMConfig,
@@ -107,13 +107,13 @@ class TestVectorStoreConfig:
 class TestChunkerConfig:
     def test_defaults(self):
         cfg = ChunkerConfig()
-        assert cfg.type == "fixed"
-        assert cfg.chunk_size == 512
-        assert cfg.overlap == 64
+        assert cfg.type == "langchain"
+        assert cfg.chunk_size == 1024
+        assert cfg.overlap == 128
 
     def test_custom_values(self):
-        cfg = ChunkerConfig(type="langchain", chunk_size=256, overlap=32)
-        assert cfg.type == "langchain"
+        cfg = ChunkerConfig(type="fixed", chunk_size=256, overlap=32)
+        assert cfg.type == "fixed"
         assert cfg.chunk_size == 256
         assert cfg.overlap == 32
 
@@ -153,7 +153,7 @@ _FULL_YAML = textwrap.dedent("""\
     embedding:
       provider: openai
       model: text-embedding-3-small
-    chunk_collections:
+    vector_collections:
       - name: doc_chunks
     pipeline:
       steps:
@@ -174,13 +174,13 @@ class TestAppConfig:
         assert cfg.structured_store is None
         assert cfg.vector_store is None
         assert cfg.embedding is None
-        assert cfg.chunk_collections == []
+        assert cfg.vector_collections == []
 
     def test_from_yaml_full(self):
         cfg = AppConfig.from_yaml(_FULL_YAML)
         assert cfg.name == "full-app"
         assert cfg.embedding is not None
-        assert len(cfg.chunk_collections) == 1
+        assert len(cfg.vector_collections) == 1
         assert cfg.pipeline.steps[0].chunker.chunk_size == 256
 
     def test_from_yaml_with_explicit_store(self):
@@ -196,7 +196,7 @@ class TestAppConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            chunk_collections:
+            vector_collections:
               - name: doc_chunks
         """)
         cfg = AppConfig.from_yaml(yaml_text)
@@ -209,10 +209,10 @@ class TestAppConfig:
             name: bad-app
             llm:
               model: gpt-4o-mini
-            chunk_collections:
+            vector_collections:
               - name: doc_chunks
         """)
-        with pytest.raises(Exception, match="embedding is required when chunk_collections"):
+        with pytest.raises(Exception, match="embedding is required when vector_collections"):
             AppConfig.from_yaml(yaml_text)
 
     def test_embedding_alone_is_valid(self):
@@ -226,15 +226,11 @@ class TestAppConfig:
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         assert cfg.embedding is not None
-        assert cfg.chunk_collections == []
+        assert cfg.vector_collections == []
 
     def test_from_yaml_non_mapping_raises(self):
         with pytest.raises(ValueError, match="mapping"):
             AppConfig.from_yaml("- item1\n- item2\n")
-
-    def test_document_collections_empty_by_default(self):
-        cfg = AppConfig.from_yaml(_MINIMAL_YAML)
-        assert cfg.document_collections == []
 
     def test_pipeline_step_literal_includes_document_embed(self):
         yaml_text = textwrap.dedent("""\
@@ -244,7 +240,7 @@ class TestAppConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            document_collections:
+            vector_collections:
               - name: doc_summary
             pipeline:
               steps:
@@ -255,18 +251,18 @@ class TestAppConfig:
         assert cfg.pipeline.steps[0].tool == "document-embed-upsert"
         assert cfg.pipeline.steps[0].collection == "doc_summary"
 
-    def test_document_collections_without_embedding_raises(self):
+    def test_vector_collections_without_embedding_raises_for_doc_embed(self):
         yaml_text = textwrap.dedent("""\
             name: bad-app
             llm:
               model: gpt-4o-mini
-            document_collections:
+            vector_collections:
               - name: doc_summary
         """)
-        with pytest.raises(Exception, match="embedding is required when document_collections"):
+        with pytest.raises(Exception, match="embedding is required when vector_collections"):
             AppConfig.from_yaml(yaml_text)
 
-    def test_step_references_unknown_document_collection_raises(self):
+    def test_step_references_unknown_vector_collection_raises(self):
         yaml_text = textwrap.dedent("""\
             name: bad-app
             llm:
@@ -274,14 +270,14 @@ class TestAppConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            document_collections:
+            vector_collections:
               - name: doc_summary
             pipeline:
               steps:
                 - tool: document-embed-upsert
                   collection: nonexistent
         """)
-        with pytest.raises(Exception, match="unknown document collection"):
+        with pytest.raises(Exception, match="unknown vector collection"):
             AppConfig.from_yaml(yaml_text)
 
     def test_full_three_step_config_parses(self):
@@ -293,15 +289,12 @@ class TestAppConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            chunk_collections:
+            vector_collections:
               - name: document_chunks
+              - name: document_summary
             structured_collections:
               - name: contract_extraction
                 schema: '{_SCHEMA}'
-            document_collections:
-              - name: document_summary
-                prompt: "Summarize in one sentence."
-                max_tokens: 128
             pipeline:
               parallel: false
               steps:
@@ -313,17 +306,18 @@ class TestAppConfig:
                     type: llm
                 - tool: document-embed-upsert
                   collection: document_summary
+                  prompt: "Summarize in one sentence."
+                  max_tokens: 128
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        assert len(cfg.chunk_collections) == 1
+        assert len(cfg.vector_collections) == 2
         assert len(cfg.structured_collections) == 1
-        assert len(cfg.document_collections) == 1
-        assert cfg.document_collections[0].name == "document_summary"
-        assert cfg.document_collections[0].prompt == "Summarize in one sentence."
-        assert cfg.document_collections[0].max_tokens == 128
         assert len(cfg.pipeline.steps) == 3
         tools = [s.tool for s in cfg.pipeline.steps]
         assert tools == ["chunk-embed-upsert", "extract-structured", "document-embed-upsert"]
+        doc_step = cfg.pipeline.steps[2]
+        assert doc_step.prompt == "Summarize in one sentence."
+        assert doc_step.max_tokens == 128
 
 
 # ---------------------------------------------------------------------------
@@ -416,7 +410,7 @@ class TestWhenCondition:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            chunk_collections:
+            vector_collections:
               - name: chunks
             pipeline:
               steps:
@@ -434,7 +428,7 @@ class TestWhenCondition:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            chunk_collections:
+            vector_collections:
               - name: rule_chunks
             pipeline:
               steps:
@@ -458,7 +452,7 @@ class TestWhenCondition:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            chunk_collections:
+            vector_collections:
               - name: rule_chunks
               - name: contract_chunks
             pipeline:
@@ -493,7 +487,7 @@ class TestWhenCondition:
             embedding:
               provider: openai
               model: text-embedding-3-small
-            chunk_collections:
+            vector_collections:
               - name: chunks
             pipeline:
               steps:
@@ -506,29 +500,24 @@ class TestWhenCondition:
 
 
 # ---------------------------------------------------------------------------
-# DocumentCollectionConfig
+# VectorCollectionConfig
 # ---------------------------------------------------------------------------
 
-class TestDocumentCollectionConfig:
+class TestVectorCollectionConfig:
     def test_defaults(self):
-        cfg = DocumentCollectionConfig(name="s")
+        cfg = VectorCollectionConfig(name="s")
         assert cfg.name == "s"
-        assert cfg.prompt is None
-        assert cfg.max_tokens == 1024
-        assert cfg.metadata_fields == []
+        assert cfg.dimensions == 1536
 
-    def test_custom_values(self):
-        cfg = DocumentCollectionConfig(
-            name="doc_summary",
-            prompt="One sentence please.",
-            max_tokens=64,
-        )
-        assert cfg.prompt == "One sentence please."
+    def test_custom_description(self):
+        cfg = VectorCollectionConfig(name="chunks", description="Passage chunks for search.")
+        assert cfg.description == "Passage chunks for search."
+
+    def test_step_prompt_and_max_tokens_on_step_config(self):
+        cfg = PipelineStepConfig(tool="document-embed-upsert", collection="doc_summary", prompt="One sentence.", max_tokens=64)
+        assert cfg.prompt == "One sentence."
         assert cfg.max_tokens == 64
 
-    def test_metadata_fields(self):
-        cfg = DocumentCollectionConfig(
-            name="meetings",
-            metadata_fields=["customer_id", "deal_stage"],
-        )
+    def test_step_metadata_fields(self):
+        cfg = PipelineStepConfig(tool="document-embed-upsert", collection="meetings", metadata_fields=["customer_id", "deal_stage"])
         assert cfg.metadata_fields == ["customer_id", "deal_stage"]
