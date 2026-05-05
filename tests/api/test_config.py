@@ -518,6 +518,6 @@ class TestVectorCollectionConfig:
         assert cfg.prompt == "One sentence."
         assert cfg.max_tokens == 64
 
-    def test_step_metadata_fields(self):
-        cfg = PipelineStepConfig(tool="document-embed-upsert", collection="meetings", metadata_fields=["customer_id", "deal_stage"])
+    def test_vector_collection_metadata_fields(self):
+        cfg = VectorCollectionConfig(name="meetings", metadata_fields=["customer_id", "deal_stage"])
         assert cfg.metadata_fields == ["customer_id", "deal_stage"]

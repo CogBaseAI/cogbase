@@ -235,13 +235,13 @@ class TestDocumentEmbedUpsert:
             schema=self._SUMMARIES_SCHEMA,
             store=vector_store,
             embedder=StubEmbedding(dim=4),
+            metadata_fields=["customer_id", "deal_stage"],
         )
         pipeline = IngestionPipeline(
             name="app",
             steps=[PipelineStep(
                 tool="document-embed-upsert",
                 collection="summaries",
-                metadata_fields=["customer_id", "deal_stage"],
             )],
             vector_collections=[vc],
         )

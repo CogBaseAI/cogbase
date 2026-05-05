@@ -22,6 +22,7 @@ class VectorCollectionConfig(BaseModel):
     name: str
     dimensions: int = 1536
     description: str = "Vector collection for passage chunks or document summaries."
+    metadata_fields: list[str] = []
 
 
 class ExtractorConfig(BaseModel):
@@ -53,7 +54,6 @@ class PipelineStepConfig(BaseModel):
     extractor: ExtractorConfig | None = None
     prompt: str | None = None
     max_tokens: int = 1024
-    metadata_fields: list[str] = []
 
 
 class PipelineConfig(BaseModel):

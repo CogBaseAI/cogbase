@@ -111,6 +111,7 @@ async def build_app(
             ),
             store=vector_store,
             embedder=embedder,
+            metadata_fields=vc_cfg.metadata_fields,
         ))
 
     # --- Structured collections ---
@@ -194,7 +195,6 @@ async def build_app(
             ps.llm = llm
             ps.prompt = s.prompt or "Summarize this document in a few sentences."
             ps.max_tokens = s.max_tokens
-            ps.metadata_fields = s.metadata_fields
         pipeline_steps.append(ps)
 
     pipeline = IngestionPipeline(

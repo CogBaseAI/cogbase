@@ -52,15 +52,17 @@ class VectorCollection:
     """A vector collection backed by a store and embedder.
 
     Args:
-        schema:   ``VectorCollectionSchema`` carrying the collection name,
-                  dimensions, description, and optional metadata.
-        store:    ``VectorStoreBase`` implementation that persists chunks.
-        embedder: ``EmbeddingBase`` implementation that produces dense vectors.
+        schema:          ``VectorCollectionSchema`` carrying the collection name,
+                         dimensions, description, and optional metadata.
+        store:           ``VectorStoreBase`` implementation that persists chunks.
+        embedder:        ``EmbeddingBase`` implementation that produces dense vectors.
+        metadata_fields: Document metadata keys to project into chunk metadata.
     """
 
     schema: VectorCollectionSchema
     store: VectorStoreBase
     embedder: EmbeddingBase
+    metadata_fields: list[str] = field(default_factory=list)
 
     @property
     def name(self) -> str:
@@ -111,15 +113,13 @@ class PipelineStep:
         tool:            One of ``"chunk-embed-upsert"``, ``"extract-structured"``,
                          or ``"document-embed-upsert"``.
         collection:      Name of the target collection for this step.
-        when:            Optional metadata filter — step is skipped unless all
-                         key/value pairs match the document's metadata.
-        chunker:         Chunker for ``chunk-embed-upsert`` steps.
-        llm:             Optional LLM for ``document-embed-upsert`` steps.  When
-                         ``None`` the raw document text is embedded directly.
-        prompt:          System prompt for the LLM summarisation call.
-        max_tokens:      Maximum tokens for the generated summary.
-        metadata_fields: Document metadata keys to project into chunk metadata
-                         (``document-embed-upsert`` only).
+        when:       Optional metadata filter — step is skipped unless all
+                    key/value pairs match the document's metadata.
+        chunker:    Chunker for ``chunk-embed-upsert`` steps.
+        llm:        Optional LLM for ``document-embed-upsert`` steps.  When
+                    ``None`` the raw document text is embedded directly.
+        prompt:     System prompt for the LLM summarisation call.
+        max_tokens: Maximum tokens for the generated summary.
     """
 
     tool: str
@@ -129,7 +129,6 @@ class PipelineStep:
     llm: LLMBase | None = None
     prompt: str = "Summarize this document in a few sentences."
     max_tokens: int = 1024
-    metadata_fields: list[str] = field(default_factory=list)
 
 
 class IngestionPipeline:
@@ -234,8 +233,9 @@ class IngestionPipeline:
             raise ValueError(
                 f"Embedder returned {len(embeddings)} embeddings for {len(chunks)} chunks."
             )
+        doc_meta = {k: v for k, v in doc.metadata.items() if k in vc.metadata_fields}
         embedded = [
-            chunk.model_copy(update={"embedding": emb})
+            chunk.model_copy(update={"embedding": emb, "metadata": {**chunk.metadata, **doc_meta}})
             for chunk, emb in zip(chunks, embeddings)
         ]
         await vc.store.upsert(vc.name, embedded)
@@ -283,7 +283,7 @@ class IngestionPipeline:
             return
 
         (embedding,) = await vc.embedder.embed([text])
-        metadata = {k: v for k, v in doc.metadata.items() if k in step.metadata_fields}
+        metadata = {k: v for k, v in doc.metadata.items() if k in vc.metadata_fields}
         chunk = Chunk(
             chunk_id=f"{doc.doc_id}__document",
             doc_id=doc.doc_id,
