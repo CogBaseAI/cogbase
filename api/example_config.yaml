@@ -18,17 +18,10 @@ name: my-contract-analyzer
 
 chunk_collections:
   - name: document_chunks    # full-text passage index
-    chunker:
-      type: fixed            # fixed | langchain
-      chunk_size: 512
-      overlap: 64
 
 structured_collections:
   - name: contract_extraction
     schema: extraction_schema.json      # filename in ZIP root (resolved at upload time)
-    extractor:
-      type: llm
-      prompt: extraction_prompt.txt     # filename in ZIP root; omit to use built-in default
 
 document_collections:
   - name: document_summary   # one vector record per document (LLM summary embedded)
@@ -41,9 +34,16 @@ pipeline:
   steps:
     - tool: chunk-embed-upsert
       collection: document_chunks
+      chunker:
+        type: fixed          # fixed | langchain
+        chunk_size: 512
+        overlap: 64
 
     - tool: extract-structured
       collection: contract_extraction
+      extractor:
+        type: llm
+        prompt: extraction_prompt.txt   # filename in ZIP root; omit to use built-in default
 
     - tool: document-embed-upsert
       collection: document_summary

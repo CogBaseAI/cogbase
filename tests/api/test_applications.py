@@ -201,13 +201,13 @@ class TestCreateApplication:
             structured_collections:
               - name: contract_extraction
                 schema: extraction_schema.json
-                extractor:
-                  type: llm
-                  prompt: extraction_prompt.txt
             pipeline:
               steps:
                 - tool: extract-structured
                   collection: contract_extraction
+                  extractor:
+                    type: llm
+                    prompt: extraction_prompt.txt
         """).encode()
         bundle = _make_bundle(
             config_yaml,
@@ -229,9 +229,9 @@ class TestCreateApplication:
             )
 
         assert resp.status_code == 201
-        sc = captured[0].structured_collections[0]
-        assert sc.schema_ == schema_json.decode()
-        assert sc.extractor.prompt == prompt_txt.decode()
+        cfg = captured[0]
+        assert cfg.structured_collections[0].schema_ == schema_json.decode()
+        assert cfg.pipeline.steps[0].extractor.prompt == prompt_txt.decode()
 
 
 # ---------------------------------------------------------------------------

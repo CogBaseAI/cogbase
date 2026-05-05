@@ -140,58 +140,65 @@ chunk_collections:
     description: >-
       Company policy and vendor contract standard passages. Use to retrieve rules,
       standards, and fallback positions relevant to a clause type or compliance topic.
-    chunker:
-      type: fixed
-      chunk_size: 512
-      overlap: 64
   - name: contract_chunks
     description: >-
       Contract text passage chunks. Use for detailed questions about specific
       contract terms, wording, or clauses.
-    chunker:
-      type: fixed
-      chunk_size: 512
-      overlap: 64
 structured_collections:
   - name: contract_metadata
     description: >-
       Key facts per contract: parties, dates, value, governing law, termination
       notice period. One record per contract document.
     schema: contract_metadata_schema.json
-    extractor:
-      type: llm
-      prompt: contract_metadata_prompt.txt
   - name: contract_clauses
     description: >-
       Individual clauses extracted from contracts. Each record is one clause with
       its type and verbatim text. Filter by doc_id to retrieve all clauses for a
       contract, or filter by clause_type to find clauses of a specific category.
     schema: contract_clauses_schema.json
-    extractor:
-      type: llm
-      extract_as_list: true
-      list_field: clauses
-      item_id_field: clause_id
-      prompt: contract_clauses_prompt.txt
+    primary_fields: [clause_id]
+  - name: clause_compliance_findings
+    description: >-
+      Clause-level compliance findings. Each record captures whether a contract
+      clause complies with company policy, with severity, summary, and redline.
+    schema: clause_compliance_findings_schema.json
+    primary_fields: [clause_id]
 pipeline:
   steps:
     - tool: chunk-embed-upsert
       collection: rule_chunks
+      chunker:
+        type: fixed
+        chunk_size: 512
+        overlap: 64
       when:
         metadata:
           doc_type: rules
     - tool: chunk-embed-upsert
       collection: contract_chunks
+      chunker:
+        type: fixed
+        chunk_size: 512
+        overlap: 64
       when:
         metadata:
           doc_type: contract
     - tool: extract-structured
       collection: contract_metadata
+      extractor:
+        type: llm
+        prompt: contract_metadata_prompt.txt
       when:
         metadata:
           doc_type: contract
     - tool: extract-structured
       collection: contract_clauses
+      extractor:
+        type: llm
+        extract_as_list: true
+        list_field: clauses
+        item_id_field: clause_id
+        prompt: contract_clauses_prompt.txt
       when:
         metadata:
           doc_type: contract
@@ -201,13 +208,6 @@ workflows:
       type: manual
     input_schema:
       doc_id: string
-    output_collections:
-      - name: clause_compliance_findings
-        schema: clause_compliance_findings_schema.json
-        primary_fields: [clause_id]
-        description: >-
-          Clause-level compliance findings. Each record captures whether a contract
-          clause complies with company policy, with severity, summary, and redline.
     steps:
       - id: load_clauses
         tool: structured-query
@@ -605,12 +605,13 @@ async def main() -> None:
                             if payload == "[DONE]":
                                 break
                             try:
-                                finding = json.loads(payload)
+                                data = json.loads(payload)
                             except json.JSONDecodeError:
                                 continue
-                            if "error" in finding:
-                                print(f"\n  ERROR: {finding['error']}")
+                            if "error" in data:
+                                print(f"\n  ERROR: {data['error']}")
                                 continue
+                            finding = data.get("record", data)
                             count += 1
                             status_val = finding.get("status", "")
                             status_marker = {
@@ -620,7 +621,7 @@ async def main() -> None:
                                 "not_applicable": "N/A          ",
                             }.get(status_val, status_val.upper())
                             sev = (finding.get("severity") or "").upper()
-                            print(f"  {finding.get('clause_id', ''):<28}  {status_marker}  {sev:<8}  {finding.get('summary', '')}")
+                            print(json.dumps(finding, indent=2))
                             if status_val == "non_compliant":
                                 non_compliant += 1
                             elif status_val == "needs_review":
@@ -665,20 +666,10 @@ async def main() -> None:
                 for f in findings:
                     by_status.setdefault(f.get("status", "unknown"), []).append(f)
 
-                for status in ("non_compliant", "needs_review", "compliant", "not_applicable"):
-                    group = by_status.get(status, [])
-                    if not group:
-                        continue
-                    label = status.replace("_", " ").upper()
-                    print(f"\n  [{label}] — {len(group)} clause(s)")
+                for status, group in by_status.items():
+                    print(f"\n[{status.upper()}] — {len(group)} clause(s)")
                     for f in group:
-                        sev = (f.get("severity") or "").upper()
-                        cid = f.get("clause_id", "")
-                        summary = f.get("summary", "")
-                        print(f"    {cid:<30}  {sev:<8}  {summary}")
-                        redline = f.get("recommended_redline")
-                        if redline:
-                            print(f"      Suggested: {redline[:120]}")
+                        print(json.dumps(f, indent=2))
                 print()
                 continue
 

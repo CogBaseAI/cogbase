@@ -73,7 +73,7 @@ class WorkflowRunner:
                     async for record in self._run_steps(step.steps or [], iter_ctx):
                         yield record
             elif step.tool is not None:
-                logger.debug(
+                logger.info(
                     "workflow.step.start workflow=%s step=%s tool=%s",
                     self.workflow.name, step.id, step.tool,
                 )
@@ -85,7 +85,7 @@ class WorkflowRunner:
                     self._llm,
                 )
                 ctx["steps"][step.id] = output
-                logger.debug(
+                logger.info(
                     "workflow.step.done workflow=%s step=%s tool=%s",
                     self.workflow.name, step.id, step.tool,
                 )

@@ -81,16 +81,15 @@ def _resolve_file_refs(data: dict, files: dict[str, str]) -> None:
         schema_ref = sc.get("schema", "")
         if schema_ref in files:
             sc["schema"] = files[schema_ref]
-        extractor = sc.get("extractor") or {}
+
+    pipeline = data.get("pipeline") or {}
+    for step in pipeline.get("steps", []):
+        extractor = step.get("extractor") or {}
         prompt_ref = extractor.get("prompt", "")
         if prompt_ref and prompt_ref in files:
             extractor["prompt"] = files[prompt_ref]
 
     for wf in data.get("workflows", []):
-        for oc in wf.get("output_collections", []):
-            schema_ref = oc.get("schema", "")
-            if schema_ref and schema_ref in files:
-                oc["schema"] = files[schema_ref]
         for step in wf.get("steps", []):
             _resolve_step_refs(step, files)
 

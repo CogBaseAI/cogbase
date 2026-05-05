@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cogbase.config.config import AppConfig, ChunkerConfig
+from cogbase.config.config import AppConfig, ChunkerConfig, ExtractorConfig
 from cogbase.config.stores import StructuredStoreConfig
 from cogbase.embeddings import build_embedding as _build_embedder
 from cogbase.llms import build_llm as _build_llm
@@ -91,6 +91,11 @@ async def build_app(
         _build_document_store(config.document_store) if config.document_store else sys.document_store
     )
 
+    # Build step-config lookup keyed by collection name for chunker/extractor resolution
+    step_by_col: dict[str, Any] = {}
+    for s in (config.pipeline.steps if config.pipeline else []):
+        step_by_col.setdefault(s.collection, s)
+
     # --- Collections (built from their own config, independent of pipeline steps) ---
     chunk_collections: list[ChunkCollection] = []
     for vc_cfg in config.chunk_collections:
@@ -103,6 +108,8 @@ async def build_app(
             raise ValueError(
                 f"chunk collection {vc_cfg.name!r} requires an embedding config"
             )
+        step = step_by_col.get(vc_cfg.name)
+        chunker_cfg = (step.chunker if step else None) or ChunkerConfig()
         chunk_collections.append(ChunkCollection(
             schema=VectorCollectionSchema(
                 name=vc_cfg.name,
@@ -111,10 +118,11 @@ async def build_app(
             ),
             store=vector_store,
             embedder=embedder,
-            chunker=_build_chunker(vc_cfg.chunker),
+            chunker=_build_chunker(chunker_cfg),
         ))
 
     structured_collections: list[StructuredCollection] = []
+    all_structured_schemas: list[CollectionSchema] = []
     for sc_cfg in config.structured_collections:
         if structured_store is None:
             raise ValueError(
@@ -124,35 +132,47 @@ async def build_app(
         extraction_model = build_model_from_json_schema(
             sc_cfg.schema_, model_name=sc_cfg.name.upper()
         )
-        extract_as_list = sc_cfg.extractor.extract_as_list
-        list_field = sc_cfg.extractor.list_field
-        item_id_field = sc_cfg.extractor.item_id_field
-        system_prompt = None
-        if sc_cfg.extractor.prompt:
-            if extract_as_list:
-                system_prompt = (
-                    sc_cfg.extractor.prompt
-                    + f'\nReturn a JSON object with a single key "{list_field}" whose value is an array.\n'
-                    + "Each element must have these fields:\n\n"
-                    + cls_json_schema_for_llm(extraction_model)
-                )
-            else:
-                system_prompt = sc_cfg.extractor.prompt + cls_json_schema_for_llm(extraction_model)
-        extractor = LLMExtractor(
-            llm,
-            extraction_model=extraction_model,
-            collection_name=sc_cfg.name,
-            collection_description=sc_cfg.description,
-            extract_as_list=extract_as_list,
-            list_field=list_field,
-            item_id_field=item_id_field,
-            system_prompt=system_prompt,
-        )
-        structured_collections.append(StructuredCollection(
-            schema=extractor.schema,
-            store=structured_store,
-            extractor=extractor,
-        ))
+        step = step_by_col.get(sc_cfg.name)
+        ext_cfg: ExtractorConfig | None = step.extractor if step else None
+        if ext_cfg is not None:
+            extract_as_list = ext_cfg.extract_as_list
+            list_field = ext_cfg.list_field
+            item_id_field = ext_cfg.item_id_field
+            system_prompt = None
+            if ext_cfg.prompt:
+                if extract_as_list:
+                    system_prompt = (
+                        ext_cfg.prompt
+                        + f'\nReturn a JSON object with a single key "{list_field}" whose value is an array.\n'
+                        + "Each element must have these fields:\n\n"
+                        + cls_json_schema_for_llm(extraction_model)
+                    )
+                else:
+                    system_prompt = ext_cfg.prompt + cls_json_schema_for_llm(extraction_model)
+            extractor = LLMExtractor(
+                llm,
+                extraction_model=extraction_model,
+                collection_name=sc_cfg.name,
+                collection_description=sc_cfg.description,
+                extract_as_list=extract_as_list,
+                list_field=list_field,
+                item_id_field=item_id_field,
+                system_prompt=system_prompt,
+            )
+            sc_schema = extractor.schema
+            structured_collections.append(StructuredCollection(
+                schema=sc_schema,
+                store=structured_store,
+                extractor=extractor,
+            ))
+        else:
+            sc_schema = CollectionSchema(
+                name=sc_cfg.name,
+                primary_fields=sc_cfg.primary_fields,
+                fields=cls_generate_schema(extraction_model),
+                description=sc_cfg.description,
+            )
+        all_structured_schemas.append(sc_schema)
 
     document_collections: list[DocumentCollection] = []
     for dc_cfg in config.document_collections:
@@ -183,9 +203,9 @@ async def build_app(
     for cc in chunk_collections:
         await cc.store.create_collection(cc.schema)
         logger.info("created chunk collection=%s, app=%s", cc.schema, config.name)
-    for sc in structured_collections:
-        await sc.store.create_collection(sc.schema)
-        logger.info("created structured collection=%s, app=%s", sc.schema, config.name)
+    for sc_schema in all_structured_schemas:
+        await structured_store.create_collection(sc_schema)
+        logger.info("created structured collection=%s, app=%s", sc_schema, config.name)
     for dc in document_collections:
         await dc.store.create_collection(dc.schema)
         logger.info("created document collection=%s, app=%s", dc.schema, config.name)
@@ -208,7 +228,7 @@ async def build_app(
         vector_store=vector_store,
         embedder=embedder,
         vector_schemas=vc_schemas or None,
-        structured_schemas=[sc.schema for sc in structured_collections] or None,
+        structured_schemas=all_structured_schemas or None,
         document_store=document_store,
         app_name=config.name,
     )
@@ -216,23 +236,6 @@ async def build_app(
     # --- Workflows ---
     workflow_runners: dict[str, WorkflowRunner] = {}
     for wf_cfg in config.workflows:
-        # Create output collections declared by this workflow
-        for oc_cfg in wf_cfg.output_collections:
-            if structured_store is None:
-                raise ValueError(
-                    f"Workflow '{wf_cfg.name}' output collection '{oc_cfg.name}' "
-                    "requires a structured store"
-                )
-            oc_model = build_model_from_json_schema(oc_cfg.schema_, model_name=oc_cfg.name.upper())
-            oc_schema = CollectionSchema(
-                name=oc_cfg.name,
-                primary_fields=oc_cfg.primary_fields,
-                fields=cls_generate_schema(oc_model),
-                description=oc_cfg.description,
-            )
-            await structured_store.create_collection(oc_schema)
-            logger.info("created workflow output collection=%s workflow=%s app=%s", oc_cfg.name, wf_cfg.name, config.name)
-
         workflow_runners[wf_cfg.name] = WorkflowRunner(
             wf_cfg,
             structured_store=structured_store,

@@ -88,22 +88,22 @@ embedding:
   dimensions: {_EMBED_DIM}
 chunk_collections:
   - name: document_chunks
-    chunker:
-      type: fixed
-      chunk_size: 512
-      overlap: 64
 structured_collections:
   - name: {_CONTRACTS_COLLECTION}
     schema: contracts_schema.json
-    extractor:
-      type: llm
-      prompt: contracts_prompt.txt
 pipeline:
   steps:
     - tool: chunk-embed-upsert
       collection: document_chunks
+      chunker:
+        type: fixed
+        chunk_size: 512
+        overlap: 64
     - tool: extract-structured
       collection: {_CONTRACTS_COLLECTION}
+      extractor:
+        type: llm
+        prompt: contracts_prompt.txt
 """
 
 

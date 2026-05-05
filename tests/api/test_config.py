@@ -13,6 +13,7 @@ from cogbase.config.config import (
     EmbeddingConfig,
     ExtractorConfig,
     LLMConfig,
+    PipelineStepConfig,
     StructuredStoreConfig,
     VectorStoreConfig,
 )
@@ -154,10 +155,14 @@ _FULL_YAML = textwrap.dedent("""\
       model: text-embedding-3-small
     chunk_collections:
       - name: doc_chunks
-        chunker:
-          type: fixed
-          chunk_size: 256
-          overlap: 32
+    pipeline:
+      steps:
+        - tool: chunk-embed-upsert
+          collection: doc_chunks
+          chunker:
+            type: fixed
+            chunk_size: 256
+            overlap: 32
 """)
 
 
@@ -176,7 +181,7 @@ class TestAppConfig:
         assert cfg.name == "full-app"
         assert cfg.embedding is not None
         assert len(cfg.chunk_collections) == 1
-        assert cfg.chunk_collections[0].chunker.chunk_size == 256
+        assert cfg.pipeline.steps[0].chunker.chunk_size == 256
 
     def test_from_yaml_with_explicit_store(self):
         yaml_text = textwrap.dedent("""\
@@ -193,10 +198,6 @@ class TestAppConfig:
               model: text-embedding-3-small
             chunk_collections:
               - name: doc_chunks
-                chunker:
-                  type: fixed
-                  chunk_size: 512
-                  overlap: 64
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         assert cfg.structured_store.type == "sqlite"
@@ -210,10 +211,6 @@ class TestAppConfig:
               model: gpt-4o-mini
             chunk_collections:
               - name: doc_chunks
-                chunker:
-                  type: fixed
-                  chunk_size: 512
-                  overlap: 64
         """)
         with pytest.raises(Exception, match="embedding is required when chunk_collections"):
             AppConfig.from_yaml(yaml_text)
@@ -298,15 +295,9 @@ class TestAppConfig:
               model: text-embedding-3-small
             chunk_collections:
               - name: document_chunks
-                chunker:
-                  type: fixed
-                  chunk_size: 512
-                  overlap: 64
             structured_collections:
               - name: contract_extraction
                 schema: '{_SCHEMA}'
-                extractor:
-                  type: llm
             document_collections:
               - name: document_summary
                 prompt: "Summarize in one sentence."
@@ -318,6 +309,8 @@ class TestAppConfig:
                   collection: document_chunks
                 - tool: extract-structured
                   collection: contract_extraction
+                  extractor:
+                    type: llm
                 - tool: document-embed-upsert
                   collection: document_summary
         """)
@@ -365,15 +358,19 @@ class TestExtractorConfig:
             structured_collections:
               - name: contract_clauses
                 schema: '{_SCHEMA}'
-                extractor:
-                  type: llm
-                  extract_as_list: true
-                  list_field: clauses
-                  item_id_field: clause_id
-                  prompt: contract_clauses_prompt.txt
+            pipeline:
+              steps:
+                - tool: extract-structured
+                  collection: contract_clauses
+                  extractor:
+                    type: llm
+                    extract_as_list: true
+                    list_field: clauses
+                    item_id_field: clause_id
+                    prompt: contract_clauses_prompt.txt
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        ext = cfg.structured_collections[0].extractor
+        ext = cfg.pipeline.steps[0].extractor
         assert ext.extract_as_list is True
         assert ext.list_field == "clauses"
         assert ext.item_id_field == "clause_id"
@@ -388,11 +385,15 @@ class TestExtractorConfig:
             structured_collections:
               - name: records
                 schema: '{_SCHEMA}'
-                extractor:
-                  type: llm
+            pipeline:
+              steps:
+                - tool: extract-structured
+                  collection: records
+                  extractor:
+                    type: llm
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        ext = cfg.structured_collections[0].extractor
+        ext = cfg.pipeline.steps[0].extractor
         assert ext.extract_as_list is False
         assert ext.list_field == "items"
         assert ext.item_id_field == "item_id"
@@ -417,10 +418,6 @@ class TestWhenCondition:
               model: text-embedding-3-small
             chunk_collections:
               - name: chunks
-                chunker:
-                  type: fixed
-                  chunk_size: 512
-                  overlap: 64
             pipeline:
               steps:
                 - tool: chunk-embed-upsert
@@ -439,10 +436,6 @@ class TestWhenCondition:
               model: text-embedding-3-small
             chunk_collections:
               - name: rule_chunks
-                chunker:
-                  type: fixed
-                  chunk_size: 512
-                  overlap: 64
             pipeline:
               steps:
                 - tool: chunk-embed-upsert
@@ -467,15 +460,7 @@ class TestWhenCondition:
               model: text-embedding-3-small
             chunk_collections:
               - name: rule_chunks
-                chunker:
-                  type: fixed
-                  chunk_size: 512
-                  overlap: 64
               - name: contract_chunks
-                chunker:
-                  type: fixed
-                  chunk_size: 512
-                  overlap: 64
             pipeline:
               steps:
                 - tool: chunk-embed-upsert
@@ -510,10 +495,6 @@ class TestWhenCondition:
               model: text-embedding-3-small
             chunk_collections:
               - name: chunks
-                chunker:
-                  type: fixed
-                  chunk_size: 512
-                  overlap: 64
             pipeline:
               steps:
                 - tool: chunk-embed-upsert

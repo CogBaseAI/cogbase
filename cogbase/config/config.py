@@ -20,7 +20,6 @@ class ChunkerConfig(BaseModel):
 
 class ChunkCollectionConfig(BaseModel):
     name: str
-    chunker: ChunkerConfig
     dimensions: int = 1536
     description: str = "Full-text passage chunks; use for detailed or specific questions about document content."
 
@@ -38,8 +37,8 @@ class StructuredCollectionConfig(BaseModel):
 
     name: str
     schema_: str = Field(alias="schema")
-    extractor: ExtractorConfig
-    description: str = "Extracted structured records from ingested documents."
+    primary_fields: list[str] = []
+    description: str = "Structured records; use for exact lookups or field-filtered queries."
 
 
 class DocumentCollectionConfig(BaseModel):
@@ -59,6 +58,8 @@ class PipelineStepConfig(BaseModel):
     tool: Literal["chunk-embed-upsert", "extract-structured", "document-embed-upsert"]
     collection: str
     when: WhenCondition | None = None
+    chunker: ChunkerConfig | None = None
+    extractor: ExtractorConfig | None = None
 
 
 class PipelineConfig(BaseModel):
@@ -74,17 +75,6 @@ class PipelineConfig(BaseModel):
 class WorkflowTriggerConfig(BaseModel):
     type: Literal["manual", "after_ingest"] = "manual"
     when: WhenCondition | None = None
-
-
-class WorkflowOutputCollectionConfig(BaseModel):
-    """A structured collection created by the workflow factory (no extractor)."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    name: str
-    schema_: str = Field(alias="schema")
-    primary_fields: list[str] = []
-    description: str = ""
 
 
 class WorkflowStepConfig(BaseModel):
@@ -121,7 +111,6 @@ class WorkflowConfig(BaseModel):
     name: str
     trigger: WorkflowTriggerConfig = WorkflowTriggerConfig()
     input_schema: dict[str, str] = {}
-    output_collections: list[WorkflowOutputCollectionConfig] = []
     steps: list[WorkflowStepConfig] = []
 
 
@@ -157,6 +146,10 @@ class AppConfig(BaseModel):
                 if step.tool == "extract-structured" and step.collection not in sc_names:
                     raise ValueError(
                         f"Pipeline step references unknown structured collection: {step.collection!r}"
+                    )
+                if step.tool == "extract-structured" and step.extractor is None:
+                    raise ValueError(
+                        f"Pipeline step for {step.collection!r} is missing 'extractor'"
                     )
                 if step.tool == "document-embed-upsert" and step.collection not in dc_names:
                     raise ValueError(

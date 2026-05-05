@@ -55,12 +55,12 @@ llm:
 structured_collections:
   - name: contract_extraction
     schema: '{_SCHEMA}'
-    extractor:
-      type: llm
 pipeline:
   steps:
     - tool: extract-structured
       collection: contract_extraction
+      extractor:
+        type: llm
 """
 
 _FULL_CONFIG_YAML = f"""\
@@ -73,22 +73,22 @@ embedding:
   model: text-embedding-3-small
 chunk_collections:
   - name: document_chunks
-    chunker:
-      type: fixed
-      chunk_size: 512
-      overlap: 64
 structured_collections:
   - name: contract_extraction
     schema: '{_SCHEMA}'
-    extractor:
-      type: llm
 pipeline:
   parallel: true
   steps:
     - tool: chunk-embed-upsert
       collection: document_chunks
+      chunker:
+        type: fixed
+        chunk_size: 512
+        overlap: 64
     - tool: extract-structured
       collection: contract_extraction
+      extractor:
+        type: llm
 """
 
 
@@ -210,15 +210,9 @@ embedding:
   model: text-embedding-3-small
 chunk_collections:
   - name: document_chunks
-    chunker:
-      type: fixed
-      chunk_size: 512
-      overlap: 64
 structured_collections:
   - name: contract_extraction
     schema: '{_SCHEMA}'
-    extractor:
-      type: llm
 document_collections:
   - name: document_summary
     prompt: "Summarize in one sentence."
@@ -228,8 +222,14 @@ pipeline:
   steps:
     - tool: chunk-embed-upsert
       collection: document_chunks
+      chunker:
+        type: fixed
+        chunk_size: 512
+        overlap: 64
     - tool: extract-structured
       collection: contract_extraction
+      extractor:
+        type: llm
     - tool: document-embed-upsert
       collection: document_summary
 """
@@ -339,15 +339,15 @@ llm:
 structured_collections:
   - name: contract_clauses
     schema: '{_SCHEMA}'
-    extractor:
-      type: llm
-      extract_as_list: true
-      list_field: clauses
-      item_id_field: clause_id
 pipeline:
   steps:
     - tool: extract-structured
       collection: contract_clauses
+      extractor:
+        type: llm
+        extract_as_list: true
+        list_field: clauses
+        item_id_field: clause_id
 """
 
 _LIST_EXTRACTOR_WITH_PROMPT_CONFIG_YAML = f"""\
@@ -358,16 +358,16 @@ llm:
 structured_collections:
   - name: contract_clauses
     schema: '{_SCHEMA}'
-    extractor:
-      type: llm
-      extract_as_list: true
-      list_field: clauses
-      item_id_field: clause_id
-      prompt: "Extract all clauses.\\n\\n"
 pipeline:
   steps:
     - tool: extract-structured
       collection: contract_clauses
+      extractor:
+        type: llm
+        extract_as_list: true
+        list_field: clauses
+        item_id_field: clause_id
+        prompt: "Extract all clauses.\\n\\n"
 """
 
 _SINGLE_EXTRACTOR_WITH_PROMPT_CONFIG_YAML = f"""\
@@ -378,13 +378,13 @@ llm:
 structured_collections:
   - name: contract_metadata
     schema: '{_SCHEMA}'
-    extractor:
-      type: llm
-      prompt: "Extract metadata.\\n\\n"
 pipeline:
   steps:
     - tool: extract-structured
       collection: contract_metadata
+      extractor:
+        type: llm
+        prompt: "Extract metadata.\\n\\n"
 """
 
 
