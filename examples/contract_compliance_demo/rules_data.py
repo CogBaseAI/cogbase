@@ -11,7 +11,6 @@ from cogbase.core.models import Document
 _META = {
     "doc_type": "rules",
     "source": "vendor_contract_standards.txt",
-    "ruleset_id": "company_rules_v1",
 }
 
 RULES_DOCUMENTS: list[Document] = [

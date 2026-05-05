@@ -40,7 +40,12 @@ class Party(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ContractClause(BaseModel):
-    """One extracted clause stored in the contract_clauses collection."""
+    """One extracted clause stored in the contract_clauses collection.
+
+    ``clause_id`` is the primary key, format ``doc_id_04d``.
+    ``clause_id`` is constructed and injected by the LLMExtractor; do not include it here.
+    ``doc_id`` is also injected by the LLMExtractor; do not include it here.
+    """
 
     clause_type: str | None = Field(
         default=None,
@@ -59,7 +64,7 @@ class ContractClause(BaseModel):
 class ContractMetadata(BaseModel):
     """Contract-level facts extracted once per document.
 
-    ``doc_id`` is injected by the LLMExtractor; do not include it here.
+    ``doc_id`` is the primary key and injected by the LLMExtractor; do not include it here.
     """
 
     contract_type: str | None = Field(
@@ -101,18 +106,14 @@ class ContractMetadata(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ClauseComplianceFinding(BaseModel):
-    """One compliance finding produced by the compliance-check skill.
+    """One compliance finding produced by the compliance-check.
 
-    ``finding_id`` is the primary key and should be constructed as
-    ``{doc_id}:{clause_id}:{ruleset_id}`` for stable, idempotent upserts.
+    ``clause_id`` is the primary key for stable, idempotent upserts.
     Re-running the check overwrites prior findings for the same key.
     """
 
-    finding_id: str = Field(
-        description="Stable primary key constructed as '{doc_id}:{clause_id}:{ruleset_id}'"
-    )
-    doc_id: str = Field(description="Source contract document ID")
     clause_id: str = Field(description="ID of the reviewed clause from contract_clauses")
+    doc_id: str = Field(description="Source contract document ID")
     clause_type: str | None = Field(
         default=None,
         description="Category of the reviewed clause, e.g. liability, payment",
@@ -169,9 +170,8 @@ CLAUSE_COMPLIANCE_FINDINGS_SCHEMA = CollectionSchema(
         "not applicable. Filter by doc_id to get all findings for a contract, or filter "
         "by status and severity to find high-priority issues across all contracts."
     ),
-    primary_fields=["finding_id"],
+    primary_fields=["clause_id"],
     fields={
-        "finding_id":           FieldSchema(type=FieldType.STRING),
         "doc_id":               FieldSchema(type=FieldType.STRING, index=True),
         "clause_id":            FieldSchema(type=FieldType.STRING, index=True),
         "clause_type":          FieldSchema(type=FieldType.STRING, nullable=True, index=True),

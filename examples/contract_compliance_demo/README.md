@@ -19,6 +19,11 @@ Requires `OPENAI_API_KEY` in a `.env` file at the repo root or in the
 environment. Set `COGBASE_API_URL` to override the default
 `http://localhost:8000`.
 
+The `check`, `report`, and `alerts` commands require persistent store backends
+(SQLite + FAISS). Configure `cogbase_system.yaml` with
+`structured_store.type=sqlite` and `vector_store.type=faiss`, or set
+`COGBASE_CONFIG` to point to your system config.
+
 ## Interactive commands
 
 | Command | Description |
@@ -28,7 +33,7 @@ environment. Set `COGBASE_API_URL` to override the default
 | `ingest rules <path>` | Ingest a company rules document from disk |
 | `ingest contracts` | Ingest the built-in contract fixtures |
 | `ingest contract <path>` | Ingest a contract file from disk |
-| `check <doc_id>` | Run deterministic clause-by-clause compliance review |
+| `check <doc_id>` | Run the compliance workflow for one contract |
 | `report <doc_id>` | Print the stored compliance report for one contract |
 | `alerts` | List high and critical compliance findings |
 | `list collections` | List collections for the application |
@@ -74,11 +79,11 @@ The demo creates one CogBase application named `contract-compliance`.
 
 ### Structured collections
 
-| Collection | Routed documents | Purpose |
-|------------|------------------|---------|
-| `contract_clauses` | `metadata.doc_type == "contract"` | One typed record per extracted contract clause |
-| `contract_metadata` | `metadata.doc_type == "contract"` | One typed record with key contract facts |
-| `clause_compliance_findings` | Written by `check <doc_id>` | One compliance finding per reviewed clause |
+| Collection | Source | Purpose |
+|------------|--------|---------|
+| `contract_clauses` | Pipeline extraction, `doc_type == "contract"` | One typed record per extracted contract clause |
+| `contract_metadata` | Pipeline extraction, `doc_type == "contract"` | One typed record with key contract facts |
+| `clause_compliance_findings` | Workflow output (`check-contract-compliance`) | One compliance finding per reviewed clause |
 
 ## Routed ingestion
 
@@ -94,8 +99,7 @@ Rules are ingested with:
   "text": "...",
   "metadata": {
     "doc_type": "rules",
-    "source": "vendor_contract_standards.txt",
-    "ruleset_id": "company_rules_v1"
+    "source": "vendor_contract_standards.txt"
   }
 }
 ```
@@ -113,7 +117,7 @@ Contracts are ingested with:
 }
 ```
 
-The intended pipeline shape is:
+The pipeline shape:
 
 ```yaml
 pipeline:
@@ -143,73 +147,99 @@ pipeline:
           doc_type: contract
 ```
 
-This keeps the application boundary simple while preserving separate ingestion
-lifecycles for rules and contracts.
+## Compliance check workflow
 
-## Compliance check skill
+The `check-contract-compliance` workflow is a declarative, config-driven
+replacement for a hand-rolled skill. The LLM does not decide which steps to
+run; it only judges one contract clause against retrieved company rule
+passages.
 
-The `compliance-check` skill is a thin wrapper around a fixed workflow
-function. The LLM does not decide which steps to run; it only judges one
-contract clause against retrieved company rule passages.
+The workflow is registered in `config.yaml` and executes four built-in tools:
 
-The skill accepts a `doc_id` and runs:
+```yaml
+workflows:
+  - name: check-contract-compliance
+    input_schema:
+      doc_id: string
+    output_collections:
+      - name: clause_compliance_findings
+        schema: clause_compliance_findings_schema.json
+        primary_fields: [finding_id]
+    steps:
+      - id: load_clauses
+        tool: structured-query
+        collection: contract_clauses
+        filters:
+          doc_id: "{{ input.doc_id }}"
 
-```python
-async def check_compliance(doc_id, *, rule_store, clause_store, results_store, llm, embedder):
-    clauses = await clause_store.query(
-        "contract_clauses",
-        filters=[Col("doc_id") == doc_id],
-    )
+      - id: review_each_clause
+        foreach: "{{ steps.load_clauses.records }}"
+        steps:
+          - id: retrieve_rules
+            tool: vector-search
+            collection: rule_chunks
+            query: "{{ item.clause_type }}\n{{ item.text }}"
+            top_k: 5
 
-    for clause in clauses:
-        query = f"{clause.get('clause_type') or ''}\n{clause['text']}"
-        (embedding,) = await embedder.embed([query])
+          - id: judge
+            tool: llm-structured
+            prompt: compliance_judge_prompt.txt
+            input:
+              clause: "{{ item }}"
+              rules: "{{ steps.retrieve_rules.chunks }}"
+            output_schema: clause_compliance_findings_schema.json
 
-        top_rules = await rule_store.search(
-            "rule_chunks",
-            query,
-            embedding,
-            top_k=5,
-        )
-
-        finding = await llm_judge(clause, top_rules, llm)
-        await results_store.save("clause_compliance_findings", [finding])
+          - id: save_finding
+            tool: structured-save
+            collection: clause_compliance_findings
+            records:
+              - "{{ steps.judge.output }}"
 ```
 
 The workflow is deterministic:
 
 - every extracted clause for the requested `doc_id` is reviewed
 - the same rule collection and `top_k` are used for each clause
-- findings are upserted with stable IDs
+- findings are upserted with stable IDs using `finding_id` as the primary key
 - rerunning `check <doc_id>` updates prior findings instead of duplicating them
+
+The demo calls the workflow via the REST streaming endpoint:
+
+```
+POST /applications/contract-compliance/workflows/check-contract-compliance/stream
+{"params": {"doc_id": "contract-001"}}
+```
+
+Each `structured-save` result is streamed as an SSE event, so findings appear
+in the terminal as they are written.
 
 ## LLM judge rules
 
 The LLM judge receives the clause text and the top matching company rule
-passages. It must return validated JSON matching the
+passages as a JSON input. It must return validated JSON matching the
 `ClauseComplianceFinding` schema.
 
-Judge constraints:
+Judge constraints (from `compliance_judge_prompt.txt` in the bundle):
 
 - Use only the provided rule passages as company policy.
 - If the retrieved rules are insufficient, return `needs_review`.
 - Do not invent company policy or rely on outside legal knowledge.
-- Every `non_compliant` finding must cite at least one matched rule ID.
-- Copy relevant clause and rule excerpts verbatim where fields require evidence.
+- Every `non_compliant` finding must cite at least one `matched_rule_quote`.
 - Use `temperature=0` for repeatability.
 
-## Extraction Schemas
+## Extraction schemas
 
 ### `contract_clauses`
- 
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `clause_type` | `str \| null` | Clause category, such as `termination`, `liability`, `privacy`, or `payment` |
 | `text` | `str` | Verbatim clause text |
 
 ### `contract_metadata`
+
 Structured information extracted by the LLM from a contract document.
-``doc_id`` is injected by the LLMExtractor; do not include it here.
+`doc_id` is injected by the extractor.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -246,9 +276,12 @@ contract_compliance_demo/
 ├── demo.py                    # interactive demo script
 ├── rules_data.py              # sample company rule documents
 ├── contracts_data.py          # sample incoming contracts
-├── schema.py                  # Pydantic models for clauses, metadata, findings
-└── compliance_skill.py        # deterministic compliance-check skill wrapper
+└── schema.py                  # Pydantic models for clauses, metadata, findings
 ```
+
+The compliance workflow, judge prompt, and output schema are bundled inline in
+`demo.py` and written into the ZIP bundle sent to `POST /applications` at
+startup.
 
 ## Design notes
 
@@ -259,12 +292,18 @@ the query runner see all relevant structured and vector collections.
 
 **Why metadata-based routing?** Rules documents and contracts have different
 ingestion behavior but share storage, retrieval, and reporting. Conditional
-pipeline steps keep routing explicit without introducing a full workflow engine.
+pipeline steps keep routing explicit without introducing separate applications.
 
-**Why a skill and not a normal ingestion step?** Compliance checking reads
+**Why a workflow and not an ingestion step?** Compliance checking reads
 previously extracted clause records, searches rule chunks, calls an LLM judge,
 and writes findings. That is a cross-collection workflow over persisted records,
-not a simple document ingestion step.
+not a single-document ingestion step. A declarative workflow makes each stage
+inspectable and independently testable without custom Python code.
+
+**Why not a skill?** The compliance check has a fixed execution graph —
+load clauses, retrieve rules, judge, save — with no branching that requires LLM
+reasoning about which tools to invoke. A workflow expresses this directly in
+config without the overhead of an agentic loop.
 
 **Clause extraction** uses a dedicated extractor that produces one record per
 clause rather than one record per document. The extractor labels each clause by
@@ -275,7 +314,4 @@ type and copies text verbatim so stored text can serve as evidence.
 - Clause extraction quality depends on contract formatting and OCR quality.
 - Semantic search may retrieve incomplete policy context for broad or ambiguous clauses.
 - The LLM judge is policy-assistive and should not be treated as legal advice.
-- Rule versioning is simplified to a `ruleset_id` in the demo.
-- The metadata-based `when` syntax shown here describes the intended design; it
-  requires pipeline step filtering support in CogBase before it can be purely
-  config-driven.
+- Rule versioning is not considered in the demo.

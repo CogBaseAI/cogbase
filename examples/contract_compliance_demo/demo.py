@@ -14,8 +14,6 @@ Set COGBASE_API_URL to override the default http://localhost:8000.
 NOTE: The check, report, and alerts commands require persistent store backends
 (SQLite + FAISS).  Configure cogbase_system.yaml with structured_store.type=sqlite
 and vector_store.type=faiss, or set COGBASE_CONFIG to point to your system config.
-Clause extraction runs as a pipeline step during ingest and does not require the
-local store to be configured separately.
 
 Commands (interactive loop)
 ---------------------------
@@ -67,15 +65,12 @@ if str(_REPO_ROOT) not in sys.path:
 
 import httpx  # noqa: E402
 
-from examples.contract_compliance_demo.compliance_skill import (  # noqa: E402
-    run_compliance_check,
-)
 from examples.contract_compliance_demo.contracts_data import (  # noqa: E402
     CONTRACTS_DOCUMENTS,
 )
 from examples.contract_compliance_demo.rules_data import RULES_DOCUMENTS  # noqa: E402
 from examples.contract_compliance_demo.schema import (  # noqa: E402
-    CLAUSE_COMPLIANCE_FINDINGS_SCHEMA,
+    ClauseComplianceFinding,
     ContractClause,
     ContractMetadata,
 )
@@ -91,6 +86,19 @@ _EMBED_DIM = 1536
 _API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000").rstrip("/")
 
 _DEFAULT_STRUCTURED_COLLECTION = "contract_metadata"
+
+_JUDGE_SYSTEM_PROMPT = """\
+You are a contract compliance reviewer. Determine whether a contract clause complies
+with the company's internal policies, using ONLY the company policy excerpts provided.
+
+Rules:
+- Ground every finding exclusively in the provided policy excerpts.
+- Do not invent policy or apply general legal knowledge not present in the excerpts.
+- If the excerpts are insufficient to determine compliance, set status=needs_review.
+- Every non_compliant finding MUST include at least one matched_rule_quote.
+- Populate recommended_redline with revised clause language for non_compliant findings; null otherwise.
+- Return ONLY valid JSON — no markdown fences, no explanation.
+"""
 
 # ---------------------------------------------------------------------------
 # App bundle — config.yaml + metadata extraction schema + prompt
@@ -187,11 +195,50 @@ pipeline:
       when:
         metadata:
           doc_type: contract
+workflows:
+  - name: check-contract-compliance
+    trigger:
+      type: manual
+    input_schema:
+      doc_id: string
+    output_collections:
+      - name: clause_compliance_findings
+        schema: clause_compliance_findings_schema.json
+        primary_fields: [clause_id]
+        description: >-
+          Clause-level compliance findings. Each record captures whether a contract
+          clause complies with company policy, with severity, summary, and redline.
+    steps:
+      - id: load_clauses
+        tool: structured-query
+        collection: contract_clauses
+        filters:
+          doc_id: "{{{{ input.doc_id }}}}"
+      - id: review_each_clause
+        foreach: "{{{{ steps.load_clauses.records }}}}"
+        steps:
+          - id: retrieve_rules
+            tool: vector-search
+            collection: rule_chunks
+            query: "{{{{ item.clause_type }}}}\n{{{{ item.text }}}}"
+            top_k: 5
+          - id: judge
+            tool: llm-structured
+            prompt: compliance_judge_prompt.txt
+            input:
+              clause: "{{{{ item }}}}"
+              rules: "{{{{ steps.retrieve_rules.chunks }}}}"
+            output_schema: clause_compliance_findings_schema.json
+          - id: save_finding
+            tool: structured-save
+            collection: clause_compliance_findings
+            records:
+              - "{{{{ steps.judge.output }}}}"
 """
 
 
 def _build_bundle() -> bytes:
-    """Build an in-memory ZIP bundle: config.yaml + schemas + extraction prompts."""
+    """Build an in-memory ZIP bundle: config.yaml + schemas + prompts."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("config.yaml", _CONFIG_YAML)
@@ -199,6 +246,8 @@ def _build_bundle() -> bytes:
         zf.writestr("contract_metadata_prompt.txt", _CONTRACT_METADATA_SYSTEM_PROMPT)
         zf.writestr("contract_clauses_schema.json", json.dumps(ContractClause.model_json_schema(), indent=2))
         zf.writestr("contract_clauses_prompt.txt", _CONTRACT_CLAUSES_SYSTEM_PROMPT)
+        zf.writestr("clause_compliance_findings_schema.json", json.dumps(ClauseComplianceFinding.model_json_schema(), indent=2))
+        zf.writestr("compliance_judge_prompt.txt", _JUDGE_SYSTEM_PROMPT)
     return buf.getvalue()
 
 
@@ -304,85 +353,6 @@ async def _query_structured_rest(
     return resp.json()["records"]
 
 
-# ---------------------------------------------------------------------------
-# Local resource management (persistent stores required for check/report/alerts)
-# ---------------------------------------------------------------------------
-
-_structured_store = None
-_vector_store = None
-_embedder = None
-_llm_local = None
-_local_ok = False
-
-
-def _init_local_stores() -> bool:
-    """Load system config and build persistent store connections.
-
-    Returns True when persistent stores are available, False otherwise.
-    Sets module-level globals used by check/report/alerts/ingest-clauses.
-    """
-    global _structured_store, _vector_store, _embedder, _llm_local, _local_ok
-
-    try:
-        from api.system_config import SystemConfig
-        from cogbase.stores.factory import build_structured_store, build_vector_store
-        from cogbase.embeddings.factory import build_embedding
-        from cogbase.llms.factory import build_llm
-    except ImportError as exc:
-        logging.warning("_init_local_stores: import failed: %s", exc)
-        return False
-
-    cfg = SystemConfig.load()
-
-    if cfg.structured_store is None or cfg.structured_store.type == "memory":
-        return False
-    if cfg.vector_store is None or cfg.vector_store.type == "memory":
-        return False
-
-    try:
-        _structured_store = build_structured_store(cfg.structured_store)
-        _vector_store = build_vector_store(cfg.vector_store)
-
-        embed_cfg = cfg.embedding
-        if embed_cfg is None:
-            return False
-        _embedder = build_embedding(embed_cfg)
-
-        llm_cfg = cfg.llm
-        if llm_cfg is None:
-            return False
-        _llm_local = build_llm(llm_cfg)
-
-        _local_ok = True
-        return True
-    except Exception:
-        logging.exception("_init_local_stores: failed to build store/llm/embedder")
-        return False
-
-
-async def _ensure_collections() -> None:
-    """Create clause_compliance_findings collection if absent.
-
-    contract_clauses is created by the pipeline when the application is registered.
-    """
-    if _structured_store is None:
-        return
-    await _structured_store.create_collection(CLAUSE_COMPLIANCE_FINDINGS_SCHEMA)
-
-
-# ---------------------------------------------------------------------------
-# Local structured queries (for contract_clauses and clause_compliance_findings)
-# ---------------------------------------------------------------------------
-
-
-async def _query_local(collection: str, filters: list | None = None) -> list[dict]:
-    """Query *collection* via the local structured store."""
-    if _structured_store is None:
-        return []
-    from cogbase.stores.filters import Filter, Op
-    parsed = [Filter(field=f["field"], op=Op(f["op"]), value=f.get("value")) for f in (filters or [])]
-    return await _structured_store.query(collection, parsed or None)
-
 
 # ---------------------------------------------------------------------------
 # Main async loop
@@ -397,13 +367,6 @@ async def main() -> None:
     print(f"  embed:   {_EMBED_MODEL}")
     print(f"  api:     {_API_BASE}")
 
-    local_ok = _init_local_stores()
-    if local_ok:
-        await _ensure_collections()
-        print("  stores:  persistent (check / report / alerts enabled)")
-    else:
-        print("  stores:  in-memory — check / report / alerts unavailable")
-        print("           (configure persistent stores in cogbase_system.yaml)")
     print()
 
     async with httpx.AsyncClient() as client:
@@ -522,22 +485,11 @@ async def main() -> None:
                 )
                 print(f"Querying structured collection '{collection}'...")
 
-                # clause_compliance_findings is stored in the local persistent store
-                if collection in {"clause_compliance_findings"}:
-                    if not _local_ok:
-                        print("  Persistent stores required. See startup notes.")
-                        continue
-                    try:
-                        records = await _query_local(collection)
-                    except Exception as exc:
-                        print(f"  ERROR: {exc}")
-                        continue
-                else:
-                    try:
-                        records = await _query_structured_rest(client, collection)
-                    except httpx.HTTPStatusError as exc:
-                        print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                        continue
+                try:
+                    records = await _query_structured_rest(client, collection)
+                except httpx.HTTPStatusError as exc:
+                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+                    continue
 
                 if not records:
                     print("  No records found.")
@@ -599,10 +551,6 @@ async def main() -> None:
                     else:
                         print(f"  {r['doc_id']:<14}  FAILED: {r['error']}")
 
-                if not _local_ok:
-                    print()
-                    print("  NOTE: check / report / alerts require persistent stores.")
-                    print("        Configure cogbase_system.yaml to enable them.")
                 continue
 
             # ---- ingest contract <path> -------------------------------------
@@ -636,35 +584,50 @@ async def main() -> None:
                 if not doc_id:
                     print("  Usage: check <doc_id>")
                     continue
-                if not _local_ok or _structured_store is None or _vector_store is None or _embedder is None or _llm_local is None:
-                    print("  Persistent stores required for check. See startup notes.")
-                    continue
 
                 print(f"Checking compliance for {doc_id!r}...")
                 count = 0
                 non_compliant = 0
                 needs_review = 0
 
-                async for finding in run_compliance_check(
-                    doc_id,
-                    vector_store=_vector_store,
-                    structured_store=_structured_store,
-                    embedder=_embedder,
-                    llm=_llm_local,
-                ):
-                    count += 1
-                    status_marker = {
-                        "compliant": "COMPLIANT    ",
-                        "non_compliant": "NON-COMPLIANT",
-                        "needs_review": "NEEDS REVIEW ",
-                        "not_applicable": "N/A          ",
-                    }.get(finding.status, finding.status.upper())
-                    sev = finding.severity.upper()
-                    print(f"  {finding.clause_id:<28}  {status_marker}  {sev:<8}  {finding.summary}")
-                    if finding.status == "non_compliant":
-                        non_compliant += 1
-                    elif finding.status == "needs_review":
-                        needs_review += 1
+                try:
+                    async with client.stream(
+                        "POST",
+                        f"{_API_BASE}/applications/{_APP_NAME}/workflows/check-contract-compliance/stream",
+                        json={"params": {"doc_id": doc_id}},
+                        timeout=300,
+                    ) as resp:
+                        resp.raise_for_status()
+                        async for line in resp.aiter_lines():
+                            if not line.startswith("data:"):
+                                continue
+                            payload = line[len("data:"):].strip()
+                            if payload == "[DONE]":
+                                break
+                            try:
+                                finding = json.loads(payload)
+                            except json.JSONDecodeError:
+                                continue
+                            if "error" in finding:
+                                print(f"\n  ERROR: {finding['error']}")
+                                continue
+                            count += 1
+                            status_val = finding.get("status", "")
+                            status_marker = {
+                                "compliant": "COMPLIANT    ",
+                                "non_compliant": "NON-COMPLIANT",
+                                "needs_review": "NEEDS REVIEW ",
+                                "not_applicable": "N/A          ",
+                            }.get(status_val, status_val.upper())
+                            sev = (finding.get("severity") or "").upper()
+                            print(f"  {finding.get('clause_id', ''):<28}  {status_marker}  {sev:<8}  {finding.get('summary', '')}")
+                            if status_val == "non_compliant":
+                                non_compliant += 1
+                            elif status_val == "needs_review":
+                                needs_review += 1
+                except httpx.HTTPStatusError as exc:
+                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+                    continue
 
                 if count == 0:
                     print(f"  No clauses found for {doc_id!r}. Run 'ingest contracts' first.")
@@ -682,14 +645,16 @@ async def main() -> None:
                 if not doc_id:
                     print("  Usage: report <doc_id>")
                     continue
-                if not _local_ok:
-                    print("  Persistent stores required for report. See startup notes.")
-                    continue
 
-                findings = await _query_local(
-                    "clause_compliance_findings",
-                    filters=[{"field": "doc_id", "op": "=", "value": doc_id}],
-                )
+                try:
+                    findings = await _query_structured_rest(
+                        client,
+                        "clause_compliance_findings",
+                        filters=[{"field": "doc_id", "op": "=", "value": doc_id}],
+                    )
+                except httpx.HTTPStatusError as exc:
+                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+                    continue
                 if not findings:
                     print(f"  No findings for {doc_id!r}. Run 'check {doc_id}' first.")
                     continue
@@ -719,17 +684,18 @@ async def main() -> None:
 
             # ---- alerts -----------------------------------------------------
             if lower == "alerts":
-                if not _local_ok:
-                    print("  Persistent stores required for alerts. See startup notes.")
+                try:
+                    findings = await _query_structured_rest(
+                        client,
+                        "clause_compliance_findings",
+                        filters=[
+                            {"field": "status", "op": "=", "value": "non_compliant"},
+                            {"field": "severity", "op": "in", "value": ["high", "critical"]},
+                        ],
+                    )
+                except httpx.HTTPStatusError as exc:
+                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     continue
-
-                findings = await _query_local(
-                    "clause_compliance_findings",
-                    filters=[
-                        {"field": "status", "op": "=", "value": "non_compliant"},
-                        {"field": "severity", "op": "in", "value": ["high", "critical"]},
-                    ],
-                )
                 if not findings:
                     print("  No high/critical non-compliant findings.")
                     continue
