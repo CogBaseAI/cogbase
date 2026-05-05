@@ -47,6 +47,20 @@ CogBase is organized into three layers with clean boundaries between them.
 ║  │  schemas, facts) │  │ document_summary (per-doc)   │   ║
 ║  └──────────────────┘  └──────────────────────────────┘   ║
 ╚═══════════════════════════════════════════════════════════╝
+          ↕  structured-query / vector-search / structured-save
+╔═══════════════════════════════════════════════════════════╗
+║  WORKFLOWS                         (on-demand)            ║
+║                                                           ║
+║  API call  ──or──  after_ingest trigger                   ║
+║          ↓                                                ║
+║  Sequential steps over ingested collections:              ║
+║    structured-query   → read typed records                ║
+║    vector-search      → semantic retrieval                ║
+║    llm-structured     → LLM judge / classifier            ║
+║    structured-save    → write derived records + SSE       ║
+║          ↓                                                ║
+║  Derived records land in output_collections               ║
+╚═══════════════════════════════════════════════════════════╝
           ↕  hybrid retrieval tools
 ╔═══════════════════════════════════════════════════════════╗
 ║  QUERY RUNNER                              (real-time)    ║
@@ -76,13 +90,15 @@ CogBase is organized into three layers with clean boundaries between them.
 ╚═══════════════════════════════════════════════════════════╝
 ```
 
-**Knowledge Pipeline** runs asynchronously at ingest time. Three step types can be combined in any order:
+**Knowledge Pipeline** runs asynchronously at ingest time. Three step types can be combined in any order, with optional `when_meta` predicates to route specific document types to different steps:
 
 - `chunk-embed-upsert` — splits document text into overlapping passages, embeds them, and upserts into a vector collection for passage-level semantic search
 - `extract-structured` — runs a configurable LLM extractor to produce typed records stored in a structured collection
 - `document-embed-upsert` — generates one vector such as LLM summary per document, embeds it, and upserts into a vector collection for document-level semantic search
 
 Both stores are pluggable — swap backends without changing application code.
+
+**Workflows** run on-demand (via API call) or automatically after a successful ingest (`after_ingest` trigger). They are YAML-declared sequential pipelines over already-ingested collections — reading from structured and vector stores, calling an LLM to judge or classify, and writing derived records back to output collections. They stream results as SSE. Workflows sit between the pipeline (document-time) and skills (query-time, LLM-callable), handling analytical computations that need to fan out over many records but don't belong in the ingest step itself.
 
 **Query Runner** drives a real-time LLM agent loop. Rather than a fixed routing pattern, the LLM receives the available tools and decides which to call: `structured_lookup` for exact record queries, `vector_search` against any configured vector collection (passage chunks, document summaries, or both), and any skill tools registered with the application. The loop continues until the LLM has enough evidence to produce a final answer. Large structured result sets are returned directly without synthesis (passthrough rule).
 
@@ -106,6 +122,21 @@ Alongside passage chunks, the pipeline supports a `document-embed-upsert` step t
 - **document_summary** — topic-level retrieval for high-level questions about what documents cover
 
 The LLM automatically picks the right collection based on the query.
+
+### Workflows
+
+Workflows are named, YAML-declared analytical pipelines that run over already-ingested collections. They compose four built-in tools in any sequence, including `foreach` loops over result sets:
+
+| Tool | What it does |
+|---|---|
+| `structured-query` | Read typed records with equality filters; result at `steps.<id>.records` |
+| `vector-search` | Embed a query string and search a vector collection; result at `steps.<id>.chunks` |
+| `llm-structured` | Call the LLM with a system prompt and JSON input, validate against a JSON Schema; result at `steps.<id>.output` |
+| `structured-save` | Upsert records into a collection and stream each one to the caller; result at `steps.<id>.records` |
+
+Step parameters are Jinja2 templates with three namespaces: `input` (invocation params), `steps.<id>` (prior step outputs), and `item` (current foreach element). A `{{ expr }}` that resolves to a list returns an actual Python list, not a string.
+
+Workflows can be triggered manually via `POST /applications/{name}/workflows/{workflow_name}/run` or automatically after each successful document ingest (`trigger.type: after_ingest`, optionally gated by document metadata). Blocking and streaming (`/stream`) endpoints are both available.
 
 ### Contradiction detection
 
@@ -200,6 +231,14 @@ Applications are created and managed through the REST API. Configuration lives i
 | `POST` | `/applications/{name}/ingest_documents` | Ingest a batch of documents |
 | `POST` | `/applications/{name}/query` | Answer a query (blocking) |
 | `POST` | `/applications/{name}/query/stream` | Stream query response as Server-Sent Events |
+
+### Workflows
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/applications/{name}/workflows` | List registered workflow names |
+| `POST` | `/applications/{name}/workflows/{workflow_name}/run` | Run a workflow (blocking); returns `{"workflow": "...", "records": [...], "total": N}` |
+| `POST` | `/applications/{name}/workflows/{workflow_name}/stream` | Run a workflow, stream records as SSE |
 
 ### Skills management
 
@@ -367,6 +406,10 @@ cogbase/
 │   ├── embeddings/           # EmbeddingBase, OpenAI, HuggingFace
 │   ├── llms/                 # LLMBase, OpenAI-compatible
 │   ├── tools/                # Built-in tools (chunk-embed-upsert, extract)
+│   ├── workflows/            # Workflow engine
+│   │   ├── runner.py         # WorkflowRunner — sequential step executor
+│   │   ├── context.py        # Jinja2 NativeEnvironment template rendering
+│   │   └── tools/            # structured-query, vector-search, llm-structured, structured-save
 │   └── core/                 # CogBaseApp, Runner, Session, models
 ├── api/                      # FastAPI REST API
 │   ├── main.py               # App lifecycle, router registration
@@ -396,6 +439,7 @@ cogbase/
 - [x] Skill registry + base skill interface
 - [x] REST API (create/update/delete apps, ingest, query, streaming)
 - [x] Contract analyst example
+- [x] Declarative workflow engine (structured-query, vector-search, llm-structured, structured-save; foreach loops; after_ingest triggers)
 - [ ] Contradiction detection engine (date, numeric, statement conflicts)
 - [ ] Short-term memory (Redis + in-memory)
 - [ ] Episodic memory (conversation + agent history)
