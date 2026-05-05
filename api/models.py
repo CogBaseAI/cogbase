@@ -114,3 +114,23 @@ class CollectionQueryResponse(BaseModel):
     collection: str
     records: list[dict]
     total: int
+
+
+# ---------------------------------------------------------------------------
+# Workflow models
+# ---------------------------------------------------------------------------
+
+
+class WorkflowListResponse(BaseModel):
+    app_name: str
+    workflows: list[str]
+
+
+class WorkflowRunRequest(BaseModel):
+    params: dict[str, Any] = {}
+
+
+class WorkflowRunResponse(BaseModel):
+    workflow: str
+    records: list[dict]
+    total: int

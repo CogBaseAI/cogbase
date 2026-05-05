@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -66,6 +66,65 @@ class PipelineConfig(BaseModel):
     steps: list[PipelineStepConfig] = []
 
 
+# ---------------------------------------------------------------------------
+# Workflow config
+# ---------------------------------------------------------------------------
+
+
+class WorkflowTriggerConfig(BaseModel):
+    type: Literal["manual", "after_ingest"] = "manual"
+    when: WhenCondition | None = None
+
+
+class WorkflowOutputCollectionConfig(BaseModel):
+    """A structured collection created by the workflow factory (no extractor)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str
+    schema_: str = Field(alias="schema")
+    primary_fields: list[str] = []
+    description: str = ""
+
+
+class WorkflowStepConfig(BaseModel):
+    """One step in a workflow — either a leaf tool call or a foreach loop."""
+
+    id: str
+    # Leaf step
+    tool: Literal["structured-query", "vector-search", "llm-structured", "structured-save"] | None = None
+    # Foreach loop (mutually exclusive with tool)
+    foreach: str | None = None
+    steps: list["WorkflowStepConfig"] | None = None
+
+    # structured-query / structured-save
+    collection: str | None = None
+    filters: dict[str, str] = {}
+
+    # vector-search
+    query: str | None = None
+    top_k: int = 5
+
+    # llm-structured
+    prompt: str | None = None
+    input: dict[str, Any] = {}
+    output_schema: str | None = None  # JSON schema content (resolved from file ref)
+
+    # structured-save
+    records: list[Any] = []
+
+
+WorkflowStepConfig.model_rebuild()
+
+
+class WorkflowConfig(BaseModel):
+    name: str
+    trigger: WorkflowTriggerConfig = WorkflowTriggerConfig()
+    input_schema: dict[str, str] = {}
+    output_collections: list[WorkflowOutputCollectionConfig] = []
+    steps: list[WorkflowStepConfig] = []
+
+
 class AppConfig(BaseModel):
     name: str
     llm: LLMConfig | None = None
@@ -78,6 +137,7 @@ class AppConfig(BaseModel):
     document_collections: list[DocumentCollectionConfig] = []
     pipeline: PipelineConfig | None = None
     skills: list[str] = []
+    workflows: list[WorkflowConfig] = []
 
     @model_validator(mode="after")
     def _validate(self) -> "AppConfig":

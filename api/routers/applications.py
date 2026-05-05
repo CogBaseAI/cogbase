@@ -33,6 +33,9 @@ from api.models import (
     QueryResponse,
     CollectionQueryRequest,
     CollectionQueryResponse,
+    WorkflowListResponse,
+    WorkflowRunRequest,
+    WorkflowRunResponse,
 )
 from api.system_store import AppRecord, SystemStore
 from cogbase.core.models import Document
@@ -60,6 +63,18 @@ def _to_response(record: AppRecord) -> ApplicationResponse:
     )
 
 
+def _resolve_step_refs(step: dict, files: dict[str, str]) -> None:
+    """Resolve file references in a single workflow step (recurses into foreach steps)."""
+    prompt_ref = step.get("prompt", "")
+    if prompt_ref and prompt_ref in files:
+        step["prompt"] = files[prompt_ref]
+    schema_ref = step.get("output_schema", "")
+    if schema_ref and schema_ref in files:
+        step["output_schema"] = files[schema_ref]
+    for substep in step.get("steps") or []:
+        _resolve_step_refs(substep, files)
+
+
 def _resolve_file_refs(data: dict, files: dict[str, str]) -> None:
     """Replace filename references in-place with file contents from the ZIP."""
     for sc in data.get("structured_collections", []):
@@ -70,6 +85,14 @@ def _resolve_file_refs(data: dict, files: dict[str, str]) -> None:
         prompt_ref = extractor.get("prompt", "")
         if prompt_ref and prompt_ref in files:
             extractor["prompt"] = files[prompt_ref]
+
+    for wf in data.get("workflows", []):
+        for oc in wf.get("output_collections", []):
+            schema_ref = oc.get("schema", "")
+            if schema_ref and schema_ref in files:
+                oc["schema"] = files[schema_ref]
+        for step in wf.get("steps", []):
+            _resolve_step_refs(step, files)
 
 
 def _parse_bundle(raw: bytes) -> tuple[str, AppConfig]:
@@ -313,6 +336,8 @@ async def _get_active_app(
     return app
 
 
+# TODO ingest a list of documents may run a long time, make it a background task,
+#      client checks and waits for task to complete.
 @router.post("/{app_name}/ingest_documents", response_model=IngestDocumentsResponse)
 async def ingest_documents(
     app_name: str,
@@ -561,3 +586,81 @@ async def query_collection(
             )
 
     raise HTTPException(status_code=404, detail=f"Collection '{collection}' not found")
+
+
+# ---------------------------------------------------------------------------
+# Workflow endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{app_name}/workflows", response_model=WorkflowListResponse)
+async def list_workflows(
+    app_name: str,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+) -> WorkflowListResponse:
+    """List all workflows registered for an application."""
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    return WorkflowListResponse(app_name=app_name, workflows=app.workflows)
+
+
+# TODO a workflow may run a long time, need to make it a background task,
+#      client checks and waits for task to complete.
+@router.post("/{app_name}/workflows/{workflow_name}/run", response_model=WorkflowRunResponse)
+async def run_workflow(
+    app_name: str,
+    workflow_name: str,
+    body: WorkflowRunRequest,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+) -> WorkflowRunResponse:
+    """Run a workflow and return all saved records when it completes."""
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    try:
+        wf_runner = app.get_workflow(workflow_name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+
+    records: list[dict] = []
+    try:
+        async for record in wf_runner.run(body.params):
+            records.append(record)
+    except Exception as exc:
+        logger.exception("run_workflow failed app=%s workflow=%s", app_name, workflow_name)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return WorkflowRunResponse(workflow=workflow_name, records=records, total=len(records))
+
+
+@router.post("/{app_name}/workflows/{workflow_name}/stream")
+async def stream_workflow(
+    app_name: str,
+    workflow_name: str,
+    body: WorkflowRunRequest,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+) -> StreamingResponse:
+    """Stream workflow results as Server-Sent Events.
+
+    Each saved record yields: ``{"record": {...}}``
+    Sentinel: ``data: [DONE]``
+    """
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    try:
+        wf_runner = app.get_workflow(workflow_name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
+
+    async def event_stream():
+        try:
+            async for record in wf_runner.run(body.params):
+                yield f"data: {json.dumps({'record': record})}\n\n"
+        except Exception:
+            logger.exception("stream_workflow failed app=%s workflow=%s", app_name, workflow_name)
+            yield f"data: {json.dumps({'error': 'workflow stream failed'})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

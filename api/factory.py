@@ -9,6 +9,7 @@ from cogbase.config.stores import StructuredStoreConfig
 from cogbase.embeddings import build_embedding as _build_embedder
 from cogbase.llms import build_llm as _build_llm
 from cogbase.stores import (
+    CollectionSchema,
     DocumentStoreBase,
     StructuredStoreBase,
     VectorCollectionSchema,
@@ -20,6 +21,7 @@ from cogbase.stores import (
 from cogbase.core.app import CogBaseApp
 from cogbase.core.query_runner import QueryRunner
 from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
+from cogbase.core.basemodel_to_schema import cls_generate_schema, cls_json_schema_for_llm
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
@@ -27,7 +29,7 @@ from cogbase.pipeline.ingestion_pipeline import (
     DocumentCollection,
     ChunkCollection,
 )
-from cogbase.core.basemodel_to_schema import cls_json_schema_for_llm
+from cogbase.workflows.runner import WorkflowRunner
 from api.system_resources import SystemResources
 
 import logging
@@ -200,7 +202,7 @@ async def build_app(
 
     vc_schemas = [c.schema for c in [*chunk_collections, *document_collections]]
 
-    runner = QueryRunner(
+    qrunner = QueryRunner(
         llm=llm,
         structured_store=structured_store,
         vector_store=vector_store,
@@ -211,4 +213,33 @@ async def build_app(
         app_name=config.name,
     )
 
-    return CogBaseApp(config.name, pipeline, runner, document_store=document_store)
+    # --- Workflows ---
+    workflow_runners: dict[str, WorkflowRunner] = {}
+    for wf_cfg in config.workflows:
+        # Create output collections declared by this workflow
+        for oc_cfg in wf_cfg.output_collections:
+            if structured_store is None:
+                raise ValueError(
+                    f"Workflow '{wf_cfg.name}' output collection '{oc_cfg.name}' "
+                    "requires a structured store"
+                )
+            oc_model = build_model_from_json_schema(oc_cfg.schema_, model_name=oc_cfg.name.upper())
+            oc_schema = CollectionSchema(
+                name=oc_cfg.name,
+                primary_fields=oc_cfg.primary_fields,
+                fields=cls_generate_schema(oc_model),
+                description=oc_cfg.description,
+            )
+            await structured_store.create_collection(oc_schema)
+            logger.info("created workflow output collection=%s workflow=%s app=%s", oc_cfg.name, wf_cfg.name, config.name)
+
+        workflow_runners[wf_cfg.name] = WorkflowRunner(
+            wf_cfg,
+            structured_store=structured_store,
+            vector_store=vector_store,
+            embedder=embedder,
+            llm=llm,
+        )
+        logger.info("registered workflow=%s app=%s trigger=%s", wf_cfg.name, config.name, wf_cfg.trigger.type)
+
+    return CogBaseApp(config.name, pipeline, qrunner, document_store=document_store, workflow_runners=workflow_runners)
