@@ -6,17 +6,14 @@ import asyncio
 from pydantic import BaseModel
 
 from cogbase.core.models import Document
-from cogbase.stores import CollectionSchema
 
 
 class ExtractorBase(abc.ABC):
     """Extract structured records from document text and declare where to store them.
 
-    An extractor is responsible for three things:
+    An extractor is responsible for two things:
     1. Declaring the **collection name** it writes to (``collection`` property).
-    2. Declaring the **schema** of that collection (``schema`` property), so the
-       pipeline can call ``create_collection`` idempotently on startup.
-    3. Implementing ``_extract_once`` to turn raw text into a single Pydantic record.
+    2. Implementing ``_extract_once`` to turn raw text into Pydantic records.
 
     The public ``extract`` method wraps ``_extract_once`` with automatic retries
     and exponential backoff, so transient LLM JSON failures are handled for all
@@ -41,21 +38,6 @@ class ExtractorBase(abc.ABC):
             def collection(self) -> str:
                 return "clauses"
 
-            @property
-            def schema(self) -> CollectionSchema:
-                return CollectionSchema(
-                    name="clauses",
-                    description="Extracted contract clauses with type, text, and page reference.",
-                    primary_fields=["clause_id"],
-                    fields={
-                        "clause_id": FieldSchema(type=FieldType.STRING),
-                        "doc_id":    FieldSchema(type=FieldType.STRING, index=True),
-                        "type":      FieldSchema(type=FieldType.STRING, index=True),
-                        "text":      FieldSchema(type=FieldType.STRING),
-                        "page":      FieldSchema(type=FieldType.INTEGER, nullable=True),
-                    },
-                )
-
             async def _extract_once(self, doc: Document) -> BaseModel | None:
                 ...
     """
@@ -67,16 +49,6 @@ class ExtractorBase(abc.ABC):
     @abc.abstractmethod
     def collection(self) -> str:
         """Name of the structured store collection this extractor writes to."""
-
-    @property
-    @abc.abstractmethod
-    def schema(self) -> CollectionSchema:
-        """Schema for ``collection``.
-
-        The pipeline calls ``structured_store.create_collection(extractor.schema)``
-        before the first ``save``.  ``create_collection`` is idempotent, so this is
-        safe to call on every pipeline run.
-        """
 
     @abc.abstractmethod
     async def _extract_once(self, doc: Document) -> list[BaseModel] | None:

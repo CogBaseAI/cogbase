@@ -106,7 +106,7 @@ def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        collection_schema=_CONTRACTS_SCHEMA,
+        collection_name=_CONTRACTS_COLLECTION,
     )
 
 
@@ -120,7 +120,7 @@ async def _make_pipeline(
     name: str = "legal",
 ) -> IngestionPipeline:
     extractor = _make_extractor(llm)
-    sc_schema = extractor.schema
+    sc_schema = _CONTRACTS_SCHEMA
     await store.create_collection(sc_schema)
     sc = StructuredCollection(schema=sc_schema, store=store)
 

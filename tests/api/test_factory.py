@@ -434,16 +434,6 @@ class TestBuildAppListExtractor:
         assert extractor._item_id_field == "clause_id"
 
     @patch("api.factory._build_llm")
-    async def test_list_extractor_schema_primary_key_is_custom_field(self, mock_build_llm):
-        mock_build_llm.return_value = _mock_llm()
-        cfg = AppConfig.from_yaml(_LIST_EXTRACTOR_CONFIG_YAML)
-        system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
-
-        extractor = self._get_extractor(app, "contract_clauses")
-        assert extractor.schema.primary_fields == ["clause_id"]
-
-    @patch("api.factory._build_llm")
     async def test_list_extractor_custom_list_field(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_LIST_EXTRACTOR_CONFIG_YAML)

@@ -16,7 +16,6 @@ from pydantic import BaseModel, ValidationError, create_model
 from cogbase.core.models import Document
 from cogbase.llms import LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
-from cogbase.stores import CollectionSchema
 from cogbase.core.basemodel_to_schema import cls_generate_schema, cls_json_schema_for_llm
 
 logger = logging.getLogger(__name__)
@@ -76,9 +75,7 @@ class LLMExtractor(ExtractorBase):
                            (e.g. ``ContractClauseExtraction``), not a wrapper model.
                            Identity fields (``doc_id``, item id) must NOT appear here;
                            they are injected automatically.
-        collection_schema: Pre-built ``CollectionSchema`` for the target collection.
-                           Constructed by the factory from the record schema file
-                           (which includes identity fields).
+        collection_name:   Name of the structured store collection to write to.
         extract_as_list:   When ``True`` the LLM is asked to return a JSON object
                            with a single array key; each element becomes one row.
         list_field:        The JSON key that wraps the array in list mode.
@@ -93,7 +90,7 @@ class LLMExtractor(ExtractorBase):
         self,
         llm: LLMBase,
         extraction_model: Type[BaseModel],
-        collection_schema: CollectionSchema,
+        collection_name: str,
         *,
         extract_as_list: bool = False,
         list_field: str = "items",
@@ -103,12 +100,11 @@ class LLMExtractor(ExtractorBase):
     ) -> None:
         super().__init__(max_retries=max_retries)
         self._llm = llm
-        self._collection_name = collection_schema.name
+        self._collection_name = collection_name
         self._extraction_model = extraction_model
         self._extract_as_list = extract_as_list
         self._list_field = list_field
         self._item_id_field = item_id_field
-        self._schema = collection_schema
 
         if extract_as_list:
             self._record_model = _build_list_record_model(extraction_model, item_id_field)
@@ -131,10 +127,6 @@ class LLMExtractor(ExtractorBase):
     @property
     def collection(self) -> str:
         return self._collection_name
-
-    @property
-    def schema(self) -> CollectionSchema:
-        return self._schema
 
     async def _extract_once(self, doc: Document) -> list[BaseModel] | None:
         """Single LLM call; returns ``None`` when the response is unparseable."""
