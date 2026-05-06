@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from enum import Enum
 from typing import Any, Literal
 
 import yaml
@@ -10,6 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
 from cogbase.config.models import LLMConfig, EmbeddingConfig
+
+
+class RecordMode(str, Enum):
+    ONE = "one"
+    MANY = "many"
 
 
 class ChunkerConfig(BaseModel):
@@ -35,7 +41,7 @@ class ExtractorConfig(BaseModel):
     type: Literal["llm"] = "llm"
     extraction_schema: str
     prompt: str | None = None
-    record_mode: Literal["one", "many"] = "one"
+    record_mode: RecordMode = RecordMode.ONE
     response_field: str = "items"
     id_field: str | None = None
     id_template: str | None = None

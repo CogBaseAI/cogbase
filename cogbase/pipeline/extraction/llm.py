@@ -12,7 +12,7 @@ from typing import Callable, Type
 
 from pydantic import BaseModel, ValidationError, create_model
 
-from cogbase.config.config import ExtractorConfig
+from cogbase.config.config import ExtractorConfig, RecordMode
 from cogbase.core.models import Document
 from cogbase.llms import LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
@@ -97,7 +97,7 @@ class LLMExtractor(ExtractorBase):
         self._response_field = config.response_field
         self._injected_fields = self._build_injected_fields_from_config(config)
 
-        if config.record_mode == "many":
+        if config.record_mode == RecordMode.MANY:
             self._wrapper_model: Type[BaseModel] = create_model(
                 "_WrapperModel",
                 **{config.response_field: (list[extraction_model], ...)},  # type: ignore[call-overload]
@@ -107,7 +107,7 @@ class LLMExtractor(ExtractorBase):
             self._system_prompt = self._build_system_prompt_from_config(config)
 
     def _build_system_prompt_from_config(self, config: ExtractorConfig) -> str:
-        if config.record_mode == "many":
+        if config.record_mode == RecordMode.MANY:
             base = (
                 (config.prompt or "")
                 if config.prompt
@@ -131,7 +131,7 @@ class LLMExtractor(ExtractorBase):
             raise ValueError(
                 "extraction_schema must not include 'doc_id' (it is injected by the pipeline)"
             )
-        if config.record_mode == "many" and config.id_field and config.id_field in extraction_fields:
+        if config.record_mode == RecordMode.MANY and config.id_field and config.id_field in extraction_fields:
             raise ValueError(
                 f"extraction_schema must not include '{config.id_field}' (it is injected by the pipeline)"
             )
@@ -139,7 +139,7 @@ class LLMExtractor(ExtractorBase):
         record_fields = set(self._record_model.model_fields)
         if "doc_id" not in record_fields:
             raise ValueError("record schema must include 'doc_id'")
-        if config.record_mode == "many" and config.id_field and config.id_field not in record_fields:
+        if config.record_mode == RecordMode.MANY and config.id_field and config.id_field not in record_fields:
             raise ValueError(
                 f"record schema must include '{config.id_field}' (id_field) for record_mode=many"
             )
@@ -149,7 +149,7 @@ class LLMExtractor(ExtractorBase):
         injected_fields: dict[str, Callable] = {
             "doc_id": lambda doc, item, index: doc.doc_id,
         }
-        if config.record_mode == "many" and config.id_field:
+        if config.record_mode == RecordMode.MANY and config.id_field:
             if config.id_template:
                 template = config.id_template
                 injected_fields[config.id_field] = (
@@ -188,7 +188,7 @@ class LLMExtractor(ExtractorBase):
             content[:50],
         )
 
-        if self._record_mode == "many":
+        if self._record_mode == RecordMode.MANY:
             return self._parse_list(doc, content, result)
         return self._parse_single(doc, content, result)
 
