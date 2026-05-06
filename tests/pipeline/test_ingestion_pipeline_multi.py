@@ -215,11 +215,11 @@ class TestDocumentEmbedUpsert:
     async def test_metadata_fields_projected_into_chunk(self, make_vector_store):
         vector_store = make_vector_store()
         await vector_store.create_collection(self._SUMMARIES_SCHEMA)
+        schema = self._SUMMARIES_SCHEMA.model_copy(update={"metadata_fields": ["customer_id", "deal_stage"]})
         vc = VectorCollection(
-            schema=self._SUMMARIES_SCHEMA,
+            schema=schema,
             store=vector_store,
             embedder=StubEmbedding(dim=4),
-            metadata_fields=["customer_id", "deal_stage"],
         )
         pipeline = IngestionPipeline(
             name="app",

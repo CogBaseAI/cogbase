@@ -19,15 +19,14 @@ class VectorCollectionSchema(BaseModel):
         description: Short description shown to the LLM to help it choose the
                      right collection (e.g. "Full-text passage chunks for detailed
                      document questions").
-        metadata:    Optional free-form str->str metadata stored at the
-                     collection level (e.g. embedding model name, distance
-                     metric).
+        metadata_fields: Document metadata keys projected into each chunk's
+                         metadata at ingest time.
     """
 
     name: str
     dimensions: int
     description: str
-    metadata: dict[str, str] = {}
+    metadata_fields: list[str] = []
 
     @field_validator("description")
     @classmethod

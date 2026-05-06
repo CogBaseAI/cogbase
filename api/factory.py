@@ -112,10 +112,10 @@ async def build_app(
                 name=vc_cfg.name,
                 dimensions=vc_cfg.dimensions,
                 description=vc_cfg.description,
+                metadata_fields=vc_cfg.metadata_fields,
             ),
             store=vector_store,
             embedder=embedder,
-            metadata_fields=vc_cfg.metadata_fields,
         ))
 
     # --- Structured collections ---
