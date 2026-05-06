@@ -13,3 +13,13 @@ vector_store:
 document_store:
   type: local
   path: /data/documents
+
+llm:
+  provider: openai
+  model: gpt-5.4-mini
+  # api_key: sk-...          # omit to use OPENAI_API_KEY env var
+
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+

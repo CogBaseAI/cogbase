@@ -41,14 +41,11 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import logging
 import os
 import pathlib
+import readline  # noqa: F401 — enables arrow-key line editing in input()
 import sys
 import zipfile
-
-_format = "%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s"
-logging.basicConfig(stream=sys.stdout, level=logging.INFO, format=_format)
 
 # ---------------------------------------------------------------------------
 # Repo root on the Python path
@@ -65,6 +62,17 @@ if str(_REPO_ROOT) not in sys.path:
 
 import httpx  # noqa: E402
 
+from examples.cogbase_client import (  # noqa: E402
+    CogBaseClient,
+    cmd_create,
+    cmd_delete,
+    cmd_list,
+    cmd_list_collections,
+    cmd_query_structured,
+    cmd_reset,
+    cmd_startup,
+    configure_logging,
+)
 from examples.contract_compliance_demo.contracts_data import (  # noqa: E402
     CONTRACTS_DOCUMENTS,
 )
@@ -75,15 +83,14 @@ from examples.contract_compliance_demo.schema import (  # noqa: E402
     ContractMetadata,
 )
 
+configure_logging()
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
 _APP_NAME = "contract-compliance"
-_CHAT_MODEL = "gpt-5.4-mini"
-_EMBED_MODEL = "text-embedding-3-small"
-_EMBED_DIM = 1536
-_API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000").rstrip("/")
+_API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000")
 
 _DEFAULT_STRUCTURED_COLLECTION = "contract_metadata"
 
@@ -128,13 +135,6 @@ _CONTRACT_CLAUSES_SYSTEM_PROMPT = (
 
 _CONFIG_YAML = f"""\
 name: {_APP_NAME}
-llm:
-  provider: openai
-  model: {_CHAT_MODEL}
-embedding:
-  provider: openai
-  model: {_EMBED_MODEL}
-  dimensions: {_EMBED_DIM}
 vector_collections:
   - name: rule_chunks
     description: >-
@@ -238,7 +238,6 @@ workflows:
 
 
 def _build_bundle() -> bytes:
-    """Build an in-memory ZIP bundle: config.yaml + schemas + prompts."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("config.yaml", _CONFIG_YAML)
@@ -252,109 +251,6 @@ def _build_bundle() -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# REST helpers
-# ---------------------------------------------------------------------------
-
-
-async def _list_apps(client: httpx.AsyncClient) -> list[dict]:
-    resp = await client.get(f"{_API_BASE}/applications", timeout=10)
-    resp.raise_for_status()
-    return resp.json()["applications"]
-
-
-async def _get_app(client: httpx.AsyncClient) -> dict | None:
-    resp = await client.get(f"{_API_BASE}/applications/{_APP_NAME}", timeout=10)
-    if resp.status_code == 404:
-        return None
-    resp.raise_for_status()
-    return resp.json()
-
-
-async def _create_app(client: httpx.AsyncClient) -> dict:
-    bundle = _build_bundle()
-    resp = await client.post(
-        f"{_API_BASE}/applications",
-        files={"bundle": ("bundle.zip", bundle, "application/zip")},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-async def _delete_app(client: httpx.AsyncClient, name: str = _APP_NAME) -> None:
-    resp = await client.delete(f"{_API_BASE}/applications/{name}", timeout=10)
-    if resp.status_code not in (204, 404):
-        resp.raise_for_status()
-
-
-async def _ingest_documents(
-    client: httpx.AsyncClient,
-    documents: list[dict],
-) -> list[dict]:
-    resp = await client.post(
-        f"{_API_BASE}/applications/{_APP_NAME}/ingest_documents",
-        json={"documents": documents, "concurrency": 3},
-        timeout=180,
-    )
-    resp.raise_for_status()
-    return resp.json()["results"]
-
-
-async def _query_stream(client: httpx.AsyncClient, text: str) -> None:
-    """POST to /query/stream and print SSE tokens as they arrive."""
-    async with client.stream(
-        "POST",
-        f"{_API_BASE}/applications/{_APP_NAME}/query/stream",
-        json={"text": text},
-        timeout=120,
-    ) as resp:
-        resp.raise_for_status()
-        print("Answer:\n")
-        async for line in resp.aiter_lines():
-            if not line.startswith("data:"):
-                continue
-            payload = line[len("data:"):].strip()
-            if payload == "[DONE]":
-                break
-            try:
-                data = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            if "token" in data:
-                print(data["token"], end="", flush=True)
-            elif "result" in data:
-                result = data["result"]
-                if result.get("passthrough") and result.get("structured_records"):
-                    print(json.dumps(result["structured_records"], indent=2))
-            elif "error" in data:
-                print(f"\n  ERROR: {data['error']}")
-        print()
-
-
-async def _list_collections(client: httpx.AsyncClient) -> dict:
-    resp = await client.get(
-        f"{_API_BASE}/applications/{_APP_NAME}/collections", timeout=10
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-async def _query_structured_rest(
-    client: httpx.AsyncClient,
-    collection: str,
-    filters: list[dict] | None = None,
-) -> list[dict]:
-    resp = await client.post(
-        f"{_API_BASE}/applications/{_APP_NAME}/collections/{collection}/query",
-        json={"filters": filters or [], "fields": None},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()["records"]
-
-
-
-# ---------------------------------------------------------------------------
 # Main async loop
 # ---------------------------------------------------------------------------
 
@@ -363,26 +259,15 @@ async def main() -> None:
     print()
     print("Contract Compliance Demo (REST API)")
     print("=" * 42)
-    print(f"  model:   {_CHAT_MODEL}")
-    print(f"  embed:   {_EMBED_MODEL}")
     print(f"  api:     {_API_BASE}")
-
     print()
 
-    async with httpx.AsyncClient() as client:
-        app_info = await _get_app(client)
+    async with httpx.AsyncClient() as http:
+        client = CogBaseClient(_APP_NAME, _API_BASE, http)
+
+        app_info = await cmd_startup(client, _build_bundle())
         if app_info is None:
-            print(f"Creating application '{_APP_NAME}'...")
-            try:
-                app_info = await _create_app(client)
-            except httpx.HTTPStatusError as exc:
-                print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                return
-            print(f"  status: {app_info['status']}")
-            if app_info.get("error"):
-                print(f"  error:  {app_info['error']}")
-        else:
-            print(f"Application '{_APP_NAME}' already exists (status: {app_info['status']})")
+            return
         print()
 
         print(
@@ -409,99 +294,39 @@ async def main() -> None:
                 print("Goodbye!")
                 break
 
-            # ---- list -------------------------------------------------------
             if lower == "list":
-                try:
-                    apps = await _list_apps(client)
-                except httpx.HTTPStatusError as exc:
-                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                    continue
-                if not apps:
-                    print("  No applications found.")
-                else:
-                    for app in apps:
-                        print(f"  {app['name']:<28}  status: {app['status']}")
+                await cmd_list(client)
                 continue
 
-            # ---- create -----------------------------------------------------
             if lower == "create":
-                existing = await _get_app(client)
-                if existing is not None:
-                    print(f"  Application '{_APP_NAME}' already exists (status: {existing['status']})")
-                    continue
-                print(f"Creating application '{_APP_NAME}'...")
-                try:
-                    result = await _create_app(client)
-                except httpx.HTTPStatusError as exc:
-                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                    continue
-                print(f"  status: {result['status']}")
-                if result.get("error"):
-                    print(f"  error:  {result['error']}")
+                await cmd_create(client, _build_bundle())
                 continue
 
-            # ---- delete <name> ----------------------------------------------
             if lower.startswith("delete "):
-                name = raw[len("delete "):].strip()
-                if not name:
-                    print("  Usage: delete <name>")
-                    continue
-                confirm = input(f"  Delete application '{name}' and all its data? [y/N] ").strip().lower()
-                if confirm == "y":
-                    try:
-                        await _delete_app(client, name)
-                    except httpx.HTTPStatusError as exc:
-                        print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                        continue
-                    print(f"  Application '{name}' deleted.")
+                await cmd_delete(client, raw)
                 continue
 
-            # ---- reset ------------------------------------------------------
             if lower == "reset":
-                confirm = input("  Delete application and all data? [y/N] ").strip().lower()
-                if confirm == "y":
-                    await _delete_app(client)
-                    print("  Application deleted. Restart the demo to start fresh.")
+                if await cmd_reset(client):
                     break
                 continue
 
-            # ---- list collections -------------------------------------------
             if lower == "list collections":
-                try:
-                    cols = await _list_collections(client)
-                except httpx.HTTPStatusError as exc:
-                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                    continue
-                print(f"  structured: {cols.get('structured', [])}")
-                print(f"  vector:     {cols.get('vector', [])}")
+                await cmd_list_collections(client)
                 continue
 
-            # ---- query structured [<collection>] ----------------------------
             if lower == "query structured" or lower.startswith("query structured "):
                 collection = (
                     raw[len("query structured "):].strip()
                     if lower.startswith("query structured ")
                     else _DEFAULT_STRUCTURED_COLLECTION
                 )
-                print(f"Querying structured collection '{collection}'...")
-
-                try:
-                    records = await _query_structured_rest(client, collection)
-                except httpx.HTTPStatusError as exc:
-                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                    continue
-
-                if not records:
-                    print("  No records found.")
-                else:
-                    print(json.dumps(records, indent=2))
+                await cmd_query_structured(client, collection)
                 continue
 
-            # ---- ingest rules [<path>] --------------------------------------
             if lower == "ingest rules" or lower.startswith("ingest rules "):
                 rest = raw[len("ingest rules"):].strip()
                 if rest:
-                    # ingest from file
                     file_path = pathlib.Path(rest).expanduser()
                     if not file_path.is_absolute():
                         file_path = pathlib.Path.cwd() / file_path
@@ -513,15 +338,13 @@ async def main() -> None:
                     documents = [{"doc_id": doc_id, "text": text, "metadata": {"doc_type": "rules"}}]
                     print(f"Ingesting {file_path.name} as doc_id={doc_id!r}...")
                 else:
-                    # ingest built-in rules
                     documents = [
                         {"doc_id": doc.doc_id, "text": doc.text, "metadata": dict(doc.metadata)}
                         for doc in RULES_DOCUMENTS
                     ]
                     print(f"Ingesting {len(documents)} built-in rule documents...")
-
                 try:
-                    results = await _ingest_documents(client, documents)
+                    results = await client.ingest_documents(documents, timeout=180)
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     continue
@@ -532,7 +355,6 @@ async def main() -> None:
                         print(f"  {r['doc_id']:<14}  FAILED: {r['error']}")
                 continue
 
-            # ---- ingest contracts -------------------------------------------
             if lower == "ingest contracts":
                 print(f"Ingesting {len(CONTRACTS_DOCUMENTS)} built-in contracts...")
                 documents = [
@@ -540,20 +362,17 @@ async def main() -> None:
                     for doc in CONTRACTS_DOCUMENTS
                 ]
                 try:
-                    results = await _ingest_documents(client, documents)
+                    results = await client.ingest_documents(documents, timeout=180)
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     continue
-
                 for r in results:
                     if r["success"]:
                         print(f"  {r['doc_id']:<14}  OK  ({r['records_extracted']} records extracted)")
                     else:
                         print(f"  {r['doc_id']:<14}  FAILED: {r['error']}")
-
                 continue
 
-            # ---- ingest contract <path> -------------------------------------
             if lower.startswith("ingest contract "):
                 rest = raw[len("ingest contract "):].strip()
                 file_path = pathlib.Path(rest).expanduser()
@@ -567,7 +386,7 @@ async def main() -> None:
                 documents = [{"doc_id": doc_id, "text": text, "metadata": {"doc_type": "contract"}}]
                 print(f"Ingesting {file_path.name} as doc_id={doc_id!r}...")
                 try:
-                    results = await _ingest_documents(client, documents)
+                    results = await client.ingest_documents(documents, timeout=180)
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     continue
@@ -578,7 +397,6 @@ async def main() -> None:
                     print(f"  {doc_id}  FAILED: {r['error']}")
                 continue
 
-            # ---- check <doc_id> ---------------------------------------------
             if lower.startswith("check "):
                 doc_id = raw[len("check "):].strip()
                 if not doc_id:
@@ -591,9 +409,9 @@ async def main() -> None:
                 needs_review = 0
 
                 try:
-                    async with client.stream(
+                    async with http.stream(
                         "POST",
-                        f"{_API_BASE}/applications/{_APP_NAME}/workflows/check-contract-compliance/stream",
+                        f"{client.api_base}/applications/{client.app_name}/workflows/check-contract-compliance/stream",
                         json={"params": {"doc_id": doc_id}},
                         timeout=300,
                     ) as resp:
@@ -614,13 +432,6 @@ async def main() -> None:
                             finding = data.get("record", data)
                             count += 1
                             status_val = finding.get("status", "")
-                            status_marker = {
-                                "compliant": "COMPLIANT    ",
-                                "non_compliant": "NON-COMPLIANT",
-                                "needs_review": "NEEDS REVIEW ",
-                                "not_applicable": "N/A          ",
-                            }.get(status_val, status_val.upper())
-                            sev = (finding.get("severity") or "").upper()
                             print(json.dumps(finding, indent=2))
                             if status_val == "non_compliant":
                                 non_compliant += 1
@@ -640,7 +451,6 @@ async def main() -> None:
                           f"compliant: {compliant}")
                 continue
 
-            # ---- report <doc_id> --------------------------------------------
             if lower.startswith("report "):
                 doc_id = raw[len("report "):].strip()
                 if not doc_id:
@@ -648,8 +458,7 @@ async def main() -> None:
                     continue
 
                 try:
-                    findings = await _query_structured_rest(
-                        client,
+                    findings = await client.query_structured(
                         "clause_compliance_findings",
                         filters=[{"field": "doc_id", "op": "=", "value": doc_id}],
                     )
@@ -673,11 +482,9 @@ async def main() -> None:
                 print()
                 continue
 
-            # ---- alerts -----------------------------------------------------
             if lower == "alerts":
                 try:
-                    findings = await _query_structured_rest(
-                        client,
+                    findings = await client.query_structured(
                         "clause_compliance_findings",
                         filters=[
                             {"field": "status", "op": "=", "value": "non_compliant"},
@@ -708,10 +515,9 @@ async def main() -> None:
                 print()
                 continue
 
-            # ---- natural-language question / anything else ------------------
             print("Thinking...")
             try:
-                await _query_stream(client, raw)
+                await client.query_stream(raw)
             except httpx.HTTPStatusError as exc:
                 print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
 
