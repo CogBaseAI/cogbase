@@ -207,7 +207,7 @@ async def create_application(
     logger.info("Creating application '%s'", config.name)
 
     try:
-        app = await build_app(config, system=system_resources)
+        app = await build_app(config, system=system_resources, app_status=record.status)
         app_cache.add(config.name, app)
         record = record.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("Application '%s' created successfully", config.name)
@@ -289,7 +289,7 @@ async def update_application(
     logger.info("Updating application '%s'", app_name)
 
     try:
-        app = await build_app(config, system=system_resources)
+        app = await build_app(config, system=system_resources, app_status=updated.status)
         app_cache.add(config.name, app)
         updated = updated.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("Application '%s' updated successfully", config.name)
@@ -336,7 +336,7 @@ async def _get_active_app(
     if record is None or record.status != "active":
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found or not active")
     config = AppConfig.from_yaml(record.config_yaml)
-    app = await build_app(config, system=system_resources)
+    app = await build_app(config, system=system_resources, app_status=record.status)
     app_cache.add(app_name, app)
     return app
 

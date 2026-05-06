@@ -119,14 +119,18 @@ class TestBuildAppStructuredStoreResolution:
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         with pytest.raises(ValueError, match="structured store"):
-            await build_app(cfg)
+            await build_app(cfg, app_status="initializing")
 
     @patch("api.factory._build_llm")
     async def test_uses_system_store_when_no_app_store(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+        app = await build_app(
+            cfg,
+            system=SystemResources(structured_store=system_store),
+            app_status="initializing",
+        )
         structured_store = next(iter(app._ingest_pipeline._structured_by_name.values())).store
         assert structured_store is system_store
 
@@ -138,9 +142,55 @@ class TestBuildAppStructuredStoreResolution:
         )
         cfg = AppConfig.from_yaml(cfg_yaml)
         system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+        app = await build_app(
+            cfg,
+            system=SystemResources(structured_store=system_store),
+            app_status="initializing",
+        )
         structured_store = next(iter(app._ingest_pipeline._structured_by_name.values())).store
         assert isinstance(structured_store, SQLiteStructuredStore)
+
+
+class TestBuildAppCollectionCreation:
+    @patch("api.factory._build_llm")
+    @patch("api.factory._build_embedder")
+    async def test_creates_collections_for_new_app(self, mock_build_embedder, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        mock_build_embedder.return_value = MagicMock()
+        cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
+        vector_store = MagicMock()
+        vector_store.create_collection = AsyncMock()
+        structured_store = MagicMock()
+        structured_store.create_collection = AsyncMock()
+
+        await build_app(
+            cfg,
+            system=SystemResources(structured_store=structured_store, vector_store=vector_store),
+            app_status="initializing",
+        )
+
+        vector_store.create_collection.assert_awaited_once()
+        structured_store.create_collection.assert_awaited_once()
+
+    @patch("api.factory._build_llm")
+    @patch("api.factory._build_embedder")
+    async def test_skips_collection_creation_for_active_restore(self, mock_build_embedder, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        mock_build_embedder.return_value = MagicMock()
+        cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
+        vector_store = MagicMock()
+        vector_store.create_collection = AsyncMock()
+        structured_store = MagicMock()
+        structured_store.create_collection = AsyncMock()
+
+        await build_app(
+            cfg,
+            system=SystemResources(structured_store=structured_store, vector_store=vector_store),
+            app_status="active",
+        )
+
+        vector_store.create_collection.assert_not_awaited()
+        structured_store.create_collection.assert_not_awaited()
 
 
 class TestBuildAppVectorStoreResolution:
@@ -149,7 +199,11 @@ class TestBuildAppVectorStoreResolution:
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+        app = await build_app(
+            cfg,
+            system=SystemResources(structured_store=system_store),
+            app_status="initializing",
+        )
         assert app._ingest_pipeline._vector_by_name == {}
 
     @patch("api.factory._build_llm")
@@ -164,6 +218,7 @@ class TestBuildAppVectorStoreResolution:
             app = await build_app(
                 cfg,
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs),
+                app_status="initializing",
             )
 
         assert app._ingest_pipeline._vector_by_name
@@ -181,6 +236,7 @@ class TestBuildAppVectorStoreResolution:
             app = await build_app(
                 cfg,
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs),
+                app_status="initializing",
             )
 
         assert "document_chunks" in app._ingest_pipeline._vector_by_name
@@ -257,7 +313,11 @@ class TestBuildAppDocumentCollection:
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
-            app = await build_app(cfg, system=SystemResources(vector_store=sys_vs))
+            app = await build_app(
+                cfg,
+                system=SystemResources(vector_store=sys_vs),
+                app_status="initializing",
+            )
 
         assert "document_summary" in app._ingest_pipeline._vector_by_name
 
@@ -269,7 +329,11 @@ class TestBuildAppDocumentCollection:
 
         with patch("api.factory._build_embedder") as mock_emb:
             mock_emb.return_value = MagicMock()
-            app = await build_app(cfg, system=SystemResources(vector_store=sys_vs))
+            app = await build_app(
+                cfg,
+                system=SystemResources(vector_store=sys_vs),
+                app_status="initializing",
+            )
 
         vc = app._ingest_pipeline._vector_by_name["document_summary"]
         assert vc.name == "document_summary"
@@ -288,6 +352,7 @@ class TestBuildAppDocumentCollection:
             app = await build_app(
                 cfg,
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs),
+                app_status="initializing",
             )
 
         stores = {vc.store for vc in app._ingest_pipeline._vector_by_name.values()}
@@ -305,6 +370,7 @@ class TestBuildAppDocumentCollection:
             app = await build_app(
                 cfg,
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs),
+                app_status="initializing",
             )
 
         assert app._ingest_pipeline._vector_by_name
@@ -323,6 +389,7 @@ class TestBuildAppDocumentCollection:
             app = await build_app(
                 cfg,
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs),
+                app_status="initializing",
             )
 
         assert "document_chunks" in app._ingest_pipeline._vector_by_name
@@ -336,7 +403,7 @@ class TestBuildAppDocumentCollection:
         cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
         # No vector store supplied
         with pytest.raises(ValueError, match="vector store"):
-            await build_app(cfg)
+            await build_app(cfg, app_status="initializing")
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +485,11 @@ class TestBuildAppListExtractor:
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_LIST_EXTRACTOR_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+        app = await build_app(
+            cfg,
+            system=SystemResources(structured_store=system_store),
+            app_status="initializing",
+        )
 
         extractor = self._get_extractor(app, "contract_clauses")
         assert extractor._record_mode == "many"
@@ -428,7 +499,11 @@ class TestBuildAppListExtractor:
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_LIST_EXTRACTOR_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+        app = await build_app(
+            cfg,
+            system=SystemResources(structured_store=system_store),
+            app_status="initializing",
+        )
 
         extractor = self._get_extractor(app, "contract_clauses")
         assert "clause_id" in extractor._injected_fields
@@ -438,7 +513,11 @@ class TestBuildAppListExtractor:
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_LIST_EXTRACTOR_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+        app = await build_app(
+            cfg,
+            system=SystemResources(structured_store=system_store),
+            app_status="initializing",
+        )
 
         extractor = self._get_extractor(app, "contract_clauses")
         assert extractor._response_field == "clauses"
@@ -448,7 +527,11 @@ class TestBuildAppListExtractor:
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_LIST_EXTRACTOR_WITH_PROMPT_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+        app = await build_app(
+            cfg,
+            system=SystemResources(structured_store=system_store),
+            app_status="initializing",
+        )
 
         extractor = self._get_extractor(app, "contract_clauses")
         assert '"clauses"' in extractor._system_prompt
@@ -459,7 +542,11 @@ class TestBuildAppListExtractor:
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_LIST_EXTRACTOR_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+        app = await build_app(
+            cfg,
+            system=SystemResources(structured_store=system_store),
+            app_status="initializing",
+        )
 
         extractor = self._get_extractor(app, "contract_clauses")
         assert '"clauses"' in extractor._system_prompt
@@ -469,7 +556,11 @@ class TestBuildAppListExtractor:
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_SINGLE_EXTRACTOR_WITH_PROMPT_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+        app = await build_app(
+            cfg,
+            system=SystemResources(structured_store=system_store),
+            app_status="initializing",
+        )
 
         extractor = self._get_extractor(app, "contract_metadata")
         assert extractor._record_mode == "one"
@@ -481,7 +572,11 @@ class TestBuildAppListExtractor:
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
-        app = await build_app(cfg, system=SystemResources(structured_store=system_store))
+        app = await build_app(
+            cfg,
+            system=SystemResources(structured_store=system_store),
+            app_status="initializing",
+        )
 
         extractor = self._get_extractor(app, "contract_extraction")
         assert extractor._record_mode == "one"
@@ -499,7 +594,11 @@ llm:
   model: gpt-4o-mini
 """)
         sys_doc = LocalFSDocumentStore(tmp_path / "docs")
-        app = await build_app(cfg, system=SystemResources(document_store=sys_doc))
+        app = await build_app(
+            cfg,
+            system=SystemResources(document_store=sys_doc),
+            app_status="initializing",
+        )
 
         assert app.document_store is sys_doc
 
@@ -516,7 +615,11 @@ document_store:
   path: {tmp_path / "app-docs"}
 """)
         sys_doc = LocalFSDocumentStore(tmp_path / "system-docs")
-        app = await build_app(cfg, system=SystemResources(document_store=sys_doc))
+        app = await build_app(
+            cfg,
+            system=SystemResources(document_store=sys_doc),
+            app_status="initializing",
+        )
 
         assert isinstance(app.document_store, LocalFSDocumentStore)
         assert app.document_store._root.name == "app-docs"  # type: ignore[union-attr]

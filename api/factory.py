@@ -63,6 +63,7 @@ async def build_app(
     config: AppConfig,
     *,
     system: SystemResources | None = None,
+    app_status: str,
 ) -> Any:
     """Instantiate a CogBase application from *config*.
 
@@ -156,12 +157,15 @@ async def build_app(
             extractors_by_col[sc_cfg.name] = extractor
 
     # --- Create collections in backing stores (idempotent) ---
-    for vc in vector_collections:
-        await vc.store.create_collection(vc.schema)
-        logger.info("created vector collection=%s, app=%s", vc.schema, config.name)
-    for sc_schema in structured_schemas:
-        await structured_store.create_collection(sc_schema)
-        logger.info("created structured collection=%s, app=%s", sc_schema, config.name)
+    # Restored active apps already have their collections, so avoid the noisy
+    # idempotent create calls and logs during startup reloads.
+    if app_status != "active":
+        for vc in vector_collections:
+            await vc.store.create_collection(vc.schema)
+            logger.info("created vector collection=%s, app=%s", vc.schema, config.name)
+        for sc_schema in structured_schemas:
+            await structured_store.create_collection(sc_schema)
+            logger.info("created structured collection=%s, app=%s", sc_schema, config.name)
 
     # --- Pipeline steps ---
     raw_steps = config.pipeline.steps if config.pipeline else []
