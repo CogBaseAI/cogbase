@@ -113,9 +113,9 @@ async def _make_pipeline(
     extractor = _make_extractor(llm)
     sc_schema = extractor.schema
     await store.create_collection(sc_schema)
-    sc = StructuredCollection(schema=sc_schema, store=store, extractor=extractor)
+    sc = StructuredCollection(schema=sc_schema, store=store)
 
-    steps = [PipelineStep(tool="extract-structured", collection=sc.name)]
+    steps = [PipelineStep(tool="extract-structured", collection=sc.name, extractor=extractor)]
     vector_collections = None
     if vector_store is not None:
         assert embedder is not None and chunker is not None

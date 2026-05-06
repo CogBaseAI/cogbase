@@ -119,7 +119,6 @@ class LLMExtractor(ExtractorBase):
         system_prompt:          Full system prompt for the LLM.  When ``None`` a
                                 generic prompt is built from *extraction_model*'s
                                 JSON schema.
-        max_tokens:             Maximum tokens for the LLM response.
         max_retries:            Retries on unparseable JSON (passed to
                                 ``ExtractorBase``).
     """
@@ -135,12 +134,10 @@ class LLMExtractor(ExtractorBase):
         list_field: str = "items",
         item_id_field: str = "item_id",
         system_prompt: str | None = None,
-        max_tokens: int = 16384,
         max_retries: int = 2,
     ) -> None:
         super().__init__(max_retries=max_retries)
         self._llm = llm
-        self._max_tokens = max_tokens
         self._collection_name = collection_name
         self._extraction_model = extraction_model
         self._extract_as_list = extract_as_list
@@ -183,7 +180,6 @@ class LLMExtractor(ExtractorBase):
                 {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": doc.text},
             ],
-            max_tokens=self._max_tokens,
         )
 
         content = result.get("content")
