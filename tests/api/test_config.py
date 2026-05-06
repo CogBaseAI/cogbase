@@ -264,10 +264,12 @@ class TestAppConfig:
               steps:
                 - tool: document-embed-upsert
                   collection: doc_summary
+                  doc_prompt: "Summarize in one sentence."
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         assert cfg.pipeline.steps[0].tool == "document-embed-upsert"
         assert cfg.pipeline.steps[0].collection == "doc_summary"
+        assert cfg.pipeline.steps[0].doc_prompt == "Summarize in one sentence."
 
     def test_vector_collections_without_embedding_raises_for_doc_embed(self):
         yaml_text = textwrap.dedent("""\
@@ -329,8 +331,7 @@ class TestAppConfig:
                     type: llm
                 - tool: document-embed-upsert
                   collection: document_summary
-                  prompt: "Summarize in one sentence."
-                  max_tokens: 128
+                  doc_prompt: "Summarize in one sentence."
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         assert len(cfg.vector_collections) == 2
@@ -339,8 +340,7 @@ class TestAppConfig:
         tools = [s.tool for s in cfg.pipeline.steps]
         assert tools == ["chunk-embed-upsert", "extract-structured", "document-embed-upsert"]
         doc_step = cfg.pipeline.steps[2]
-        assert doc_step.prompt == "Summarize in one sentence."
-        assert doc_step.max_tokens == 128
+        assert doc_step.doc_prompt == "Summarize in one sentence."
 
     def test_structured_collection_description_is_required(self):
         _SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
@@ -560,10 +560,9 @@ class TestVectorCollectionConfig:
         with pytest.raises(Exception, match="must be set"):
             VectorCollectionConfig(name="chunks", description=" ")
 
-    def test_step_prompt_and_max_tokens_on_step_config(self):
-        cfg = PipelineStepConfig(tool="document-embed-upsert", collection="doc_summary", prompt="One sentence.", max_tokens=64)
-        assert cfg.prompt == "One sentence."
-        assert cfg.max_tokens == 64
+    def test_step_prompt_on_step_config(self):
+        cfg = PipelineStepConfig(tool="document-embed-upsert", collection="doc_summary", doc_prompt="One sentence.")
+        assert cfg.doc_prompt == "One sentence."
 
     def test_vector_collection_metadata_fields(self):
         cfg = VectorCollectionConfig(

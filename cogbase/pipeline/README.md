@@ -1,12 +1,12 @@
 # cogbase.pipeline
 
-The pipeline module handles ingest-time processing: chunking documents into vector-searchable passages, extracting structured facts via LLM, and storing document-level summaries. It is asynchronous throughout and designed around pluggable chunkers and extractors.
+The pipeline module handles ingest-time processing: chunking documents into vector-searchable passages, extracting structured facts via LLM, and storing document-level summaries. It is asynchronous throughout and designed around pluggable chunkers, extractors, and step-level prompts.
 
 ## Structure
 
 ```
 pipeline/
-├── ingestion_pipeline.py   # orchestration — IngestionPipeline, ChunkCollection, StructuredCollection, DocumentCollection
+├── ingestion_pipeline.py   # orchestration — IngestionPipeline, PipelineStep, VectorCollection, StructuredCollection
 ├── extraction/
 │   ├── base.py             # ExtractorBase abstract class
 │   └── llm.py              # LLMExtractor — LLM-backed structured extraction
@@ -28,15 +28,16 @@ pipeline/
 | `extract-structured` | Calls `LLMExtractor` to pull typed records, writes them to a structured collection |
 | `document-embed-upsert` | Produces one vector record per document — either the full text or an LLM summary |
 
-Steps can be gated by document metadata predicates (`when_meta` dict). A step executes only if all predicate keys match the document's metadata.
+Steps can be gated by document metadata predicates (`when` dict). A step executes only if all predicate keys match the document's metadata.
 
 ### Collections
 
-Three collection wrapper types carry the stores and components each step needs:
+Two collection wrapper types carry the stores and components each step needs:
 
-- **`ChunkCollection`** — `VectorCollectionSchema` + `VectorStoreBase` + `EmbeddingBase` + `ChunkerBase`
-- **`StructuredCollection`** — `CollectionSchema` + `StructuredStoreBase` + `ExtractorBase`
-- **`DocumentCollection`** — `VectorCollectionSchema` + `VectorStoreBase` + `EmbeddingBase` + optional `LLMBase` for summarization
+- **`VectorCollection`** — `VectorCollectionSchema` + `VectorStoreBase` + `EmbeddingBase`
+- **`StructuredCollection`** — `CollectionSchema` + `StructuredStoreBase`
+
+`PipelineStep` binds a tool to one of those collections and supplies any tool-specific component needed at runtime, such as a chunker, extractor, or document-summary prompt.
 
 ### Extraction modes
 
@@ -53,31 +54,23 @@ Both modes auto-derive the `CollectionSchema` from the Pydantic model's field ty
 
 ```python
 from cogbase.pipeline.ingestion_pipeline import (
-    IngestionPipeline, ChunkCollection, StructuredCollection, DocumentCollection,
+    IngestionPipeline, PipelineStep, StructuredCollection, VectorCollection,
 )
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
-from cogbase.pipeline.extraction.llm import LLMExtractor
 
 pipeline = IngestionPipeline(
     name="legal",
     steps=[
-        ("chunk-embed-upsert",    "document_chunks", None),
-        ("extract-structured",    "contracts",       None),
-        ("document-embed-upsert", "document_summary", None),
+        PipelineStep(tool="chunk-embed-upsert", collection="document_chunks", chunker=FixedSizeChunker(chunk_size=1000, overlap=200)),
+        PipelineStep(tool="extract-structured", collection="contracts"),
+        PipelineStep(tool="document-embed-upsert", collection="document_summary", doc_prompt="Summarize this document in a concise way."),
     ],
-    chunk_collections=[
-        ChunkCollection(
-            schema=chunk_schema,
-            store=vector_store,
-            embedder=embedder,
-            chunker=FixedSizeChunker(chunk_size=1000, overlap=200),
-        )
+    vector_collections=[
+        VectorCollection(schema=chunk_schema, store=vector_store, embedder=embedder),
+        VectorCollection(schema=summary_schema, store=vector_store, embedder=embedder),
     ],
     structured_collections=[
-        StructuredCollection(schema=contracts_schema, store=structured_store, extractor=extractor)
-    ],
-    document_collections=[
-        DocumentCollection(schema=summary_schema, store=vector_store, embedder=embedder, llm=llm)
+        StructuredCollection(schema=contracts_schema, store=structured_store),
     ],
 )
 

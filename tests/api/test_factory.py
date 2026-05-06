@@ -200,8 +200,7 @@ pipeline:
   steps:
     - tool: document-embed-upsert
       collection: document_summary
-      prompt: "Summarize in one sentence."
-      max_tokens: 128
+      doc_prompt: "Summarize in one sentence."
 """
 
 _THREE_STEP_CONFIG_YAML = f"""\
@@ -236,8 +235,7 @@ pipeline:
         type: llm
     - tool: document-embed-upsert
       collection: document_summary
-      prompt: "Summarize in one sentence."
-      max_tokens: 128
+      doc_prompt: "Summarize in one sentence."
 """
 
 
@@ -255,7 +253,7 @@ class TestBuildAppDocumentCollection:
         assert "document_summary" in app._ingest_pipeline._vector_by_name
 
     @patch("api.factory._build_llm")
-    async def test_document_step_prompt_and_max_tokens(self, mock_build_llm):
+    async def test_document_step_prompt(self, mock_build_llm):
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
         sys_vs = FAISSVectorStore()
@@ -267,8 +265,7 @@ class TestBuildAppDocumentCollection:
         vc = app._ingest_pipeline._vector_by_name["document_summary"]
         assert vc.name == "document_summary"
         step = next(s for s in app._ingest_pipeline._steps if s.collection == "document_summary")
-        assert step.prompt == "Summarize in one sentence."
-        assert step.max_tokens == 128
+        assert step.doc_prompt == "Summarize in one sentence."
 
     @patch("api.factory._build_llm")
     async def test_all_vector_collections_share_vector_store(self, mock_build_llm):

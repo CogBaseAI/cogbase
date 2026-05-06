@@ -108,8 +108,7 @@ class PipelineStep:
         extractor:  Extractor for ``extract-structured`` steps.
         llm:        Optional LLM for ``document-embed-upsert`` steps.  When
                     ``None`` the raw document text is embedded directly.
-        prompt:     System prompt for the LLM summarisation call.
-        max_tokens: Maximum tokens for the generated summary.
+        doc_prompt: System prompt for the document summarization call.
     """
 
     tool: str
@@ -118,8 +117,7 @@ class PipelineStep:
     chunker: ChunkerBase | None = None
     extractor: ExtractorBase | None = None
     llm: LLMBase | None = None
-    prompt: str = "Summarize this document in a few sentences."
-    max_tokens: int = 1024
+    doc_prompt: str = "Summarize this document in a few sentences."
 
 
 class IngestionPipeline:
@@ -292,11 +290,11 @@ class IngestionPipeline:
         if step.llm is None:
             return doc.text or None
         messages: list[ChatMessage] = [
-            {"role": "system", "content": step.prompt},
+            {"role": "system", "content": step.doc_prompt},
             {"role": "user", "content": doc.text},
         ]
         try:
-            result = await step.llm.complete(messages, max_tokens=step.max_tokens)
+            result = await step.llm.complete(messages)
             return result.get("content") or None
         except Exception:
             logger.exception(

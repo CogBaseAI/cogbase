@@ -64,8 +64,7 @@ class PipelineStepConfig(BaseModel):
     when: WhenCondition | None = None
     chunker: ChunkerConfig | None = None
     extractor: ExtractorConfig | None = None
-    prompt: str | None = None
-    max_tokens: int = 1024
+    doc_prompt: str | None = None
 
 
 class PipelineConfig(BaseModel):

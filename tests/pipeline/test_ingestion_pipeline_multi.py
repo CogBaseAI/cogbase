@@ -350,7 +350,7 @@ class TestThreeStepPipeline:
 
 
 # ---------------------------------------------------------------------------
-# Config: VectorCollectionConfig and step-level prompt/max_tokens
+# Config: VectorCollectionConfig and step-level prompt
 # ---------------------------------------------------------------------------
 
 class TestVectorCollectionConfig:
@@ -373,15 +373,13 @@ class TestVectorCollectionConfig:
               steps:
                 - tool: document-embed-upsert
                   collection: document_summary
-                  prompt: "Summarize in one sentence."
-                  max_tokens: 128
+                  doc_prompt: "Summarize in one sentence."
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         assert len(cfg.vector_collections) == 1
         assert cfg.vector_collections[0].name == "document_summary"
         step = cfg.pipeline.steps[0]
-        assert step.prompt == "Summarize in one sentence."
-        assert step.max_tokens == 128
+        assert step.doc_prompt == "Summarize in one sentence."
 
     def test_vector_collection_requires_embedding(self):
         import textwrap

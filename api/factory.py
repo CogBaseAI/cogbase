@@ -35,6 +35,10 @@ from api.system_resources import SystemResources
 import logging
 logger = logging.getLogger(__name__)
 
+DEFAULT_DOC_PROMPT = (
+    "Summarize this document in a concise way, focusing on the most important "
+    "points and avoiding unnecessary detail."
+)
 
 def _build_chunker(cfg: ChunkerConfig) -> Any:
     if cfg.type == "fixed":
@@ -191,8 +195,7 @@ async def build_app(
             ps.extractor = extractors_by_col.get(s.collection)
         elif s.tool == "document-embed-upsert":
             ps.llm = llm
-            ps.prompt = s.prompt or "Summarize this document in a few sentences."
-            ps.max_tokens = s.max_tokens
+            ps.doc_prompt = s.doc_prompt or DEFAULT_DOC_PROMPT
         pipeline_steps.append(ps)
 
     pipeline = IngestionPipeline(

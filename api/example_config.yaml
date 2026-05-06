@@ -49,5 +49,4 @@ pipeline:
 
     - tool: document-embed-upsert
       collection: document_summary
-      prompt: "Summarize this document in a few sentences."
-      max_tokens: 1024
+      doc_prompt: "Summarize this document in a concise way, focusing on the most important points and avoiding unnecessary detail."

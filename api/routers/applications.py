@@ -88,6 +88,9 @@ def _resolve_file_refs(data: dict, files: dict[str, str]) -> None:
         prompt_ref = extractor.get("prompt", "")
         if prompt_ref and prompt_ref in files:
             extractor["prompt"] = files[prompt_ref]
+        prompt_ref = step.get("doc_prompt", "")
+        if prompt_ref and prompt_ref in files:
+            step["doc_prompt"] = files[prompt_ref]
 
     for wf in data.get("workflows", []):
         for step in wf.get("steps", []):
