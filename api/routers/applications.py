@@ -85,6 +85,9 @@ def _resolve_file_refs(data: dict, files: dict[str, str]) -> None:
     pipeline = data.get("pipeline") or {}
     for step in pipeline.get("steps", []):
         extractor = step.get("extractor") or {}
+        schema_ref = extractor.get("extraction_schema", "")
+        if schema_ref and schema_ref in files:
+            extractor["extraction_schema"] = files[schema_ref]
         prompt_ref = extractor.get("prompt", "")
         if prompt_ref and prompt_ref in files:
             extractor["prompt"] = files[prompt_ref]

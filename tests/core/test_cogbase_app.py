@@ -21,7 +21,9 @@ from cogbase.pipeline.ingestion_pipeline import (
 from cogbase.core.models import Document
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import LLMBase
-from cogbase.pipeline.extraction.llm import LLMExtractor
+from cogbase.core.basemodel_to_schema import cls_generate_schema
+from cogbase.pipeline.extraction.llm import LLMExtractor, _build_record_model
+from cogbase.stores import CollectionSchema
 from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
 from cogbase.stores import VectorCollectionSchema
 from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -92,12 +94,19 @@ class StubEmbedding(EmbeddingBase):
         return [[0.1] * self._dim for _ in texts]
 
 
+_CONTRACTS_SCHEMA = CollectionSchema(
+    name=_CONTRACTS_COLLECTION,
+    description="Extracted contract metadata: parties, dates, and governing law.",
+    primary_fields=["doc_id"],
+    fields=cls_generate_schema(_build_record_model(ContractExtraction)),
+)
+
+
 def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        collection_name=_CONTRACTS_COLLECTION,
-        collection_description="Extracted contract metadata: parties, dates, and governing law.",
+        collection_schema=_CONTRACTS_SCHEMA,
     )
 
 

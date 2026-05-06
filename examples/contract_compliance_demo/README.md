@@ -70,20 +70,75 @@ Example questions after ingestion and review:
 
 The demo creates one CogBase application named `contract-compliance`.
 
-### Chunk collections
+### Vector collections
 
 | Collection | Routed documents | Purpose |
 |------------|------------------|---------|
-| `rule_chunks` | `metadata.doc_type == "rules"` | Searchable company rules, standards, playbooks, and fallback positions |
+| `rule_chunks` | `metadata.doc_type == "rules"` | Searchable company rules, standards, and fallback positions |
 | `contract_chunks` | `metadata.doc_type == "contract"` | Searchable contract passages for QA and citation |
 
 ### Structured collections
 
-| Collection | Source | Purpose |
-|------------|--------|---------|
-| `contract_clauses` | Pipeline extraction, `doc_type == "contract"` | One typed record per extracted contract clause |
-| `contract_metadata` | Pipeline extraction, `doc_type == "contract"` | One typed record with key contract facts |
-| `clause_compliance_findings` | Workflow output (`check-contract-compliance`) | One compliance finding per reviewed clause |
+| Collection | Primary key | Source | Purpose |
+|------------|-------------|--------|---------|
+| `contract_metadata` | `doc_id` | Pipeline extraction | One record of key contract facts per contract |
+| `contract_clauses` | `clause_id` | Pipeline extraction | One record per extracted clause |
+| `clause_compliance_findings` | `clause_id` | Workflow output | One compliance finding per reviewed clause |
+
+## Schema design
+
+Each structured collection uses two schemas:
+
+- **Extraction schema** — the fields the LLM is asked to extract (no identity fields).
+- **Record schema** — what is stored in the collection (extraction fields + identity fields such as `doc_id` and `clause_id`, injected by the pipeline).
+
+### `contract_metadata`
+
+Extraction schema: `ContractMetadata` — the LLM extracts these fields.
+Record schema: `ContractMetadataRecord` — adds `doc_id` (primary key).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `doc_id` | `str` | Source contract document ID (injected, not extracted) |
+| `contract_type` | `str \| null` | Contract category |
+| `parties` | `list[Party]` | Named parties and their roles |
+| `effective_date` | `str \| null` | Start date in `YYYY-MM-DD` format |
+| `expiry_date` | `str \| null` | End date in `YYYY-MM-DD` format |
+| `contract_value` | `float \| null` | Total monetary value when explicitly stated |
+| `currency` | `str \| null` | ISO 4217 currency code |
+| `governing_law` | `str \| null` | Governing law jurisdiction |
+| `termination_notice_days` | `int \| null` | Notice period in days for termination |
+
+### `contract_clauses`
+
+Extraction schema: `ContractClause` — the LLM extracts one item per clause.
+Record schema: `ContractClauseRecord` — adds `clause_id` (primary key, format `{doc_id}__{i:04d}`) and `doc_id`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `clause_id` | `str` | Stable per-clause identifier (injected, not extracted) |
+| `doc_id` | `str` | Source contract document ID (injected, not extracted) |
+| `clause_type` | `str \| null` | Clause category: `liability`, `indemnification`, `termination`, `payment`, `privacy`, `confidentiality`, `ip`, `governing_law`, `other` |
+| `text` | `str` | Verbatim clause text |
+
+### `clause_compliance_findings`
+
+Produced by the compliance workflow, not by pipeline extraction. The LLM judge writes directly to this collection; there is no separate extraction schema.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `clause_id` | `str` | Primary key — matches the reviewed clause in `contract_clauses` |
+| `doc_id` | `str` | Source contract document ID |
+| `clause_type` | `str \| null` | Reviewed clause category |
+| `status` | `str` | `compliant`, `non_compliant`, `needs_review`, or `not_applicable` |
+| `severity` | `str` | `low`, `medium`, `high`, or `critical` |
+| `summary` | `str` | Short human-readable finding |
+| `contract_clause_text` | `str` | Verbatim reviewed clause text |
+| `matched_rule_ids` | `list[str]` | IDs of rule chunks used as evidence |
+| `matched_rule_quotes` | `list[str]` | Verbatim excerpts from matched rule chunks |
+| `reasoning` | `str` | Explanation grounded in matched rules |
+| `recommended_redline` | `str \| null` | Suggested replacement language; null when compliant |
+| `confidence` | `float` | Judge confidence from 0.0 to 1.0 |
 
 ## Routed ingestion
 
@@ -91,33 +146,8 @@ Rules documents and contract documents share one app but take different paths
 through the ingestion pipeline. The demo relies on document metadata to route
 pipeline steps deterministically.
 
-Rules are ingested with:
-
-```json
-{
-  "doc_id": "rules-001",
-  "text": "...",
-  "metadata": {
-    "doc_type": "rules",
-    "source": "vendor_contract_standards.txt"
-  }
-}
-```
-
-Contracts are ingested with:
-
-```json
-{
-  "doc_id": "contract-001",
-  "text": "...",
-  "metadata": {
-    "doc_type": "contract",
-    "source": "vendor_agreement.txt"
-  }
-}
-```
-
-The pipeline shape:
+Rules are ingested with `metadata.doc_type = "rules"`; contracts with
+`metadata.doc_type = "contract"`. The pipeline shape:
 
 ```yaml
 pipeline:
@@ -135,13 +165,24 @@ pipeline:
           doc_type: contract
 
     - tool: extract-structured
-      collection: contract_clauses
+      collection: contract_metadata
+      extractor:
+        type: llm
+        extraction_schema: contract_metadata_extraction_schema.json
+        prompt: contract_metadata_prompt.txt
       when:
         metadata:
           doc_type: contract
 
     - tool: extract-structured
-      collection: contract_metadata
+      collection: contract_clauses
+      extractor:
+        type: llm
+        extraction_schema: contract_clause_extraction_schema.json
+        extract_as_list: true
+        list_field: clauses
+        item_id_field: clause_id
+        prompt: contract_clauses_prompt.txt
       when:
         metadata:
           doc_type: contract
@@ -154,17 +195,11 @@ replacement for a hand-rolled skill. The LLM does not decide which steps to
 run; it only judges one contract clause against retrieved company rule
 passages.
 
-The workflow is registered in `config.yaml` and executes four built-in tools:
-
 ```yaml
 workflows:
   - name: check-contract-compliance
     input_schema:
       doc_id: string
-    output_collections:
-      - name: clause_compliance_findings
-        schema: clause_compliance_findings_schema.json
-        primary_fields: [finding_id]
     steps:
       - id: load_clauses
         tool: structured-query
@@ -196,92 +231,42 @@ workflows:
               - "{{ steps.judge.output }}"
 ```
 
-The workflow is deterministic:
+The workflow is deterministic: every clause for the requested `doc_id` is
+reviewed with the same rule collection and `top_k`. Findings are upserted with
+`clause_id` as the primary key so rerunning `check <doc_id>` updates prior
+findings in place rather than duplicating them.
 
-- every extracted clause for the requested `doc_id` is reviewed
-- the same rule collection and `top_k` are used for each clause
-- findings are upserted with stable IDs using `finding_id` as the primary key
-- rerunning `check <doc_id>` updates prior findings instead of duplicating them
-
-The demo calls the workflow via the REST streaming endpoint:
+Results stream as SSE events — findings appear in the terminal as they are
+written:
 
 ```
 POST /applications/contract-compliance/workflows/check-contract-compliance/stream
 {"params": {"doc_id": "contract-001"}}
 ```
 
-Each `structured-save` result is streamed as an SSE event, so findings appear
-in the terminal as they are written.
-
 ## LLM judge rules
 
-The LLM judge receives the clause text and the top matching company rule
-passages as a JSON input. It must return validated JSON matching the
-`ClauseComplianceFinding` schema.
-
-Judge constraints (from `compliance_judge_prompt.txt` in the bundle):
+The compliance judge (prompt: `compliance_judge_prompt.txt`) receives the clause text and the top matching company rule passages. Constraints:
 
 - Use only the provided rule passages as company policy.
-- If the retrieved rules are insufficient, return `needs_review`.
+- Return `needs_review` when retrieved rules are insufficient to decide.
 - Do not invent company policy or rely on outside legal knowledge.
 - Every `non_compliant` finding must cite at least one `matched_rule_quote`.
-- Use `temperature=0` for repeatability.
-
-## Extraction schemas
-
-### `contract_clauses`
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `clause_type` | `str \| null` | Clause category, such as `termination`, `liability`, `privacy`, or `payment` |
-| `text` | `str` | Verbatim clause text |
-
-### `contract_metadata`
-
-Structured information extracted by the LLM from a contract document.
-`doc_id` is injected by the extractor.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `contract_type` | `str \| null` | Contract category |
-| `parties` | `list[Party]` | Named parties and roles |
-| `effective_date` | `str \| null` | Start date in `YYYY-MM-DD` format |
-| `expiry_date` | `str \| null` | End date in `YYYY-MM-DD` format |
-| `contract_value` | `float \| null` | Total monetary value when stated |
-| `currency` | `str \| null` | ISO 4217 currency code |
-| `governing_law` | `str \| null` | Governing law clause or jurisdiction |
-| `termination_notice_days` | `int \| null` | Notice period for termination |
-
-### `clause_compliance_findings`
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `doc_id` | `str` | Source contract document ID |
-| `clause_id` | `str` | Reviewed clause ID |
-| `clause_type` | `str \| null` | Reviewed clause category |
-| `status` | `str` | `compliant`, `non_compliant`, `needs_review`, or `not_applicable` |
-| `severity` | `str` | `low`, `medium`, `high`, or `critical` |
-| `summary` | `str` | Short human-readable finding |
-| `contract_clause_text` | `str` | Verbatim reviewed clause text |
-| `matched_rule_quotes` | `list[str]` | Verbatim excerpts from matched rules |
-| `reasoning` | `str` | Explanation grounded in matched rules |
-| `recommended_redline` | `str \| null` | Suggested replacement or fallback language |
-| `confidence` | `float` | Judge confidence from 0.0 to 1.0 |
+- Populate `recommended_redline` for non-compliant findings; null otherwise.
 
 ## Project structure
 
 ```text
 contract_compliance_demo/
 ├── README.md
-├── demo.py                    # interactive demo script
-├── rules_data.py              # sample company rule documents
-├── contracts_data.py          # sample incoming contracts
-└── schema.py                  # Pydantic models for clauses, metadata, findings
+├── demo.py              # interactive demo script and ZIP bundle builder
+├── schema.py            # Pydantic extraction and record models for all three collections
+├── rules_data.py        # sample company rule documents
+└── contracts_data.py    # sample incoming contracts
 ```
 
-The compliance workflow, judge prompt, and output schema are bundled inline in
-`demo.py` and written into the ZIP bundle sent to `POST /applications` at
-startup.
+The pipeline config, prompts, and all schema files are bundled inline in
+`demo.py` and written into the ZIP sent to `POST /applications` at startup.
 
 ## Design notes
 
@@ -290,9 +275,11 @@ workspace. Keeping them in one app avoids cross-app collection access and lets
 the query runner see all relevant structured and vector collections.
 `metadata.doc_type` controls which pipeline steps apply to each document type.
 
-**Why metadata-based routing?** Rules documents and contracts have different
-ingestion behavior but share storage, retrieval, and reporting. Conditional
-pipeline steps keep routing explicit without introducing separate applications.
+**Why separate extraction and record schemas?** The extraction schema describes
+what the LLM is asked to return; identity fields (`doc_id`, `clause_id`) are
+meaningless to the LLM and would add noise to the prompt. The record schema
+adds those fields explicitly so the collection definition is self-contained and
+auditable. The extractor injects identity values at parse time.
 
 **Why a workflow and not an ingestion step?** Compliance checking reads
 previously extracted clause records, searches rule chunks, calls an LLM judge,
@@ -304,10 +291,6 @@ inspectable and independently testable without custom Python code.
 load clauses, retrieve rules, judge, save — with no branching that requires LLM
 reasoning about which tools to invoke. A workflow expresses this directly in
 config without the overhead of an agentic loop.
-
-**Clause extraction** uses a dedicated extractor that produces one record per
-clause rather than one record per document. The extractor labels each clause by
-type and copies text verbatim so stored text can serve as evidence.
 
 ## Known limitations
 

@@ -45,7 +45,10 @@ class TestBuildStructuredStore:
 # build_app — structured store resolution
 # ---------------------------------------------------------------------------
 
-_SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
+_EXTRACTION_SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
+_RECORD_SCHEMA = '{"type":"object","properties":{"value":{"type":"string"},"doc_id":{"type":"string"}}}'
+_LIST_EXTRACTION_SCHEMA = _EXTRACTION_SCHEMA
+_LIST_RECORD_SCHEMA = '{"type":"object","properties":{"value":{"type":"string"},"doc_id":{"type":"string"},"clause_id":{"type":"string"}}}'
 
 _EXTRACT_ONLY_CONFIG_YAML = f"""\
 name: test_app
@@ -55,13 +58,15 @@ llm:
 structured_collections:
   - name: contract_extraction
     description: Extracted contract facts and entities for exact lookup.
-    schema: '{_SCHEMA}'
+    schema: '{_RECORD_SCHEMA}'
+    primary_fields: [doc_id]
 pipeline:
   steps:
     - tool: extract-structured
       collection: contract_extraction
       extractor:
         type: llm
+        extraction_schema: '{_EXTRACTION_SCHEMA}'
 """
 
 _FULL_CONFIG_YAML = f"""\
@@ -78,7 +83,8 @@ vector_collections:
 structured_collections:
   - name: contract_extraction
     description: Extracted contract facts and entities for exact lookup.
-    schema: '{_SCHEMA}'
+    schema: '{_RECORD_SCHEMA}'
+    primary_fields: [doc_id]
 pipeline:
   parallel: true
   steps:
@@ -92,6 +98,7 @@ pipeline:
       collection: contract_extraction
       extractor:
         type: llm
+        extraction_schema: '{_EXTRACTION_SCHEMA}'
 """
 
 
@@ -219,7 +226,8 @@ vector_collections:
 structured_collections:
   - name: contract_extraction
     description: Extracted contract facts and entities for exact lookup.
-    schema: '{_SCHEMA}'
+    schema: '{_RECORD_SCHEMA}'
+    primary_fields: [doc_id]
 pipeline:
   parallel: false
   steps:
@@ -233,6 +241,7 @@ pipeline:
       collection: contract_extraction
       extractor:
         type: llm
+        extraction_schema: '{_EXTRACTION_SCHEMA}'
     - tool: document-embed-upsert
       collection: document_summary
       doc_prompt: "Summarize in one sentence."
@@ -342,13 +351,15 @@ llm:
 structured_collections:
   - name: contract_clauses
     description: Extracted contract clauses with clause type and verbatim text.
-    schema: '{_SCHEMA}'
+    schema: '{_LIST_RECORD_SCHEMA}'
+    primary_fields: [clause_id]
 pipeline:
   steps:
     - tool: extract-structured
       collection: contract_clauses
       extractor:
         type: llm
+        extraction_schema: '{_LIST_EXTRACTION_SCHEMA}'
         extract_as_list: true
         list_field: clauses
         item_id_field: clause_id
@@ -362,13 +373,15 @@ llm:
 structured_collections:
   - name: contract_clauses
     description: Extracted contract clauses with clause type and verbatim text.
-    schema: '{_SCHEMA}'
+    schema: '{_LIST_RECORD_SCHEMA}'
+    primary_fields: [clause_id]
 pipeline:
   steps:
     - tool: extract-structured
       collection: contract_clauses
       extractor:
         type: llm
+        extraction_schema: '{_LIST_EXTRACTION_SCHEMA}'
         extract_as_list: true
         list_field: clauses
         item_id_field: clause_id
@@ -383,13 +396,15 @@ llm:
 structured_collections:
   - name: contract_metadata
     description: Extracted contract facts and entities for exact lookup.
-    schema: '{_SCHEMA}'
+    schema: '{_RECORD_SCHEMA}'
+    primary_fields: [doc_id]
 pipeline:
   steps:
     - tool: extract-structured
       collection: contract_metadata
       extractor:
         type: llm
+        extraction_schema: '{_EXTRACTION_SCHEMA}'
         prompt: "Extract metadata.\\n\\n"
 """
 

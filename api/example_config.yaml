@@ -2,9 +2,10 @@
 #
 # Bundle structure:
 #   my_app.zip
-#   ├── config.yaml               (this file)
-#   ├── extraction_schema.json    (JSON Schema for structured extraction)
-#   └── extraction_prompt.txt     (optional LLM system prompt prefix)
+#   ├── config.yaml                         (this file)
+#   ├── contract_record_schema.json         (JSON Schema for the stored record — includes identity fields)
+#   ├── contract_extraction_schema.json     (JSON Schema for what the LLM extracts — no identity fields)
+#   └── extraction_prompt.txt               (optional LLM system prompt prefix)
 #
 # POST the ZIP to POST /applications to create an application.
 #
@@ -24,15 +25,15 @@ vector_collections:
     # metadata_fields: [customer_id, deal_stage]  # optional: project doc.metadata keys into chunk metadata
   - name: document_summary   # one vector record per document (LLM summary embedded)
     description: "One-per-document summaries; use for topic-level or high-level questions about what documents cover."
-    # metadata_fields: [customer_id, deal_stage]  # optional: project doc.metadata keys into chunk metadata
 
 structured_collections:
   - name: contract_extraction
     description: "Extracted contract facts and entities for exact lookup."
-    schema: extraction_schema.json      # filename in ZIP root (resolved at upload time)
+    schema: contract_record_schema.json         # record schema — includes doc_id and any other identity fields
+    primary_fields: [doc_id]
 
 pipeline:
-  parallel: true             # steps run sequentially top-to-bottom
+  parallel: true             # steps run in parallel where possible
   steps:
     - tool: chunk-embed-upsert
       collection: document_chunks
@@ -45,8 +46,29 @@ pipeline:
       collection: contract_extraction
       extractor:
         type: llm
-        prompt: extraction_prompt.txt   # filename in ZIP root; omit to use built-in default
+        extraction_schema: contract_extraction_schema.json  # what the LLM extracts — no identity fields
+        prompt: extraction_prompt.txt                       # filename in ZIP root; omit to use built-in default
 
     - tool: document-embed-upsert
       collection: document_summary
       doc_prompt: "Summarize this document in a concise way, focusing on the most important points and avoiding unnecessary detail."
+
+# --- List extraction example (e.g. one record per clause) ---
+#
+# structured_collections:
+#   - name: contract_clauses
+#     description: "Individual clauses extracted from contracts."
+#     schema: clause_record_schema.json         # includes clause_id and doc_id
+#     primary_fields: [clause_id]
+#
+# pipeline:
+#   steps:
+#     - tool: extract-structured
+#       collection: contract_clauses
+#       extractor:
+#         type: llm
+#         extraction_schema: clause_extraction_schema.json  # just the clause fields (no ids)
+#         extract_as_list: true
+#         list_field: clauses
+#         item_id_field: clause_id
+#         prompt: clause_prompt.txt

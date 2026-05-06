@@ -66,6 +66,7 @@ from examples.cogbase_client import (  # noqa: E402
 from examples.contract_analyst_demo.schema import (  # noqa: E402
     CONTRACTS_SYSTEM_PROMPT_PREFIX,
     ContractExtraction,
+    ContractExtractionRecord,
 )
 from examples.contract_analyst_demo.saas_contracts import CONTRACTS  # noqa: E402
 
@@ -94,7 +95,8 @@ structured_collections:
   - name: {_CONTRACTS_COLLECTION}
     description: >-
       Extracted contract facts and entities for exact lookup.
-    schema: contracts_schema.json
+    schema: contracts_record_schema.json
+    primary_fields: [doc_id]
 pipeline:
   steps:
     - tool: chunk-embed-upsert
@@ -107,16 +109,17 @@ pipeline:
       collection: {_CONTRACTS_COLLECTION}
       extractor:
         type: llm
+        extraction_schema: contracts_extraction_schema.json
         prompt: contracts_prompt.txt
 """
 
 
 def _build_bundle() -> bytes:
-    schema_json = json.dumps(ContractExtraction.model_json_schema(), indent=2)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("config.yaml", _CONFIG_YAML)
-        zf.writestr("contracts_schema.json", schema_json)
+        zf.writestr("contracts_record_schema.json", json.dumps(ContractExtractionRecord.model_json_schema(), indent=2))
+        zf.writestr("contracts_extraction_schema.json", json.dumps(ContractExtraction.model_json_schema(), indent=2))
         zf.writestr("contracts_prompt.txt", CONTRACTS_SYSTEM_PROMPT_PREFIX)
     return buf.getvalue()
 

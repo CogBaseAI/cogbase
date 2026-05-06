@@ -33,6 +33,7 @@ class VectorCollectionConfig(BaseModel):
 
 class ExtractorConfig(BaseModel):
     type: Literal["llm"] = "llm"
+    extraction_schema: str
     prompt: str | None = None
     extract_as_list: bool = False
     list_field: str = "items"

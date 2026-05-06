@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from cogbase.stores import CollectionSchema, FieldSchema, FieldType
 
@@ -40,11 +40,10 @@ class Party(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ContractClause(BaseModel):
-    """One extracted clause stored in the contract_clauses collection.
+    """One clause extracted by the LLM (extraction schema).
 
-    ``clause_id`` is the primary key, format ``doc_id_04d``.
-    ``clause_id`` is constructed and injected by the LLMExtractor; do not include it here.
-    ``doc_id`` is also injected by the LLMExtractor; do not include it here.
+    ``clause_id`` and ``doc_id`` must NOT appear here — they are injected by the
+    extractor and declared in ``ContractClauseRecord`` (the record schema).
     """
 
     clause_type: str | None = Field(
@@ -57,14 +56,23 @@ class ContractClause(BaseModel):
     text: str = Field(description="Verbatim clause text copied from the contract without paraphrasing")
 
 
+ContractClauseRecord = create_model(
+    "ContractClauseRecord",
+    clause_id=(str, ...),
+    doc_id=(str, ...),
+    __base__=ContractClause,
+)
+
+
 # ---------------------------------------------------------------------------
 # contract_metadata
 # ---------------------------------------------------------------------------
 
 class ContractMetadata(BaseModel):
-    """Contract-level facts extracted once per document.
+    """Contract-level facts extracted by the LLM from a contract document (extraction schema).
 
-    ``doc_id`` is the primary key and injected by the LLMExtractor; do not include it here.
+    ``doc_id`` must NOT appear here — it is injected by the extractor and declared
+    in ``ContractMetadataRecord`` (the record schema stored in the collection).
     """
 
     contract_type: str | None = Field(
@@ -99,6 +107,13 @@ class ContractMetadata(BaseModel):
         default=None,
         description="Number of days of written notice required to terminate for convenience",
     )
+
+
+ContractMetadataRecord = create_model(
+    "ContractMetadataRecord",
+    doc_id=(str, ...),
+    __base__=ContractMetadata,
+)
 
 
 # ---------------------------------------------------------------------------

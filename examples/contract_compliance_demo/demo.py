@@ -80,7 +80,9 @@ from examples.contract_compliance_demo.rules_data import RULES_DOCUMENTS  # noqa
 from examples.contract_compliance_demo.schema import (  # noqa: E402
     ClauseComplianceFinding,
     ContractClause,
+    ContractClauseRecord,
     ContractMetadata,
+    ContractMetadataRecord,
 )
 
 configure_logging()
@@ -149,13 +151,14 @@ structured_collections:
     description: >-
       Key facts per contract: parties, dates, value, governing law, termination
       notice period. One record per contract document.
-    schema: contract_metadata_schema.json
+    schema: contract_metadata_record_schema.json
+    primary_fields: [doc_id]
   - name: contract_clauses
     description: >-
       Individual clauses extracted from contracts. Each record is one clause with
       its type and verbatim text. Filter by doc_id to retrieve all clauses for a
       contract, or filter by clause_type to find clauses of a specific category.
-    schema: contract_clauses_schema.json
+    schema: contract_clause_record_schema.json
     primary_fields: [clause_id]
   - name: clause_compliance_findings
     description: >-
@@ -187,6 +190,7 @@ pipeline:
       collection: contract_metadata
       extractor:
         type: llm
+        extraction_schema: contract_metadata_extraction_schema.json
         prompt: contract_metadata_prompt.txt
       when:
         metadata:
@@ -195,6 +199,7 @@ pipeline:
       collection: contract_clauses
       extractor:
         type: llm
+        extraction_schema: contract_clause_extraction_schema.json
         extract_as_list: true
         list_field: clauses
         item_id_field: clause_id
@@ -241,9 +246,11 @@ def _build_bundle() -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("config.yaml", _CONFIG_YAML)
-        zf.writestr("contract_metadata_schema.json", json.dumps(ContractMetadata.model_json_schema(), indent=2))
+        zf.writestr("contract_metadata_record_schema.json", json.dumps(ContractMetadataRecord.model_json_schema(), indent=2))
+        zf.writestr("contract_metadata_extraction_schema.json", json.dumps(ContractMetadata.model_json_schema(), indent=2))
         zf.writestr("contract_metadata_prompt.txt", _CONTRACT_METADATA_SYSTEM_PROMPT)
-        zf.writestr("contract_clauses_schema.json", json.dumps(ContractClause.model_json_schema(), indent=2))
+        zf.writestr("contract_clause_record_schema.json", json.dumps(ContractClauseRecord.model_json_schema(), indent=2))
+        zf.writestr("contract_clause_extraction_schema.json", json.dumps(ContractClause.model_json_schema(), indent=2))
         zf.writestr("contract_clauses_prompt.txt", _CONTRACT_CLAUSES_SYSTEM_PROMPT)
         zf.writestr("clause_compliance_findings_schema.json", json.dumps(ClauseComplianceFinding.model_json_schema(), indent=2))
         zf.writestr("compliance_judge_prompt.txt", _JUDGE_SYSTEM_PROMPT)

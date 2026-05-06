@@ -1,6 +1,6 @@
 # Contract Analyst Demo
 
-A CogBase demo that ingests and queries legal contracts through the REST API. Each document is processed by an LLM that extracts a structured `ContractExtraction` record — covering contract basics, common clause text, and flexible fields for terms and conditions that vary by contract type.
+A CogBase demo that ingests and queries legal contracts through the REST API. Each document is processed by an LLM that extracts a structured record covering contract basics, common clause text, and flexible fields for terms that vary by contract type.
 
 ## Quick start
 
@@ -35,23 +35,36 @@ Any other input is sent as a query to the running application. Answers stream ba
 
 On first run the demo uploads a ZIP bundle to `POST /applications` that configures:
 
-- **LLM**: `gpt-5.4-mini` via OpenAI
-- **Embeddings**: `text-embedding-3-small` (1536 dimensions)
 - **Pipeline steps**:
-  1. `chunk-embed-upsert` → `document_chunks` collection
-  2. `extract-structured` → `contracts` collection
+  1. `chunk-embed-upsert` → `document_chunks` vector collection
+  2. `extract-structured` → `contracts` structured collection
 
-The bundle includes the JSON schema for `ContractExtraction` and the extraction system prompt. If the application already exists, the demo reuses it.
+The bundle contains three files:
 
-## Extracted contract record
+| File | Purpose |
+|------|---------|
+| `contracts_record_schema.json` | Record schema — what is stored (`ContractExtractionRecord`, includes `doc_id`) |
+| `contracts_extraction_schema.json` | Extraction schema — what the LLM extracts (`ContractExtraction`, no `doc_id`) |
+| `contracts_prompt.txt` | LLM system prompt prefix |
 
-Each ingested document produces exactly one `ContractExtraction`. The LLM is instructed to copy clause text verbatim — not paraphrase — so stored text can serve as a citation.
+The extraction schema and record schema are separate: `ContractExtraction` defines the fields the LLM fills in; `ContractExtractionRecord` extends it with `doc_id`, which the pipeline injects automatically. The collection is declared with `schema: contracts_record_schema.json` and the extractor with `extraction_schema: contracts_extraction_schema.json`.
+
+If the application already exists, the demo reuses it.
+
+## Stored contract record
+
+Each ingested document produces exactly one record in the `contracts` collection. The LLM is instructed to copy clause text verbatim — not paraphrase — so stored text can serve as a citation.
+
+### Identity
+
+| Field | Type | Source | Description |
+|-------|------|--------|-------------|
+| `doc_id` | `str` | Injected by pipeline | Source document identifier — not extracted by the LLM |
 
 ### Contract basics
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `doc_id` | `str` | Source document identifier (injected by the pipeline) |
 | `contract_type` | `str \| None` | Category: `"NDA"`, `"SaaS"`, `"employment"`, `"vendor"`, `"lease"`, etc. |
 | `purpose` | `str \| None` | One sentence describing what the contract is for |
 | `effective_date` | `str \| None` | Contract start date in `YYYY-MM-DD` format |
@@ -106,6 +119,16 @@ Verbatim text copied from the contract. `null` when the clause is absent.
 > find passages about data breach notification obligations
 > which contracts have unusually long notice periods?
 > summarise all termination rights across the vendor portfolio
+```
+
+## Project structure
+
+```text
+contract_analyst_demo/
+├── README.md
+├── demo.py               # interactive demo script
+├── schema.py             # ContractExtraction, ContractExtractionRecord, Party, PaymentTerms
+└── saas_contracts.py     # built-in SaaS contract fixtures
 ```
 
 ## Known limitations

@@ -190,8 +190,9 @@ class TestCreateApplication:
 
     @pytest.mark.asyncio
     async def test_file_refs_resolved_from_bundle(self, client):
-        """Schema and prompt filenames in config.yaml are replaced with file contents."""
-        schema_json = b'{"type":"object","properties":{"value":{"type":"string"}}}'
+        """Schema, extraction_schema, and prompt filenames in config.yaml are replaced with file contents."""
+        record_schema_json = b'{"type":"object","properties":{"value":{"type":"string"},"doc_id":{"type":"string"}}}'
+        extraction_schema_json = b'{"type":"object","properties":{"value":{"type":"string"}}}'
         prompt_txt = b"Extract contract fields."
         config_yaml = textwrap.dedent("""\
             name: my-contract-analyzer
@@ -201,19 +202,22 @@ class TestCreateApplication:
             structured_collections:
               - name: contract_extraction
                 description: Extracted contract facts and entities for exact lookup.
-                schema: extraction_schema.json
+                schema: record_schema.json
+                primary_fields: [doc_id]
             pipeline:
               steps:
                 - tool: extract-structured
                   collection: contract_extraction
                   extractor:
                     type: llm
+                    extraction_schema: extraction_schema.json
                     prompt: extraction_prompt.txt
         """).encode()
         bundle = _make_bundle(
             config_yaml,
             files={
-                "extraction_schema.json": schema_json,
+                "record_schema.json": record_schema_json,
+                "extraction_schema.json": extraction_schema_json,
                 "extraction_prompt.txt": prompt_txt,
             },
         )
@@ -231,7 +235,8 @@ class TestCreateApplication:
 
         assert resp.status_code == 201
         cfg = captured[0]
-        assert cfg.structured_collections[0].schema_ == schema_json.decode()
+        assert cfg.structured_collections[0].schema_ == record_schema_json.decode()
+        assert cfg.pipeline.steps[0].extractor.extraction_schema == extraction_schema_json.decode()
         assert cfg.pipeline.steps[0].extractor.prompt == prompt_txt.decode()
 
 

@@ -61,74 +61,39 @@ def _build_list_record_model(extraction_model: Type[BaseModel], item_id_field: s
     )
 
 
-def _build_collection_schema(
-    record_model: Type[BaseModel],
-    collection_name: str,
-    description: str,
-) -> CollectionSchema:
-    """Derive a ``CollectionSchema`` from *record_model*'s fields."""
-    return CollectionSchema(
-        name=collection_name,
-        description=description,
-        primary_fields=["doc_id"],
-        fields=cls_generate_schema(record_model),
-    )
-
-
-def _build_list_collection_schema(
-    record_model: Type[BaseModel],
-    collection_name: str,
-    description: str,
-    item_id_field: str,
-) -> CollectionSchema:
-    """Derive a ``CollectionSchema`` for list extraction."""
-    return CollectionSchema(
-        name=collection_name,
-        description=description,
-        primary_fields=[item_id_field],
-        fields=cls_generate_schema(record_model),
-    )
-
-
 class LLMExtractor(ExtractorBase):
     """Extracts structured records from documents using an LLM.
 
     In single-record mode (default) each call to ``extract`` produces one record
     per document.  In list mode (``extract_as_list=True``) the LLM returns a JSON
     object whose ``list_field`` key holds an array of items; each item becomes a
-    separate row with an auto-generated ``item_id`` (``"{doc_id}__{i:04d}"``).
+    separate row with an auto-generated item id (``"{doc_id}__{i:04d}"``).
 
     Args:
-        llm:                    LLM backend.
-        extraction_model:       Pydantic ``BaseModel`` class describing the fields to
-                                extract.  In list mode this is the *item* type (e.g.
-                                ``ContractClause``), not a wrapper model.
-        collection_name:        Name of the structured store collection to write to.
-        collection_description: Short description shown to the LLM in the retrieval
-                                prompt so it understands what this collection holds
-                                and when to query it.
-        extract_as_list:        When ``True`` the LLM is asked to return a JSON
-                                object with a single array key; each element becomes
-                                one row.  Default: ``False``.
-        list_field:             The JSON key that wraps the array when
-                                ``extract_as_list`` is ``True``.  Default: ``"items"``.
-        item_id_field:          Name of the per-item primary-key field added to each
-                                extracted row in list mode.  Default: ``"item_id"``.
-                                Use a domain name such as ``"clause_id"`` to make the
-                                collection schema more descriptive.
-        system_prompt:          Full system prompt for the LLM.  When ``None`` a
-                                generic prompt is built from *extraction_model*'s
-                                JSON schema.
-        max_retries:            Retries on unparseable JSON (passed to
-                                ``ExtractorBase``).
+        llm:               LLM backend.
+        extraction_model:  Pydantic ``BaseModel`` describing the fields the LLM
+                           should extract.  In list mode this is the *item* type
+                           (e.g. ``ContractClauseExtraction``), not a wrapper model.
+                           Identity fields (``doc_id``, item id) must NOT appear here;
+                           they are injected automatically.
+        collection_schema: Pre-built ``CollectionSchema`` for the target collection.
+                           Constructed by the factory from the record schema file
+                           (which includes identity fields).
+        extract_as_list:   When ``True`` the LLM is asked to return a JSON object
+                           with a single array key; each element becomes one row.
+        list_field:        The JSON key that wraps the array in list mode.
+        item_id_field:     Name of the per-item primary-key field injected into each
+                           extracted row in list mode.
+        system_prompt:     Full system prompt.  When ``None`` a generic prompt is
+                           built from *extraction_model*'s JSON schema.
+        max_retries:       Retries on unparseable JSON.
     """
 
     def __init__(
         self,
         llm: LLMBase,
         extraction_model: Type[BaseModel],
-        collection_name: str,
-        collection_description: str,
+        collection_schema: CollectionSchema,
         *,
         extract_as_list: bool = False,
         list_field: str = "items",
@@ -138,15 +103,15 @@ class LLMExtractor(ExtractorBase):
     ) -> None:
         super().__init__(max_retries=max_retries)
         self._llm = llm
-        self._collection_name = collection_name
+        self._collection_name = collection_schema.name
         self._extraction_model = extraction_model
         self._extract_as_list = extract_as_list
         self._list_field = list_field
         self._item_id_field = item_id_field
+        self._schema = collection_schema
 
         if extract_as_list:
             self._record_model = _build_list_record_model(extraction_model, item_id_field)
-            self._schema = _build_list_collection_schema(self._record_model, collection_name, collection_description, item_id_field)
             self._wrapper_model: Type[BaseModel] = create_model(
                 "_WrapperModel",
                 **{list_field: (list[extraction_model], ...)},  # type: ignore[call-overload]
@@ -159,7 +124,6 @@ class LLMExtractor(ExtractorBase):
             )
         else:
             self._record_model = _build_record_model(extraction_model)
-            self._schema = _build_collection_schema(self._record_model, collection_name, collection_description)
             self._system_prompt = system_prompt or (
                 _DEFAULT_SYSTEM_PROMPT_PREFIX + cls_json_schema_for_llm(extraction_model)
             )

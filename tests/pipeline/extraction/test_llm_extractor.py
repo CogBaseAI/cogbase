@@ -9,7 +9,9 @@ import pytest
 
 from cogbase.llms import LLMBase
 from cogbase.core.models import Document
-from cogbase.pipeline.extraction.llm import LLMExtractor
+from cogbase.core.basemodel_to_schema import cls_generate_schema
+from cogbase.pipeline.extraction.llm import LLMExtractor, _build_record_model
+from cogbase.stores import CollectionSchema, FieldSchema, FieldType
 from examples.contract_analyst_demo.demo import _CONTRACTS_COLLECTION
 from examples.contract_analyst_demo.schema import (
     ContractExtraction,
@@ -28,12 +30,19 @@ def _make_llm(content: str) -> MagicMock:
     return llm
 
 
+_CONTRACTS_SCHEMA = CollectionSchema(
+    name=_CONTRACTS_COLLECTION,
+    description="Extracted contract metadata: parties, dates, and governing law.",
+    primary_fields=["doc_id"],
+    fields=cls_generate_schema(_build_record_model(ContractExtraction)),
+)
+
+
 def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        collection_name=_CONTRACTS_COLLECTION,
-        collection_description="Extracted contract metadata: parties, dates, and governing law.",
+        collection_schema=_CONTRACTS_SCHEMA,
     )
 
 
@@ -287,8 +296,7 @@ async def test_extract_succeeds_on_retry_after_bad_json(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        collection_name=_CONTRACTS_COLLECTION,
-        collection_description="Extracted contract metadata.",
+        collection_schema=_CONTRACTS_SCHEMA,
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-1", text="contract text"))
@@ -305,8 +313,7 @@ async def test_extract_returns_none_after_all_retries_exhausted(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        collection_name=_CONTRACTS_COLLECTION,
-        collection_description="Extracted contract metadata.",
+        collection_schema=_CONTRACTS_SCHEMA,
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-2", text="contract text"))
@@ -323,8 +330,7 @@ async def test_extract_no_retry_on_success(monkeypatch):
     extractor = LLMExtractor(
         _make_llm(_full_payload()),
         extraction_model=ContractExtraction,
-        collection_name=_CONTRACTS_COLLECTION,
-        collection_description="Extracted contract metadata.",
+        collection_schema=_CONTRACTS_SCHEMA,
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-3", text="contract text"))
@@ -342,8 +348,7 @@ async def test_extract_retry_uses_exponential_backoff(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        collection_name=_CONTRACTS_COLLECTION,
-        collection_description="Extracted contract metadata.",
+        collection_schema=_CONTRACTS_SCHEMA,
         max_retries=2,
     )
     await extractor.extract(Document(doc_id="doc-retry-4", text="contract text"))
@@ -361,8 +366,7 @@ async def test_extract_max_retries_zero_no_sleep(monkeypatch):
     extractor = LLMExtractor(
         _make_llm("bad json"),
         extraction_model=ContractExtraction,
-        collection_name=_CONTRACTS_COLLECTION,
-        collection_description="Extracted contract metadata.",
+        collection_schema=_CONTRACTS_SCHEMA,
         max_retries=0,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-5", text="contract text"))
@@ -376,6 +380,7 @@ async def test_extract_max_retries_zero_no_sleep(monkeypatch):
 # ---------------------------------------------------------------------------
 
 from pydantic import BaseModel, Field as PydanticField  # noqa: E402
+from cogbase.pipeline.extraction.llm import _build_list_record_model  # noqa: E402
 
 
 class _Clause(BaseModel):
@@ -392,11 +397,17 @@ def _make_list_extractor(
     list_field: str = "clauses",
     item_id_field: str = "item_id",
 ) -> LLMExtractor:
+    rec_model = _build_list_record_model(_Clause, item_id_field)
+    schema = CollectionSchema(
+        name=_LIST_COLLECTION,
+        description=_LIST_DESCRIPTION,
+        primary_fields=[item_id_field],
+        fields=cls_generate_schema(rec_model),
+    )
     return LLMExtractor(
         llm,
         extraction_model=_Clause,
-        collection_name=_LIST_COLLECTION,
-        collection_description=_LIST_DESCRIPTION,
+        collection_schema=schema,
         extract_as_list=True,
         list_field=list_field,
         item_id_field=item_id_field,
@@ -551,8 +562,12 @@ async def test_list_extract_retry_on_bad_json(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=_Clause,
-        collection_name=_LIST_COLLECTION,
-        collection_description=_LIST_DESCRIPTION,
+        collection_schema=CollectionSchema(
+            name=_LIST_COLLECTION,
+            description=_LIST_DESCRIPTION,
+            primary_fields=["item_id"],
+            fields=cls_generate_schema(_build_list_record_model(_Clause, "item_id")),
+        ),
         extract_as_list=True,
         list_field="clauses",
         max_retries=1,

@@ -303,7 +303,8 @@ class TestAppConfig:
             AppConfig.from_yaml(yaml_text)
 
     def test_full_three_step_config_parses(self):
-        _SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
+        _EXTRACTION_SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
+        _RECORD_SCHEMA = '{"type":"object","properties":{"value":{"type":"string"},"doc_id":{"type":"string"}}}'
         yaml_text = textwrap.dedent(f"""\
             name: contracts
             llm:
@@ -319,7 +320,8 @@ class TestAppConfig:
             structured_collections:
               - name: contract_extraction
                 description: Extracted contract facts and entities for exact lookup.
-                schema: '{_SCHEMA}'
+                schema: '{_RECORD_SCHEMA}'
+                primary_fields: [doc_id]
             pipeline:
               parallel: false
               steps:
@@ -329,6 +331,7 @@ class TestAppConfig:
                   collection: contract_extraction
                   extractor:
                     type: llm
+                    extraction_schema: '{_EXTRACTION_SCHEMA}'
                 - tool: document-embed-upsert
                   collection: document_summary
                   doc_prompt: "Summarize in one sentence."
@@ -361,26 +364,30 @@ class TestAppConfig:
 # ---------------------------------------------------------------------------
 
 class TestExtractorConfig:
-    def test_defaults(self):
-        cfg = ExtractorConfig()
+    _EXTRACTION_SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
+
+    def test_required_fields(self):
+        cfg = ExtractorConfig(extraction_schema=self._EXTRACTION_SCHEMA)
         assert cfg.type == "llm"
+        assert cfg.extraction_schema == self._EXTRACTION_SCHEMA
         assert cfg.prompt is None
         assert cfg.extract_as_list is False
         assert cfg.list_field == "items"
         assert cfg.item_id_field == "item_id"
 
     def test_custom_item_id_field(self):
-        cfg = ExtractorConfig(item_id_field="clause_id")
+        cfg = ExtractorConfig(extraction_schema=self._EXTRACTION_SCHEMA, item_id_field="clause_id")
         assert cfg.item_id_field == "clause_id"
 
     def test_extract_as_list_true(self):
-        cfg = ExtractorConfig(extract_as_list=True, list_field="clauses", item_id_field="clause_id")
+        cfg = ExtractorConfig(extraction_schema=self._EXTRACTION_SCHEMA, extract_as_list=True, list_field="clauses", item_id_field="clause_id")
         assert cfg.extract_as_list is True
         assert cfg.list_field == "clauses"
         assert cfg.item_id_field == "clause_id"
 
     def test_yaml_list_extractor_parses(self):
-        _SCHEMA = '{"type":"object","properties":{"text":{"type":"string"}}}'
+        _EXTRACTION_SCHEMA = '{"type":"object","properties":{"text":{"type":"string"}}}'
+        _RECORD_SCHEMA = '{"type":"object","properties":{"text":{"type":"string"},"clause_id":{"type":"string"},"doc_id":{"type":"string"}}}'
         yaml_text = textwrap.dedent(f"""\
             name: clauses-app
             llm:
@@ -388,13 +395,15 @@ class TestExtractorConfig:
             structured_collections:
               - name: contract_clauses
                 description: Extracted contract clauses with clause type and verbatim text.
-                schema: '{_SCHEMA}'
+                schema: '{_RECORD_SCHEMA}'
+                primary_fields: [clause_id]
             pipeline:
               steps:
                 - tool: extract-structured
                   collection: contract_clauses
                   extractor:
                     type: llm
+                    extraction_schema: '{_EXTRACTION_SCHEMA}'
                     extract_as_list: true
                     list_field: clauses
                     item_id_field: clause_id
@@ -402,13 +411,15 @@ class TestExtractorConfig:
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         ext = cfg.pipeline.steps[0].extractor
+        assert ext.extraction_schema == _EXTRACTION_SCHEMA
         assert ext.extract_as_list is True
         assert ext.list_field == "clauses"
         assert ext.item_id_field == "clause_id"
         assert ext.prompt == "contract_clauses_prompt.txt"
 
-    def test_yaml_extractor_defaults_when_omitted(self):
-        _SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
+    def test_yaml_extractor_parses(self):
+        _EXTRACTION_SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
+        _RECORD_SCHEMA = '{"type":"object","properties":{"value":{"type":"string"},"doc_id":{"type":"string"}}}'
         yaml_text = textwrap.dedent(f"""\
             name: simple-app
             llm:
@@ -416,16 +427,19 @@ class TestExtractorConfig:
             structured_collections:
               - name: records
                 description: Generic structured records for exact lookup.
-                schema: '{_SCHEMA}'
+                schema: '{_RECORD_SCHEMA}'
+                primary_fields: [doc_id]
             pipeline:
               steps:
                 - tool: extract-structured
                   collection: records
                   extractor:
                     type: llm
+                    extraction_schema: '{_EXTRACTION_SCHEMA}'
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         ext = cfg.pipeline.steps[0].extractor
+        assert ext.extraction_schema == _EXTRACTION_SCHEMA
         assert ext.extract_as_list is False
         assert ext.list_field == "items"
         assert ext.item_id_field == "item_id"

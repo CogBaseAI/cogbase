@@ -1,6 +1,6 @@
 """Schema and Pydantic models for the legal contract review pack."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 
 CONTRACTS_SYSTEM_PROMPT_PREFIX = (
@@ -57,7 +57,8 @@ class ContractExtraction(BaseModel):
     LLM prompt schema (via ``cls_json_schema_for_llm``) and the store schema
     (via ``cls_generate_schema``).
 
-    ``doc_id`` is the primary key and injected by the LLMExtractor; do not include it here.
+    ``doc_id`` MUST NOT appear here - it is injected by the extractor and declared
+    in ``ContractExtractionRecord`` (the record schema).
     """
 
     # contract basics
@@ -136,4 +137,11 @@ class ContractExtraction(BaseModel):
         default_factory=list,
         description="verbatim conditions precedent, carve-outs, custom provisions, or anything unusual; use [] if none",
     )
+
+
+ContractExtractionRecord = create_model(
+    "ContractExtractionRecord",
+    doc_id=(str, ...),
+    __base__=ContractExtraction,
+)
 

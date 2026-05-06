@@ -129,15 +129,27 @@ async def build_app(
                 f"structured collection {sc_cfg.name!r} requires a structured store"
                 " (configure structured_store in the app config or system config)"
             )
-        extraction_model = build_model_from_json_schema(
-            sc_cfg.schema_, model_name=sc_cfg.name.upper()
+
+        record_model = build_model_from_json_schema(sc_cfg.schema_, model_name=sc_cfg.name.upper() + "_RECORD")
+        sc_schema = CollectionSchema(
+            name=sc_cfg.name,
+            description=sc_cfg.description,
+            primary_fields=sc_cfg.primary_fields,
+            fields=cls_generate_schema(record_model),
         )
+
+        structured_collections.append(StructuredCollection(schema=sc_schema, store=structured_store))
+        structured_schemas.append(sc_schema)
+
         step = step_by_col.get(sc_cfg.name)
         ext_cfg: ExtractorConfig | None = step.extractor if step else None
         if ext_cfg is not None:
             extract_as_list = ext_cfg.extract_as_list
             list_field = ext_cfg.list_field
             item_id_field = ext_cfg.item_id_field
+
+            extraction_model = build_model_from_json_schema(ext_cfg.extraction_schema, model_name=sc_cfg.name.upper())
+
             system_prompt = None
             if ext_cfg.prompt:
                 if extract_as_list:
@@ -149,27 +161,17 @@ async def build_app(
                     )
                 else:
                     system_prompt = ext_cfg.prompt + cls_json_schema_for_llm(extraction_model)
+
             extractor = LLMExtractor(
                 llm,
                 extraction_model=extraction_model,
-                collection_name=sc_cfg.name,
-                collection_description=sc_cfg.description,
+                collection_schema=sc_schema,
                 extract_as_list=extract_as_list,
                 list_field=list_field,
                 item_id_field=item_id_field,
                 system_prompt=system_prompt,
             )
             extractors_by_col[sc_cfg.name] = extractor
-            sc_schema = extractor.schema
-        else:
-            sc_schema = CollectionSchema(
-                name=sc_cfg.name,
-                primary_fields=sc_cfg.primary_fields,
-                fields=cls_generate_schema(extraction_model),
-                description=sc_cfg.description,
-            )
-        structured_collections.append(StructuredCollection(schema=sc_schema, store=structured_store))
-        structured_schemas.append(sc_schema)
 
     # --- Create collections in backing stores (idempotent) ---
     for vc in vector_collections:
