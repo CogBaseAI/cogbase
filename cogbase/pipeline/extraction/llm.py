@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Callable, Literal, Type
+from typing import Callable, Type
 
 from pydantic import BaseModel, ValidationError, create_model
 
+from cogbase.config.config import ExtractorConfig
 from cogbase.core.models import Document
 from cogbase.llms import LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
@@ -69,14 +70,10 @@ class LLMExtractor(ExtractorBase):
         llm:              LLM backend.
         extraction_model: Pydantic model describing what the LLM should return.
                           Injected identity fields (``doc_id``, item id) must NOT
-                          appear here; supply them via *injected_fields*.
+                          appear here; supply them via *config*.
         record_model:     Pydantic model used for final validation and storage.
-        record_mode:      ``"one"`` (default) or ``"many"``.
-        response_field:   JSON key that wraps the array in many mode.
-        injected_fields:  Mapping of field name to ``(doc, item, index) → value``
-                          callables.  Defaults to ``doc_id``-only injection.
-        system_prompt:    Full system prompt; auto-built from *extraction_model* when
-                          ``None``.
+        config:           ExtractorConfig describing record mode, prompt, and
+                          injected identity fields.
         max_retries:      Retries on unparseable JSON.
     """
 
@@ -85,40 +82,84 @@ class LLMExtractor(ExtractorBase):
         llm: LLMBase,
         extraction_model: Type[BaseModel],
         *,
+        config: ExtractorConfig,
         record_model: Type[BaseModel],
-        record_mode: Literal["one", "many"] = "one",
-        response_field: str = "items",
-        injected_fields: dict[str, Callable] | None = None,
-        system_prompt: str | None = None,
         max_retries: int = 2,
     ) -> None:
         super().__init__(max_retries=max_retries)
         self._llm = llm
         self._extraction_model = extraction_model
-        self._record_mode = record_mode
-        self._response_field = response_field
         self._record_model = record_model
-        self._injected_fields: dict[str, Callable] = (
-            injected_fields
-            if injected_fields is not None
-            else {"doc_id": lambda doc, item, index: doc.doc_id}
-        )
 
-        if record_mode == "many":
+        self._validate_schema_contract(config)
+
+        self._record_mode = config.record_mode
+        self._response_field = config.response_field
+        self._injected_fields = self._build_injected_fields_from_config(config)
+
+        if config.record_mode == "many":
             self._wrapper_model: Type[BaseModel] = create_model(
                 "_WrapperModel",
-                **{response_field: (list[extraction_model], ...)},  # type: ignore[call-overload]
+                **{config.response_field: (list[extraction_model], ...)},  # type: ignore[call-overload]
             )
-            self._system_prompt = system_prompt or (
-                _DEFAULT_LIST_SYSTEM_PROMPT_PREFIX
-                + f'Return a JSON object with a single key "{response_field}" whose value is an array.\n'
-                + "Each element must have these fields:\n\n"
-                + cls_json_schema_for_llm(extraction_model)
-            )
+            self._system_prompt = self._build_system_prompt_from_config(config)
         else:
-            self._system_prompt = system_prompt or (
-                _DEFAULT_SYSTEM_PROMPT_PREFIX + cls_json_schema_for_llm(extraction_model)
+            self._system_prompt = self._build_system_prompt_from_config(config)
+
+    def _build_system_prompt_from_config(self, config: ExtractorConfig) -> str:
+        if config.record_mode == "many":
+            base = (
+                (config.prompt or "")
+                if config.prompt
+                else _DEFAULT_LIST_SYSTEM_PROMPT_PREFIX
             )
+            return (
+                base
+                + f'\nReturn a JSON object with a single key "{config.response_field}" whose value is an array.\n'
+                + "Each element must have these fields:\n\n"
+                + cls_json_schema_for_llm(self._extraction_model)
+            )
+        base = (config.prompt or "") if config.prompt else _DEFAULT_SYSTEM_PROMPT_PREFIX
+        return (
+            base
+            + cls_json_schema_for_llm(self._extraction_model)
+        )
+
+    def _validate_schema_contract(self, config: ExtractorConfig) -> None:
+        extraction_fields = set(self._extraction_model.model_fields)
+        if "doc_id" in extraction_fields:
+            raise ValueError(
+                "extraction_schema must not include 'doc_id' (it is injected by the pipeline)"
+            )
+        if config.record_mode == "many" and config.id_field and config.id_field in extraction_fields:
+            raise ValueError(
+                f"extraction_schema must not include '{config.id_field}' (it is injected by the pipeline)"
+            )
+
+        record_fields = set(self._record_model.model_fields)
+        if "doc_id" not in record_fields:
+            raise ValueError("record schema must include 'doc_id'")
+        if config.record_mode == "many" and config.id_field and config.id_field not in record_fields:
+            raise ValueError(
+                f"record schema must include '{config.id_field}' (id_field) for record_mode=many"
+            )
+
+    @staticmethod
+    def _build_injected_fields_from_config(config: ExtractorConfig) -> dict[str, Callable]:
+        injected_fields: dict[str, Callable] = {
+            "doc_id": lambda doc, item, index: doc.doc_id,
+        }
+        if config.record_mode == "many" and config.id_field:
+            if config.id_template:
+                template = config.id_template
+                injected_fields[config.id_field] = (
+                    lambda doc, item, index, t=template: t.format(doc_id=doc.doc_id, index=index)
+                )
+            else:
+                injected_fields[config.id_field] = (
+                    lambda doc, item, index: f"{doc.doc_id}__{index:04d}"
+                )
+        return injected_fields
 
     async def _extract_once(self, doc: Document) -> list[BaseModel] | None:
         t0 = time.monotonic()

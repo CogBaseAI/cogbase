@@ -6,13 +6,18 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import BaseModel, create_model
 
+from cogbase.config.config import ExtractorConfig
 from cogbase.llms import LLMBase
 from cogbase.core.models import Document
 from cogbase.pipeline.extraction.llm import LLMExtractor, _build_record_model, _build_list_record_model
 from examples.contract_analyst_demo.schema import (
     ContractExtraction,
 )
+
+
+_DEFAULT_EXTRACTION_SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
 
 
 def _make_llm(content: str) -> MagicMock:
@@ -31,6 +36,7 @@ def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
+        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA),
         record_model=_build_record_model(ContractExtraction),
     )
 
@@ -375,18 +381,75 @@ def _make_list_extractor(
     return LLMExtractor(
         llm,
         extraction_model=_Clause,
+        config=ExtractorConfig(
+            extraction_schema=_DEFAULT_EXTRACTION_SCHEMA,
+            record_mode="many",
+            response_field=response_field,
+            id_field=item_id_field,
+        ),
         record_model=_build_list_record_model(_Clause, item_id_field),
-        record_mode="many",
-        response_field=response_field,
-        injected_fields={
-            "doc_id": lambda doc, item, index: doc.doc_id,
-            item_id_field: lambda doc, item, index: f"{doc.doc_id}__{index:04d}",
-        },
     )
 
 
 def _list_payload(*clauses: dict, field: str = "clauses") -> str:
     return json.dumps({field: list(clauses)})
+
+
+@pytest.mark.asyncio
+async def test_config_driven_list_extractor_builds_prompt_and_injected_fields():
+    cfg = ExtractorConfig(
+        extraction_schema='{"type":"object","properties":{"text":{"type":"string"}}}',
+        record_mode="many",
+        response_field="clauses",
+        id_field="clause_id",
+        prompt="Extract all clauses.\n\n",
+    )
+    extractor = LLMExtractor(
+        _make_llm(_list_payload({"text": "Clause text"})),
+        extraction_model=_Clause,
+        config=cfg,
+        record_model=_build_list_record_model(_Clause, "clause_id"),
+    )
+
+    assert extractor._record_mode == "many"
+    assert extractor._response_field == "clauses"
+    assert list(extractor._injected_fields.keys()) == ["doc_id", "clause_id"]
+    assert "Extract all clauses." in extractor._system_prompt
+    assert '"clauses"' in extractor._system_prompt
+
+
+def test_config_driven_extractor_rejects_doc_id_in_extraction_schema():
+    cfg = ExtractorConfig(
+        extraction_schema='{"type":"object","properties":{"doc_id":{"type":"string"}}}',
+    )
+    extraction_model = create_model("_BadExtraction", doc_id=(str, ...))
+    record_model = create_model("_GoodRecord", doc_id=(str, ...))
+
+    with pytest.raises(ValueError, match="doc_id"):
+        LLMExtractor(
+            _make_llm("{}"),
+            extraction_model=extraction_model,
+            config=cfg,
+            record_model=record_model,
+        )
+
+
+def test_config_driven_extractor_rejects_missing_doc_id_in_record_schema():
+    cfg = ExtractorConfig(
+        extraction_schema='{"type":"object","properties":{"text":{"type":"string"}}}',
+        record_mode="many",
+        id_field="clause_id",
+    )
+    extraction_model = create_model("_GoodExtraction", text=(str | None, None))
+    record_model = create_model("_BadRecord", clause_id=(str, ...))
+
+    with pytest.raises(ValueError, match="record schema must include 'doc_id'"):
+        LLMExtractor(
+            _make_llm("{}"),
+            extraction_model=extraction_model,
+            config=cfg,
+            record_model=record_model,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -513,13 +576,13 @@ async def test_list_extract_retry_on_bad_json(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=_Clause,
+        config=ExtractorConfig(
+            extraction_schema=_DEFAULT_EXTRACTION_SCHEMA,
+            record_mode="many",
+            response_field="clauses",
+            id_field="item_id",
+        ),
         record_model=_build_list_record_model(_Clause, "item_id"),
-        record_mode="many",
-        response_field="clauses",
-        injected_fields={
-            "doc_id": lambda doc, item, index: doc.doc_id,
-            "item_id": lambda doc, item, index: f"{doc.doc_id}__{index:04d}",
-        },
         max_retries=1,
     )
     result = await extractor.extract(Document(doc_id="doc-LR1", text="contract text"))

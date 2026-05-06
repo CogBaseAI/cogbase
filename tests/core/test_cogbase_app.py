@@ -19,6 +19,7 @@ from cogbase.pipeline.ingestion_pipeline import (
     PipelineStep,
 )
 from cogbase.core.models import Document
+from cogbase.config.config import ExtractorConfig
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import LLMBase
 from cogbase.core.basemodel_to_schema import cls_generate_schema
@@ -106,6 +107,7 @@ def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
+        config=ExtractorConfig(extraction_schema='{"type":"object","properties":{"value":{"type":"string"}}}'),
         record_model=_build_record_model(ContractExtraction),
     )
 

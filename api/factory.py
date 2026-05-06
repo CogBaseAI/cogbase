@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from cogbase.config.config import AppConfig, ChunkerConfig, ExtractorConfig
-from typing import Callable
 from cogbase.config.stores import StructuredStoreConfig
 from cogbase.embeddings import build_embedding as _build_embedder
 from cogbase.llms import build_llm as _build_llm
@@ -22,7 +21,7 @@ from cogbase.stores import (
 from cogbase.core.app import CogBaseApp
 from cogbase.core.query_runner import QueryRunner
 from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
-from cogbase.core.basemodel_to_schema import cls_generate_schema, cls_json_schema_for_llm
+from cogbase.core.basemodel_to_schema import cls_generate_schema
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
@@ -145,74 +144,14 @@ async def build_app(
         step = step_by_col.get(sc_cfg.name)
         ext_cfg: ExtractorConfig | None = step.extractor if step else None
         if ext_cfg is not None:
-            record_mode = ext_cfg.record_mode
-            response_field = ext_cfg.response_field
-
             extraction_model = build_model_from_json_schema(
                 ext_cfg.extraction_schema, model_name=sc_cfg.name.upper() + "_EXTRACTION"
             )
-
-            # Validate: injected fields must not appear in the extraction schema
-            extraction_fields = set(extraction_model.model_fields)
-            if "doc_id" in extraction_fields:
-                raise ValueError(
-                    f"structured collection {sc_cfg.name!r}: extraction_schema must not include "
-                    f"'doc_id' (it is injected by the pipeline)"
-                )
-            if record_mode == "many" and ext_cfg.id_field and ext_cfg.id_field in extraction_fields:
-                raise ValueError(
-                    f"structured collection {sc_cfg.name!r}: extraction_schema must not include "
-                    f"'{ext_cfg.id_field}' (it is injected by the pipeline)"
-                )
-
-            # Validate: record schema must include injected fields
-            record_fields = set(record_model.model_fields)
-            if "doc_id" not in record_fields:
-                raise ValueError(
-                    f"structured collection {sc_cfg.name!r}: record schema must include 'doc_id'"
-                )
-            if record_mode == "many" and ext_cfg.id_field and ext_cfg.id_field not in record_fields:
-                raise ValueError(
-                    f"structured collection {sc_cfg.name!r}: record schema must include "
-                    f"'{ext_cfg.id_field}' (id_field) for record_mode=many"
-                )
-
-            # Build injected_fields: doc_id always; id_field added in many mode
-            injected_fields: dict[str, Callable] = {
-                "doc_id": lambda doc, item, index: doc.doc_id,
-            }
-            if record_mode == "many" and ext_cfg.id_field:
-                _id_field = ext_cfg.id_field
-                if ext_cfg.id_template:
-                    _template = ext_cfg.id_template
-                    injected_fields[_id_field] = (
-                        lambda doc, item, index, t=_template: t.format(doc_id=doc.doc_id, index=index)
-                    )
-                else:
-                    injected_fields[_id_field] = (
-                        lambda doc, item, index: f"{doc.doc_id}__{index:04d}"
-                    )
-
-            system_prompt = None
-            if ext_cfg.prompt:
-                if record_mode == "many":
-                    system_prompt = (
-                        ext_cfg.prompt
-                        + f'\nReturn a JSON object with a single key "{response_field}" whose value is an array.\n'
-                        + "Each element must have these fields:\n\n"
-                        + cls_json_schema_for_llm(extraction_model)
-                    )
-                else:
-                    system_prompt = ext_cfg.prompt + cls_json_schema_for_llm(extraction_model)
-
             extractor = LLMExtractor(
                 llm,
                 extraction_model=extraction_model,
                 record_model=record_model,
-                record_mode=record_mode,
-                response_field=response_field,
-                injected_fields=injected_fields,
-                system_prompt=system_prompt,
+                config=ext_cfg,
             )
             extractors_by_col[sc_cfg.name] = extractor
 
