@@ -117,6 +117,8 @@ async def build_app(
     # --- Structured collections ---
     structured_collections: list[StructuredCollection] = []
     structured_schemas: list[CollectionSchema] = []
+    extractors_by_col: dict[str, LLMExtractor] = {}
+    step_by_col: dict[str, Any] = {s.collection: s for s in (config.pipeline.steps if config.pipeline else [])}
     for sc_cfg in config.structured_collections:
         if structured_store is None:
             raise ValueError(
@@ -126,9 +128,6 @@ async def build_app(
         extraction_model = build_model_from_json_schema(
             sc_cfg.schema_, model_name=sc_cfg.name.upper()
         )
-        step_by_col: dict[str, Any] = {}
-        for s in (config.pipeline.steps if config.pipeline else []):
-            step_by_col.setdefault(s.collection, s)
         step = step_by_col.get(sc_cfg.name)
         ext_cfg: ExtractorConfig | None = step.extractor if step else None
         if ext_cfg is not None:
@@ -156,12 +155,8 @@ async def build_app(
                 item_id_field=item_id_field,
                 system_prompt=system_prompt,
             )
+            extractors_by_col[sc_cfg.name] = extractor
             sc_schema = extractor.schema
-            structured_collections.append(StructuredCollection(
-                schema=sc_schema,
-                store=structured_store,
-                extractor=extractor,
-            ))
         else:
             sc_schema = CollectionSchema(
                 name=sc_cfg.name,
@@ -169,6 +164,7 @@ async def build_app(
                 fields=cls_generate_schema(extraction_model),
                 description=sc_cfg.description,
             )
+        structured_collections.append(StructuredCollection(schema=sc_schema, store=structured_store))
         structured_schemas.append(sc_schema)
 
     # --- Create collections in backing stores (idempotent) ---
@@ -191,6 +187,8 @@ async def build_app(
         if s.tool == "chunk-embed-upsert":
             chunker_cfg = s.chunker or ChunkerConfig()
             ps.chunker = _build_chunker(chunker_cfg)
+        elif s.tool == "extract-structured":
+            ps.extractor = extractors_by_col.get(s.collection)
         elif s.tool == "document-embed-upsert":
             ps.llm = llm
             ps.prompt = s.prompt or "Summarize this document in a few sentences."

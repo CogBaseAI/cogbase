@@ -68,36 +68,17 @@ class StubExtractor(ExtractorBase):
 
 class TestStructuredCollection:
     def _make(self, collection_name: str = "tags") -> StructuredCollection:
-        extractor = StubExtractor()
-        schema = extractor.schema if collection_name == "tags" else CollectionSchema(
+        schema = StubExtractor().schema if collection_name == "tags" else CollectionSchema(
             name=collection_name,
             description="Test collection.",
             primary_fields=["tag_id"],
             fields={"tag_id": FieldSchema(type=FieldType.STRING)},
         )
-        return StructuredCollection(
-            schema=extractor.schema,
-            store=InMemoryStructuredStore(),
-            extractor=extractor,
-        )
+        return StructuredCollection(schema=schema, store=InMemoryStructuredStore())
 
     def test_name_from_schema(self):
         sc = self._make()
         assert sc.name == "tags"
-
-    def test_mismatched_extractor_raises(self):
-        wrong_schema = CollectionSchema(
-            name="other",
-            description="Test collection.",
-            primary_fields=["tag_id"],
-            fields={"tag_id": FieldSchema(type=FieldType.STRING)},
-        )
-        with pytest.raises(ValueError, match="does not match schema.name"):
-            StructuredCollection(
-                schema=wrong_schema,
-                store=InMemoryStructuredStore(),
-                extractor=StubExtractor(),
-            )
 
 
 def test_field_schema_rejects_json_schema_on_non_json_type():
@@ -133,11 +114,7 @@ class TestIngestionPipelineConstruction:
         assert app._structured_by_name == {}
 
     def test_structured_only(self):
-        sc = StructuredCollection(
-            schema=StubExtractor().schema,
-            store=InMemoryStructuredStore(),
-            extractor=StubExtractor(),
-        )
+        sc = StructuredCollection(schema=StubExtractor().schema, store=InMemoryStructuredStore())
         app = IngestionPipeline(name="app", structured_collections=[sc])
         assert app._vector_by_name == {}
         assert app._structured_by_name
@@ -161,16 +138,12 @@ class TestIngestionPipelineIngest:
             store=vector_store,
             embedder=StubEmbedding(dim=4),
         )
-        sc = StructuredCollection(
-            schema=sc_schema,
-            store=structured_store,
-            extractor=StubExtractor(),
-        )
+        sc = StructuredCollection(schema=sc_schema, store=structured_store)
         app = IngestionPipeline(
             name="app",
             steps=[
                 PipelineStep(tool="chunk-embed-upsert", collection="docs", chunker=FixedSizeChunker(chunk_size=50, overlap=0)),
-                PipelineStep(tool="extract-structured", collection="tags"),
+                PipelineStep(tool="extract-structured", collection="tags", extractor=StubExtractor()),
             ],
             vector_collections=[vc],
             structured_collections=[sc],
@@ -237,12 +210,12 @@ class TestIngestionPipelineIngest:
         structured_store = InMemoryStructuredStore()
         sc_schema = StubExtractor().schema
         await structured_store.create_collection(sc_schema)
-        sc = StructuredCollection(
-            schema=sc_schema,
-            store=structured_store,
-            extractor=StubExtractor(),
+        sc = StructuredCollection(schema=sc_schema, store=structured_store)
+        app = IngestionPipeline(
+            name="app",
+            steps=[PipelineStep(tool="extract-structured", collection="tags", extractor=StubExtractor())],
+            structured_collections=[sc],
         )
-        app = IngestionPipeline(name="app", structured_collections=[sc])
         await app._ingest(Document(doc_id="doc-1", text="important clause about termination"))
         rows = await structured_store.query("tags")
         assert len(rows) == 1
@@ -260,12 +233,12 @@ class TestIngestionPipelineIngestMany:
         structured_store = InMemoryStructuredStore()
         sc_schema = StubExtractor().schema
         await structured_store.create_collection(sc_schema)
-        sc = StructuredCollection(
-            schema=sc_schema,
-            store=structured_store,
-            extractor=StubExtractor(),
+        sc = StructuredCollection(schema=sc_schema, store=structured_store)
+        app = IngestionPipeline(
+            name="app",
+            steps=[PipelineStep(tool="extract-structured", collection="tags", extractor=StubExtractor())],
+            structured_collections=[sc],
         )
-        app = IngestionPipeline(name="app", structured_collections=[sc])
         return app, structured_store
 
     @pytest.mark.asyncio
@@ -337,12 +310,12 @@ class TestIngestionPipelineIngestMany:
         structured_store = InMemoryStructuredStore()
         sc_schema = StubExtractor().schema
         await structured_store.create_collection(sc_schema)
-        sc = StructuredCollection(
-            schema=sc_schema,
-            store=structured_store,
-            extractor=FailFirstExtractor(),
+        sc = StructuredCollection(schema=sc_schema, store=structured_store)
+        app = IngestionPipeline(
+            name="app",
+            steps=[PipelineStep(tool="extract-structured", collection="tags", extractor=FailFirstExtractor())],
+            structured_collections=[sc],
         )
-        app = IngestionPipeline(name="app", structured_collections=[sc])
 
         results = await app.ingest_documents(
             [

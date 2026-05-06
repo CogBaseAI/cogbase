@@ -56,6 +56,8 @@ class ContractExtraction(BaseModel):
     Every field is optional (null if not found).  This model drives both the
     LLM prompt schema (via ``cls_json_schema_for_llm``) and the store schema
     (via ``cls_generate_schema``).
+
+    ``doc_id`` is the primary key and injected by the LLMExtractor; do not include it here.
     """
 
     # contract basics

@@ -75,29 +75,18 @@ class VectorCollection:
 
 @dataclass
 class StructuredCollection:
-    """A structured collection backed by a store, schema, and extractor.
+    """A structured collection backed by a store and schema.
 
     The collection name is taken from ``schema.name`` — no separate ``name``
     field is needed.
 
     Args:
-        schema:    ``CollectionSchema`` describing the table and its fields.
-        store:     ``StructuredStoreBase`` implementation that persists records.
-        extractor: ``ExtractorBase`` implementation that extracts records from
-                   document text.  ``extractor.collection`` must match
-                   ``schema.name``; this is validated at construction time.
+        schema: ``CollectionSchema`` describing the table and its fields.
+        store:  ``StructuredStoreBase`` implementation that persists records.
     """
 
     schema: CollectionSchema
     store: StructuredStoreBase
-    extractor: ExtractorBase
-
-    def __post_init__(self) -> None:
-        if self.extractor.collection != self.schema.name:
-            raise ValueError(
-                f"StructuredCollection extractor.collection '{self.extractor.collection}' "
-                f"does not match schema.name '{self.schema.name}'"
-            )
 
     @property
     def name(self) -> str:
@@ -110,12 +99,13 @@ class PipelineStep:
     """One step in the ingestion pipeline.
 
     Args:
-        tool:            One of ``"chunk-embed-upsert"``, ``"extract-structured"``,
-                         or ``"document-embed-upsert"``.
-        collection:      Name of the target collection for this step.
+        tool:       One of ``"chunk-embed-upsert"``, ``"extract-structured"``,
+                    or ``"document-embed-upsert"``.
+        collection: Name of the target collection for this step.
         when:       Optional metadata filter — step is skipped unless all
                     key/value pairs match the document's metadata.
         chunker:    Chunker for ``chunk-embed-upsert`` steps.
+        extractor:  Extractor for ``extract-structured`` steps.
         llm:        Optional LLM for ``document-embed-upsert`` steps.  When
                     ``None`` the raw document text is embedded directly.
         prompt:     System prompt for the LLM summarisation call.
@@ -126,6 +116,7 @@ class PipelineStep:
     collection: str
     when: dict[str, str] | None = None
     chunker: ChunkerBase | None = None
+    extractor: ExtractorBase | None = None
     llm: LLMBase | None = None
     prompt: str = "Summarize this document in a few sentences."
     max_tokens: int = 1024
@@ -166,13 +157,7 @@ class IngestionPipeline:
         self._vector_by_name: dict[str, VectorCollection] = {vc.name: vc for vc in _vcs}
         self._structured_by_name: dict[str, StructuredCollection] = {sc.name: sc for sc in _scs}
 
-        if steps is None:
-            self._steps = [
-                PipelineStep(tool="extract-structured", collection=sc.name)
-                for sc in _scs
-            ]
-        else:
-            self._steps = list(steps)
+        self._steps = list(steps or [])
 
     async def _ingest(self, doc: Document) -> int:
         """Ingest a document by executing each step in declaration order.
@@ -253,8 +238,14 @@ class IngestionPipeline:
                 self.name, step.collection,
             )
             return 0
+        if step.extractor is None:
+            logger.warning(
+                "ingestion_pipeline.extract_structured.no_extractor name=%s collection=%s",
+                self.name, step.collection,
+            )
+            return 0
 
-        records = await sc.extractor.extract(doc)
+        records = await step.extractor.extract(doc)
         if not records:
             return 0
 

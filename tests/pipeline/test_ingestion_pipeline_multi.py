@@ -104,11 +104,7 @@ class TestMultiCollectionPipelineConstruction:
         )
 
     def _make_sc(self, make_structured_store: Callable[[], StructuredStoreBase]) -> StructuredCollection:
-        return StructuredCollection(
-            schema=StubExtractor().schema,
-            store=make_structured_store(),
-            extractor=StubExtractor(),
-        )
+        return StructuredCollection(schema=StubExtractor().schema, store=make_structured_store())
 
     def test_explicit_steps_with_all_three_types(self, make_vector_store, make_structured_store):
         vc_chunks = self._make_vc(make_vector_store, "document_chunks")
@@ -130,18 +126,6 @@ class TestMultiCollectionPipelineConstruction:
         assert "chunk-embed-upsert" in tools
         assert "document-embed-upsert" in tools
         assert "tags" in pipeline._structured_by_name
-
-    def test_auto_steps_generation_from_structured_collection(self, make_structured_store):
-        sc = self._make_sc(make_structured_store)
-
-        pipeline = IngestionPipeline(
-            name="app",
-            structured_collections=[sc],
-        )
-
-        assert len(pipeline._steps) == 1
-        assert pipeline._steps[0].tool == "extract-structured"
-        assert pipeline._steps[0].collection == "tags"
 
     def test_two_vector_collections(self, make_vector_store):
         vc1 = self._make_vc(make_vector_store, "col_a")
@@ -313,13 +297,13 @@ class TestThreeStepPipeline:
 
         vc_chunks = VectorCollection(schema=vc_schema, store=chunk_store, embedder=StubEmbedding(dim=4))
         vc_summary = VectorCollection(schema=dc_schema, store=summary_store, embedder=StubEmbedding(dim=4))
-        sc = StructuredCollection(schema=sc_schema, store=struct_store, extractor=StubExtractor())
+        sc = StructuredCollection(schema=sc_schema, store=struct_store)
 
         pipeline = IngestionPipeline(
             name="app",
             steps=[
                 PipelineStep(tool="chunk-embed-upsert",    collection="chunks",    chunker=FixedSizeChunker(chunk_size=20, overlap=0)),
-                PipelineStep(tool="extract-structured",    collection="tags"),
+                PipelineStep(tool="extract-structured",    collection="tags",      extractor=StubExtractor()),
                 PipelineStep(tool="document-embed-upsert", collection="summaries", llm=_make_llm("Short summary.")),
             ],
             vector_collections=[vc_chunks, vc_summary],
@@ -353,8 +337,8 @@ class TestThreeStepPipeline:
             def schema(self): return CollectionSchema(name="col_b", description="Test collection B.", primary_fields=["tag_id"], fields=_fields)
             async def _extract_once(self, doc): return None
 
-        sc_a = StructuredCollection(schema=ExtA().schema, store=struct_store_a, extractor=ExtA())
-        sc_b = StructuredCollection(schema=ExtB().schema, store=struct_store_b, extractor=ExtB())
+        sc_a = StructuredCollection(schema=ExtA().schema, store=struct_store_a)
+        sc_b = StructuredCollection(schema=ExtB().schema, store=struct_store_b)
 
         await struct_store_a.create_collection(ExtA().schema)
         await struct_store_b.create_collection(ExtB().schema)
