@@ -88,8 +88,12 @@ embedding:
   dimensions: {_EMBED_DIM}
 vector_collections:
   - name: document_chunks
+    description: >-
+      Full-text document chunks for detailed retrieval.
 structured_collections:
   - name: {_CONTRACTS_COLLECTION}
+    description: >-
+      Extracted contract facts and entities for exact lookup.
     schema: contracts_schema.json
 pipeline:
   steps:

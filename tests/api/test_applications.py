@@ -200,6 +200,7 @@ class TestCreateApplication:
               model: gpt-4o-mini
             structured_collections:
               - name: contract_extraction
+                description: Extracted contract facts and entities for exact lookup.
                 schema: extraction_schema.json
             pipeline:
               steps:

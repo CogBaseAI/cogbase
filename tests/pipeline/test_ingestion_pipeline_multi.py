@@ -368,6 +368,7 @@ class TestVectorCollectionConfig:
               model: text-embedding-3-small
             vector_collections:
               - name: document_summary
+                description: One summary vector per document for topic-level search.
             pipeline:
               steps:
                 - tool: document-embed-upsert
@@ -392,6 +393,7 @@ class TestVectorCollectionConfig:
               model: gpt-4o-mini
             vector_collections:
               - name: document_summary
+                description: One summary vector per document for topic-level search.
         """)
         with pytest.raises(Exception, match="embedding is required when vector_collections"):
             AppConfig.from_yaml(yaml_text)
@@ -409,6 +411,7 @@ class TestVectorCollectionConfig:
               model: text-embedding-3-small
             vector_collections:
               - name: document_summary
+                description: One summary vector per document for topic-level search.
             pipeline:
               steps:
                 - tool: document-embed-upsert

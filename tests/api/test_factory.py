@@ -54,6 +54,7 @@ llm:
   model: gpt-4o-mini
 structured_collections:
   - name: contract_extraction
+    description: Extracted contract facts and entities for exact lookup.
     schema: '{_SCHEMA}'
 pipeline:
   steps:
@@ -73,8 +74,10 @@ embedding:
   model: text-embedding-3-small
 vector_collections:
   - name: document_chunks
+    description: Full-text document chunks for detailed retrieval.
 structured_collections:
   - name: contract_extraction
+    description: Extracted contract facts and entities for exact lookup.
     schema: '{_SCHEMA}'
 pipeline:
   parallel: true
@@ -192,6 +195,7 @@ embedding:
   model: text-embedding-3-small
 vector_collections:
   - name: document_summary
+    description: One summary vector per document for topic-level search.
 pipeline:
   steps:
     - tool: document-embed-upsert
@@ -210,9 +214,12 @@ embedding:
   model: text-embedding-3-small
 vector_collections:
   - name: document_chunks
+    description: Full-text document chunks for detailed retrieval.
   - name: document_summary
+    description: One summary vector per document for topic-level search.
 structured_collections:
   - name: contract_extraction
+    description: Extracted contract facts and entities for exact lookup.
     schema: '{_SCHEMA}'
 pipeline:
   parallel: false
@@ -337,6 +344,7 @@ llm:
   model: gpt-4o-mini
 structured_collections:
   - name: contract_clauses
+    description: Extracted contract clauses with clause type and verbatim text.
     schema: '{_SCHEMA}'
 pipeline:
   steps:
@@ -356,6 +364,7 @@ llm:
   model: gpt-4o-mini
 structured_collections:
   - name: contract_clauses
+    description: Extracted contract clauses with clause type and verbatim text.
     schema: '{_SCHEMA}'
 pipeline:
   steps:
@@ -376,6 +385,7 @@ llm:
   model: gpt-4o-mini
 structured_collections:
   - name: contract_metadata
+    description: Extracted contract facts and entities for exact lookup.
     schema: '{_SCHEMA}'
 pipeline:
   steps:
@@ -389,7 +399,7 @@ pipeline:
 
 class TestBuildAppListExtractor:
     def _get_extractor(self, app, collection: str):
-        return app._ingest_pipeline._structured_by_name[collection].extractor
+        return next(s for s in app._ingest_pipeline._steps if s.collection == collection).extractor
 
     @patch("api.factory._build_llm")
     async def test_list_extractor_extract_as_list_true(self, mock_build_llm):

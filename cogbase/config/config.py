@@ -21,8 +21,14 @@ class ChunkerConfig(BaseModel):
 class VectorCollectionConfig(BaseModel):
     name: str
     dimensions: int = 1536
-    description: str = "Vector collection for passage chunks or document summaries."
+    description: str
     metadata_fields: list[str] = []
+
+    @model_validator(mode="after")
+    def _non_empty_description(self) -> "VectorCollectionConfig":
+        if not self.description or not self.description.strip():
+            raise ValueError("VectorCollectionConfig.description must be set")
+        return self
 
 
 class ExtractorConfig(BaseModel):
@@ -39,7 +45,13 @@ class StructuredCollectionConfig(BaseModel):
     name: str
     schema_: str = Field(alias="schema")
     primary_fields: list[str] = []
-    description: str = "Structured records; use for exact lookups or field-filtered queries."
+    description: str
+
+    @model_validator(mode="after")
+    def _non_empty_description(self) -> "StructuredCollectionConfig":
+        if not self.description or not self.description.strip():
+            raise ValueError("StructuredCollectionConfig.description must be set")
+        return self
 
 
 class WhenCondition(BaseModel):

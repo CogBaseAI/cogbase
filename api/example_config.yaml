@@ -20,6 +20,7 @@ name: my-contract-analyzer
 
 vector_collections:
   - name: document_chunks    # full-text passage index
+    description: "Full-text document chunks for detailed retrieval."
     # metadata_fields: [customer_id, deal_stage]  # optional: project doc.metadata keys into chunk metadata
   - name: document_summary   # one vector record per document (LLM summary embedded)
     description: "One-per-document summaries; use for topic-level or high-level questions about what documents cover."
@@ -27,6 +28,7 @@ vector_collections:
 
 structured_collections:
   - name: contract_extraction
+    description: "Extracted contract facts and entities for exact lookup."
     schema: extraction_schema.json      # filename in ZIP root (resolved at upload time)
 
 pipeline:

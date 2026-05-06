@@ -155,6 +155,7 @@ _FULL_YAML = textwrap.dedent("""\
       model: text-embedding-3-small
     vector_collections:
       - name: doc_chunks
+        description: Full-text document chunks for detailed retrieval.
     pipeline:
       steps:
         - tool: chunk-embed-upsert
@@ -198,6 +199,7 @@ class TestAppConfig:
               model: text-embedding-3-small
             vector_collections:
               - name: doc_chunks
+                description: Full-text document chunks for detailed retrieval.
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         assert cfg.structured_store.type == "sqlite"
@@ -211,8 +213,23 @@ class TestAppConfig:
               model: gpt-4o-mini
             vector_collections:
               - name: doc_chunks
+                description: Full-text document chunks for detailed retrieval.
         """)
         with pytest.raises(Exception, match="embedding is required when vector_collections"):
+            AppConfig.from_yaml(yaml_text)
+
+    def test_vector_collection_description_is_required(self):
+        yaml_text = textwrap.dedent("""\
+            name: bad-app
+            llm:
+              model: gpt-4o-mini
+            embedding:
+              provider: openai
+              model: text-embedding-3-small
+            vector_collections:
+              - name: doc_chunks
+        """)
+        with pytest.raises(Exception, match="description"):
             AppConfig.from_yaml(yaml_text)
 
     def test_embedding_alone_is_valid(self):
@@ -242,6 +259,7 @@ class TestAppConfig:
               model: text-embedding-3-small
             vector_collections:
               - name: doc_summary
+                description: One summary vector per document for topic-level search.
             pipeline:
               steps:
                 - tool: document-embed-upsert
@@ -258,6 +276,7 @@ class TestAppConfig:
               model: gpt-4o-mini
             vector_collections:
               - name: doc_summary
+                description: One summary vector per document for topic-level search.
         """)
         with pytest.raises(Exception, match="embedding is required when vector_collections"):
             AppConfig.from_yaml(yaml_text)
@@ -272,6 +291,7 @@ class TestAppConfig:
               model: text-embedding-3-small
             vector_collections:
               - name: doc_summary
+                description: One summary vector per document for topic-level search.
             pipeline:
               steps:
                 - tool: document-embed-upsert
@@ -291,9 +311,12 @@ class TestAppConfig:
               model: text-embedding-3-small
             vector_collections:
               - name: document_chunks
+                description: Full-text document chunks for detailed retrieval.
               - name: document_summary
+                description: One summary vector per document for topic-level search.
             structured_collections:
               - name: contract_extraction
+                description: Extracted contract facts and entities for exact lookup.
                 schema: '{_SCHEMA}'
             pipeline:
               parallel: false
@@ -318,6 +341,19 @@ class TestAppConfig:
         doc_step = cfg.pipeline.steps[2]
         assert doc_step.prompt == "Summarize in one sentence."
         assert doc_step.max_tokens == 128
+
+    def test_structured_collection_description_is_required(self):
+        _SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
+        yaml_text = textwrap.dedent(f"""\
+            name: bad-app
+            llm:
+              model: gpt-4o-mini
+            structured_collections:
+              - name: records
+                schema: '{_SCHEMA}'
+        """)
+        with pytest.raises(Exception, match="description"):
+            AppConfig.from_yaml(yaml_text)
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +387,7 @@ class TestExtractorConfig:
               model: gpt-4o-mini
             structured_collections:
               - name: contract_clauses
+                description: Extracted contract clauses with clause type and verbatim text.
                 schema: '{_SCHEMA}'
             pipeline:
               steps:
@@ -378,6 +415,7 @@ class TestExtractorConfig:
               model: gpt-4o-mini
             structured_collections:
               - name: records
+                description: Generic structured records for exact lookup.
                 schema: '{_SCHEMA}'
             pipeline:
               steps:
@@ -412,6 +450,7 @@ class TestWhenCondition:
               model: text-embedding-3-small
             vector_collections:
               - name: chunks
+                description: Full-text document chunks for detailed retrieval.
             pipeline:
               steps:
                 - tool: chunk-embed-upsert
@@ -430,6 +469,7 @@ class TestWhenCondition:
               model: text-embedding-3-small
             vector_collections:
               - name: rule_chunks
+                description: Policy and rules chunks for compliance checks.
             pipeline:
               steps:
                 - tool: chunk-embed-upsert
@@ -454,7 +494,9 @@ class TestWhenCondition:
               model: text-embedding-3-small
             vector_collections:
               - name: rule_chunks
+                description: Policy and rules chunks for compliance checks.
               - name: contract_chunks
+                description: Contract text chunks for clause-level retrieval.
             pipeline:
               steps:
                 - tool: chunk-embed-upsert
@@ -489,6 +531,7 @@ class TestWhenCondition:
               model: text-embedding-3-small
             vector_collections:
               - name: chunks
+                description: Full-text document chunks for detailed retrieval.
             pipeline:
               steps:
                 - tool: chunk-embed-upsert
@@ -505,7 +548,7 @@ class TestWhenCondition:
 
 class TestVectorCollectionConfig:
     def test_defaults(self):
-        cfg = VectorCollectionConfig(name="s")
+        cfg = VectorCollectionConfig(name="s", description="test collection")
         assert cfg.name == "s"
         assert cfg.dimensions == 1536
 
@@ -513,11 +556,19 @@ class TestVectorCollectionConfig:
         cfg = VectorCollectionConfig(name="chunks", description="Passage chunks for search.")
         assert cfg.description == "Passage chunks for search."
 
+    def test_empty_description_raises(self):
+        with pytest.raises(Exception, match="must be set"):
+            VectorCollectionConfig(name="chunks", description=" ")
+
     def test_step_prompt_and_max_tokens_on_step_config(self):
         cfg = PipelineStepConfig(tool="document-embed-upsert", collection="doc_summary", prompt="One sentence.", max_tokens=64)
         assert cfg.prompt == "One sentence."
         assert cfg.max_tokens == 64
 
     def test_vector_collection_metadata_fields(self):
-        cfg = VectorCollectionConfig(name="meetings", metadata_fields=["customer_id", "deal_stage"])
+        cfg = VectorCollectionConfig(
+            name="meetings",
+            description="Meeting notes and extracted records for search.",
+            metadata_fields=["customer_id", "deal_stage"],
+        )
         assert cfg.metadata_fields == ["customer_id", "deal_stage"]

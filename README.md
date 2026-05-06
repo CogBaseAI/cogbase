@@ -251,48 +251,14 @@ Applications are created and managed through the REST API. Configuration lives i
 
 ### Application config format
 
-Applications are configured via a `config.yaml` inside a ZIP bundle. Any files referenced by filename (JSON schemas, prompt templates) must also be present flat at the ZIP root.
+Applications are configured via a `config.yaml` inside a ZIP bundle. Any files referenced by filename
+(JSON schemas, prompt templates) must also be present flat at the ZIP root.
 
-```yaml
-name: my-contract-analyzer
-
-llm:
-  provider: openai
-  model: gpt-5.4-mini
-  # api_key: sk-...          # omit to use OPENAI_API_KEY env var
-
-embedding:                   # shared across all vector and summarize collections
-  provider: openai
-  model: text-embedding-3-small
-
-chunk_collections:
-  - name: document_chunks
-    chunker:
-      type: fixed
-      chunk_size: 512
-      overlap: 64
-
-structured_collections:
-  - name: contract_extraction
-    schema: extraction_schema.json      # filename in ZIP root
-    extractor:
-      type: llm
-      prompt: extraction_prompt.txt     # filename in ZIP root; omit for built-in default
-
-document_collections:
-  - name: document_summary              # one summary vector per document
-    prompt: "Summarize this document in a few sentences."
-    max_tokens: 1024
-
-pipeline:
-  steps:
-    - tool: chunk-embed-upsert
-      collection: document_chunks
-    - tool: extract-structured
-      collection: contract_extraction
-    - tool: document-embed-upsert
-      collection: document_summary
-```
+For the annotated reference bundle, see
+[`api/example_config.yaml`](https://github.com/CogBaseAI/cogbase/blob/main/api/example_config.yaml).
+For a fully working zipped example, see the `_CONFIG_YAML` string in
+[`examples/contract_analyst_demo/demo.py`](https://github.com/CogBaseAI/cogbase/blob/main/examples/contract_analyst_demo/demo.py), and 
+[`examples/contract_compliance_demo/demo.py`](https://github.com/CogBaseAI/cogbase/blob/main/examples/contract_compliance_demo/demo.py).
 
 ---
 
