@@ -165,7 +165,6 @@ async def build_app(
             extractor = LLMExtractor(
                 llm,
                 extraction_model=extraction_model,
-                collection_name=sc_cfg.name,
                 extract_as_list=extract_as_list,
                 list_field=list_field,
                 item_id_field=item_id_field,

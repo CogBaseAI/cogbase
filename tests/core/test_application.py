@@ -35,8 +35,7 @@ class TagRecord(BaseModel):
 
 
 class StubExtractor(ExtractorBase):
-    _collection = "tags"
-    _schema = CollectionSchema(
+    schema = CollectionSchema(
         name="tags",
         description="Extracted document tags: tag identifier, source document, and tag value.",
         primary_fields=["tag_id"],
@@ -46,14 +45,6 @@ class StubExtractor(ExtractorBase):
             "value":  FieldSchema(type=FieldType.STRING),
         },
     )
-
-    @property
-    def collection(self) -> str:
-        return self._collection
-
-    @property
-    def schema(self) -> CollectionSchema:
-        return self._schema
 
     async def _extract_once(self, doc: Document) -> list[TagRecord] | None:
         if not doc.text.strip():

@@ -75,7 +75,6 @@ class LLMExtractor(ExtractorBase):
                            (e.g. ``ContractClauseExtraction``), not a wrapper model.
                            Identity fields (``doc_id``, item id) must NOT appear here;
                            they are injected automatically.
-        collection_name:   Name of the structured store collection to write to.
         extract_as_list:   When ``True`` the LLM is asked to return a JSON object
                            with a single array key; each element becomes one row.
         list_field:        The JSON key that wraps the array in list mode.
@@ -90,7 +89,6 @@ class LLMExtractor(ExtractorBase):
         self,
         llm: LLMBase,
         extraction_model: Type[BaseModel],
-        collection_name: str,
         *,
         extract_as_list: bool = False,
         list_field: str = "items",
@@ -100,7 +98,6 @@ class LLMExtractor(ExtractorBase):
     ) -> None:
         super().__init__(max_retries=max_retries)
         self._llm = llm
-        self._collection_name = collection_name
         self._extraction_model = extraction_model
         self._extract_as_list = extract_as_list
         self._list_field = list_field
@@ -123,10 +120,6 @@ class LLMExtractor(ExtractorBase):
             self._system_prompt = system_prompt or (
                 _DEFAULT_SYSTEM_PROMPT_PREFIX + cls_json_schema_for_llm(extraction_model)
             )
-
-    @property
-    def collection(self) -> str:
-        return self._collection_name
 
     async def _extract_once(self, doc: Document) -> list[BaseModel] | None:
         """Single LLM call; returns ``None`` when the response is unparseable."""

@@ -9,22 +9,14 @@ from cogbase.core.models import Document
 
 
 class ExtractorBase(abc.ABC):
-    """Extract structured records from document text and declare where to store them.
+    """Extract structured records from document text.
 
-    An extractor is responsible for two things:
-    1. Declaring the **collection name** it writes to (``collection`` property).
-    2. Implementing ``_extract_once`` to turn raw text into Pydantic records.
+    Implements ``_extract_once`` to turn raw document text into Pydantic records.
+    The public ``extract`` method adds automatic retries with exponential backoff;
+    a ``None`` return from ``_extract_once`` triggers a retry, an empty list is
+    returned immediately.
 
-    The public ``extract`` method wraps ``_extract_once`` with automatic retries
-    and exponential backoff, so transient LLM JSON failures are handled for all
-    extractors without any per-extractor boilerplate.  A ``None`` return from
-    ``_extract_once`` is treated as a parse failure and triggers a retry; an empty
-    list is treated as a valid (no-data) result and is returned immediately.
-
-    The output type is intentionally open — any ``BaseModel`` subclass works:
-    ``Fact``, ``Entity``, ``Clause``, ``Event``, ``Relationship``, etc.  Domain
-    packs define their own model + extractor pairs and register them in the
-    pipeline without touching core CogBase code.
+    The output type is intentionally open — any ``BaseModel`` subclass works.
 
     Args:
         max_retries: Number of additional attempts after the first failure.
@@ -34,21 +26,12 @@ class ExtractorBase(abc.ABC):
     Example::
 
         class ClauseExtractor(ExtractorBase):
-            @property
-            def collection(self) -> str:
-                return "clauses"
-
-            async def _extract_once(self, doc: Document) -> BaseModel | None:
+            async def _extract_once(self, doc: Document) -> list[BaseModel] | None:
                 ...
     """
 
     def __init__(self, max_retries: int = 2) -> None:
         self._max_retries = max_retries
-
-    @property
-    @abc.abstractmethod
-    def collection(self) -> str:
-        """Name of the structured store collection this extractor writes to."""
 
     @abc.abstractmethod
     async def _extract_once(self, doc: Document) -> list[BaseModel] | None:

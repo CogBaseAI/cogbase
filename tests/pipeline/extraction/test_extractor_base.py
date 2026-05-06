@@ -37,14 +37,6 @@ class StubExtractor(ExtractorBase):
         super().__init__()
         self._calls: list[tuple[str, str]] = []
 
-    @property
-    def collection(self) -> str:
-        return "nouns"
-
-    @property
-    def schema(self) -> CollectionSchema:
-        return _NOUN_SCHEMA
-
     async def _extract_once(self, doc: Document) -> list[BaseModel] | None:
         self._calls.append((doc.text, doc.doc_id))
         return [NounRecord(noun_id=f"{doc.doc_id}-0", doc_id=doc.doc_id, text=doc.text)]
@@ -56,14 +48,6 @@ class NullExtractor(ExtractorBase):
     def __init__(self, max_retries: int = 0) -> None:
         super().__init__(max_retries=max_retries)
         self.call_count = 0
-
-    @property
-    def collection(self) -> str:
-        return "nouns"
-
-    @property
-    def schema(self) -> CollectionSchema:
-        return _NOUN_SCHEMA
 
     async def _extract_once(self, doc: Document) -> None:
         self.call_count += 1
@@ -79,26 +63,14 @@ class TestExtractorBase:
         with pytest.raises(TypeError):
             ExtractorBase()  # type: ignore[abstract]
 
-    def test_concrete_subclass_requires_all_methods(self):
+    def test_concrete_subclass_requires_extract_once(self):
         """Subclass missing _extract_once() must still be abstract."""
 
         class Incomplete(ExtractorBase):
-            @property
-            def collection(self) -> str:
-                return "x"
-
-            @property
-            def schema(self) -> CollectionSchema:
-                return _NOUN_SCHEMA
+            pass
 
         with pytest.raises(TypeError):
             Incomplete()  # type: ignore[abstract]
-
-    def test_stub_extractor_properties(self):
-        e = StubExtractor()
-        assert e.collection == "nouns"
-        assert e.schema.name == "nouns"
-        assert e.schema.primary_fields == ["noun_id"]
 
 
 # ---------------------------------------------------------------------------

@@ -26,9 +26,11 @@ class ExtractTool(SystemTool):
         self,
         extractor: ExtractorBase,
         structured_store: StructuredStoreBase,
+        collection_name: str,
     ) -> None:
         _extractor = extractor
         _structured_store = structured_store
+        _collection_name = collection_name
 
         async def _handler(inputs: dict) -> str:
             doc: Document = inputs["document"]
@@ -38,7 +40,7 @@ class ExtractTool(SystemTool):
             logger.info(
                 "extract-structured.start doc_id=%s collection=%s",
                 doc.doc_id,
-                _extractor.collection,
+                _collection_name,
             )
 
             records = await _extractor.extract(doc)
@@ -46,12 +48,12 @@ class ExtractTool(SystemTool):
                 logger.debug("extract-structured.no-record doc_id=%s", doc.doc_id)
                 return json.dumps({"doc_id": doc.doc_id, "extracted": False})
 
-            await _structured_store.save(_extractor.collection, records)
+            await _structured_store.save(_collection_name, records)
 
             logger.info(
                 "extract-structured.done doc_id=%s collection=%s count=%d",
                 doc.doc_id,
-                _extractor.collection,
+                _collection_name,
                 len(records),
             )
             return json.dumps({"doc_id": doc.doc_id, "extracted": True})

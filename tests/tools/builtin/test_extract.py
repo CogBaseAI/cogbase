@@ -25,7 +25,6 @@ class _Record(BaseModel):
 class StubExtractor:
     def __init__(self, record):
         self._record = record
-        self.collection = "test-col"
 
     async def extract(self, doc: Document):
         return [self._record] if self._record is not None else None
@@ -39,6 +38,14 @@ class StubStructuredStore:
         self.saved.append((collection, records))
 
 
+def _make_tool(record, collection_name: str = "test-col") -> ExtractTool:
+    return ExtractTool(
+        extractor=StubExtractor(record),
+        structured_store=StubStructuredStore(),
+        collection_name=collection_name,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Happy path — record returned
 # ---------------------------------------------------------------------------
@@ -46,8 +53,11 @@ class StubStructuredStore:
 @pytest.mark.asyncio
 async def test_run_returns_extracted_true():
     record = _Record(doc_id="doc-42", value="v")
-    store = StubStructuredStore()
-    tool = ExtractTool(extractor=StubExtractor(record), structured_store=store)
+    tool = ExtractTool(
+        extractor=StubExtractor(record),
+        structured_store=StubStructuredStore(),
+        collection_name="test-col",
+    )
     result = json.loads(await tool.handler({"document": _doc()}))
     assert result == {"doc_id": "doc-42", "extracted": True}
 
@@ -56,7 +66,11 @@ async def test_run_returns_extracted_true():
 async def test_run_saves_to_correct_collection():
     record = _Record(doc_id="doc-42", value="v")
     store = StubStructuredStore()
-    tool = ExtractTool(extractor=StubExtractor(record), structured_store=store)
+    tool = ExtractTool(
+        extractor=StubExtractor(record),
+        structured_store=store,
+        collection_name="test-col",
+    )
     await tool.handler({"document": _doc()})
     assert len(store.saved) == 1
     col, records = store.saved[0]
@@ -71,7 +85,11 @@ async def test_run_saves_to_correct_collection():
 @pytest.mark.asyncio
 async def test_run_returns_extracted_false_when_none():
     store = StubStructuredStore()
-    tool = ExtractTool(extractor=StubExtractor(None), structured_store=store)
+    tool = ExtractTool(
+        extractor=StubExtractor(None),
+        structured_store=store,
+        collection_name="test-col",
+    )
     result = json.loads(await tool.handler({"document": _doc()}))
     assert result == {"doc_id": "doc-42", "extracted": False}
 
@@ -79,7 +97,11 @@ async def test_run_returns_extracted_false_when_none():
 @pytest.mark.asyncio
 async def test_run_does_not_save_when_no_record():
     store = StubStructuredStore()
-    tool = ExtractTool(extractor=StubExtractor(None), structured_store=store)
+    tool = ExtractTool(
+        extractor=StubExtractor(None),
+        structured_store=store,
+        collection_name="test-col",
+    )
     await tool.handler({"document": _doc()})
     assert store.saved == []
 
@@ -93,6 +115,7 @@ async def test_run_wrong_type_raises():
     tool = ExtractTool(
         extractor=StubExtractor(None),
         structured_store=StubStructuredStore(),
+        collection_name="test-col",
     )
     with pytest.raises(TypeError, match="Document"):
         await tool.handler({"document": 123})
@@ -103,6 +126,7 @@ async def test_run_missing_key_raises():
     tool = ExtractTool(
         extractor=StubExtractor(None),
         structured_store=StubStructuredStore(),
+        collection_name="test-col",
     )
     with pytest.raises(KeyError):
         await tool.handler({})
