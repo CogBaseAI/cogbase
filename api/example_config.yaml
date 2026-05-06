@@ -32,44 +32,52 @@ structured_collections:
     schema: contract_record_schema.json         # record schema — includes doc_id and any other identity fields
     primary_fields: [doc_id]
 
-pipeline:
-  parallel: true             # steps run in parallel where possible
-  steps:
-    - tool: chunk-embed-upsert
-      collection: document_chunks
-      chunker:
-        type: fixed          # fixed | langchain
-        chunk_size: 512
-        overlap: 64
+pipelines:
+  - name: contracts
+    steps:
+      - tool: chunk-embed-upsert
+        collection: document_chunks
+        chunker:
+          type: fixed          # fixed | langchain
+          chunk_size: 512
+          overlap: 64
 
-    - tool: extract-structured
-      collection: contract_extraction
-      extractor:
-        type: llm
-        extraction_schema: contract_extraction_schema.json  # what the LLM extracts — no identity fields
-        prompt: extraction_prompt.txt                       # filename in ZIP root; omit to use built-in default
+      - tool: extract-structured
+        collection: contract_extraction
+        extractor:
+          type: llm
+          extraction_schema: contract_extraction_schema.json  # what the LLM extracts — no identity fields
+          prompt: extraction_prompt.txt                       # filename in ZIP root; omit to use built-in default
 
-    - tool: document-embed-upsert
-      collection: document_summary
-      doc_prompt: "Summarize this document in a concise way, focusing on the most important points and avoiding unnecessary detail."
+      - tool: document-embed-upsert
+        collection: document_summary
+        doc_prompt: "Summarize this document in a concise way, focusing on the most important points and avoiding unnecessary detail."
 
-# --- List extraction example (e.g. one record per clause) ---
+# --- Multi-pipeline example (e.g. rules vs. contracts routed by doc_type) ---
 #
-# structured_collections:
-#   - name: contract_clauses
-#     description: "Individual clauses extracted from contracts."
-#     schema: clause_record_schema.json         # includes clause_id and doc_id
-#     primary_fields: [clause_id]
+# pipelines:
+#   - name: rules
+#     match:
+#       metadata:
+#         doc_type: rules
+#     steps:
+#       - tool: chunk-embed-upsert
+#         collection: rule_chunks
 #
-# pipeline:
-#   steps:
-#     - tool: extract-structured
-#       collection: contract_clauses
-#       extractor:
-#         type: llm
-#         extraction_schema: clause_extraction_schema.json  # just the clause fields (no ids)
-#         record_mode: many
-#         response_field: clauses
-#         id_field: clause_id
-#         id_template: "{doc_id}__{index:04d}"
-#         prompt: clause_prompt.txt
+#   - name: contracts
+#     match:
+#       metadata:
+#         doc_type: contract
+#     steps:
+#       - tool: chunk-embed-upsert
+#         collection: contract_chunks
+#       - tool: extract-structured
+#         collection: contract_clauses
+#         extractor:
+#           type: llm
+#           extraction_schema: clause_extraction_schema.json
+#           record_mode: many
+#           response_field: clauses
+#           id_field: clause_id
+#           id_template: "{doc_id}__{index:04d}"
+#           prompt: clause_prompt.txt

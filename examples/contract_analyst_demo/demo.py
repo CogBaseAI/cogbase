@@ -97,20 +97,21 @@ structured_collections:
       Extracted contract facts and entities for exact lookup.
     schema: contracts_record_schema.json
     primary_fields: [doc_id]
-pipeline:
-  steps:
-    - tool: chunk-embed-upsert
-      collection: document_chunks
-      chunker:
-        type: fixed
-        chunk_size: 512
-        overlap: 64
-    - tool: extract-structured
-      collection: {_CONTRACTS_COLLECTION}
-      extractor:
-        type: llm
-        extraction_schema: contracts_extraction_schema.json
-        prompt: contracts_prompt.txt
+pipelines:
+  - name: contracts
+    steps:
+      - tool: chunk-embed-upsert
+        collection: document_chunks
+        chunker:
+          type: fixed
+          chunk_size: 512
+          overlap: 64
+      - tool: extract-structured
+        collection: {_CONTRACTS_COLLECTION}
+        extractor:
+          type: llm
+          extraction_schema: contracts_extraction_schema.json
+          prompt: contracts_prompt.txt
 """
 
 

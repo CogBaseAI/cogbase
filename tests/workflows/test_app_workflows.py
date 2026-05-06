@@ -27,7 +27,7 @@ def _minimal_app(workflow_runners: dict | None = None) -> CogBaseApp:
     llm = MagicMock()
     llm.complete = AsyncMock(return_value={"content": "ok", "tool_calls": None})
     runner = QueryRunner(llm=llm, structured_store=store)
-    return CogBaseApp("test-app", pipeline, runner, workflow_runners=workflow_runners)
+    return CogBaseApp("test-app", [pipeline], runner, workflow_runners=workflow_runners)
 
 
 def _make_wf_runner(
@@ -146,7 +146,7 @@ class TestAfterIngestTrigger:
         qrunner = QueryRunner(llm=llm, structured_store=store)
 
         runner = _make_wf_runner("check", trigger_type="after_ingest")
-        app = CogBaseApp("test-app", pipeline, qrunner, workflow_runners={"check": runner})
+        app = CogBaseApp("test-app", [pipeline], qrunner, workflow_runners={"check": runner})
 
         with patch(self._PATCH, side_effect=self._discard_task) as mock_ct:
             await app.ingest_documents([Document(doc_id="d-fail", text="text")])

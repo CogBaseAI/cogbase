@@ -166,48 +166,45 @@ structured_collections:
       clause complies with company policy, with severity, summary, and redline.
     schema: clause_compliance_findings_schema.json
     primary_fields: [clause_id]
-pipeline:
-  steps:
-    - tool: chunk-embed-upsert
-      collection: rule_chunks
-      chunker:
-        type: fixed
-        chunk_size: 512
-        overlap: 64
-      when:
-        metadata:
-          doc_type: rules
-    - tool: chunk-embed-upsert
-      collection: contract_chunks
-      chunker:
-        type: fixed
-        chunk_size: 512
-        overlap: 64
-      when:
-        metadata:
-          doc_type: contract
-    - tool: extract-structured
-      collection: contract_metadata
-      extractor:
-        type: llm
-        extraction_schema: contract_metadata_extraction_schema.json
-        prompt: contract_metadata_prompt.txt
-      when:
-        metadata:
-          doc_type: contract
-    - tool: extract-structured
-      collection: contract_clauses
-      extractor:
-        type: llm
-        extraction_schema: contract_clause_extraction_schema.json
-        record_mode: many
-        response_field: clauses
-        id_field: clause_id
-        id_template: "{doc_id}__{index:04d}"
-        prompt: contract_clauses_prompt.txt
-      when:
-        metadata:
-          doc_type: contract
+pipelines:
+  - name: rules
+    match:
+      metadata:
+        doc_type: rules
+    steps:
+      - tool: chunk-embed-upsert
+        collection: rule_chunks
+        chunker:
+          type: fixed
+          chunk_size: 512
+          overlap: 64
+  - name: contracts
+    match:
+      metadata:
+        doc_type: contract
+    steps:
+      - tool: chunk-embed-upsert
+        collection: contract_chunks
+        chunker:
+          type: fixed
+          chunk_size: 512
+          overlap: 64
+      - tool: extract-structured
+        collection: contract_metadata
+        extractor:
+          type: llm
+          extraction_schema: contract_metadata_extraction_schema.json
+          prompt: contract_metadata_prompt.txt
+      - tool: extract-structured
+        collection: contract_clauses
+        extractor:
+          type: llm
+          extraction_schema: contract_clause_extraction_schema.json
+          record_mode: many
+          response_field: clauses
+          id_field: clause_id
+          id_template: "{doc_id}__{index:04d}"
+          prompt: contract_clauses_prompt.txt
 workflows:
   - name: check-contract-compliance
     trigger:

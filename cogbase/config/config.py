@@ -76,8 +76,10 @@ class PipelineStepConfig(BaseModel):
 
 
 class PipelineConfig(BaseModel):
-    parallel: bool = True
-    steps: list[PipelineStepConfig] = []
+    name: str
+    match: WhenCondition | None = None
+    parallel: bool = False
+    steps: list[PipelineStepConfig]
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +138,7 @@ class AppConfig(BaseModel):
     vector_store: VectorStoreConfig | None = None
     vector_collections: list[VectorCollectionConfig] = []
     structured_collections: list[StructuredCollectionConfig] = []
-    pipeline: PipelineConfig | None = None
+    pipelines: list[PipelineConfig] = []
     skills: list[str] = []
     workflows: list[WorkflowConfig] = []
 
@@ -144,10 +146,10 @@ class AppConfig(BaseModel):
     def _validate(self) -> "AppConfig":
         if self.vector_collections and self.embedding is None:
             raise ValueError("embedding is required when vector_collections are defined")
-        if self.pipeline:
-            vc_names = {vc.name for vc in self.vector_collections}
-            sc_names = {sc.name for sc in self.structured_collections}
-            for step in self.pipeline.steps:
+        vc_names = {vc.name for vc in self.vector_collections}
+        sc_names = {sc.name for sc in self.structured_collections}
+        for pipeline in self.pipelines:
+            for step in pipeline.steps:
                 if step.tool in ("chunk-embed-upsert", "document-embed-upsert") and step.collection not in vc_names:
                     raise ValueError(
                         f"Pipeline step references unknown vector collection: {step.collection!r}"

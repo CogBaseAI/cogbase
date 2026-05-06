@@ -156,14 +156,15 @@ _FULL_YAML = textwrap.dedent("""\
     vector_collections:
       - name: doc_chunks
         description: Full-text document chunks for detailed retrieval.
-    pipeline:
-      steps:
-        - tool: chunk-embed-upsert
-          collection: doc_chunks
-          chunker:
-            type: fixed
-            chunk_size: 256
-            overlap: 32
+    pipelines:
+      - name: main
+        steps:
+          - tool: chunk-embed-upsert
+            collection: doc_chunks
+            chunker:
+              type: fixed
+              chunk_size: 256
+              overlap: 32
 """)
 
 
@@ -182,7 +183,7 @@ class TestAppConfig:
         assert cfg.name == "full-app"
         assert cfg.embedding is not None
         assert len(cfg.vector_collections) == 1
-        assert cfg.pipeline.steps[0].chunker.chunk_size == 256
+        assert cfg.pipelines[0].steps[0].chunker.chunk_size == 256
 
     def test_from_yaml_with_explicit_store(self):
         yaml_text = textwrap.dedent("""\
@@ -260,16 +261,17 @@ class TestAppConfig:
             vector_collections:
               - name: doc_summary
                 description: One summary vector per document for topic-level search.
-            pipeline:
-              steps:
-                - tool: document-embed-upsert
-                  collection: doc_summary
-                  doc_prompt: "Summarize in one sentence."
+            pipelines:
+              - name: main
+                steps:
+                  - tool: document-embed-upsert
+                    collection: doc_summary
+                    doc_prompt: "Summarize in one sentence."
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        assert cfg.pipeline.steps[0].tool == "document-embed-upsert"
-        assert cfg.pipeline.steps[0].collection == "doc_summary"
-        assert cfg.pipeline.steps[0].doc_prompt == "Summarize in one sentence."
+        assert cfg.pipelines[0].steps[0].tool == "document-embed-upsert"
+        assert cfg.pipelines[0].steps[0].collection == "doc_summary"
+        assert cfg.pipelines[0].steps[0].doc_prompt == "Summarize in one sentence."
 
     def test_vector_collections_without_embedding_raises_for_doc_embed(self):
         yaml_text = textwrap.dedent("""\
@@ -294,10 +296,11 @@ class TestAppConfig:
             vector_collections:
               - name: doc_summary
                 description: One summary vector per document for topic-level search.
-            pipeline:
-              steps:
-                - tool: document-embed-upsert
-                  collection: nonexistent
+            pipelines:
+              - name: main
+                steps:
+                  - tool: document-embed-upsert
+                    collection: nonexistent
         """)
         with pytest.raises(Exception, match="unknown vector collection"):
             AppConfig.from_yaml(yaml_text)
@@ -322,27 +325,27 @@ class TestAppConfig:
                 description: Extracted contract facts and entities for exact lookup.
                 schema: '{_RECORD_SCHEMA}'
                 primary_fields: [doc_id]
-            pipeline:
-              parallel: false
-              steps:
-                - tool: chunk-embed-upsert
-                  collection: document_chunks
-                - tool: extract-structured
-                  collection: contract_extraction
-                  extractor:
-                    type: llm
-                    extraction_schema: '{_EXTRACTION_SCHEMA}'
-                - tool: document-embed-upsert
-                  collection: document_summary
-                  doc_prompt: "Summarize in one sentence."
+            pipelines:
+              - name: main
+                steps:
+                  - tool: chunk-embed-upsert
+                    collection: document_chunks
+                  - tool: extract-structured
+                    collection: contract_extraction
+                    extractor:
+                      type: llm
+                      extraction_schema: '{_EXTRACTION_SCHEMA}'
+                  - tool: document-embed-upsert
+                    collection: document_summary
+                    doc_prompt: "Summarize in one sentence."
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         assert len(cfg.vector_collections) == 2
         assert len(cfg.structured_collections) == 1
-        assert len(cfg.pipeline.steps) == 3
-        tools = [s.tool for s in cfg.pipeline.steps]
+        assert len(cfg.pipelines[0].steps) == 3
+        tools = [s.tool for s in cfg.pipelines[0].steps]
         assert tools == ["chunk-embed-upsert", "extract-structured", "document-embed-upsert"]
-        doc_step = cfg.pipeline.steps[2]
+        doc_step = cfg.pipelines[0].steps[2]
         assert doc_step.doc_prompt == "Summarize in one sentence."
 
     def test_structured_collection_description_is_required(self):
@@ -405,21 +408,22 @@ class TestExtractorConfig:
                 description: Extracted contract clauses with clause type and verbatim text.
                 schema: '{_RECORD_SCHEMA}'
                 primary_fields: [clause_id]
-            pipeline:
-              steps:
-                - tool: extract-structured
-                  collection: contract_clauses
-                  extractor:
-                    type: llm
-                    extraction_schema: '{_EXTRACTION_SCHEMA}'
-                    record_mode: many
-                    response_field: clauses
-                    id_field: clause_id
-                    id_template: "{{doc_id}}__{{index:04d}}"
-                    prompt: contract_clauses_prompt.txt
+            pipelines:
+              - name: main
+                steps:
+                  - tool: extract-structured
+                    collection: contract_clauses
+                    extractor:
+                      type: llm
+                      extraction_schema: '{_EXTRACTION_SCHEMA}'
+                      record_mode: many
+                      response_field: clauses
+                      id_field: clause_id
+                      id_template: "{{doc_id}}__{{index:04d}}"
+                      prompt: contract_clauses_prompt.txt
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        ext = cfg.pipeline.steps[0].extractor
+        ext = cfg.pipelines[0].steps[0].extractor
         assert ext.extraction_schema == _EXTRACTION_SCHEMA
         assert ext.record_mode == "many"
         assert ext.response_field == "clauses"
@@ -439,16 +443,17 @@ class TestExtractorConfig:
                 description: Generic structured records for exact lookup.
                 schema: '{_RECORD_SCHEMA}'
                 primary_fields: [doc_id]
-            pipeline:
-              steps:
-                - tool: extract-structured
-                  collection: records
-                  extractor:
-                    type: llm
-                    extraction_schema: '{_EXTRACTION_SCHEMA}'
+            pipelines:
+              - name: main
+                steps:
+                  - tool: extract-structured
+                    collection: records
+                    extractor:
+                      type: llm
+                      extraction_schema: '{_EXTRACTION_SCHEMA}'
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        ext = cfg.pipeline.steps[0].extractor
+        ext = cfg.pipelines[0].steps[0].extractor
         assert ext.extraction_schema == _EXTRACTION_SCHEMA
         assert ext.record_mode == "one"
         assert ext.response_field == "items"
@@ -475,13 +480,14 @@ class TestWhenCondition:
             vector_collections:
               - name: chunks
                 description: Full-text document chunks for detailed retrieval.
-            pipeline:
-              steps:
-                - tool: chunk-embed-upsert
-                  collection: chunks
+            pipelines:
+              - name: main
+                steps:
+                  - tool: chunk-embed-upsert
+                    collection: chunks
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        assert cfg.pipeline.steps[0].when is None
+        assert cfg.pipelines[0].steps[0].when is None
 
     def test_step_with_when_metadata_parses(self):
         yaml_text = textwrap.dedent("""\
@@ -494,16 +500,17 @@ class TestWhenCondition:
             vector_collections:
               - name: rule_chunks
                 description: Policy and rules chunks for compliance checks.
-            pipeline:
-              steps:
-                - tool: chunk-embed-upsert
-                  collection: rule_chunks
-                  when:
-                    metadata:
-                      doc_type: rules
+            pipelines:
+              - name: main
+                steps:
+                  - tool: chunk-embed-upsert
+                    collection: rule_chunks
+                    when:
+                      metadata:
+                        doc_type: rules
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        step = cfg.pipeline.steps[0]
+        step = cfg.pipelines[0].steps[0]
         assert step.when is not None
         assert step.when.metadata == {"doc_type": "rules"}
 
@@ -521,27 +528,28 @@ class TestWhenCondition:
                 description: Policy and rules chunks for compliance checks.
               - name: contract_chunks
                 description: Contract text chunks for clause-level retrieval.
-            pipeline:
-              steps:
-                - tool: chunk-embed-upsert
-                  collection: rule_chunks
-                  when:
-                    metadata:
-                      doc_type: rules
-                - tool: chunk-embed-upsert
-                  collection: contract_chunks
-                  when:
-                    metadata:
-                      doc_type: contract
+            pipelines:
+              - name: main
+                steps:
+                  - tool: chunk-embed-upsert
+                    collection: rule_chunks
+                    when:
+                      metadata:
+                        doc_type: rules
+                  - tool: chunk-embed-upsert
+                    collection: contract_chunks
+                    when:
+                      metadata:
+                        doc_type: contract
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        assert len(cfg.pipeline.steps) == 2
+        assert len(cfg.pipelines[0].steps) == 2
 
-        rule_step = cfg.pipeline.steps[0]
+        rule_step = cfg.pipelines[0].steps[0]
         assert rule_step.collection == "rule_chunks"
         assert rule_step.when.metadata == {"doc_type": "rules"}
 
-        contract_step = cfg.pipeline.steps[1]
+        contract_step = cfg.pipelines[0].steps[1]
         assert contract_step.collection == "contract_chunks"
         assert contract_step.when.metadata == {"doc_type": "contract"}
 
@@ -556,14 +564,15 @@ class TestWhenCondition:
             vector_collections:
               - name: chunks
                 description: Full-text document chunks for detailed retrieval.
-            pipeline:
-              steps:
-                - tool: chunk-embed-upsert
-                  collection: chunks
-                  when: {}
+            pipelines:
+              - name: main
+                steps:
+                  - tool: chunk-embed-upsert
+                    collection: chunks
+                    when: {}
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        assert cfg.pipeline.steps[0].when.metadata == {}
+        assert cfg.pipelines[0].steps[0].when.metadata == {}
 
 
 # ---------------------------------------------------------------------------

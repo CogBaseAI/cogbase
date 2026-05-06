@@ -123,7 +123,7 @@ async def build_app(
     structured_collections: list[StructuredCollection] = []
     structured_schemas: list[CollectionSchema] = []
     extractors_by_col: dict[str, LLMExtractor] = {}
-    step_by_col: dict[str, Any] = {s.collection: s for s in (config.pipeline.steps if config.pipeline else [])}
+    step_by_col: dict[str, Any] = {s.collection: s for p in config.pipelines for s in p.steps}
     for sc_cfg in config.structured_collections:
         if structured_store is None:
             raise ValueError(
@@ -167,31 +167,33 @@ async def build_app(
             await structured_store.create_collection(sc_schema)
             logger.info("created structured collection=%s, app=%s", sc_schema, config.name)
 
-    # --- Pipeline steps ---
-    raw_steps = config.pipeline.steps if config.pipeline else []
-    pipeline_steps: list[PipelineStep] = []
-    for s in raw_steps:
-        ps = PipelineStep(
-            tool=s.tool,
-            collection=s.collection,
-            when=s.when.metadata if s.when else None,
-        )
-        if s.tool == "chunk-embed-upsert":
-            chunker_cfg = s.chunker or ChunkerConfig()
-            ps.chunker = _build_chunker(chunker_cfg)
-        elif s.tool == "extract-structured":
-            ps.extractor = extractors_by_col.get(s.collection)
-        elif s.tool == "document-embed-upsert":
-            ps.llm = llm
-            ps.doc_prompt = s.doc_prompt or DEFAULT_DOC_PROMPT
-        pipeline_steps.append(ps)
-
-    pipeline = IngestionPipeline(
-        name=config.name,
-        steps=pipeline_steps,
-        vector_collections=vector_collections or None,
-        structured_collections=structured_collections or None,
-    )
+    # --- Pipelines ---
+    pipelines: list[IngestionPipeline] = []
+    for p_cfg in config.pipelines:
+        pipeline_steps: list[PipelineStep] = []
+        for s in p_cfg.steps:
+            ps = PipelineStep(
+                tool=s.tool,
+                collection=s.collection,
+                when=s.when.metadata if s.when else None,
+            )
+            if s.tool == "chunk-embed-upsert":
+                chunker_cfg = s.chunker or ChunkerConfig()
+                ps.chunker = _build_chunker(chunker_cfg)
+            elif s.tool == "extract-structured":
+                ps.extractor = extractors_by_col.get(s.collection)
+            elif s.tool == "document-embed-upsert":
+                ps.llm = llm
+                ps.doc_prompt = s.doc_prompt or DEFAULT_DOC_PROMPT
+            pipeline_steps.append(ps)
+        pipelines.append(IngestionPipeline(
+            name=p_cfg.name or config.name,
+            steps=pipeline_steps,
+            vector_collections=vector_collections or None,
+            structured_collections=structured_collections or None,
+            match=p_cfg.match.metadata if p_cfg.match else None,
+            parallel=p_cfg.parallel,
+        ))
 
     vc_schemas = [vc.schema for vc in vector_collections]
 
@@ -218,4 +220,4 @@ async def build_app(
         )
         logger.info("registered workflow=%s app=%s trigger=%s", wf_cfg.name, config.name, wf_cfg.trigger.type)
 
-    return CogBaseApp(config.name, pipeline, qrunner, document_store=document_store, workflow_runners=workflow_runners)
+    return CogBaseApp(config.name, pipelines, qrunner, document_store=document_store, workflow_runners=workflow_runners)

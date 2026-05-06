@@ -204,14 +204,15 @@ class TestCreateApplication:
                 description: Extracted contract facts and entities for exact lookup.
                 schema: record_schema.json
                 primary_fields: [doc_id]
-            pipeline:
-              steps:
-                - tool: extract-structured
-                  collection: contract_extraction
-                  extractor:
-                    type: llm
-                    extraction_schema: extraction_schema.json
-                    prompt: extraction_prompt.txt
+            pipelines:
+              - name: main
+                steps:
+                  - tool: extract-structured
+                    collection: contract_extraction
+                    extractor:
+                      type: llm
+                      extraction_schema: extraction_schema.json
+                      prompt: extraction_prompt.txt
         """).encode()
         bundle = _make_bundle(
             config_yaml,
@@ -236,8 +237,8 @@ class TestCreateApplication:
         assert resp.status_code == 201
         cfg = captured[0]
         assert cfg.structured_collections[0].schema_ == record_schema_json.decode()
-        assert cfg.pipeline.steps[0].extractor.extraction_schema == extraction_schema_json.decode()
-        assert cfg.pipeline.steps[0].extractor.prompt == prompt_txt.decode()
+        assert cfg.pipelines[0].steps[0].extractor.extraction_schema == extraction_schema_json.decode()
+        assert cfg.pipelines[0].steps[0].extractor.prompt == prompt_txt.decode()
 
 
 # ---------------------------------------------------------------------------

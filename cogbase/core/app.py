@@ -23,11 +23,14 @@ logger = logging.getLogger(__name__)
 
 
 class CogBaseApp:
-    """CogBase application: ingestion pipeline + query runner + workflows.
+    """CogBase application: ingestion pipelines + query runner + workflows.
 
     Args:
         name:             Logical name for the application.
-        pipeline:         Fully configured ``IngestionPipeline`` (ingestion layer).
+        pipelines:        List of configured ``IngestionPipeline`` objects. Each
+                          document is routed to the first pipeline whose ``match``
+                          condition is satisfied; a pipeline with ``match=None``
+                          accepts all documents.
         runner:           Pre-built ``QueryRunner`` (query layer).
         document_store:   Optional document store for raw document persistence.
         workflow_runners: Named ``WorkflowRunner`` instances keyed by workflow name.
@@ -36,17 +39,23 @@ class CogBaseApp:
     def __init__(
         self,
         name: str,
-        pipeline: IngestionPipeline,
+        pipelines: list[IngestionPipeline],
         runner: QueryRunner,
         *,
         document_store: DocumentStoreBase | None = None,
         workflow_runners: dict[str, "WorkflowRunner"] | None = None,
     ) -> None:
         self.name = name
-        self._ingest_pipeline = pipeline
+        self._pipelines = pipelines
         self._runner = runner
         self._document_store = document_store
         self._workflows: dict[str, "WorkflowRunner"] = workflow_runners or {}
+
+    def _find_pipeline(self, doc: Document) -> IngestionPipeline | None:
+        for p in self._pipelines:
+            if p.match is None or all(doc.metadata.get(k) == v for k, v in p.match.items()):
+                return p
+        return None
 
     async def ingest_documents(
         self,
@@ -62,6 +71,8 @@ class CogBaseApp:
         does not abort the others.  Results are returned in the same order as
         *documents*.
         """
+        if concurrency < 1:
+            raise ValueError(f"concurrency must be at least 1, got {concurrency}")
         logger.info("app.ingest_documents.start documents=%d concurrency=%d", len(documents), concurrency)
 
         store_failures: dict[str, Exception] = {}
@@ -77,13 +88,36 @@ class CogBaseApp:
                     logger.exception("app.ingest_documents.store_save_failed doc_id=%s", doc.doc_id)
                     store_failures[doc.doc_id] = exc
 
-        pipeline_results = await self._ingest_pipeline.ingest_documents(docs_to_process, concurrency=concurrency)
-        pipeline_by_id = {r.doc_id: r for r in pipeline_results}
+        pipeline_groups: dict[int, tuple[IngestionPipeline, list[Document]]] = {}
+        unmatched: list[Document] = []
+        for doc in docs_to_process:
+            matched = self._find_pipeline(doc)
+            if matched is None:
+                unmatched.append(doc)
+            else:
+                pid = id(matched)
+                if pid not in pipeline_groups:
+                    pipeline_groups[pid] = (matched, [])
+                pipeline_groups[pid][1].append(doc)
+
+        group_results_lists = await asyncio.gather(
+            *(p.ingest_documents(docs, concurrency=concurrency) for p, docs in pipeline_groups.values())
+        )
+        results_by_id: dict[str, IngestResult] = {}
+        for group_results in group_results_lists:
+            for r in group_results:
+                results_by_id[r.doc_id] = r
+        for doc in unmatched:
+            results_by_id[doc.doc_id] = IngestResult(
+                doc_id=doc.doc_id,
+                success=False,
+                error=ValueError(f"no pipeline matched doc_id={doc.doc_id!r}"),
+            )
 
         results = [
             IngestResult(doc_id=doc.doc_id, success=False, error=store_failures[doc.doc_id])
             if doc.doc_id in store_failures
-            else pipeline_by_id[doc.doc_id]
+            else results_by_id[doc.doc_id]
             for doc in documents
         ]
         failures = sum(1 for r in results if not r.success)
@@ -155,9 +189,9 @@ class CogBaseApp:
     # ------------------------------------------------------------------
 
     @property
-    def ingestion_pipeline(self) -> IngestionPipeline:
-        """The underlying ``IngestionPipeline`` (ingestion layer)."""
-        return self._ingest_pipeline
+    def ingestion_pipelines(self) -> list[IngestionPipeline]:
+        """The ingestion pipelines (ingestion layer)."""
+        return list(self._pipelines)
 
     @property
     def query_runner(self) -> QueryRunner:

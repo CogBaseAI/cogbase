@@ -369,16 +369,17 @@ class TestVectorCollectionConfig:
             vector_collections:
               - name: document_summary
                 description: One summary vector per document for topic-level search.
-            pipeline:
-              steps:
-                - tool: document-embed-upsert
-                  collection: document_summary
-                  doc_prompt: "Summarize in one sentence."
+            pipelines:
+              - name: main
+                steps:
+                  - tool: document-embed-upsert
+                    collection: document_summary
+                    doc_prompt: "Summarize in one sentence."
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         assert len(cfg.vector_collections) == 1
         assert cfg.vector_collections[0].name == "document_summary"
-        step = cfg.pipeline.steps[0]
+        step = cfg.pipelines[0].steps[0]
         assert step.doc_prompt == "Summarize in one sentence."
 
     def test_vector_collection_requires_embedding(self):
@@ -410,10 +411,11 @@ class TestVectorCollectionConfig:
             vector_collections:
               - name: document_summary
                 description: One summary vector per document for topic-level search.
-            pipeline:
-              steps:
-                - tool: document-embed-upsert
-                  collection: nonexistent
+            pipelines:
+              - name: main
+                steps:
+                  - tool: document-embed-upsert
+                    collection: nonexistent
         """)
         with pytest.raises(Exception, match="unknown vector collection"):
             AppConfig.from_yaml(yaml_text)

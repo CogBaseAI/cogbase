@@ -162,7 +162,7 @@ async def _make_app(
         vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None,
         structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None,
     )
-    return CogBaseApp(name, pipeline, runner)
+    return CogBaseApp(name, [pipeline], runner)
 
 
 # ---------------------------------------------------------------------------
@@ -172,10 +172,10 @@ async def _make_app(
 class TestCogBaseAppConstruction:
     async def test_structured_only_builds(self):
         app = await _make_app(_make_llm("{}"), InMemoryStructuredStore())
-        assert app._ingest_pipeline.name == "legal"
-        assert app._ingest_pipeline._structured_by_name
-        assert _CONTRACTS_COLLECTION in app._ingest_pipeline._structured_by_name
-        assert app._ingest_pipeline._vector_by_name == {}
+        assert app._pipelines[0].name == "legal"
+        assert app._pipelines[0]._structured_by_name
+        assert _CONTRACTS_COLLECTION in app._pipelines[0]._structured_by_name
+        assert app._pipelines[0]._vector_by_name == {}
 
     async def test_full_mode_builds(self):
         app = await _make_app(
@@ -185,23 +185,23 @@ class TestCogBaseAppConstruction:
             embedder=StubEmbedding(dim=4),
             chunker=FixedSizeChunker(chunk_size=64, overlap=0),
         )
-        assert app._ingest_pipeline._vector_by_name
-        assert "legal" in app._ingest_pipeline._vector_by_name
+        assert app._pipelines[0]._vector_by_name
+        assert "legal" in app._pipelines[0]._vector_by_name
 
     async def test_pipeline_wired_to_app(self):
         store = InMemoryStructuredStore()
         pipeline = await _make_pipeline(_make_llm("{}"), store)
         runner = QueryRunner(llm=_make_llm("{}"), structured_store=store, structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None)
-        app = CogBaseApp("test", pipeline, runner)
-        assert app._ingest_pipeline is pipeline
+        app = CogBaseApp("test", [pipeline], runner)
+        assert app._pipelines[0] is pipeline
 
     async def test_custom_name(self):
         app = await _make_app(_make_llm("{}"), InMemoryStructuredStore(), name="my-legal-app")
-        assert app._ingest_pipeline.name == "my-legal-app"
+        assert app._pipelines[0].name == "my-legal-app"
 
     async def test_ingestion_pipeline_and_query_runner_accessible(self):
         app = await _make_app(_make_llm("{}"), InMemoryStructuredStore())
-        assert isinstance(app.ingestion_pipeline, IngestionPipeline)
+        assert isinstance(app.ingestion_pipelines[0], IngestionPipeline)
         assert isinstance(app.query_runner, QueryRunner)
 
 
@@ -425,18 +425,18 @@ class TestVectorOnlyMode:
             embedder=vc_embedder,
             vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None,
         )
-        return CogBaseApp("vector-only", pipeline, runner)
+        return CogBaseApp("vector-only", [pipeline], runner)
 
     def _tool_names(self, app: CogBaseApp) -> list[str]:
         return [t["name"] for t in app.query_runner._tool_defs]
 
     async def test_no_structured_collection(self):
         app = await self._make_vector_only_app(_make_llm("{}"))
-        assert app._ingest_pipeline._structured_by_name == {}
+        assert app._pipelines[0]._structured_by_name == {}
 
     async def test_vector_collection_present(self):
         app = await self._make_vector_only_app(_make_llm("{}"))
-        assert app._ingest_pipeline._vector_by_name
+        assert app._pipelines[0]._vector_by_name
 
     async def test_no_structured_lookup_tool(self):
         app = await self._make_vector_only_app(_make_llm("{}"))
@@ -462,7 +462,7 @@ class TestVectorOnlyMode:
             vector_collections=[vc],
         )
         runner = QueryRunner(llm=_make_llm("{}"), vector_store=vector_store, embedder=StubEmbedding(dim=4), vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None)
-        app = CogBaseApp("testapp", pipeline, runner)
+        app = CogBaseApp("testapp", [pipeline], runner)
         results = await app.ingest_documents([Document(doc_id="d-001", text="word " * 20)])
         assert results[0].success is True
         assert results[0].records_extracted == 0

@@ -60,13 +60,14 @@ structured_collections:
     description: Extracted contract facts and entities for exact lookup.
     schema: '{_RECORD_SCHEMA}'
     primary_fields: [doc_id]
-pipeline:
-  steps:
-    - tool: extract-structured
-      collection: contract_extraction
-      extractor:
-        type: llm
-        extraction_schema: '{_EXTRACTION_SCHEMA}'
+pipelines:
+  - name: main
+    steps:
+      - tool: extract-structured
+        collection: contract_extraction
+        extractor:
+          type: llm
+          extraction_schema: '{_EXTRACTION_SCHEMA}'
 """
 
 _FULL_CONFIG_YAML = f"""\
@@ -85,20 +86,20 @@ structured_collections:
     description: Extracted contract facts and entities for exact lookup.
     schema: '{_RECORD_SCHEMA}'
     primary_fields: [doc_id]
-pipeline:
-  parallel: true
-  steps:
-    - tool: chunk-embed-upsert
-      collection: document_chunks
-      chunker:
-        type: fixed
-        chunk_size: 512
-        overlap: 64
-    - tool: extract-structured
-      collection: contract_extraction
-      extractor:
-        type: llm
-        extraction_schema: '{_EXTRACTION_SCHEMA}'
+pipelines:
+  - name: main
+    steps:
+      - tool: chunk-embed-upsert
+        collection: document_chunks
+        chunker:
+          type: fixed
+          chunk_size: 512
+          overlap: 64
+      - tool: extract-structured
+        collection: contract_extraction
+        extractor:
+          type: llm
+          extraction_schema: '{_EXTRACTION_SCHEMA}'
 """
 
 
@@ -131,7 +132,7 @@ class TestBuildAppStructuredStoreResolution:
             system=SystemResources(structured_store=system_store),
             app_status="initializing",
         )
-        structured_store = next(iter(app._ingest_pipeline._structured_by_name.values())).store
+        structured_store = next(iter(app._pipelines[0]._structured_by_name.values())).store
         assert structured_store is system_store
 
     @patch("api.factory._build_llm")
@@ -147,7 +148,7 @@ class TestBuildAppStructuredStoreResolution:
             system=SystemResources(structured_store=system_store),
             app_status="initializing",
         )
-        structured_store = next(iter(app._ingest_pipeline._structured_by_name.values())).store
+        structured_store = next(iter(app._pipelines[0]._structured_by_name.values())).store
         assert isinstance(structured_store, SQLiteStructuredStore)
 
 
@@ -204,7 +205,7 @@ class TestBuildAppVectorStoreResolution:
             system=SystemResources(structured_store=system_store),
             app_status="initializing",
         )
-        assert app._ingest_pipeline._vector_by_name == {}
+        assert app._pipelines[0]._vector_by_name == {}
 
     @patch("api.factory._build_llm")
     async def test_system_vector_store_used_when_chunk_step_present(self, mock_build_llm):
@@ -221,7 +222,7 @@ class TestBuildAppVectorStoreResolution:
                 app_status="initializing",
             )
 
-        assert app._ingest_pipeline._vector_by_name
+        assert app._pipelines[0]._vector_by_name
 
     @patch("api.factory._build_llm")
     async def test_vector_collection_name_matches_config(self, mock_build_llm):
@@ -239,7 +240,7 @@ class TestBuildAppVectorStoreResolution:
                 app_status="initializing",
             )
 
-        assert "document_chunks" in app._ingest_pipeline._vector_by_name
+        assert "document_chunks" in app._pipelines[0]._vector_by_name
 
 
 # ---------------------------------------------------------------------------
@@ -259,11 +260,12 @@ embedding:
 vector_collections:
   - name: document_summary
     description: One summary vector per document for topic-level search.
-pipeline:
-  steps:
-    - tool: document-embed-upsert
-      collection: document_summary
-      doc_prompt: "Summarize in one sentence."
+pipelines:
+  - name: main
+    steps:
+      - tool: document-embed-upsert
+        collection: document_summary
+        doc_prompt: "Summarize in one sentence."
 """
 
 _THREE_STEP_CONFIG_YAML = f"""\
@@ -284,23 +286,23 @@ structured_collections:
     description: Extracted contract facts and entities for exact lookup.
     schema: '{_RECORD_SCHEMA}'
     primary_fields: [doc_id]
-pipeline:
-  parallel: false
-  steps:
-    - tool: chunk-embed-upsert
-      collection: document_chunks
-      chunker:
-        type: fixed
-        chunk_size: 512
-        overlap: 64
-    - tool: extract-structured
-      collection: contract_extraction
-      extractor:
-        type: llm
-        extraction_schema: '{_EXTRACTION_SCHEMA}'
-    - tool: document-embed-upsert
-      collection: document_summary
-      doc_prompt: "Summarize in one sentence."
+pipelines:
+  - name: main
+    steps:
+      - tool: chunk-embed-upsert
+        collection: document_chunks
+        chunker:
+          type: fixed
+          chunk_size: 512
+          overlap: 64
+      - tool: extract-structured
+        collection: contract_extraction
+        extractor:
+          type: llm
+          extraction_schema: '{_EXTRACTION_SCHEMA}'
+      - tool: document-embed-upsert
+        collection: document_summary
+        doc_prompt: "Summarize in one sentence."
 """
 
 
@@ -319,7 +321,7 @@ class TestBuildAppDocumentCollection:
                 app_status="initializing",
             )
 
-        assert "document_summary" in app._ingest_pipeline._vector_by_name
+        assert "document_summary" in app._pipelines[0]._vector_by_name
 
     @patch("api.factory._build_llm")
     async def test_document_step_prompt(self, mock_build_llm):
@@ -335,9 +337,9 @@ class TestBuildAppDocumentCollection:
                 app_status="initializing",
             )
 
-        vc = app._ingest_pipeline._vector_by_name["document_summary"]
+        vc = app._pipelines[0]._vector_by_name["document_summary"]
         assert vc.name == "document_summary"
-        step = next(s for s in app._ingest_pipeline._steps if s.collection == "document_summary")
+        step = next(s for s in app._pipelines[0]._steps if s.collection == "document_summary")
         assert step.doc_prompt == "Summarize in one sentence."
 
     @patch("api.factory._build_llm")
@@ -355,7 +357,7 @@ class TestBuildAppDocumentCollection:
                 app_status="initializing",
             )
 
-        stores = {vc.store for vc in app._ingest_pipeline._vector_by_name.values()}
+        stores = {vc.store for vc in app._pipelines[0]._vector_by_name.values()}
         assert len(stores) == 1, "all vector collections should share the same store"
 
     @patch("api.factory._build_llm")
@@ -373,9 +375,9 @@ class TestBuildAppDocumentCollection:
                 app_status="initializing",
             )
 
-        assert app._ingest_pipeline._vector_by_name
-        assert app._ingest_pipeline._structured_by_name
-        assert "document_summary" in app._ingest_pipeline._vector_by_name
+        assert app._pipelines[0]._vector_by_name
+        assert app._pipelines[0]._structured_by_name
+        assert "document_summary" in app._pipelines[0]._vector_by_name
 
     @patch("api.factory._build_llm")
     async def test_vector_collection_names_includes_both(self, mock_build_llm):
@@ -392,8 +394,8 @@ class TestBuildAppDocumentCollection:
                 app_status="initializing",
             )
 
-        assert "document_chunks" in app._ingest_pipeline._vector_by_name
-        assert "document_summary" in app._ingest_pipeline._vector_by_name
+        assert "document_chunks" in app._pipelines[0]._vector_by_name
+        assert "document_summary" in app._pipelines[0]._vector_by_name
 
     @patch("api.factory._build_llm")
     @patch("api.factory._build_embedder")
@@ -420,16 +422,17 @@ structured_collections:
     description: Extracted contract clauses with clause type and verbatim text.
     schema: '{_LIST_RECORD_SCHEMA}'
     primary_fields: [clause_id]
-pipeline:
-  steps:
-    - tool: extract-structured
-      collection: contract_clauses
-      extractor:
-        type: llm
-        extraction_schema: '{_LIST_EXTRACTION_SCHEMA}'
-        record_mode: many
-        response_field: clauses
-        id_field: clause_id
+pipelines:
+  - name: main
+    steps:
+      - tool: extract-structured
+        collection: contract_clauses
+        extractor:
+          type: llm
+          extraction_schema: '{_LIST_EXTRACTION_SCHEMA}'
+          record_mode: many
+          response_field: clauses
+          id_field: clause_id
 """
 
 _LIST_EXTRACTOR_WITH_PROMPT_CONFIG_YAML = f"""\
@@ -442,17 +445,18 @@ structured_collections:
     description: Extracted contract clauses with clause type and verbatim text.
     schema: '{_LIST_RECORD_SCHEMA}'
     primary_fields: [clause_id]
-pipeline:
-  steps:
-    - tool: extract-structured
-      collection: contract_clauses
-      extractor:
-        type: llm
-        extraction_schema: '{_LIST_EXTRACTION_SCHEMA}'
-        record_mode: many
-        response_field: clauses
-        id_field: clause_id
-        prompt: "Extract all clauses.\\n\\n"
+pipelines:
+  - name: main
+    steps:
+      - tool: extract-structured
+        collection: contract_clauses
+        extractor:
+          type: llm
+          extraction_schema: '{_LIST_EXTRACTION_SCHEMA}'
+          record_mode: many
+          response_field: clauses
+          id_field: clause_id
+          prompt: "Extract all clauses.\\n\\n"
 """
 
 _SINGLE_EXTRACTOR_WITH_PROMPT_CONFIG_YAML = f"""\
@@ -465,20 +469,21 @@ structured_collections:
     description: Extracted contract facts and entities for exact lookup.
     schema: '{_RECORD_SCHEMA}'
     primary_fields: [doc_id]
-pipeline:
-  steps:
-    - tool: extract-structured
-      collection: contract_metadata
-      extractor:
-        type: llm
-        extraction_schema: '{_EXTRACTION_SCHEMA}'
-        prompt: "Extract metadata.\\n\\n"
+pipelines:
+  - name: main
+    steps:
+      - tool: extract-structured
+        collection: contract_metadata
+        extractor:
+          type: llm
+          extraction_schema: '{_EXTRACTION_SCHEMA}'
+          prompt: "Extract metadata.\\n\\n"
 """
 
 
 class TestBuildAppListExtractor:
     def _get_extractor(self, app, collection: str):
-        return next(s for s in app._ingest_pipeline._steps if s.collection == collection).extractor
+        return next(s for s in app._pipelines[0]._steps if s.collection == collection).extractor
 
     @patch("api.factory._build_llm")
     async def test_list_extractor_record_mode_many(self, mock_build_llm):

@@ -282,6 +282,7 @@ async def test_extract_succeeds_on_retry_after_bad_json(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
+        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA),
         record_model=_build_record_model(ContractExtraction),
         max_retries=2,
     )
@@ -299,6 +300,7 @@ async def test_extract_returns_none_after_all_retries_exhausted(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
+        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA),
         record_model=_build_record_model(ContractExtraction),
         max_retries=2,
     )
@@ -316,6 +318,7 @@ async def test_extract_no_retry_on_success(monkeypatch):
     extractor = LLMExtractor(
         _make_llm(_full_payload()),
         extraction_model=ContractExtraction,
+        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA),
         record_model=_build_record_model(ContractExtraction),
         max_retries=2,
     )
@@ -334,6 +337,7 @@ async def test_extract_retry_uses_exponential_backoff(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
+        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA),
         record_model=_build_record_model(ContractExtraction),
         max_retries=2,
     )
@@ -352,6 +356,7 @@ async def test_extract_max_retries_zero_no_sleep(monkeypatch):
     extractor = LLMExtractor(
         _make_llm("bad json"),
         extraction_model=ContractExtraction,
+        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA),
         record_model=_build_record_model(ContractExtraction),
         max_retries=0,
     )

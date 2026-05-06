@@ -127,16 +127,19 @@ class IngestionPipeline:
     - ``"extract-structured"``    → :class:`StructuredCollection`
     - ``"document-embed-upsert"`` → :class:`VectorCollection` (optional ``step.llm``)
 
-    Steps run in declaration order.
-
     Args:
         name:                   Logical name for this pipeline.
         steps:                  Ordered list of :class:`PipelineStep` objects.
-                                When omitted, steps are auto-generated for
-                                structured collections only.
         vector_collections:     Vector collections available to steps.
         structured_collections: Structured collections available to steps.
+        match:                  Metadata filter — this pipeline only processes
+                                documents whose metadata contains all specified
+                                key/value pairs.  ``None`` matches all documents.
+        parallel:               When ``True``, all steps run concurrently via
+                                ``asyncio.gather`` instead of sequentially.
     """
+
+    match: dict[str, str] | None = None
 
     def __init__(
         self,
@@ -144,8 +147,12 @@ class IngestionPipeline:
         steps: list[PipelineStep] | None = None,
         vector_collections: list[VectorCollection] | None = None,
         structured_collections: list[StructuredCollection] | None = None,
+        match: dict[str, str] | None = None,
+        parallel: bool = False,
     ) -> None:
         self.name = name
+        self.match = match
+        self.parallel = parallel
 
         _vcs: list[VectorCollection] = list(vector_collections or [])
         _scs: list[StructuredCollection] = list(structured_collections or [])
@@ -155,30 +162,40 @@ class IngestionPipeline:
 
         self._steps = list(steps or [])
 
+    async def _run_step(self, doc: Document, step: PipelineStep) -> int:
+        """Dispatch one step and return the number of records extracted (0 for non-structured steps)."""
+        if step.tool == "chunk-embed-upsert":
+            return await self._run_chunk_embed_upsert(doc, step)
+        if step.tool == "extract-structured":
+            return await self._run_extract_structured(doc, step)
+        if step.tool == "document-embed-upsert":
+            await self._run_document_embed_upsert(doc, step)
+            return 0
+        logger.warning(
+            "ingestion_pipeline.ingest.unknown_tool name=%s tool=%s", self.name, step.tool
+        )
+        return 0
+
     async def _ingest(self, doc: Document) -> int:
-        """Ingest a document by executing each step in declaration order.
+        """Ingest a document by executing each step, sequentially or in parallel.
 
         Returns:
             Number of structured records saved (sum across all structured steps).
         """
         logger.info("ingestion_pipeline.ingest.start name=%s doc_id=%s", self.name, doc.doc_id)
-        records_extracted = 0
 
-        for step in self._steps:
-            if step.when and not all(
-                doc.metadata.get(k) == v for k, v in step.when.items()
-            ):
-                continue
-            if step.tool == "chunk-embed-upsert":
-                records_extracted += await self._run_chunk_embed_upsert(doc, step)
-            elif step.tool == "extract-structured":
-                records_extracted += await self._run_extract_structured(doc, step)
-            elif step.tool == "document-embed-upsert":
-                await self._run_document_embed_upsert(doc, step)
-            else:
-                logger.warning(
-                    "ingestion_pipeline.ingest.unknown_tool name=%s tool=%s", self.name, step.tool
-                )
+        active_steps = [
+            step for step in self._steps
+            if not (step.when and not all(doc.metadata.get(k) == v for k, v in step.when.items()))
+        ]
+
+        if self.parallel:
+            counts = await asyncio.gather(*[self._run_step(doc, step) for step in active_steps])
+            records_extracted = sum(counts)
+        else:
+            records_extracted = 0
+            for step in active_steps:
+                records_extracted += await self._run_step(doc, step)
 
         logger.info(
             "ingestion_pipeline.ingest.done name=%s doc_id=%s records_extracted=%d",
