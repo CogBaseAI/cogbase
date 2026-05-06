@@ -35,9 +35,10 @@ class ExtractorConfig(BaseModel):
     type: Literal["llm"] = "llm"
     extraction_schema: str
     prompt: str | None = None
-    extract_as_list: bool = False
-    list_field: str = "items"
-    item_id_field: str = "item_id"
+    record_mode: Literal["one", "many"] = "one"
+    response_field: str = "items"
+    id_field: str | None = None
+    id_template: str | None = None
 
 
 class StructuredCollectionConfig(BaseModel):

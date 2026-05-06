@@ -68,7 +68,8 @@ pipeline:
 #       extractor:
 #         type: llm
 #         extraction_schema: clause_extraction_schema.json  # just the clause fields (no ids)
-#         extract_as_list: true
-#         list_field: clauses
-#         item_id_field: clause_id
+#         record_mode: many
+#         response_field: clauses
+#         id_field: clause_id
+#         id_template: "{doc_id}__{index:04d}"
 #         prompt: clause_prompt.txt

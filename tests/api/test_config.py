@@ -371,19 +371,27 @@ class TestExtractorConfig:
         assert cfg.type == "llm"
         assert cfg.extraction_schema == self._EXTRACTION_SCHEMA
         assert cfg.prompt is None
-        assert cfg.extract_as_list is False
-        assert cfg.list_field == "items"
-        assert cfg.item_id_field == "item_id"
+        assert cfg.record_mode == "one"
+        assert cfg.response_field == "items"
+        assert cfg.id_field is None
+        assert cfg.id_template is None
 
-    def test_custom_item_id_field(self):
-        cfg = ExtractorConfig(extraction_schema=self._EXTRACTION_SCHEMA, item_id_field="clause_id")
-        assert cfg.item_id_field == "clause_id"
+    def test_custom_id_field(self):
+        cfg = ExtractorConfig(extraction_schema=self._EXTRACTION_SCHEMA, id_field="clause_id")
+        assert cfg.id_field == "clause_id"
 
-    def test_extract_as_list_true(self):
-        cfg = ExtractorConfig(extraction_schema=self._EXTRACTION_SCHEMA, extract_as_list=True, list_field="clauses", item_id_field="clause_id")
-        assert cfg.extract_as_list is True
-        assert cfg.list_field == "clauses"
-        assert cfg.item_id_field == "clause_id"
+    def test_record_mode_many(self):
+        cfg = ExtractorConfig(
+            extraction_schema=self._EXTRACTION_SCHEMA,
+            record_mode="many",
+            response_field="clauses",
+            id_field="clause_id",
+            id_template="{doc_id}__{index:04d}",
+        )
+        assert cfg.record_mode == "many"
+        assert cfg.response_field == "clauses"
+        assert cfg.id_field == "clause_id"
+        assert cfg.id_template == "{doc_id}__{index:04d}"
 
     def test_yaml_list_extractor_parses(self):
         _EXTRACTION_SCHEMA = '{"type":"object","properties":{"text":{"type":"string"}}}'
@@ -404,17 +412,19 @@ class TestExtractorConfig:
                   extractor:
                     type: llm
                     extraction_schema: '{_EXTRACTION_SCHEMA}'
-                    extract_as_list: true
-                    list_field: clauses
-                    item_id_field: clause_id
+                    record_mode: many
+                    response_field: clauses
+                    id_field: clause_id
+                    id_template: "{{doc_id}}__{{index:04d}}"
                     prompt: contract_clauses_prompt.txt
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         ext = cfg.pipeline.steps[0].extractor
         assert ext.extraction_schema == _EXTRACTION_SCHEMA
-        assert ext.extract_as_list is True
-        assert ext.list_field == "clauses"
-        assert ext.item_id_field == "clause_id"
+        assert ext.record_mode == "many"
+        assert ext.response_field == "clauses"
+        assert ext.id_field == "clause_id"
+        assert ext.id_template == "{doc_id}__{index:04d}"
         assert ext.prompt == "contract_clauses_prompt.txt"
 
     def test_yaml_extractor_parses(self):
@@ -440,9 +450,9 @@ class TestExtractorConfig:
         cfg = AppConfig.from_yaml(yaml_text)
         ext = cfg.pipeline.steps[0].extractor
         assert ext.extraction_schema == _EXTRACTION_SCHEMA
-        assert ext.extract_as_list is False
-        assert ext.list_field == "items"
-        assert ext.item_id_field == "item_id"
+        assert ext.record_mode == "one"
+        assert ext.response_field == "items"
+        assert ext.id_field is None
 
 
 # ---------------------------------------------------------------------------

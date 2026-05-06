@@ -200,9 +200,10 @@ pipeline:
       extractor:
         type: llm
         extraction_schema: contract_clause_extraction_schema.json
-        extract_as_list: true
-        list_field: clauses
-        item_id_field: clause_id
+        record_mode: many
+        response_field: clauses
+        id_field: clause_id
+        id_template: "{doc_id}__{index:04d}"
         prompt: contract_clauses_prompt.txt
       when:
         metadata:

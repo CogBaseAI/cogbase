@@ -106,6 +106,7 @@ def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
+        record_model=_build_record_model(ContractExtraction),
     )
 
 

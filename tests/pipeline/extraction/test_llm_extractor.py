@@ -9,7 +9,7 @@ import pytest
 
 from cogbase.llms import LLMBase
 from cogbase.core.models import Document
-from cogbase.pipeline.extraction.llm import LLMExtractor
+from cogbase.pipeline.extraction.llm import LLMExtractor, _build_record_model, _build_list_record_model
 from examples.contract_analyst_demo.schema import (
     ContractExtraction,
 )
@@ -31,6 +31,7 @@ def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
+        record_model=_build_record_model(ContractExtraction),
     )
 
 
@@ -275,7 +276,7 @@ async def test_extract_succeeds_on_retry_after_bad_json(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-
+        record_model=_build_record_model(ContractExtraction),
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-1", text="contract text"))
@@ -292,7 +293,7 @@ async def test_extract_returns_none_after_all_retries_exhausted(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-
+        record_model=_build_record_model(ContractExtraction),
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-2", text="contract text"))
@@ -309,7 +310,7 @@ async def test_extract_no_retry_on_success(monkeypatch):
     extractor = LLMExtractor(
         _make_llm(_full_payload()),
         extraction_model=ContractExtraction,
-
+        record_model=_build_record_model(ContractExtraction),
         max_retries=2,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-3", text="contract text"))
@@ -327,7 +328,7 @@ async def test_extract_retry_uses_exponential_backoff(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-
+        record_model=_build_record_model(ContractExtraction),
         max_retries=2,
     )
     await extractor.extract(Document(doc_id="doc-retry-4", text="contract text"))
@@ -345,7 +346,7 @@ async def test_extract_max_retries_zero_no_sleep(monkeypatch):
     extractor = LLMExtractor(
         _make_llm("bad json"),
         extraction_model=ContractExtraction,
-
+        record_model=_build_record_model(ContractExtraction),
         max_retries=0,
     )
     result = await extractor.extract(Document(doc_id="doc-retry-5", text="contract text"))
@@ -368,15 +369,19 @@ class _Clause(BaseModel):
 
 def _make_list_extractor(
     llm: MagicMock,
-    list_field: str = "clauses",
+    response_field: str = "clauses",
     item_id_field: str = "item_id",
 ) -> LLMExtractor:
     return LLMExtractor(
         llm,
         extraction_model=_Clause,
-        extract_as_list=True,
-        list_field=list_field,
-        item_id_field=item_id_field,
+        record_model=_build_list_record_model(_Clause, item_id_field),
+        record_mode="many",
+        response_field=response_field,
+        injected_fields={
+            "doc_id": lambda doc, item, index: doc.doc_id,
+            item_id_field: lambda doc, item, index: f"{doc.doc_id}__{index:04d}",
+        },
     )
 
 
@@ -463,9 +468,9 @@ async def test_list_extract_empty_array_returns_empty_list():
 
 
 @pytest.mark.asyncio
-async def test_list_extract_custom_list_field():
+async def test_list_extract_custom_response_field():
     payload = json.dumps({"items": [{"clause_type": "ip", "text": "All IP is retained by licensor."}]})
-    extractor = _make_list_extractor(_make_llm(payload), list_field="items")
+    extractor = _make_list_extractor(_make_llm(payload), response_field="items")
     result = await extractor.extract(Document(doc_id="doc-L6", text="contract text"))
 
     assert len(result) == 1
@@ -508,8 +513,13 @@ async def test_list_extract_retry_on_bad_json(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=_Clause,
-        extract_as_list=True,
-        list_field="clauses",
+        record_model=_build_list_record_model(_Clause, "item_id"),
+        record_mode="many",
+        response_field="clauses",
+        injected_fields={
+            "doc_id": lambda doc, item, index: doc.doc_id,
+            "item_id": lambda doc, item, index: f"{doc.doc_id}__{index:04d}",
+        },
         max_retries=1,
     )
     result = await extractor.extract(Document(doc_id="doc-LR1", text="contract text"))
