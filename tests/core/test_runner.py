@@ -322,7 +322,6 @@ async def test_run_retrieval_vector_search_populates_chunks():
         async def delete(self, collection, doc_id): pass
         async def delete_collection(self, collection): pass
         async def create_collection(self, schema): pass
-        async def list_collections(self): return []
 
     llm = _make_llm(
         _tool_result("vector_search", {"query": "relevant", "collection": "docs"}),
@@ -362,7 +361,6 @@ def test_tool_defs_vector_only():
         async def delete(self, c, d): pass
         async def delete_collection(self, c): pass
         async def create_collection(self, s): pass
-        async def list_collections(self): return []
 
     class _E(EmbeddingBase):
         async def embed(self, texts): return [[0.0]]

@@ -943,31 +943,50 @@ class TestQueryApplicationStream:
 # ---------------------------------------------------------------------------
 
 
-def _mock_collections_app(
+def _make_collections_bundle(
     structured_collections: list[str] | None = None,
     vector_collections: list[str] | None = None,
-    structured_records: list[dict] | None = None,
-) -> MagicMock:
-    """Build a mock CogBaseApp for collection endpoint tests."""
+) -> bytes:
+    lines = ["name: my-contract-analyzer", "llm:", "  provider: openai", "  model: gpt-4o-mini"]
+    if vector_collections:
+        lines.append("vector_collections:")
+        for vc in vector_collections:
+            lines += [f"  - name: {vc}", f"    description: {vc} chunks", "    dimensions: 1536"]
+    if structured_collections:
+        lines.append("structured_collections:")
+        for sc in structured_collections:
+            lines += [
+                f"  - name: {sc}",
+                f"    description: {sc} records",
+                "    schema: '{}'",
+                "    primary_fields: [doc_id]",
+            ]
+    return _make_bundle("\n".join(lines).encode())
+
+
+async def _create_collections_app(
+    client,
+    mock_app: MagicMock,
+    structured_collections: list[str] | None = None,
+    vector_collections: list[str] | None = None,
+) -> None:
+    bundle = _make_collections_bundle(structured_collections, vector_collections)
+    with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=mock_app):
+        resp = await client.post(
+            "/applications",
+            files={"bundle": ("bundle.zip", bundle, "application/zip")},
+        )
+    assert resp.status_code == 201
+
+
+def _mock_query_store_app(structured_records: list[dict] | None = None) -> MagicMock:
+    """Build a mock CogBaseApp with a structured store for query_collection tests."""
     inst = MagicMock()
     runner = MagicMock()
     inst.query_runner = runner
-
-    if structured_collections is not None:
-        store = MagicMock()
-        store.list_collections = AsyncMock(return_value=structured_collections)
-        store.query = AsyncMock(return_value=structured_records or [])
-        runner.structured_store = store
-    else:
-        runner.structured_store = None
-
-    if vector_collections is not None:
-        store = MagicMock()
-        store.list_collections = AsyncMock(return_value=vector_collections)
-        runner.vector_store = store
-    else:
-        runner.vector_store = None
-
+    store = MagicMock()
+    store.query = AsyncMock(return_value=structured_records or [])
+    runner.structured_store = store
     return inst
 
 
@@ -979,11 +998,11 @@ def _mock_collections_app(
 class TestListCollections:
     @pytest.mark.asyncio
     async def test_returns_structured_and_vector(self, client):
-        mock_app = _mock_collections_app(
+        await _create_collections_app(
+            client, MagicMock(),
             structured_collections=["contracts", "parties"],
             vector_collections=["doc_chunks"],
         )
-        await _create_app(client, mock_app)
 
         resp = await client.get("/applications/my-contract-analyzer/collections")
 
@@ -993,9 +1012,8 @@ class TestListCollections:
         assert body["vector"] == ["doc_chunks"]
 
     @pytest.mark.asyncio
-    async def test_no_structured_store_returns_empty_structured(self, client):
-        mock_app = _mock_collections_app(vector_collections=["doc_chunks"])
-        await _create_app(client, mock_app)
+    async def test_no_structured_collections_returns_empty_structured(self, client):
+        await _create_collections_app(client, MagicMock(), vector_collections=["doc_chunks"])
 
         resp = await client.get("/applications/my-contract-analyzer/collections")
 
@@ -1005,9 +1023,8 @@ class TestListCollections:
         assert body["vector"] == ["doc_chunks"]
 
     @pytest.mark.asyncio
-    async def test_no_vector_store_returns_empty_vector(self, client):
-        mock_app = _mock_collections_app(structured_collections=["contracts"])
-        await _create_app(client, mock_app)
+    async def test_no_vector_collections_returns_empty_vector(self, client):
+        await _create_collections_app(client, MagicMock(), structured_collections=["contracts"])
 
         resp = await client.get("/applications/my-contract-analyzer/collections")
 
@@ -1017,9 +1034,8 @@ class TestListCollections:
         assert body["vector"] == []
 
     @pytest.mark.asyncio
-    async def test_no_stores_returns_empty_lists(self, client):
-        mock_app = _mock_collections_app()
-        await _create_app(client, mock_app)
+    async def test_no_collections_returns_empty_lists(self, client):
+        await _create_app(client, MagicMock())
 
         resp = await client.get("/applications/my-contract-analyzer/collections")
 
@@ -1043,11 +1059,8 @@ class TestQueryCollection:
     @pytest.mark.asyncio
     async def test_returns_records_for_structured_collection(self, client):
         records = [{"type": "NDA", "doc_id": "c-001"}, {"type": "NDA", "doc_id": "c-002"}]
-        mock_app = _mock_collections_app(
-            structured_collections=["contracts"],
-            structured_records=records,
-        )
-        await _create_app(client, mock_app)
+        mock_app = _mock_query_store_app(structured_records=records)
+        await _create_collections_app(client, mock_app, structured_collections=["contracts"])
 
         resp = await client.post(
             "/applications/my-contract-analyzer/collections/contracts/query",
@@ -1062,11 +1075,8 @@ class TestQueryCollection:
 
     @pytest.mark.asyncio
     async def test_passes_filters_to_store(self, client):
-        mock_app = _mock_collections_app(
-            structured_collections=["contracts"],
-            structured_records=[{"type": "NDA", "doc_id": "c-001"}],
-        )
-        await _create_app(client, mock_app)
+        mock_app = _mock_query_store_app(structured_records=[{"type": "NDA", "doc_id": "c-001"}])
+        await _create_collections_app(client, mock_app, structured_collections=["contracts"])
 
         resp = await client.post(
             "/applications/my-contract-analyzer/collections/contracts/query",
@@ -1082,11 +1092,8 @@ class TestQueryCollection:
 
     @pytest.mark.asyncio
     async def test_passes_fields_to_store(self, client):
-        mock_app = _mock_collections_app(
-            structured_collections=["contracts"],
-            structured_records=[{"type": "NDA"}],
-        )
-        await _create_app(client, mock_app)
+        mock_app = _mock_query_store_app(structured_records=[{"type": "NDA"}])
+        await _create_collections_app(client, mock_app, structured_collections=["contracts"])
 
         resp = await client.post(
             "/applications/my-contract-analyzer/collections/contracts/query",
@@ -1099,8 +1106,8 @@ class TestQueryCollection:
 
     @pytest.mark.asyncio
     async def test_empty_filters_passes_none_to_store(self, client):
-        mock_app = _mock_collections_app(structured_collections=["contracts"])
-        await _create_app(client, mock_app)
+        mock_app = _mock_query_store_app()
+        await _create_collections_app(client, mock_app, structured_collections=["contracts"])
 
         resp = await client.post(
             "/applications/my-contract-analyzer/collections/contracts/query",
@@ -1114,8 +1121,7 @@ class TestQueryCollection:
 
     @pytest.mark.asyncio
     async def test_vector_collection_returns_400(self, client):
-        mock_app = _mock_collections_app(vector_collections=["doc_chunks"])
-        await _create_app(client, mock_app)
+        await _create_collections_app(client, MagicMock(), vector_collections=["doc_chunks"])
 
         resp = await client.post(
             "/applications/my-contract-analyzer/collections/doc_chunks/query",
@@ -1127,11 +1133,11 @@ class TestQueryCollection:
 
     @pytest.mark.asyncio
     async def test_unknown_collection_returns_404(self, client):
-        mock_app = _mock_collections_app(
+        await _create_collections_app(
+            client, MagicMock(),
             structured_collections=["contracts"],
             vector_collections=["doc_chunks"],
         )
-        await _create_app(client, mock_app)
 
         resp = await client.post(
             "/applications/my-contract-analyzer/collections/nonexistent/query",

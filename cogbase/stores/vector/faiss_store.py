@@ -78,9 +78,6 @@ class FAISSMemoryVectorStore(VectorStoreBase):
         if self._collections.pop(collection, None) is not None:
             await self._after_mutation()
 
-    async def list_collections(self) -> list[str]:
-        return list(self._collections.keys())
-
     async def upsert(self, collection: str, chunks: list[Chunk]) -> None:
         """Add or replace chunks. Chunks without an embedding are skipped.
 
@@ -238,10 +235,6 @@ class FAISSVectorStore(FAISSMemoryVectorStore):
     async def delete_collection(self, collection: str) -> None:
         await self._ensure_loaded()
         await super().delete_collection(collection)
-
-    async def list_collections(self) -> list[str]:
-        await self._ensure_loaded()
-        return await super().list_collections()
 
     async def upsert(self, collection: str, chunks: list[Chunk]) -> None:
         await self._ensure_loaded()

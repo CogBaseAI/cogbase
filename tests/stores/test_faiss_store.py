@@ -275,15 +275,6 @@ async def test_multiple_collections_are_independent():
     assert len(results_b) == 1 and results_b[0].doc_id == "doc-b"
 
 
-async def test_list_collections_returns_created_collections():
-    store = FAISSMemoryVectorStore()
-    await store.create_collection(make_schema("col_a", dim=2))
-    await store.create_collection(make_schema("col_b", dim=2))
-    await store.create_collection(make_schema("col_a", dim=2))
-
-    assert set(await store.list_collections()) == {"col_a", "col_b"}
-
-
 async def test_delete_one_collection_leaves_other_intact():
     store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema("col_a", dim=2))
@@ -296,16 +287,6 @@ async def test_delete_one_collection_leaves_other_intact():
     assert store.ntotal("col_b") == 1
     with pytest.raises(KeyError):
         await store.search("col_a", "q", [1.0, 0.0], top_k=1)
-
-
-async def test_list_collections_excludes_deleted_collection():
-    store = FAISSMemoryVectorStore()
-    await store.create_collection(make_schema("col_a", dim=2))
-    await store.create_collection(make_schema("col_b", dim=2))
-
-    await store.delete_collection("col_a")
-
-    assert await store.list_collections() == ["col_b"]
 
 
 def test_memory_store_does_not_expose_persistence_methods():
@@ -631,7 +612,7 @@ async def test_file_store_persists_delete_collection(tmp_path):
     await store.delete_collection("col_a")
 
     loaded = FAISSVectorStore(path=path)
-    assert await loaded.list_collections() == ["col_b"]
+    assert (path / "col_b.faiss").exists()
     assert not (path / "col_a.faiss").exists()
 
 
@@ -643,5 +624,4 @@ async def test_file_store_persists_deleting_last_collection(tmp_path):
     await store.delete_collection(COLLECTION)
 
     loaded = FAISSVectorStore(path=path)
-    assert await loaded.list_collections() == []
     assert not (path / f"{COLLECTION}.faiss").exists()

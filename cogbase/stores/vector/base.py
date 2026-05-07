@@ -132,6 +132,3 @@ class VectorStoreBase(abc.ABC):
     async def delete(self, collection: str, doc_id: str) -> None:
         """Delete all chunks for ``doc_id`` from ``collection``."""
 
-    @abc.abstractmethod
-    async def list_collections(self) -> list[str]:
-        """Return the names of all registered collections."""

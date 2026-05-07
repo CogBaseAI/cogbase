@@ -164,9 +164,6 @@ class PGVectorStore(VectorStoreBase):
             await conn.execute(f'DROP TABLE IF EXISTS "{collection}"')
         self._collection_names.discard(collection)
 
-    async def list_collections(self) -> list[str]:
-        return sorted(self._collection_names)
-
     async def upsert(self, collection: str, chunks: list[Chunk]) -> None:
         """Add or replace chunks in ``collection``.
 

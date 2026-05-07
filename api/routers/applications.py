@@ -544,22 +544,15 @@ async def remove_application_skill(
 @router.get("/{app_name}/collections", response_model=CollectionsResponse)
 async def list_collections(
     app_name: str,
-    app_cache: AppCacheDep,
     system_store: SystemStoreDep,
-    system_resources: SystemResourcesDep,
 ) -> CollectionsResponse:
     """List all structured and vector collections registered for an application."""
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
-    runner = app.query_runner
-
-    structured: list[str] = []
-    if runner.structured_store is not None:
-        structured = await runner.structured_store.list_collections()
-
-    vector: list[str] = []
-    if runner.vector_store is not None:
-        vector = await runner.vector_store.list_collections()
-
+    record = await system_store.get_app(app_name)
+    if record is None or record.status != "active":
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found or not active")
+    config = AppConfig.from_yaml(record.config_yaml)
+    structured = [sc.name for sc in config.structured_collections]
+    vector = [vc.name for vc in config.vector_collections]
     return CollectionsResponse(structured=structured, vector=vector)
 
 
@@ -577,21 +570,25 @@ async def query_collection(
     Structured collections support field filtering and field selection.
     Vector collections do not yet support direct querying.
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
-    runner = app.query_runner
+    record = await system_store.get_app(app_name)
+    if record is None or record.status != "active":
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found or not active")
+    config = AppConfig.from_yaml(record.config_yaml)
+    sc_names = {sc.name for sc in config.structured_collections}
+    vc_names = {vc.name for vc in config.vector_collections}
 
-    if runner.structured_store is not None:
-        if collection in await runner.structured_store.list_collections():
-            filters = [_to_filter(f) for f in body.filters]
-            records = await runner.structured_store.query(collection, filters or None, body.fields or None)
-            return CollectionQueryResponse(collection=collection, records=records, total=len(records))
+    if collection in sc_names:
+        app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+        runner = app.query_runner
+        filters = [_to_filter(f) for f in body.filters]
+        records = await runner.structured_store.query(collection, filters or None, body.fields or None)
+        return CollectionQueryResponse(collection=collection, records=records, total=len(records))
 
-    if runner.vector_store is not None:
-        if collection in await runner.vector_store.list_collections():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"'{collection}' is a vector collection; direct querying is not yet supported. Use POST /{app_name}/query instead.",
-            )
+    if collection in vc_names:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"'{collection}' is a vector collection; direct querying is not yet supported. Use POST /{app_name}/query instead.",
+        )
 
     raise HTTPException(status_code=404, detail=f"Collection '{collection}' not found")
 

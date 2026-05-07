@@ -39,12 +39,6 @@ async def test_create_collection_is_idempotent(structured_store):
     await structured_store.create_collection(FACTS_SCHEMA)
 
 
-async def test_list_collections_returns_created_collections(structured_store):
-    collections = await structured_store.list_collections()
-
-    assert set(collections) == {"facts", "events", "contradictions"}
-
-
 def test_create_collection_invalid_name():
     with pytest.raises(Exception, match="invalid"):
         CollectionSchema(
@@ -396,12 +390,6 @@ async def test_delete_collection_leaves_other_collections_intact(structured_stor
     # "events" must still be queryable and contain its data
     results = await structured_store.query("events")
     assert len(results) == 1
-
-
-async def test_list_collections_excludes_deleted_collection(structured_store):
-    await structured_store.delete_collection("facts")
-
-    assert set(await structured_store.list_collections()) == {"events", "contradictions"}
 
 
 # ------------------------------------------------------------------
@@ -922,17 +910,6 @@ async def test_register_schema_enables_query_without_create_collection(structure
     results = await structured_store.query("facts")
     assert len(results) == 1
     assert results[0]["type"] == "notice_period"
-
-
-async def test_register_schema_appears_in_list_collections(structured_store):
-    """A collection registered via register_schema is visible in list_collections."""
-    from tests.stores.conftest import FACTS_SCHEMA
-
-    structured_store._schemas.clear()
-    structured_store.register_schema(FACTS_SCHEMA)
-
-    collections = await structured_store.list_collections()
-    assert "facts" in collections
 
 
 async def test_register_schema_unknown_collection_still_raises_on_save(structured_store):
