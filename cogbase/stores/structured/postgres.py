@@ -64,13 +64,13 @@ class PostgresStructuredStore(StructuredStoreBase):
         dsn: str | None = None,
         pool: "asyncpg.Pool | None" = None,  # type: ignore[name-defined]
     ) -> None:
+        super().__init__()
         if dsn is None and pool is None:
             raise ValueError("Provide either dsn or pool.")
         if dsn is not None and pool is not None:
             raise ValueError("Provide either dsn or pool, not both.")
         self._dsn = dsn
         self._pool: asyncpg.Pool | None = pool  # type: ignore[name-defined]
-        self._schemas: dict[str, CollectionSchema] = {}
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -260,11 +260,6 @@ class PostgresStructuredStore(StructuredStoreBase):
             await conn.execute(sql, *params)
 
     # ------------------------------------------------------------------
-
-    def _get_schema(self, collection: str) -> CollectionSchema:
-        if collection not in self._schemas:
-            raise KeyError(f"Collection '{collection}' not found. Call create_collection first.")
-        return self._schemas[collection]
 
     def _get_pool(self) -> "asyncpg.Pool":  # type: ignore[name-defined]
         if self._pool is None:

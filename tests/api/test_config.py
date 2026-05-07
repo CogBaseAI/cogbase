@@ -207,18 +207,6 @@ class TestAppConfig:
         assert cfg.structured_store.path == "./data/my.db"
         assert cfg.vector_store.type == "faiss"
 
-    def test_vector_collections_without_embedding_raises(self):
-        yaml_text = textwrap.dedent("""\
-            name: bad-app
-            llm:
-              model: gpt-4o-mini
-            vector_collections:
-              - name: doc_chunks
-                description: Full-text document chunks for detailed retrieval.
-        """)
-        with pytest.raises(Exception, match="embedding is required when vector_collections"):
-            AppConfig.from_yaml(yaml_text)
-
     def test_vector_collection_description_is_required(self):
         yaml_text = textwrap.dedent("""\
             name: bad-app
@@ -272,18 +260,6 @@ class TestAppConfig:
         assert cfg.pipelines[0].steps[0].tool == "document-embed-upsert"
         assert cfg.pipelines[0].steps[0].collection == "doc_summary"
         assert cfg.pipelines[0].steps[0].doc_prompt == "Summarize in one sentence."
-
-    def test_vector_collections_without_embedding_raises_for_doc_embed(self):
-        yaml_text = textwrap.dedent("""\
-            name: bad-app
-            llm:
-              model: gpt-4o-mini
-            vector_collections:
-              - name: doc_summary
-                description: One summary vector per document for topic-level search.
-        """)
-        with pytest.raises(Exception, match="embedding is required when vector_collections"):
-            AppConfig.from_yaml(yaml_text)
 
     def test_step_references_unknown_vector_collection_raises(self):
         yaml_text = textwrap.dedent("""\

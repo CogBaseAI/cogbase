@@ -34,6 +34,23 @@ class StructuredStoreBase(abc.ABC):
     filters to the engine; others may evaluate them in Python after the fetch.
     """
 
+    def __init__(self) -> None:
+        self._schemas: dict[str, CollectionSchema] = {}
+
+    def register_schema(self, schema: CollectionSchema) -> None:
+        """Register a schema in the in-memory registry without running any DDL.
+
+        Use when the backing store already has the collection (e.g. on service
+        restart with an active app) and only the in-memory registry needs to be
+        populated so that ``save``, ``query``, and friends can look up the schema.
+        """
+        self._schemas[schema.name] = schema
+
+    def _get_schema(self, collection: str) -> CollectionSchema:
+        if collection not in self._schemas:
+            raise KeyError(f"Collection '{collection}' not found. Call create_collection first.")
+        return self._schemas[collection]
+
     @abc.abstractmethod
     async def create_collection(self, schema: CollectionSchema) -> None:
         """Declare a collection. Idempotent - safe to call on every startup."""

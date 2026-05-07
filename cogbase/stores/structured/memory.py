@@ -34,7 +34,7 @@ class InMemoryStructuredStore(StructuredStoreBase):
     """
 
     def __init__(self) -> None:
-        self._schemas: dict[str, CollectionSchema] = {}
+        super().__init__()
         self._frames: dict[str, pd.DataFrame] = {}
 
     async def create_collection(self, schema: CollectionSchema) -> None:
@@ -190,11 +190,6 @@ class InMemoryStructuredStore(StructuredStoreBase):
                     self._frames[name] = pickle.load(fh)
             else:
                 self._frames[name] = _empty_frame(schema)
-
-    def _get_schema(self, collection: str) -> CollectionSchema:
-        if collection not in self._schemas:
-            raise KeyError(f"Collection '{collection}' not found. Call create_collection first.")
-        return self._schemas[collection]
 
 
 # ---------------------------------------------------------------------------

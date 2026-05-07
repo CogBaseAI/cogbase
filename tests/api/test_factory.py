@@ -193,6 +193,53 @@ class TestBuildAppCollectionCreation:
         vector_store.create_collection.assert_not_awaited()
         structured_store.create_collection.assert_not_awaited()
 
+    @patch("api.factory._build_llm")
+    @patch("api.factory._build_embedder")
+    async def test_register_schema_called_for_active_restore(self, mock_build_embedder, mock_build_llm):
+        """Active restore must call register_schema so _schemas is populated without DDL."""
+        mock_build_llm.return_value = _mock_llm()
+        mock_build_embedder.return_value = MagicMock()
+        cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
+        vector_store = MagicMock()
+        vector_store.create_collection = AsyncMock()
+        structured_store = MagicMock()
+        structured_store.create_collection = AsyncMock()
+
+        await build_app(
+            cfg,
+            system=SystemResources(structured_store=structured_store, vector_store=vector_store),
+            app_status="active",
+        )
+
+        structured_store.register_schema.assert_called_once()
+        called_schema = structured_store.register_schema.call_args[0][0]
+        assert called_schema.name == "contract_extraction"
+
+    @patch("api.factory._build_llm")
+    async def test_active_restore_enables_query_on_real_store(self, mock_build_llm):
+        """End-to-end: schemas registered by build_app (active) let the store serve queries."""
+        from cogbase.stores.structured.memory import InMemoryStructuredStore
+        from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
+
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
+        store = InMemoryStructuredStore()
+
+        # First pass — initialising: creates the table.
+        await build_app(cfg, system=SystemResources(structured_store=store), app_status="initializing")
+
+        # Simulate restart: wipe only _schemas (the data frame persists in a real
+        # backing store; InMemoryStructuredStore's frame is retained here to mimic
+        # that a SQLite/Postgres table survives across process restarts).
+        store._schemas.clear()
+
+        # Second pass — active: must register schemas so query doesn't raise KeyError.
+        await build_app(cfg, system=SystemResources(structured_store=store), app_status="active")
+
+        # Query must succeed (empty result, no KeyError).
+        results = await store.query("contract_extraction")
+        assert results == []
+
 
 class TestBuildAppVectorStoreResolution:
     @patch("api.factory._build_llm")

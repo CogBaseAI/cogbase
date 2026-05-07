@@ -31,12 +31,12 @@ class SQLiteStructuredStore(StructuredStoreBase):
     """
 
     def __init__(self, path: str | Path = ":memory:") -> None:
+        super().__init__()
         p = Path(path)
         if str(path) != ":memory:" and p.parent != Path("."):
             p.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._schemas: dict[str, CollectionSchema] = {}
 
     def close(self) -> None:
         self._conn.close()
@@ -241,13 +241,6 @@ class SQLiteStructuredStore(StructuredStoreBase):
             params,
         )
         self._conn.commit()
-
-    # ------------------------------------------------------------------
-
-    def _get_schema(self, collection: str) -> CollectionSchema:
-        if collection not in self._schemas:
-            raise KeyError(f"Collection '{collection}' not found. Call create_collection first.")
-        return self._schemas[collection]
 
 
 # ------------------------------------------------------------------

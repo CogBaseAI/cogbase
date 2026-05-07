@@ -157,15 +157,18 @@ async def build_app(
             extractors_by_col[sc_cfg.name] = extractor
 
     # --- Create collections in backing stores (idempotent) ---
-    # Restored active apps already have their collections, so avoid the noisy
-    # idempotent create calls and logs during startup reloads.
     if app_status != "active":
         for vc in vector_collections:
             await vc.store.create_collection(vc.schema)
-            logger.info("created vector collection=%s, app=%s", vc.schema, config.name)
+            logger.info("created vector collection=%s, app=%s", vc.schema.name, config.name)
         for sc_schema in structured_schemas:
             await structured_store.create_collection(sc_schema)
-            logger.info("created structured collection=%s, app=%s", sc_schema, config.name)
+            logger.info("created structured collection=%s, app=%s", sc_schema.name, config.name)
+    else:
+        # Active apps already have their tables — skip DDL but populate the
+        # in-memory schema registry so save/query can look up column types.
+        for sc_schema in structured_schemas:
+            structured_store.register_schema(sc_schema)
 
     # --- Pipelines ---
     pipelines: list[IngestionPipeline] = []

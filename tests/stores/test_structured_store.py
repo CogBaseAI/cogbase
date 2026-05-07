@@ -900,3 +900,60 @@ async def test_query_fields_with_json_filter_strips_json_col_from_result(memory_
     assert len(results) == 1
     assert set(results[0].keys()) == {"session_id"}
     assert results[0]["session_id"] == "s1"
+
+
+# ------------------------------------------------------------------
+# register_schema — schema registry without DDL
+# ------------------------------------------------------------------
+
+async def test_register_schema_enables_query_without_create_collection(structured_store):
+    """register_schema populates the in-memory registry so that an already-existing
+    collection can be queried without calling create_collection first (restart case)."""
+    from tests.stores.conftest import FACTS_SCHEMA
+
+    # Save a fact through the normal path so the underlying table exists.
+    await structured_store.save("facts", [make_fact(type="notice_period")])
+
+    # Simulate restart: wipe _schemas but leave backing store intact.
+    structured_store._schemas.clear()
+
+    # register_schema (no DDL) should re-hydrate the registry.
+    structured_store.register_schema(FACTS_SCHEMA)
+    results = await structured_store.query("facts")
+    assert len(results) == 1
+    assert results[0]["type"] == "notice_period"
+
+
+async def test_register_schema_appears_in_list_collections(structured_store):
+    """A collection registered via register_schema is visible in list_collections."""
+    from tests.stores.conftest import FACTS_SCHEMA
+
+    structured_store._schemas.clear()
+    structured_store.register_schema(FACTS_SCHEMA)
+
+    collections = await structured_store.list_collections()
+    assert "facts" in collections
+
+
+async def test_register_schema_unknown_collection_still_raises_on_save(structured_store):
+    """register_schema for a collection whose table does not exist lets save raise
+    a DB-level error rather than a registry error — the contract is that the table
+    must already exist when register_schema is used."""
+    from cogbase.stores.structured.memory import InMemoryStructuredStore
+    if not isinstance(structured_store, InMemoryStructuredStore):
+        return  # only testable on in-memory where we can control table existence
+    # Registering a schema for a non-existent collection is legal (no DDL error),
+    # but save will fail because the frame doesn't exist.
+    new_schema = CollectionSchema(
+        name="ghost",
+        description="Non-existent collection.",
+        primary_fields=["id"],
+        fields={"id": FieldSchema(type=FieldType.STRING, nullable=False)},
+    )
+    structured_store.register_schema(new_schema)
+    # In InMemoryStructuredStore, save uses self._frames which won't have "ghost".
+    with pytest.raises(KeyError):
+        from pydantic import BaseModel as BM
+        class Ghost(BM):
+            id: str
+        await structured_store.save("ghost", [Ghost(id="x")])
