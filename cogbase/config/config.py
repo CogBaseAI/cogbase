@@ -144,8 +144,6 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> "AppConfig":
-        if self.vector_collections and self.embedding is None:
-            raise ValueError("embedding is required when vector_collections are defined")
         vc_names = {vc.name for vc in self.vector_collections}
         sc_names = {sc.name for sc in self.structured_collections}
         for pipeline in self.pipelines:

@@ -100,6 +100,14 @@ def _resolve_file_refs(data: dict, files: dict[str, str]) -> None:
             _resolve_step_refs(step, files)
 
 
+def _serialize_config(config: AppConfig) -> str:
+    # by_alias=True preserves "schema" as the YAML key (field name is schema_).
+    # mode='json' so enums are serialized as their string values.
+    #   - model_dump(by_alias=True) returns Python enum objects (like RecordMode.ONE),
+    #   - so yaml.dump() serializes them with Python-specific tags.
+    return yaml.dump(config.model_dump(by_alias=True, mode="json"), allow_unicode=True, default_flow_style=False)
+
+
 def _parse_bundle(raw: bytes) -> tuple[str, AppConfig]:
     """Unzip bundle, resolve file refs, parse config, return (stored_yaml, config)."""
     try:
@@ -134,8 +142,7 @@ def _parse_bundle(raw: bytes) -> tuple[str, AppConfig]:
 
     # Store the resolved config (file refs replaced with content) so the app
     # can be rebuilt from the system store without the original ZIP.
-    # by_alias=True preserves "schema" as the YAML key (field name is schema_).
-    stored_yaml = yaml.dump(config.model_dump(by_alias=True), allow_unicode=True, default_flow_style=False)
+    stored_yaml = _serialize_config(config)
     return stored_yaml, config
 
 
@@ -160,10 +167,6 @@ def _validate_skills(skill_names: list[str], skill_registry) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Unknown skill(s): {', '.join(unknown)}. Run GET /skills to see available skills.",
         )
-
-
-def _serialize_config(config: AppConfig) -> str:
-    return yaml.dump(config.model_dump(by_alias=True), allow_unicode=True, default_flow_style=False)
 
 
 @router.post("", response_model=ApplicationResponse, status_code=status.HTTP_201_CREATED)
