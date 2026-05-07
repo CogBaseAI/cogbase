@@ -13,6 +13,8 @@ import zipfile
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import yaml
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -27,7 +29,9 @@ from api.system_resources import SystemResources
 from cogbase.skills.registry import SkillRegistry
 from api.main import app
 from api.app_cache import AppCache
+from api.routers.applications import _serialize_config
 from api.system_store import SystemStore
+from cogbase.config.config import AppConfig, ExtractorConfig, RecordMode
 from cogbase.core.query_runner import QueryResult
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 
@@ -92,6 +96,82 @@ async def client():
         yield ac
 
     app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# _serialize_config — enum serialization
+# ---------------------------------------------------------------------------
+
+class TestSerializeConfig:
+    def _minimal_config(self, **overrides) -> AppConfig:
+        return AppConfig(
+            name="test-app",
+            llm={"provider": "openai", "model": "gpt-4o-mini"},
+            **overrides,
+        )
+
+    def test_enum_serializes_as_plain_string(self):
+        """RecordMode enum must appear as its string value in YAML, not as a Python object tag."""
+        extractor = ExtractorConfig(extraction_schema="{}", record_mode=RecordMode.MANY)
+        # Embed the extractor in a pipeline step so it ends up in the serialized output.
+        config_yaml = textwrap.dedent("""\
+            name: test-app
+            llm:
+              provider: openai
+              model: gpt-4o-mini
+            structured_collections:
+              - name: facts
+                description: Extracted facts.
+                schema: '{}'
+                primary_fields: [doc_id]
+            pipelines:
+              - name: main
+                steps:
+                  - tool: extract-structured
+                    collection: facts
+                    extractor:
+                      type: llm
+                      extraction_schema: '{}'
+                      record_mode: many
+        """)
+        cfg = AppConfig.model_validate(yaml.safe_load(config_yaml))
+        serialized = _serialize_config(cfg)
+
+        assert "!!python" not in serialized, "YAML must not contain Python-specific tags"
+        assert "record_mode: many" in serialized
+
+    def test_serialized_yaml_round_trips(self):
+        """YAML produced by _serialize_config can be parsed back with yaml.safe_load and validates to an equivalent AppConfig."""
+        config_yaml = textwrap.dedent("""\
+            name: test-app
+            llm:
+              provider: openai
+              model: gpt-4o-mini
+            structured_collections:
+              - name: facts
+                description: Extracted facts.
+                schema: '{}'
+                primary_fields: [doc_id]
+            pipelines:
+              - name: main
+                steps:
+                  - tool: extract-structured
+                    collection: facts
+                    extractor:
+                      type: llm
+                      extraction_schema: '{}'
+                      record_mode: one
+        """)
+        original = AppConfig.model_validate(yaml.safe_load(config_yaml))
+        serialized = _serialize_config(original)
+
+        # safe_load must succeed (no Python-specific tags that require unsafe load)
+        parsed_back = yaml.safe_load(serialized)
+        restored = AppConfig.model_validate(parsed_back)
+
+        assert restored.name == original.name
+        step = restored.pipelines[0].steps[0]
+        assert step.extractor.record_mode == RecordMode.ONE
 
 
 # ---------------------------------------------------------------------------
