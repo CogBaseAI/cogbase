@@ -4,7 +4,7 @@
 
 CogBase is an open-source framework for building AI applications that need to understand, cross-reference, and reason over large volumes of unstructured data — documents, emails, transcripts, chat logs, reports, and more.
 
-It provides the foundational layer that vertical AI products are built on: typed fact extraction, contradiction detection, a pluggable hybrid store, an LLM agent query runner, composable skills, and a multi-tier memory system — all configurable for any domain through a REST API.
+It provides the foundational layer that vertical AI products are built on: typed fact extraction, contradiction detection, a pluggable hybrid store, an LLM agent query runner, composable skills, and a multi-tier memory system — all generated from a natural-language description and deployed through a REST API.
 
 ---
 
@@ -25,9 +25,28 @@ CogBase solves this with a structured extraction layer sitting between raw inges
 
 ## Architecture
 
-CogBase is organized into three layers with clean boundaries between them.
+CogBase is organized into four layers with clean boundaries between them.
 
 ```
+╔═══════════════════════════════════════════════════════════╗
+║  APP GENERATOR                 (conversational)           ║
+║                                                           ║
+║  User describes:                                          ║
+║    • document types  ("SaaS contracts, vendor emails")    ║
+║    • facts that matter  ("parties, payment terms, dates") ║
+║    • example questions  ("which vendors auto-renew?")     ║
+║          ↓                                                ║
+║  LLM generates complete draft config:                     ║
+║    vector collections  (passages + summaries)             ║
+║    structured collections + extraction schemas + prompts  ║
+║    pipeline steps  (chunk, extract, summarise)            ║
+║    workflows  (if example questions need fan-out)         ║
+║          ↓                                                ║
+║  Draft presented → user revises conversationally          ║
+║          ↓                                                ║
+║  Deploy via POST /applications                            ║
+╚═══════════════════════════════════════════════════════════╝
+          ↓  config.yaml ZIP bundle
 ╔═══════════════════════════════════════════════════════════╗
 ║  KNOWLEDGE PIPELINE                        (async)        ║
 ║                                                           ║
@@ -90,6 +109,8 @@ CogBase is organized into three layers with clean boundaries between them.
 ╚═══════════════════════════════════════════════════════════╝
 ```
 
+**App Generator** is the entry point for new applications. Instead of writing `config.yaml` by hand, describe your documents and example questions in natural language and the system generates the full configuration — collections, steps, schemas, prompts, and workflows — as a draft you can then revise conversationally before deploying.
+
 **Knowledge Pipeline** runs asynchronously at ingest time. Three step types can be combined in any order, with optional `when_meta` predicates to route specific document types to different steps:
 
 - `chunk-embed-upsert` — splits document text into overlapping passages, embeds them, and upserts into a vector collection for passage-level semantic search
@@ -107,6 +128,43 @@ Both stores are pluggable — swap backends without changing application code.
 ---
 
 ## Core capabilities
+
+### App generator
+
+Instead of authoring `config.yaml` manually, describe what you want to build and let the system generate the full configuration:
+
+1. **Describe your use case** — the document types you have (contracts, medical records, emails, transcripts), the facts that matter, and a handful of example questions you want to answer.
+2. **Review the draft** — the system generates a complete `config.yaml` with pipeline steps, vector and structured collections, extraction schemas, extraction prompts, and any workflows needed to answer your example questions.
+3. **Revise conversationally** — adjust any part of the generated config through follow-up chat: add a field, rename a collection, change a workflow step, tighten an extraction prompt.
+4. **Deploy** — when satisfied, submit the config directly via `POST /generate/{session_id}/deploy` (equivalent to `POST /applications` with the generated bundle).
+
+The generator is opinionated: it infers the minimal set of collections and steps needed to cover the example questions, defaulting to one passage-chunk vector collection, one document-summary vector collection, and one or more structured collections with typed fields. Workflows are only generated when example questions require multi-record fan-out (e.g., "flag all contracts that…").
+
+**Example input:**
+
+```json
+{
+  "description": "I review SaaS vendor contracts and need to track payment terms, renewal dates, and liability caps.",
+  "document_type": "legal contracts (PDF / DOCX)",
+  "example_questions": [
+    "Which contracts expire before Q2 2026?",
+    "Which vendors have auto-renewal clauses?",
+    "What is the average liability cap across the portfolio?"
+  ]
+}
+```
+
+**Generated output (summarised):**
+
+- Vector collections: `contract_chunks` (passage-level), `contract_summaries` (per-document)
+- Structured collection: `contracts` — fields: `vendor`, `effective_date`, `expiry_date`, `payment_terms`, `auto_renewal` (bool), `liability_cap`, `doc_id`
+- Pipeline steps: `chunk-embed-upsert → extract-structured → document-embed-upsert`
+- Extraction prompt: tailored to pull the declared fields from contract text
+- Workflow: `flag_auto_renewal` — queries `contracts` for `auto_renewal = true` and streams results (triggered by the third example question)
+
+The response includes the full draft YAML, a human-readable summary of what was generated, and a `session_id` for follow-up revisions.
+
+---
 
 ### Structured extraction
 
@@ -213,6 +271,15 @@ class Skill:
 ## REST API
 
 Applications are created and managed through the REST API. Configuration lives in a YAML file bundled as a ZIP with any referenced prompt templates and JSON schemas.
+
+### App generator
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/generate` | Start a generation session from a natural-language description; returns `session_id` + `draft_config` |
+| `GET` | `/generate/{session_id}` | Retrieve the current draft config for a session |
+| `POST` | `/generate/{session_id}/revise` | Send a follow-up instruction to revise the draft |
+| `POST` | `/generate/{session_id}/deploy` | Deploy the current draft as a new application |
 
 ### Application lifecycle
 
@@ -406,6 +473,7 @@ cogbase/
 - [x] REST API (create/update/delete apps, ingest, query, streaming)
 - [x] Contract analyst example
 - [x] Declarative workflow engine (structured-query, vector-search, llm-structured, structured-save; foreach loops; after_ingest triggers)
+- [ ] App generator (conversational config generation from description + example questions, with iterative revision)
 - [ ] Contradiction detection engine (date, numeric, statement conflicts)
 - [ ] Short-term memory (Redis + in-memory)
 - [ ] Episodic memory (conversation + agent history)
