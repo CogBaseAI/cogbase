@@ -1,27 +1,10 @@
-"""Pydantic models and CollectionSchema definitions for the contract compliance demo.
-
-Exports
--------
-Models (used for extraction, query results, and skill I/O):
-  Party                          — named party in a contract (name + role)
-  ContractClause                 — one stored clause record (contract_clauses)
-  ContractClausesExtractionResult — LLM output wrapper used by the clause extractor
-  ContractMetadata               — contract-level facts (contract_metadata)
-  ClauseComplianceFinding        — one compliance finding (clause_compliance_findings)
-
-CollectionSchema objects (passed to structured_store.create_collection):
-  CONTRACT_CLAUSES_SCHEMA
-  CONTRACT_METADATA_SCHEMA
-  CLAUSE_COMPLIANCE_FINDINGS_SCHEMA
-"""
+"""Pydantic models for the contract compliance demo."""
 
 from __future__ import annotations
 
 from typing import Literal
 
 from pydantic import BaseModel, Field, create_model
-
-from cogbase.stores import CollectionSchema, FieldSchema, FieldType
 
 
 # ---------------------------------------------------------------------------
@@ -174,30 +157,3 @@ class ClauseComplianceFinding(BaseModel):
         le=1.0,
         description="Judge confidence in the finding on a scale from 0.0 (uncertain) to 1.0 (certain)",
     )
-
-
-CLAUSE_COMPLIANCE_FINDINGS_SCHEMA = CollectionSchema(
-    name="clause_compliance_findings",
-    description=(
-        "Clause-level compliance findings produced by the compliance-check skill. "
-        "Each record links a contract clause to the company rules it was checked against "
-        "and records whether the clause is compliant, non-compliant, needs review, or "
-        "not applicable. Filter by doc_id to get all findings for a contract, or filter "
-        "by status and severity to find high-priority issues across all contracts."
-    ),
-    primary_fields=["clause_id"],
-    fields={
-        "doc_id":               FieldSchema(type=FieldType.STRING, index=True),
-        "clause_id":            FieldSchema(type=FieldType.STRING, index=True),
-        "clause_type":          FieldSchema(type=FieldType.STRING, nullable=True, index=True),
-        "status":               FieldSchema(type=FieldType.STRING, index=True),
-        "severity":             FieldSchema(type=FieldType.STRING, index=True),
-        "summary":              FieldSchema(type=FieldType.STRING),
-        "contract_clause_text": FieldSchema(type=FieldType.STRING),
-        "matched_rule_ids":     FieldSchema(type=FieldType.JSON),
-        "matched_rule_quotes":  FieldSchema(type=FieldType.JSON),
-        "reasoning":            FieldSchema(type=FieldType.STRING),
-        "recommended_redline":  FieldSchema(type=FieldType.STRING, nullable=True),
-        "confidence":           FieldSchema(type=FieldType.FLOAT),
-    },
-)

@@ -1,18 +1,6 @@
-"""Schema and Pydantic models for the legal contract review pack."""
+"""Pydantic models for the legal contract review pack."""
 
 from pydantic import BaseModel, Field, create_model
-
-
-CONTRACTS_SYSTEM_PROMPT_PREFIX = (
-    "You are a legal contract analyst.  Extract structured information from the\n"
-    "contract provided by the user.\n\n"
-    "Rules:\n"
-    "- Copy all clause text verbatim — do not paraphrase or summarise.\n"
-    "- Do not invent information not present in the contract.\n"
-    "- Use null for any field not found in the contract.\n"
-    "- Return ONLY the JSON object — no explanation, no markdown fences.\n\n"
-    "Return a single JSON object with these fields:\n\n"
-)
 
 
 class Party(BaseModel):

@@ -28,7 +28,7 @@ contract-003  Data Analytics Platform Agreement
   termination       — COMPLIANT               60-day convenience notice
   governing_law     — COMPLIANT               New York
   confidentiality   — COMPLIANT               3-year term
-  data_breach       — NON-COMPLIANT (critical) 72-hour notification, rule requires 24 hours
+  data_breach       — NON-COMPLIANT (critical/high) 72-hour notification, rule requires 24 hours
   subprocessors     — NON-COMPLIANT (high)    Vendor may add without prior Company authorisation
   ip_ownership      — NON-COMPLIANT (high)    deliverables owned by Vendor, Company gets licence only
 """

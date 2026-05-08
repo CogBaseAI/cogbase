@@ -64,7 +64,6 @@ from examples.cogbase_client import (  # noqa: E402
     configure_logging,
 )
 from examples.contract_analyst_demo.schema import (  # noqa: E402
-    CONTRACTS_SYSTEM_PROMPT_PREFIX,
     ContractExtraction,
     ContractExtractionRecord,
 )
@@ -81,45 +80,14 @@ _API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000")
 
 _CONTRACTS_COLLECTION = "contracts"
 
-# ---------------------------------------------------------------------------
-# ZIP bundle
-# ---------------------------------------------------------------------------
-
-_CONFIG_YAML = f"""\
-name: {_APP_NAME}
-vector_collections:
-  - name: document_chunks
-    description: >-
-      Full-text document chunks for detailed retrieval.
-structured_collections:
-  - name: {_CONTRACTS_COLLECTION}
-    description: >-
-      Extracted contract facts and entities for exact lookup.
-    schema: contracts_record_schema.json
-    primary_fields: [doc_id]
-pipelines:
-  - name: contracts
-    steps:
-      - tool: chunk-embed-upsert
-        collection: document_chunks
-        chunker:
-          type: langchain
-      - tool: extract-structured
-        collection: {_CONTRACTS_COLLECTION}
-        extractor:
-          type: llm
-          extraction_schema: contracts_extraction_schema.json
-          prompt: contracts_prompt.txt
-"""
-
 
 def _build_bundle() -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("config.yaml", _CONFIG_YAML)
+        zf.write(_DEMO_DIR / "config.yaml", "config.yaml")
         zf.writestr("contracts_record_schema.json", json.dumps(ContractExtractionRecord.model_json_schema(), indent=2))
         zf.writestr("contracts_extraction_schema.json", json.dumps(ContractExtraction.model_json_schema(), indent=2))
-        zf.writestr("contracts_prompt.txt", CONTRACTS_SYSTEM_PROMPT_PREFIX)
+        zf.write(_DEMO_DIR / "contracts_prompt.txt", "contracts_prompt.txt")
     return buf.getvalue()
 
 

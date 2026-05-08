@@ -96,158 +96,19 @@ _API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000")
 
 _DEFAULT_STRUCTURED_COLLECTION = "contract_metadata"
 
-_JUDGE_SYSTEM_PROMPT = """\
-You are a contract compliance reviewer. Determine whether a contract clause complies
-with the company's internal policies, using ONLY the company policy excerpts provided.
-
-Rules:
-- Ground every finding exclusively in the provided policy excerpts.
-- Do not invent policy or apply general legal knowledge not present in the excerpts.
-- If the excerpts are insufficient to determine compliance, set status=needs_review.
-- Every non_compliant finding MUST include at least one matched_rule_quote.
-- Populate recommended_redline with revised clause language for non_compliant findings; null otherwise.
-- Return ONLY valid JSON — no markdown fences, no explanation.
-"""
-
-# ---------------------------------------------------------------------------
-# App bundle — config.yaml + metadata extraction schema + prompt
-# ---------------------------------------------------------------------------
-
-_CONTRACT_METADATA_SYSTEM_PROMPT = (
-    "You are a legal contract analyst. Extract key contract facts from the provided contract.\n\n"
-    "Rules:\n"
-    "- Do not invent information not present in the contract.\n"
-    "- Use null for any field not found in the contract.\n"
-    "- Return ONLY the JSON object — no explanation, no markdown fences.\n"
-    "- Format dates as YYYY-MM-DD.\n"
-    "- For parties, return an array where each element has 'name' (legal name) "
-    "and 'role' (role in the agreement, e.g. vendor, customer) keys.\n\n"
-    "Return a single JSON object with these fields:\n\n"
-)
-
-_CONTRACT_CLAUSES_SYSTEM_PROMPT = (
-    "You are a legal contract analyst. Extract every distinct clause from the provided contract.\n\n"
-    "Rules:\n"
-    "- Copy all clause text verbatim — do not paraphrase or summarise.\n"
-    "- Do not invent clauses not present in the contract.\n"
-    "- Assign clause_type from: liability, indemnification, termination, payment, "
-    "privacy, confidentiality, ip, governing_law, other. Use null when unclear.\n"
-    "- Return ONLY the JSON object — no explanation, no markdown fences.\n\n"
-)
-
-_CONFIG_YAML = f"""\
-name: {_APP_NAME}
-vector_collections:
-  - name: rule_chunks
-    description: >-
-      Company policy and vendor contract standard passages. Use to retrieve rules,
-      standards, and fallback positions relevant to a clause type or compliance topic.
-  - name: contract_chunks
-    description: >-
-      Contract text passage chunks. Use for detailed questions about specific
-      contract terms, wording, or clauses.
-structured_collections:
-  - name: contract_metadata
-    description: >-
-      Key facts per contract: parties, dates, value, governing law, termination
-      notice period. One record per contract document.
-    schema: contract_metadata_record_schema.json
-    primary_fields: [doc_id]
-  - name: contract_clauses
-    description: >-
-      Individual clauses extracted from contracts. Each record is one clause with
-      its type and verbatim text. Filter by doc_id to retrieve all clauses for a
-      contract, or filter by clause_type to find clauses of a specific category.
-    schema: contract_clause_record_schema.json
-    primary_fields: [clause_id]
-  - name: clause_compliance_findings
-    description: >-
-      Clause-level compliance findings. Each record captures whether a contract
-      clause complies with company policy, with severity, summary, and redline.
-    schema: clause_compliance_findings_schema.json
-    primary_fields: [clause_id]
-pipelines:
-  - name: rules
-    match:
-      metadata:
-        doc_type: rules
-    steps:
-      - tool: chunk-embed-upsert
-        collection: rule_chunks
-        chunker:
-          type: langchain
-  - name: contracts
-    match:
-      metadata:
-        doc_type: contract
-    steps:
-      - tool: chunk-embed-upsert
-        collection: contract_chunks
-        chunker:
-          type: langchain
-      - tool: extract-structured
-        collection: contract_metadata
-        extractor:
-          type: llm
-          extraction_schema: contract_metadata_extraction_schema.json
-          prompt: contract_metadata_prompt.txt
-      - tool: extract-structured
-        collection: contract_clauses
-        extractor:
-          type: llm
-          extraction_schema: contract_clause_extraction_schema.json
-          record_mode: many
-          response_field: clauses
-          id_field: clause_id
-          id_template: "{{doc_id}}__{{index:04d}}"
-          prompt: contract_clauses_prompt.txt
-workflows:
-  - name: check-contract-compliance
-    trigger:
-      type: manual
-    input_schema:
-      doc_id: string
-    steps:
-      - id: load_clauses
-        tool: structured-query
-        collection: contract_clauses
-        filters:
-          doc_id: "{{{{ input.doc_id }}}}"
-      - id: review_each_clause
-        foreach: "{{{{ steps.load_clauses.records }}}}"
-        steps:
-          - id: retrieve_rules
-            tool: vector-search
-            collection: rule_chunks
-            query: "{{{{ item.clause_type }}}}\n{{{{ item.text }}}}"
-            top_k: 5
-          - id: judge
-            tool: llm-structured
-            prompt: compliance_judge_prompt.txt
-            input:
-              clause: "{{{{ item }}}}"
-              rules: "{{{{ steps.retrieve_rules.chunks }}}}"
-            output_schema: clause_compliance_findings_schema.json
-          - id: save_finding
-            tool: structured-save
-            collection: clause_compliance_findings
-            records:
-              - "{{{{ steps.judge.output }}}}"
-"""
-
 
 def _build_bundle() -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("config.yaml", _CONFIG_YAML)
+        zf.write(_DEMO_DIR / "config.yaml", "config.yaml")
         zf.writestr("contract_metadata_record_schema.json", json.dumps(ContractMetadataRecord.model_json_schema(), indent=2))
         zf.writestr("contract_metadata_extraction_schema.json", json.dumps(ContractMetadata.model_json_schema(), indent=2))
-        zf.writestr("contract_metadata_prompt.txt", _CONTRACT_METADATA_SYSTEM_PROMPT)
+        zf.write(_DEMO_DIR / "contract_metadata_prompt.txt", "contract_metadata_prompt.txt")
         zf.writestr("contract_clause_record_schema.json", json.dumps(ContractClauseRecord.model_json_schema(), indent=2))
         zf.writestr("contract_clause_extraction_schema.json", json.dumps(ContractClause.model_json_schema(), indent=2))
-        zf.writestr("contract_clauses_prompt.txt", _CONTRACT_CLAUSES_SYSTEM_PROMPT)
+        zf.write(_DEMO_DIR / "contract_clauses_prompt.txt", "contract_clauses_prompt.txt")
         zf.writestr("clause_compliance_findings_schema.json", json.dumps(ClauseComplianceFinding.model_json_schema(), indent=2))
-        zf.writestr("compliance_judge_prompt.txt", _JUDGE_SYSTEM_PROMPT)
+        zf.write(_DEMO_DIR / "compliance_judge_prompt.txt", "compliance_judge_prompt.txt")
     return buf.getvalue()
 
 

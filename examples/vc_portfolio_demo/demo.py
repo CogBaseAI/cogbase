@@ -63,6 +63,7 @@ from examples.cogbase_client import (  # noqa: E402
     configure_logging,
 )
 from examples.vc_portfolio_demo.portfolio_data import BOARD_UPDATES, DEAL_MEMOS  # noqa: E402
+from examples.vc_portfolio_demo.schema import PortfolioKPIExtraction, PortfolioKPIRecord  # noqa: E402
 
 configure_logging()
 
@@ -77,8 +78,8 @@ def _build_bundle() -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.write(_DEMO_DIR / "config.yaml", "config.yaml")
-        zf.write(_DEMO_DIR / "kpi_record_schema.json", "kpi_record_schema.json")
-        zf.write(_DEMO_DIR / "kpi_extraction_schema.json", "kpi_extraction_schema.json")
+        zf.writestr("kpi_record_schema.json", json.dumps(PortfolioKPIRecord.model_json_schema(), indent=2))
+        zf.writestr("kpi_extraction_schema.json", json.dumps(PortfolioKPIExtraction.model_json_schema(), indent=2))
         zf.write(_DEMO_DIR / "kpi_extraction_prompt.txt", "kpi_extraction_prompt.txt")
     return buf.getvalue()
 

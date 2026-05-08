@@ -1,0 +1,37 @@
+# Contract Analyst — CogBase app config
+#
+# Bundle structure:
+#   contract_analyst.zip
+#   ├── config.yaml                       (this file)
+#   ├── contracts_record_schema.json      (record schema — includes doc_id)
+#   ├── contracts_extraction_schema.json  (LLM extraction schema — no identity fields)
+#   └── contracts_prompt.txt              (LLM system prompt)
+
+name: contract-analyst
+
+vector_collections:
+  - name: document_chunks
+    description: >-
+      Full-text document chunks for detailed retrieval.
+
+structured_collections:
+  - name: contracts
+    description: >-
+      Extracted contract facts and entities for exact lookup.
+    schema: contracts_record_schema.json
+    primary_fields: [doc_id]
+
+pipelines:
+  - name: contracts
+    steps:
+      - tool: chunk-embed-upsert
+        collection: document_chunks
+        chunker:
+          type: langchain
+
+      - tool: extract-structured
+        collection: contracts
+        extractor:
+          type: llm
+          extraction_schema: contracts_extraction_schema.json
+          prompt: contracts_prompt.txt
