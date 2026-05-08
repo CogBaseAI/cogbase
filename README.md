@@ -1,10 +1,12 @@
 # CogBase
 
-**Ingest anything. Extract structured facts. Reason across all of it.**
+**Generate. Ingest. Reason. Evolve.**
+
+Build AI apps from a plain-language description. Ingest anything. Extract structured facts. Reason across all of it. Get smarter with every query.
 
 CogBase is an open-source framework for building AI applications that need to understand, cross-reference, and reason over large volumes of unstructured data — documents, emails, transcripts, chat logs, reports, and more.
 
-It provides the foundational layer that vertical AI products are built on: typed fact extraction, contradiction detection, a pluggable hybrid store, an LLM agent query runner, composable skills, and a multi-tier memory system — all generated from a natural-language description and deployed through a REST API.
+It provides the foundational layer that vertical AI products are built on: typed fact extraction, contradiction detection, a pluggable hybrid store, an LLM agent query runner, composable skills, a multi-tier memory system, and an adaptive evolution engine — generated from a plain-language description, deployed through a REST API, and improved by every query.
 
 ---
 

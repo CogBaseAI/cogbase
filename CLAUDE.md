@@ -4,18 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-CogBase is in active early development. The knowledge pipeline, query runner, skills registry, REST API, and store adapters are implemented. The memory layer (short-term, episodic, long-term) and contradiction detection engine are planned but not yet implemented.
+CogBase is in active early development. The knowledge pipeline, workflow engine, query runner, skills registry, REST API, and store adapters are implemented. The app generator, adaptive evolution engine, memory layer (short-term, episodic, long-term), and contradiction detection engine are planned but not yet implemented.
 
 ## Architecture
 
-CogBase is a framework for structured fact extraction, contradiction detection, and grounded LLM reasoning over large document sets. It has three layers with clean boundaries:
+CogBase is a framework for building AI applications from a plain-language description, with structured fact extraction, contradiction detection, grounded LLM reasoning, and adaptive self-improvement from usage. It has five layers with clean boundaries:
+
+**App Generator** (conversational, planned)
+- User describes document types, facts that matter, and example questions in natural language
+- LLM generates a complete draft `config.yaml`: pipeline steps, vector/structured collections, extraction schemas, prompts, and workflows
+- Draft is revised conversationally then deployed via `POST /generate/{session_id}/deploy`
 
 **Knowledge Pipeline** (async, ingest-time)
+- An app may have multiple named pipelines; documents are routed to a pipeline by metadata (e.g. `doc_type`)
 - Three step types run in declaration order per document:
   - `chunk-embed-upsert` — splits text into overlapping passages, embeds, upserts to a vector collection
   - `extract-structured` — LLM extraction → typed records → structured collection
-  - `summarize-embed-upsert` — LLM summary of the full document → embed → upsert as a single chunk per document to a vector collection
+  - `document-embed-upsert` — LLM summary of the full document → embed → upsert as a single chunk per document to a vector collection
 - Writes to pluggable structured and vector stores
+
+**Workflows** (on-demand / after_ingest)
+- YAML-declared sequential pipelines over already-ingested collections
+- Four built-in tools: `structured-query`, `vector-search`, `llm-structured`, `structured-save`; support `foreach` loops
+- Step parameters are Jinja2 templates with `input`, `steps.<id>`, and `item` namespaces
+- Can be triggered manually via API or automatically after a successful ingest (`trigger.type: after_ingest`)
+- Results streamed as SSE; sit between the pipeline (document-time) and skills (query-time)
 
 **Query Runner** (real-time, query-time)
 - Unified LLM agent loop — no fixed routing patterns
@@ -31,25 +44,34 @@ CogBase is a framework for structured fact extraction, contradiction detection, 
 - Episodic: conversation + agent action history in structured store
 - Long-term: cross-session confirmed facts, resolved contradictions, preferences
 
+**Adaptive Evolution** (background, planned)
+- Gap detector mines episodic logs for signals the current config doesn't cover: low vector scores, repeated null answers, recurring tool chains
+- Surfaces concrete suggestions (new field, new step, new skill) with supporting evidence via `GET /applications/{name}/suggestions`
+- On user acceptance: config is patched and only affected documents are re-ingested
+
 ## Current project structure
 
 ```
 cogbase/
 ├── cogbase/
-│   ├── pipeline/         # ingestion/, extraction/, ingestion_pipeline.py
-│   ├── stores/           # base.py, schema.py, filters.py, structured/, vector/
-│   ├── skills/           # skill.py, registry.py
-│   ├── embeddings/       # base.py, openai.py, huggingface.py
-│   ├── llms/             # base.py, openai.py
-│   ├── tools/            # builtin/ (chunk_embed_upsert, extract)
-│   └── core/             # app.py, runner.py, session.py, models.py
-├── api/                  # FastAPI REST API
-│   ├── routers/          # applications.py, skills.py
-│   ├── config.py         # AppConfig (YAML schema)
-│   ├── factory.py        # build_app from config
-│   └── example_config.yaml
+│   ├── pipeline/             # ingestion/, extraction/, ingestion_pipeline.py
+│   ├── stores/               # base.py, schema.py, filters.py, structured/, vector/
+│   ├── skills/               # skill.py, registry.py
+│   ├── embeddings/           # base.py, openai.py, huggingface.py
+│   ├── llms/                 # base.py, openai.py
+│   ├── tools/                # builtin/ (chunk_embed_upsert, extract)
+│   ├── workflows/            # runner.py, context.py, tools/ (structured-query, vector-search, llm-structured, structured-save)
+│   └── core/                 # app.py, runner.py, session.py, models.py
+├── api/                      # FastAPI REST API
+│   ├── routers/              # applications.py, skills.py, workflows.py
+│   ├── config.py             # AppConfig (YAML schema)
+│   ├── factory.py            # build_app — registers schemas, wires pipelines
+│   ├── example_config.yaml
+│   └── example_system_config.yaml
 ├── examples/
-│   └── contract_analyst_demo/
+│   ├── contract_analyst_demo/
+│   ├── contract_compliance_demo/
+│   └── vc_portfolio_demo/
 └── docker-compose.yml
 ```
 
@@ -116,8 +138,24 @@ Previously resolved contradictions are stored in long-term memory and excluded f
 ## REST API
 
 Applications are created and managed through `POST /applications` (ZIP bundle upload). Key endpoints:
+
+App generator (planned):
+- `POST /generate` — start a generation session from a natural-language description
+- `POST /generate/{session_id}/revise` — revise the draft conversationally
+- `POST /generate/{session_id}/deploy` — deploy the draft as a new application
+
+Application lifecycle:
 - `POST /applications` — create from ZIP bundle (config.yaml + referenced files)
 - `POST /applications/{name}/ingest_documents` — ingest a batch of documents
 - `POST /applications/{name}/query` — blocking query
 - `POST /applications/{name}/query/stream` — streaming query (SSE)
 - `GET/POST/DELETE /applications/{name}/skills` — manage skills per application
+
+Workflows:
+- `POST /applications/{name}/workflows/{workflow_name}/run` — run a workflow (blocking)
+- `POST /applications/{name}/workflows/{workflow_name}/stream` — run a workflow (SSE)
+
+Adaptive evolution (planned):
+- `GET /applications/{name}/suggestions` — list pending suggestions with supporting evidence
+- `POST /applications/{name}/suggestions/{id}/accept` — accept; triggers config patch + targeted re-ingest
+- `POST /applications/{name}/suggestions/{id}/reject` — reject
