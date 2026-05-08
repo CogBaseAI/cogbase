@@ -107,6 +107,20 @@ CogBase is organized into four layers with clean boundaries between them.
 ║               (cross-session facts, conclusions,          ║
 ║                confirmed resolutions, user preferences)   ║
 ╚═══════════════════════════════════════════════════════════╝
+          ↕  reads episodic history
+╔═══════════════════════════════════════════════════════════╗
+║  ADAPTIVE EVOLUTION                     (background)      ║
+║                                                           ║
+║  Gap detector mines episodic logs:                        ║
+║    • low vector scores     → missing collection or step   ║
+║    • repeated null answers → missing structured field     ║
+║    • recurring tool chains → candidate skill              ║
+║          ↓                                                ║
+║  Suggestion queue: user confirms, adjusts, or rejects     ║
+║          ↓  on acceptance                                 ║
+║  Config patched → targeted re-ingest → app updated        ║
+║          ↺  feeds back to App Generator                   ║
+╚═══════════════════════════════════════════════════════════╝
 ```
 
 **App Generator** is the entry point for new applications. Instead of writing `config.yaml` by hand, describe your documents and example questions in natural language and the system generates the full configuration — collections, steps, schemas, prompts, and workflows — as a draft you can then revise conversationally before deploying.
@@ -124,6 +138,8 @@ Both stores are pluggable — swap backends without changing application code.
 **Query Runner** drives a real-time LLM agent loop. Rather than a fixed routing pattern, the LLM receives the available tools and decides which to call: `structured_lookup` for exact record queries, `vector_search` against any configured vector collection (passage chunks, document summaries, or both), and any skill tools registered with the application. The loop continues until the LLM has enough evidence to produce a final answer. Large structured result sets are returned directly without synthesis (passthrough rule).
 
 **Memory Layer** serves the layers above. Short-term memory holds the assembled context for the current query. Episodic memory logs the full history of queries, answers, and agent actions. Long-term memory accumulates confirmed facts, resolved contradictions, learned patterns, and user preferences across sessions.
+
+**Adaptive Evolution** closes the feedback loop between usage and configuration. A background gap detector mines episodic logs for signals that the current config doesn't cover what users actually ask: low-scoring retrieval results suggest a missing collection or pipeline step; repeated "I don't have that information" answers suggest a missing structured field; recurring multi-step tool chains suggest a skill worth encapsulating. The system surfaces these as concrete, evidence-backed suggestions — a new extraction field, a new workflow, a new skill stub — and waits for user confirmation before applying any change. On acceptance, the config is patched and only the affected documents are re-ingested. The app evolves to fit how people actually use it.
 
 ---
 
@@ -249,6 +265,28 @@ CogBase maintains three tiers of memory, each scoped and persisted differently:
 | Episodic | User / session | Full history of queries, answers, and agent actions; enables follow-ups and agent continuity |
 | Long-term | User / project / org | Confirmed facts, resolved contradictions, learned patterns, preferences; persists indefinitely |
 
+### Adaptive evolution
+
+An initial app configuration is always a guess — the schema fields, pipeline steps, and skills defined up front reflect what the builder *expected* people to ask, not what they actually ask. Adaptive evolution lets the app correct itself over time.
+
+A background gap detector continuously analyzes the episodic memory of a deployed application:
+
+| Signal | What it indicates | Suggested action |
+|---|---|---|
+| Vector search scores are consistently low for a query class | The relevant information isn't being stored as vectors, or the chunking strategy is wrong | Add or reconfigure a collection or pipeline step |
+| Queries return "I don't have that information" repeatedly | A fact users care about isn't being extracted | Add a field to the structured schema and re-extract |
+| The same long tool chain appears repeatedly across sessions | A recurring multi-step reasoning pattern | Encapsulate as a named skill |
+| An extraction field is never queried | The field isn't useful | Simplify the schema |
+
+Each signal becomes a **suggestion** — a concrete, evidence-backed proposed change to the app's config. Suggestions are queued and surfaced via the API with supporting evidence (example queries, relevant session IDs, retrieval score distributions). The user reviews each suggestion, adjusts if needed, and accepts or rejects it.
+
+On acceptance:
+1. The app config is patched (a new field, a new step, a new skill stub)
+2. A targeted re-ingest runs over the affected documents
+3. The app's behavior updates without any manual config editing
+
+This makes the app generator not just a one-time tool but a continuous improvement loop — each round of real usage makes the app more capable for the next.
+
 ### Skills
 
 Skills are the unit of custom capability in CogBase — discrete, stateless, and composable. Each skill is a markdown file (describing what the LLM should do) alongside an optional Python implementation. Skills are loaded from a directory at server startup and can be assigned to applications via the REST API.
@@ -315,6 +353,14 @@ Applications are created and managed through the REST API. Configuration lives i
 | `POST` | `/applications/{name}/skills` | Assign a skill to an application |
 | `DELETE` | `/applications/{name}/skills/{skill}` | Remove a skill from an application |
 | `GET` | `/skills` | List all skills in the system registry |
+
+### Adaptive evolution
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/applications/{name}/suggestions` | List pending suggestions with supporting evidence (example queries, score distributions, session IDs) |
+| `POST` | `/applications/{name}/suggestions/{id}/accept` | Accept a suggestion; triggers config patch + targeted re-ingest |
+| `POST` | `/applications/{name}/suggestions/{id}/reject` | Reject a suggestion |
 
 ### Application config format
 
@@ -478,6 +524,8 @@ cogbase/
 - [ ] Short-term memory (Redis + in-memory)
 - [ ] Episodic memory (conversation + agent history)
 - [ ] Long-term memory (cross-session knowledge store)
+- [ ] Adaptive evolution engine (gap detector: retrieval score analysis, null-answer pattern mining, tool-chain clustering)
+- [ ] Suggestion surface API (GET /suggestions, accept/reject with targeted re-ingest)
 - [ ] Docker Compose quickstart
 - [ ] Insurance example
 - [ ] Medical records example
