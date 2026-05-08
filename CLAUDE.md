@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-CogBase is in active early development. The knowledge pipeline, workflow engine, query runner, skills registry, REST API, and store adapters are implemented. The app generator, adaptive evolution engine, memory layer (short-term, episodic, long-term), and contradiction detection engine are planned but not yet implemented.
+CogBase is in active early development. The knowledge pipeline, workflow engine, query runner, skills registry, REST API, and store adapters are implemented. The app generator, adaptive evolution engine, and memory layer (short-term, episodic, long-term) are planned but not yet implemented.
 
 ## Architecture
 
-CogBase is a framework for building AI applications from a plain-language description, with structured fact extraction, contradiction detection, grounded LLM reasoning, and adaptive self-improvement from usage. It has five layers with clean boundaries:
+CogBase is a framework for building AI applications from a plain-language description, with structured fact extraction, grounded LLM reasoning, and adaptive self-improvement from usage. It has five layers with clean boundaries:
 
 **App Generator** (conversational, planned)
 - User describes document types, facts that matter, and example questions in natural language
@@ -126,14 +126,6 @@ class Skill:
 ## Domain examples
 
 Domain-specific applications are in `examples/`, not in a `packs/` directory. Each example shows how to configure the pipeline, schema, and extractor for a specific vertical. Apps are deployed via the REST API using a ZIP bundle containing `config.yaml` and referenced files.
-
-## Contradiction detection approach (planned)
-
-Two-phase (not a single LLM prompt over long context):
-1. Extract typed facts from each source individually
-2. Cross-document comparison using embedding distance + NLI classification, bucketed by conflict type (date, numeric, statement)
-
-Previously resolved contradictions are stored in long-term memory and excluded from future scans.
 
 ## REST API
 
