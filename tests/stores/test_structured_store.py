@@ -1,10 +1,13 @@
 """Contract tests for StructuredStoreBase — run against every concrete adapter."""
 
-import pytest
-from pydantic import BaseModel
+from datetime import datetime, timezone
+from uuid import uuid4
 
-from cogbase.core.models import Contradiction, Event, Fact
+import pytest
+from pydantic import BaseModel, Field
+
 from cogbase.stores import Col, CollectionSchema, FieldSchema, FieldType
+from cogbase.stores.filters import Filter, Op
 from cogbase.stores.structured import InMemoryStructuredStore
 
 
@@ -12,22 +15,55 @@ from cogbase.stores.structured import InMemoryStructuredStore
 # Record factories
 # ------------------------------------------------------------------
 
-def make_fact(**kw) -> Fact:
+
+class FactRecord(BaseModel):
+    fact_id: str = Field(default_factory=lambda: str(uuid4()))
+    type: str
+    value: str
+    raw_text: str
+    doc_id: str
+    page: int | None = None
+    confidence: float
+
+
+class EventRecord(BaseModel):
+    event_id: str = Field(default_factory=lambda: str(uuid4()))
+    session_id: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    actor: str
+    action: str
+    payload: dict = Field(default_factory=dict)
+
+
+class ContradictionRecord(BaseModel):
+    contradiction_id: str = Field(default_factory=lambda: str(uuid4()))
+    fact_a: dict
+    fact_b: dict
+    conflict_type: str
+    resolved: bool = False
+    resolution_note: str | None = None
+
+
+def make_fact(**kw) -> FactRecord:
     defaults = dict(
         type="notice_period", value="60 days",
         raw_text="sixty (60) days written notice",
         doc_id="doc-1", confidence=0.95,
     )
-    return Fact(**{**defaults, **kw})
+    return FactRecord(**{**defaults, **kw})
 
 
-def make_event(**kw) -> Event:
+def make_event(**kw) -> EventRecord:
     defaults = dict(session_id="session-1", actor="user", action="query")
-    return Event(**{**defaults, **kw})
+    return EventRecord(**{**defaults, **kw})
 
 
-def make_contradiction(fact_a: Fact, fact_b: Fact, **kw) -> Contradiction:
-    return Contradiction(fact_a=fact_a, fact_b=fact_b, **{"conflict_type": "date", **kw})
+def make_contradiction(fact_a: FactRecord, fact_b: FactRecord, **kw) -> ContradictionRecord:
+    return ContradictionRecord(
+        fact_a=fact_a.model_dump(),
+        fact_b=fact_b.model_dump(),
+        **{"conflict_type": "date", **kw},
+    )
 
 
 # ------------------------------------------------------------------
@@ -78,14 +114,14 @@ async def test_save_and_query_no_filters(structured_store):
 async def test_query_as_deserialises_to_model(structured_store):
     fact = make_fact()
     await structured_store.save("facts", [fact])
-    results = await structured_store.query_as("facts", None, Fact)
-    assert isinstance(results[0], Fact) and results[0].fact_id == fact.fact_id
+    results = await structured_store.query_as("facts", None, FactRecord)
+    assert isinstance(results[0], FactRecord) and results[0].fact_id == fact.fact_id
 
 
 async def test_save_upserts_by_id(structured_store):
     fact = make_fact(value="30 days")
     await structured_store.save("facts", [fact])
-    updated = Fact(
+    updated = FactRecord(
         fact_id=fact.fact_id, type=fact.type, value="60 days",
         raw_text=fact.raw_text, doc_id=fact.doc_id, confidence=fact.confidence,
     )
@@ -325,8 +361,8 @@ async def test_boolean_filter(structured_store):
         make_contradiction(fa, fb, resolved=False),
         make_contradiction(fa, fb, resolved=True),
     ])
-    assert len(await structured_store.query("contradictions", [Col("resolved") == False])) == 1
-    assert len(await structured_store.query("contradictions", [Col("resolved") == True])) == 1
+    assert len(await structured_store.query("contradictions", [Filter("resolved", Op.EQ, False)])) == 1
+    assert len(await structured_store.query("contradictions", [Filter("resolved", Op.EQ, True)])) == 1
 
 
 # ------------------------------------------------------------------

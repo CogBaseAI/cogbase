@@ -41,8 +41,6 @@ The response includes the full draft YAML, a human-readable summary of what was 
 
 Every document is processed into structured records at ingestion time. Extraction is general — any JSON schema works: facts, entities, clauses, events, relationships, risk flags, and more. Each extractor declares the collection it writes to and its schema.
 
-The built-in `Fact` model carries: `type`, `value`, `raw_text`, `doc_id`, `page`, `confidence`. The `raw_text` field is preserved verbatim from the source and used as the citation.
-
 ---
 
 ## Per-document summarization
