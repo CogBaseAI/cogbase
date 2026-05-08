@@ -1,0 +1,80 @@
+# VC Portfolio Intelligence — CogBase app config
+#
+# Bundle structure:
+#   vc_portfolio.zip
+#   ├── config.yaml                     (this file)
+#   ├── kpi_record_schema.json          (record schema — includes doc_id)
+#   ├── kpi_extraction_schema.json      (LLM extraction schema — no identity fields)
+#   └── kpi_extraction_prompt.txt       (LLM system prompt)
+#
+# Two pipelines, routed by doc_type metadata:
+#   board-update  → board decks and LP updates  → extract KPIs + vector index
+#   deal-memo     → investment memos / pitches   → vector index only
+
+name: vc-portfolio
+
+vector_collections:
+  - name: portfolio_chunks
+    description: >
+      Full-text passage index across all portfolio documents (board decks,
+      LP updates, investment memos). Use for detailed questions about specific
+      companies, deals, or periods.
+
+  - name: portfolio_summaries
+    description: >
+      One-per-document summaries. Use for broad questions like "what companies
+      raised a Series B?" or "which board decks mention hiring risk?"
+
+structured_collections:
+  - name: portfolio_kpis
+    description: >
+      Extracted KPIs and financials from board decks and LP updates.
+      Fields: company_name, reporting_period, arr_usd, mrr_usd,
+      arr_growth_yoy_pct, burn_rate_monthly_usd, runway_months,
+      headcount, customer_count, ndr_pct, key_milestones, notable_risks,
+      doc_type. Use for exact lookups and cross-company comparisons.
+    schema: kpi_record_schema.json
+    primary_fields: [doc_id]
+
+pipelines:
+  - name: board-update
+    match:
+      metadata:
+        doc_type: board_update   # set this on ingest: metadata.doc_type=board_update
+    steps:
+      - tool: chunk-embed-upsert
+        collection: portfolio_chunks
+        chunker:
+          type: langchain
+
+      - tool: extract-structured
+        collection: portfolio_kpis
+        extractor:
+          type: llm
+          extraction_schema: kpi_extraction_schema.json
+          prompt: kpi_extraction_prompt.txt
+
+      - tool: document-embed-upsert
+        collection: portfolio_summaries
+        doc_prompt: >
+          Summarize this board deck or LP update. Include: company name,
+          reporting period, key financial metrics (ARR, burn, runway),
+          headcount, major milestones achieved, and any risks or concerns
+          raised. Be concise and factual.
+
+  - name: deal-memo
+    match:
+      metadata:
+        doc_type: deal_memo      # set this on ingest: metadata.doc_type=deal_memo
+    steps:
+      - tool: chunk-embed-upsert
+        collection: portfolio_chunks
+        chunker:
+          type: langchain
+
+      - tool: document-embed-upsert
+        collection: portfolio_summaries
+        doc_prompt: >
+          Summarize this investment memo or pitch deck. Include: company name,
+          stage, sector, investment thesis, key risks, and deal terms if present.
+          Be concise and factual.

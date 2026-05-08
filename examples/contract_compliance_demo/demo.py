@@ -175,9 +175,7 @@ pipelines:
       - tool: chunk-embed-upsert
         collection: rule_chunks
         chunker:
-          type: fixed
-          chunk_size: 512
-          overlap: 64
+          type: langchain
   - name: contracts
     match:
       metadata:
@@ -186,9 +184,7 @@ pipelines:
       - tool: chunk-embed-upsert
         collection: contract_chunks
         chunker:
-          type: fixed
-          chunk_size: 512
-          overlap: 64
+          type: langchain
       - tool: extract-structured
         collection: contract_metadata
         extractor:
@@ -203,7 +199,7 @@ pipelines:
           record_mode: many
           response_field: clauses
           id_field: clause_id
-          id_template: "{doc_id}__{index:04d}"
+          id_template: "{{doc_id}}__{{index:04d}}"
           prompt: contract_clauses_prompt.txt
 workflows:
   - name: check-contract-compliance
