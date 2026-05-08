@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -53,8 +53,14 @@ class IngestDocumentsResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class QueryRequest(BaseModel):
     text: str
+    history: list[ChatMessage] = []
 
 
 class QueryResponse(BaseModel):

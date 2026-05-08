@@ -157,7 +157,7 @@ class CogBaseApp:
                 wf_runner.workflow.name, params.get("doc_id"),
             )
 
-    async def query_stream(self, text: str):
+    async def query_stream(self, text: str, history: list[dict] | None = None):
         """Stream the answer token-by-token, then yield a final QueryResult.
 
         The retrieval loop runs until the LLM has enough evidence to answer or
@@ -165,7 +165,7 @@ class CogBaseApp:
         returned directly as formatted text (passthrough rule).
         """
         logger.info("app.query_stream.start query=%s", text[:200])
-        async for chunk in self._runner.run(text):
+        async for chunk in self._runner.run(text, history=history):
             yield chunk
 
     # ------------------------------------------------------------------

@@ -346,6 +346,7 @@ async def _get_active_app(
 
 # TODO ingest a list of documents may run a long time, make it a background task,
 #      client checks and waits for task to complete.
+# TODO support long documents
 @router.post("/{app_name}/ingest_documents", response_model=IngestDocumentsResponse)
 async def ingest_documents(
     app_name: str,
@@ -383,9 +384,9 @@ async def ingest_documents(
     )
 
 
-async def _drain_query(app, text: str):
+async def _drain_query(app, text: str, history: list[dict] | None = None):
     """Drain app.query_stream and return the final result."""
-    async for item in app.query_stream(text):
+    async for item in app.query_stream(text, history=history):
         if not isinstance(item, str):
             return item
     raise RuntimeError("query_stream did not yield a result")
@@ -406,14 +407,15 @@ async def query_application(
     directly (passthrough=True) without an additional synthesis step.
     """
     app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    history = [{"role": m.role, "content": m.content} for m in body.history] or None
     try:
-        result = await _drain_query(app, body.text)
+        result = await _drain_query(app, body.text, history=history)
     except Exception:
         logger.exception("query failed for app '%s', retrying with fresh app", app_name)
         app = await _get_active_app(
             app_name, app_cache, system_store, system_resources, force_refresh=True
         )
-        result = await _drain_query(app, body.text)
+        result = await _drain_query(app, body.text, history=history)
     return QueryResponse(
         answer=result.answer,
         passthrough=result.passthrough,
@@ -436,10 +438,11 @@ async def query_application_stream(
     Sentinel:     ``data: [DONE]``
     """
     app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    history = [{"role": m.role, "content": m.content} for m in body.history] or None
 
     async def event_stream():
         try:
-            async for item in app.query_stream(body.text):
+            async for item in app.query_stream(body.text, history=history):
                 if isinstance(item, str):
                     yield f"data: {json.dumps({'token': item})}\n\n"
                 else:

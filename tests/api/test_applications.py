@@ -693,7 +693,8 @@ def _mock_query_app(result: QueryResult) -> MagicMock:
     """Build a mock CogBaseApp whose query_stream yields tokens then a QueryResult."""
     inst = MagicMock()
 
-    async def _query_stream(text: str):
+    async def _query_stream(text: str, history: list[dict] | None = None):
+        _ = history
         for token in result.answer.split():
             yield token + " "
         yield result
@@ -732,7 +733,10 @@ class TestQueryApplication:
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query",
-            json={"text": "what is the notice period?"},
+            json={
+                "text": "what is the notice period?",
+                "history": [{"role": "user", "content": "summarize the contract first"}],
+            },
         )
 
         assert resp.status_code == 200
@@ -745,7 +749,7 @@ class TestQueryApplication:
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query",
-            json={"text": "q"},
+            json={"text": "q", "history": []},
         )
 
         assert resp.json()["passthrough"] is False
@@ -762,7 +766,10 @@ class TestQueryApplication:
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query",
-            json={"text": "list NDA contracts"},
+            json={
+                "text": "list NDA contracts",
+                "history": [{"role": "assistant", "content": "I found one contract already."}],
+            },
         )
 
         data = resp.json()
@@ -774,7 +781,7 @@ class TestQueryApplication:
     async def test_404_when_app_not_found(self, client):
         resp = await client.post(
             "/applications/nonexistent/query",
-            json={"text": "q"},
+            json={"text": "q", "history": []},
         )
         assert resp.status_code == 404
 
@@ -788,7 +795,7 @@ class TestQueryApplication:
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query",
-            json={"text": "q"},
+            json={"text": "q", "history": []},
         )
         assert resp.status_code == 404
 
@@ -798,7 +805,8 @@ class TestQueryApplication:
 
         call_count = 0
 
-        async def _flaky_stream(text: str):
+        async def _flaky_stream(text: str, history: list[dict] | None = None):
+            _ = history
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -814,7 +822,7 @@ class TestQueryApplication:
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=failing_then_good):
             resp = await client.post(
                 "/applications/my-contract-analyzer/query",
-                json={"text": "q"},
+                json={"text": "q", "history": []},
             )
 
         assert resp.status_code == 200
@@ -833,7 +841,7 @@ class TestQueryApplicationStream:
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query/stream",
-            json={"text": "q"},
+            json={"text": "q", "history": []},
         )
 
         assert resp.status_code == 200
@@ -846,7 +854,7 @@ class TestQueryApplicationStream:
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query/stream",
-            json={"text": "q"},
+            json={"text": "q", "history": []},
         )
 
         events = _parse_sse(resp.text)
@@ -863,7 +871,7 @@ class TestQueryApplicationStream:
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query/stream",
-            json={"text": "q"},
+            json={"text": "q", "history": []},
         )
 
         events = _parse_sse(resp.text)
@@ -880,7 +888,7 @@ class TestQueryApplicationStream:
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query/stream",
-            json={"text": "q"},
+            json={"text": "q", "history": []},
         )
 
         events = _parse_sse(resp.text)
@@ -898,7 +906,7 @@ class TestQueryApplicationStream:
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query/stream",
-            json={"text": "q"},
+            json={"text": "q", "history": []},
         )
 
         events = _parse_sse(resp.text)
@@ -911,7 +919,7 @@ class TestQueryApplicationStream:
     async def test_404_when_app_not_found(self, client):
         resp = await client.post(
             "/applications/nonexistent/query/stream",
-            json={"text": "q"},
+            json={"text": "q", "history": []},
         )
         assert resp.status_code == 404
 
@@ -919,7 +927,8 @@ class TestQueryApplicationStream:
     async def test_error_event_on_stream_failure(self, client):
         inst = MagicMock()
 
-        async def _failing_stream(text: str):
+        async def _failing_stream(text: str, history: list[dict] | None = None):
+            _ = history
             raise RuntimeError("boom")
             yield  # make it an async generator
 
@@ -928,7 +937,7 @@ class TestQueryApplicationStream:
 
         resp = await client.post(
             "/applications/my-contract-analyzer/query/stream",
-            json={"text": "q"},
+            json={"text": "q", "history": []},
         )
 
         assert resp.status_code == 200

@@ -25,6 +25,7 @@ class CogBaseClient:
         self.app_name = app_name
         self.api_base = api_base.rstrip("/")
         self._http = http_client
+        self._history: list[dict] = []
 
     async def list_apps(self) -> list[dict]:
         resp = await self._http.get(f"{self.api_base}/applications", timeout=10)
@@ -68,11 +69,17 @@ class CogBaseClient:
         resp.raise_for_status()
         return resp.json()["results"]
 
+    def clear_history(self) -> None:
+        """Reset the chat history."""
+        self._history = []
+
     async def query_stream(self, text: str) -> None:
+        """Stream a query using accumulated chat history, printing tokens as they arrive."""
+        answer_parts: list[str] = []
         async with self._http.stream(
             "POST",
             f"{self.api_base}/applications/{self.app_name}/query/stream",
-            json={"text": text},
+            json={"text": text, "history": self._history},
             timeout=120,
         ) as resp:
             resp.raise_for_status()
@@ -89,13 +96,19 @@ class CogBaseClient:
                     continue
                 if "token" in data:
                     print(data["token"], end="", flush=True)
+                    answer_parts.append(data["token"])
                 elif "result" in data:
                     result = data["result"]
                     if result.get("passthrough") and result.get("structured_records"):
-                        print(json.dumps(result["structured_records"], indent=2))
+                        formatted = json.dumps(result["structured_records"], indent=2)
+                        print(formatted)
+                        answer_parts.append(formatted)
                 elif "error" in data:
                     print(f"\n  ERROR: {data['error']}")
             print()
+        answer = "".join(answer_parts)
+        self._history.append({"role": "user", "content": text})
+        self._history.append({"role": "assistant", "content": answer})
 
     async def list_collections(self) -> dict:
         """Returns {"structured": [...], "vector": [...]}."""
