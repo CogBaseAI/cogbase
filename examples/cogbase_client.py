@@ -16,60 +16,76 @@ except ImportError:
     _READLINE_AVAILABLE = False
 
 class GeneratorClient:
-    """REST client for the /generate endpoints (pre-app, session-scoped).
+    """REST client for the /generate endpoints.
 
-    Lifecycle: describe → revise* → deploy → hand off to CogBaseClient.
+    Owns the full conversation history. The server is stateless — history is
+    sent on every call. The LLM drives the conversation and embeds config
+    proposals in its responses; this client extracts and tracks them.
+
+    Lifecycle:
+      chat(message)*  →  (display_text, config_yaml | None)
+      deploy()        →  {name, status, error}
     """
+
+    _CONFIG_START = "---CONFIG---"
+    _CONFIG_END = "---END CONFIG---"
 
     def __init__(self, api_base: str, http_client: httpx.AsyncClient) -> None:
         self.api_base = api_base.rstrip("/")
         self._http = http_client
-        self.session_id: str | None = None
+        self.messages: list[dict] = []   # full history sent to the server each turn
         self.config_yaml: str | None = None
 
-    async def generate(self, description: str) -> dict:
-        """Start a new session. Returns the full GenerateResponse dict."""
-        resp = await self._http.post(
-            f"{self.api_base}/generate",
-            json={"description": description},
-            timeout=120,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        self.session_id = data["session_id"]
-        self.config_yaml = data["config_yaml"]
-        return data
+    async def chat(self, user_message: str) -> tuple[str, str | None]:
+        """Send a user message and return (display_text, config_yaml | None).
 
-    async def revise(self, feedback: str) -> dict:
-        """Revise the current session. Returns the full ReviseResponse dict."""
-        if self.session_id is None:
-            raise RuntimeError("No active generator session")
+        ``display_text`` has CONFIG markers stripped — safe to print directly.
+        The full server response (markers included) is stored in ``self.messages``
+        so the LLM retains context of its previous proposals.
+        """
         resp = await self._http.post(
-            f"{self.api_base}/generate/{self.session_id}/revise",
-            json={"feedback": feedback},
+            f"{self.api_base}/generate/chat",
+            json={"text": user_message, "history": self.messages},
             timeout=120,
         )
         resp.raise_for_status()
         data = resp.json()
-        self.config_yaml = data["config_yaml"]
-        return data
+
+        full_content: str = data["content"]
+        config_yaml: str | None = data.get("config_yaml")
+
+        # Store the full history so the LLM sees its own proposals on the next turn.
+        self.messages.append({"role": "user", "content": user_message})
+        self.messages.append({"role": "assistant", "content": full_content})
+        if config_yaml:
+            self.config_yaml = config_yaml
+
+        display_text = self._strip_config_block(full_content)
+        return display_text, config_yaml
 
     async def deploy(self) -> dict:
-        """Deploy the current config as a new application. Returns DeployResponse dict."""
-        if self.session_id is None:
-            raise RuntimeError("No active generator session")
+        """Deploy the current config_yaml as a new application."""
+        if not self.config_yaml:
+            raise RuntimeError("No config to deploy — keep chatting until the LLM proposes one")
         resp = await self._http.post(
-            f"{self.api_base}/generate/{self.session_id}/deploy",
+            f"{self.api_base}/generate/deploy",
+            json={"config_yaml": self.config_yaml},
             timeout=60,
         )
         resp.raise_for_status()
-        self.session_id = None
-        self.config_yaml = None
         return resp.json()
 
     def reset(self) -> None:
-        self.session_id = None
+        self.messages = []
         self.config_yaml = None
+
+    @classmethod
+    def _strip_config_block(cls, text: str) -> str:
+        if cls._CONFIG_START not in text:
+            return text
+        before, rest = text.split(cls._CONFIG_START, 1)
+        after = rest.split(cls._CONFIG_END, 1)[1] if cls._CONFIG_END in rest else ""
+        return (before.strip() + ("\n\n" + after.strip() if after.strip() else "")).strip()
 
 
 _BUILTIN_COMMANDS = [

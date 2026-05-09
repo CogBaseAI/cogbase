@@ -147,36 +147,18 @@ class WorkflowRunResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class GenerateRequest(BaseModel):
-    description: str
+class GenerateChatRequest(BaseModel):
+    text: str
+    history: list[ChatMessage] = []
 
 
-class ReviseRequest(BaseModel):
-    feedback: str
+class GenerateChatResponse(BaseModel):
+    content: str        # display text (CONFIG markers stripped); store full in history
+    config_yaml: str | None = None
 
 
-class StructuredCollectionSummary(BaseModel):
-    name: str
-    fields: list[str]
-
-
-class ConfigSummary(BaseModel):
-    name: str
-    vector_collections: list[str]
-    structured_collections: list[StructuredCollectionSummary]
-    pipeline_steps: list[str]
-
-
-class GenerateResponse(BaseModel):
-    session_id: str
+class GenerateDeployRequest(BaseModel):
     config_yaml: str
-    summary: ConfigSummary
-
-
-class ReviseResponse(BaseModel):
-    config_yaml: str
-    summary: ConfigSummary
-    changes: list[str]
 
 
 class DeployResponse(BaseModel):

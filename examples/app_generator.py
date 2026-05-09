@@ -1,4 +1,7 @@
-"""CogBase App Generator — describe, refine, and deploy an app interactively.
+"""CogBase App Generator — conversational, LLM-driven app creation.
+
+The LLM asks what it needs, proposes config sections as they become clear,
+and refines on feedback. Just describe what you want and keep chatting.
 
 Usage
 -----
@@ -11,19 +14,13 @@ Usage
 
 Set COGBASE_API_URL to override the default http://localhost:8000.
 
-Phases
-------
-    1. Describe — type a plain-language description of the app you want
-    2. Revise   — refine the generated config with natural-language feedback
-    3. Deploy   — deploy the config as a live application
-
-Commands (revision phase)
--------------------------
-    /preview            Print the full generated config.yaml
-    /save [path]        Save config.yaml to disk (default: <app-name>-config.yaml)
-    /deploy             Deploy the current config
-    /restart            Start over with a new description
-    /q /quit /exit      Exit
+Commands
+--------
+    /preview    print the current config.yaml (available once the LLM proposes one)
+    /save       save config.yaml to disk  (/save <path> for a custom path)
+    /deploy     deploy the current config as a live application
+    /restart    clear history and start a new conversation
+    /q          quit
 """
 
 from __future__ import annotations
@@ -49,7 +46,7 @@ from examples.cogbase_client import (  # noqa: E402
 configure_logging()
 
 _API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000")
-_REVISION_COMMANDS = ["/preview", "/save", "/deploy", "/restart", "/q", "/quit", "/exit"]
+_COMMANDS = ["/preview", "/save", "/deploy", "/restart", "/q", "/quit", "/exit"]
 
 # ---------------------------------------------------------------------------
 # readline tab completion (best-effort)
@@ -62,12 +59,12 @@ except ImportError:
     _READLINE = False
 
 
-def _setup_completion(commands: list[str]) -> None:
+def _setup_completion() -> None:
     if not _READLINE:
         return
 
     def _completer(text: str, state: int) -> str | None:
-        matches = [c for c in commands if c.startswith(text)]
+        matches = [c for c in _COMMANDS if c.startswith(text)]
         return matches[state] if state < len(matches) else None
 
     _readline.set_completer(_completer)
@@ -76,53 +73,6 @@ def _setup_completion(commands: list[str]) -> None:
         _readline.parse_and_bind("bind ^I rl_complete")
     else:
         _readline.parse_and_bind("tab: complete")
-
-
-# ---------------------------------------------------------------------------
-# Display helpers
-# ---------------------------------------------------------------------------
-
-_SEP = "─" * 62
-
-
-def _print_summary(summary: dict) -> None:
-    name = summary.get("name", "?")
-    print(f"\nGenerated: {name}")
-    print(_SEP)
-    vc = summary.get("vector_collections", [])
-    if vc:
-        print(f"  vector collections  : {', '.join(vc)}")
-    for sc in summary.get("structured_collections", []):
-        fields: list[str] = sc.get("fields", [])
-        shown = fields[:6]
-        suffix = ", ..." if len(fields) > 6 else ""
-        print(f"  structured schema   : {sc['name']}")
-        if shown:
-            print(f"    fields: {', '.join(shown)}{suffix}")
-    steps: list[str] = summary.get("pipeline_steps", [])
-    if steps:
-        print(f"  pipeline steps      : {' → '.join(steps)}")
-    print(_SEP)
-    print()
-
-
-def _print_changes(changes: list[str]) -> None:
-    if not changes:
-        return
-    print()
-    for c in changes:
-        print(f"  {c}")
-    print()
-
-
-def _print_revision_help() -> None:
-    print("Type feedback to revise, or a command:")
-    print("  /preview    show the full generated config.yaml")
-    print("  /save       save config.yaml to disk  (/save <path> for a custom path)")
-    print("  /deploy     deploy this app")
-    print("  /restart    describe a new app")
-    print("  /q          quit")
-    print()
 
 
 # ---------------------------------------------------------------------------
@@ -136,132 +86,112 @@ async def main() -> None:
     print("=" * 40)
     print(f"  api: {_API_BASE}")
     print()
+    print("Describe the app you want to build and the LLM will guide you from there.")
+    print("Commands: /preview | /save [path] | /deploy | /restart | /q")
+    print()
+
+    _setup_completion()
 
     async with httpx.AsyncClient() as http:
         gen = GeneratorClient(_API_BASE, http)
 
         while True:
-            # ------------------------------------------------------------------
-            # Phase 1: describe
-            # ------------------------------------------------------------------
-            print("Describe the app you want to build.")
-            print("Include: document types, facts to extract, and example questions.\n")
-
             try:
-                description = input("> ").strip()
+                raw = input("> ").strip()
             except (EOFError, KeyboardInterrupt):
                 print("\nGoodbye!")
                 return
 
-            if not description:
+            if not raw:
                 continue
-            if description.lower() in {"/q", "/quit", "/exit"}:
+
+            lower = raw.lower()
+
+            if lower in {"/q", "/quit", "/exit"}:
                 print("Goodbye!")
                 return
 
-            print("\nGenerating...")
+            if lower == "/restart":
+                gen.reset()
+                print()
+                print("Conversation cleared. Describe the app you want to build.")
+                print()
+                continue
+
+            if lower == "/preview":
+                if not gen.config_yaml:
+                    print("  No config yet — keep chatting until the LLM proposes one.")
+                else:
+                    print()
+                    print(gen.config_yaml)
+                    print()
+                continue
+
+            if lower == "/save" or lower.startswith("/save "):
+                if not gen.config_yaml:
+                    print("  No config yet — keep chatting until the LLM proposes one.")
+                    continue
+                path_str = raw[len("/save"):].strip()
+                if not path_str:
+                    # derive a filename from the app name in the config
+                    import yaml as _yaml
+                    try:
+                        name = (_yaml.safe_load(gen.config_yaml) or {}).get("name", "app")
+                    except Exception:
+                        name = "app"
+                    path_str = f"{name}-config.yaml"
+                path = pathlib.Path(path_str).expanduser()
+                path.write_text(gen.config_yaml, encoding="utf-8")
+                print(f"  Saved to {path}")
+                continue
+
+            if lower == "/deploy":
+                if not gen.config_yaml:
+                    print("  No config yet — keep chatting until the LLM proposes one.")
+                    continue
+                import yaml as _yaml
+                try:
+                    app_name = (_yaml.safe_load(gen.config_yaml) or {}).get("name", "app")
+                except Exception:
+                    app_name = "app"
+                print(f"\nDeploying {app_name}...")
+                try:
+                    result = await gen.deploy()
+                except httpx.HTTPStatusError as exc:
+                    print(f"  ERROR {exc.response.status_code}: {exc.response.text}")
+                    continue
+                print(f"  status: {result['status']}")
+                if result.get("error"):
+                    print(f"  error:  {result['error']}")
+                    continue
+
+                deployed_name: str = result["name"]
+                print()
+                try:
+                    launch = input("  Launch query loop? [y/N] ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    return
+                if launch == "y":
+                    print()
+                    client = CogBaseClient(deployed_name, _API_BASE, http)
+                    print("Commands: /list | /ingest <file> | /list_collections | /query_structured | /clear | /reset | /q")
+                    print()
+                    await run_interactive_loop(client, lambda: b"")
+                return
+
+            # Natural-language message — send to the LLM
             try:
-                gen_data = await gen.generate(description)
+                display_text, config_yaml = await gen.chat(raw)
             except httpx.HTTPStatusError as exc:
                 print(f"  ERROR {exc.response.status_code}: {exc.response.text}")
                 continue
 
-            current_summary: dict = gen_data["summary"]
-            _print_summary(current_summary)
-            _print_revision_help()
-
-            # ------------------------------------------------------------------
-            # Phase 2: revise
-            # ------------------------------------------------------------------
-            _setup_completion(_REVISION_COMMANDS)
-            deployed_name: str | None = None
-            restart = False
-
-            while True:
-                try:
-                    raw = input("> ").strip()
-                except (EOFError, KeyboardInterrupt):
-                    print("\nGoodbye!")
-                    return
-
-                if not raw:
-                    continue
-
-                lower = raw.lower()
-
-                if lower in {"/q", "/quit", "/exit"}:
-                    print("Goodbye!")
-                    return
-
-                if lower == "/restart":
-                    gen.reset()
-                    restart = True
-                    print()
-                    break
-
-                if lower == "/preview":
-                    print()
-                    print(gen.config_yaml or "")
-                    print()
-                    continue
-
-                if lower == "/save" or lower.startswith("/save "):
-                    path_str = raw[len("/save"):].strip()
-                    if not path_str:
-                        path_str = f"{current_summary.get('name', 'app')}-config.yaml"
-                    path = pathlib.Path(path_str).expanduser()
-                    path.write_text(gen.config_yaml or "", encoding="utf-8")
-                    print(f"  Saved to {path}")
-                    continue
-
-                if lower == "/deploy":
-                    app_name = current_summary.get("name", "app")
-                    print(f"\nDeploying {app_name}...")
-                    try:
-                        deploy_data = await gen.deploy()
-                    except httpx.HTTPStatusError as exc:
-                        print(f"  ERROR {exc.response.status_code}: {exc.response.text}")
-                        continue
-                    print(f"  status: {deploy_data['status']}")
-                    if deploy_data.get("error"):
-                        print(f"  error:  {deploy_data['error']}")
-                    else:
-                        deployed_name = deploy_data["name"]
-                    break
-
-                # Natural-language revision
-                print("\nRevising...")
-                try:
-                    revise_data = await gen.revise(raw)
-                except httpx.HTTPStatusError as exc:
-                    print(f"  ERROR {exc.response.status_code}: {exc.response.text}")
-                    continue
-                current_summary = revise_data["summary"]
-                _print_changes(revise_data.get("changes", []))
-
-            if restart:
-                continue
-
-            if deployed_name is None:
-                return
-
-            # ------------------------------------------------------------------
-            # Phase 3: optional query loop
-            # ------------------------------------------------------------------
             print()
-            try:
-                launch = input("  Launch query loop? [y/N] ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                return
-
-            if launch == "y":
-                print()
-                client = CogBaseClient(deployed_name, _API_BASE, http)
-                print(f"Commands: /list | /ingest <file> | /list_collections | /query_structured | /clear | /reset | /q")
-                print()
-                await run_interactive_loop(client, lambda: b"")
-            return
+            print(display_text)
+            if config_yaml:
+                print("\n  (config updated — /preview to inspect, /deploy when ready)")
+            print()
 
 
 if __name__ == "__main__":
