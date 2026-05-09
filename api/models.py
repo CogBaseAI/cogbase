@@ -140,3 +140,46 @@ class WorkflowRunResponse(BaseModel):
     workflow: str
     records: list[dict]
     total: int
+
+
+# ---------------------------------------------------------------------------
+# Generator models
+# ---------------------------------------------------------------------------
+
+
+class GenerateRequest(BaseModel):
+    description: str
+
+
+class ReviseRequest(BaseModel):
+    feedback: str
+
+
+class StructuredCollectionSummary(BaseModel):
+    name: str
+    fields: list[str]
+
+
+class ConfigSummary(BaseModel):
+    name: str
+    vector_collections: list[str]
+    structured_collections: list[StructuredCollectionSummary]
+    pipeline_steps: list[str]
+
+
+class GenerateResponse(BaseModel):
+    session_id: str
+    config_yaml: str
+    summary: ConfigSummary
+
+
+class ReviseResponse(BaseModel):
+    config_yaml: str
+    summary: ConfigSummary
+    changes: list[str]
+
+
+class DeployResponse(BaseModel):
+    name: str
+    status: str
+    error: str | None = None

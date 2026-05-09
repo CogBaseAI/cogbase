@@ -15,6 +15,63 @@ try:
 except ImportError:
     _READLINE_AVAILABLE = False
 
+class GeneratorClient:
+    """REST client for the /generate endpoints (pre-app, session-scoped).
+
+    Lifecycle: describe → revise* → deploy → hand off to CogBaseClient.
+    """
+
+    def __init__(self, api_base: str, http_client: httpx.AsyncClient) -> None:
+        self.api_base = api_base.rstrip("/")
+        self._http = http_client
+        self.session_id: str | None = None
+        self.config_yaml: str | None = None
+
+    async def generate(self, description: str) -> dict:
+        """Start a new session. Returns the full GenerateResponse dict."""
+        resp = await self._http.post(
+            f"{self.api_base}/generate",
+            json={"description": description},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        self.session_id = data["session_id"]
+        self.config_yaml = data["config_yaml"]
+        return data
+
+    async def revise(self, feedback: str) -> dict:
+        """Revise the current session. Returns the full ReviseResponse dict."""
+        if self.session_id is None:
+            raise RuntimeError("No active generator session")
+        resp = await self._http.post(
+            f"{self.api_base}/generate/{self.session_id}/revise",
+            json={"feedback": feedback},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        self.config_yaml = data["config_yaml"]
+        return data
+
+    async def deploy(self) -> dict:
+        """Deploy the current config as a new application. Returns DeployResponse dict."""
+        if self.session_id is None:
+            raise RuntimeError("No active generator session")
+        resp = await self._http.post(
+            f"{self.api_base}/generate/{self.session_id}/deploy",
+            timeout=60,
+        )
+        resp.raise_for_status()
+        self.session_id = None
+        self.config_yaml = None
+        return resp.json()
+
+    def reset(self) -> None:
+        self.session_id = None
+        self.config_yaml = None
+
+
 _BUILTIN_COMMANDS = [
     "/q", "/quit", "/exit",
     "/list",

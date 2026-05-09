@@ -251,7 +251,7 @@ CogBase is not limited to legal. The core architecture maps to any domain where 
 | Medical records review | EHR notes, lab results, imaging reports, referrals | Drug conflict detection, care summary drafting |
 | Academic / patent research | Papers, patents, citations | Prior art timelines, claim contradiction analysis |
 
-About 60% of the codebase — the ingestion pipeline, workflow engine, query runner, skill registry, memory layer, and store interfaces — is identical across all verticals. You write the config and schema once. The store adapters handle the rest.
+About 90% of the codebase — the ingestion pipeline, workflow engine, query runner, skill registry, memory layer, and store interfaces — is identical across all verticals. You write the config and schema once. The store adapters handle the rest.
 
 ---
 
