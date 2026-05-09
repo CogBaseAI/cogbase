@@ -5,8 +5,44 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from collections.abc import Awaitable, Callable
 
 import httpx
+
+try:
+    import readline as _readline
+    _READLINE_AVAILABLE = True
+except ImportError:
+    _READLINE_AVAILABLE = False
+
+_BUILTIN_COMMANDS = [
+    "/q", "/quit", "/exit",
+    "/list",
+    "/create",
+    "/delete",
+    "/reset",
+    "/list_collections",
+    "/query_structured",
+    "/clear",
+]
+
+
+def _install_completer(commands: list[str]) -> None:
+    if not _READLINE_AVAILABLE:
+        return
+
+    def _completer(text: str, state: int) -> str | None:
+        matches = [c for c in commands if c.startswith(text)]
+        return matches[state] if state < len(matches) else None
+
+    _readline.set_completer(_completer)
+    # Keep / as a non-delimiter so the completer receives the full /cmd token.
+    _readline.set_completer_delims(" \t\n")
+    # libedit (macOS default) uses a different binding syntax than GNU readline.
+    if "libedit" in getattr(_readline, "__doc__", ""):
+        _readline.parse_and_bind("bind ^I rl_complete")
+    else:
+        _readline.parse_and_bind("tab: complete")
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s"
 
@@ -184,10 +220,9 @@ async def cmd_create(client: CogBaseClient, bundle: bytes) -> None:
         print(f"  error:  {result['error']}")
 
 
-async def cmd_delete(client: CogBaseClient, raw: str) -> None:
-    name = raw[len("delete "):].strip()
+async def cmd_delete(client: CogBaseClient, name: str) -> None:
     if not name:
-        print("  Usage: delete <name>")
+        print("  Usage: /delete <name>")
         return
     confirm = input(f"  Delete application '{name}' and all its data? [y/N] ").strip().lower()
     if confirm == "y":
@@ -234,3 +269,86 @@ async def cmd_query_structured(
         print("  No records found.")
     else:
         print(json.dumps(records, indent=2))
+
+
+async def run_interactive_loop(
+    client: CogBaseClient,
+    build_bundle: Callable[[], bytes],
+    *,
+    default_collection: str = "",
+    handler: Callable[[str, str], Awaitable[bool]] | None = None,
+    extra_commands: list[str] | None = None,
+) -> None:
+    """Run the standard interactive command loop.
+
+    All commands use a ``/`` prefix. Anything without a leading ``/`` is sent
+    as a natural-language query. Pass *handler* for demo-specific commands; it
+    receives ``(raw, lower)`` and returns ``True`` if it handled the input or
+    ``False`` to fall through to a query.
+
+    Common commands: /q /quit /exit, /list, /create, /delete <name>, /reset,
+    /list_collections, /query_structured [<name>], /clear.
+    """
+    _install_completer(_BUILTIN_COMMANDS + (extra_commands or []))
+    while True:
+        try:
+            raw = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nGoodbye!")
+            break
+
+        if not raw:
+            continue
+
+        lower = raw.lower()
+
+        if lower in {"/q", "/quit", "/exit"}:
+            print("Goodbye!")
+            break
+
+        if lower == "/list":
+            await cmd_list(client)
+            continue
+
+        if lower == "/create":
+            await cmd_create(client, build_bundle())
+            continue
+
+        if lower.startswith("/delete"):
+            await cmd_delete(client, raw[len("/delete"):].strip())
+            continue
+
+        if lower == "/reset":
+            if await cmd_reset(client):
+                break
+            continue
+
+        if lower == "/list_collections":
+            await cmd_list_collections(client)
+            continue
+
+        if lower == "/query_structured" or lower.startswith("/query_structured "):
+            collection = (
+                raw[len("/query_structured "):].strip()
+                if lower.startswith("/query_structured ")
+                else default_collection
+            )
+            if not collection:
+                print("  Usage: /query_structured <collection>")
+                continue
+            await cmd_query_structured(client, collection)
+            continue
+
+        if lower == "/clear":
+            client.clear_history()
+            print("  Chat history cleared.")
+            continue
+
+        if handler is not None and await handler(raw, lower):
+            continue
+
+        print("Thinking...")
+        try:
+            await client.query_stream(raw)
+        except httpx.HTTPStatusError as exc:
+            print(f"  ERROR: {exc.response.status_code} {exc.response.text}")

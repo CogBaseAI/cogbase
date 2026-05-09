@@ -14,16 +14,18 @@ Set COGBASE_API_URL to override the default http://localhost:8000.
 
 Commands (interactive loop)
 ---------------------------
-    list                        List all applications
-    create                      Create the vc-portfolio application
-    delete <name>               Delete an application by name
-    ingest all                  Ingest all built-in synthetic board updates + memos
-    ingest board                Ingest only board updates
-    ingest memos                Ingest only investment memos
-    list collections            List all structured and vector collections
-    query structured            Dump all portfolio_kpis records
-    reset                       Delete the application and start fresh
-    q / quit / exit             Exit
+    /list                       List all applications
+    /create                     Create the vc-portfolio application
+    /delete <name>              Delete an application by name
+    /ingest_all                 Ingest all built-in synthetic board updates + memos
+    /ingest_board               Ingest only board updates
+    /ingest_memos               Ingest only investment memos
+    /list_collections           List all structured and vector collections
+    /query_structured           Dump all portfolio_kpis records
+    /query_structured <name>    Query a named structured collection
+    /clear                      Clear chat history
+    /reset                      Delete the application and start fresh
+    /q /quit /exit              Exit
 
 Then type any natural-language question to run a query, e.g.:
     Which companies are burning more than $500K per month?
@@ -40,7 +42,6 @@ import io
 import json
 import os
 import pathlib
-import readline  # noqa: F401 — enables arrow-key line editing in input()
 import sys
 import zipfile
 
@@ -53,14 +54,9 @@ import httpx  # noqa: E402
 
 from examples.cogbase_client import (  # noqa: E402
     CogBaseClient,
-    cmd_create,
-    cmd_delete,
-    cmd_list,
-    cmd_list_collections,
-    cmd_query_structured,
-    cmd_reset,
     cmd_startup,
     configure_logging,
+    run_interactive_loop,
 )
 from examples.vc_portfolio_demo.portfolio_data import BOARD_UPDATES, DEAL_MEMOS  # noqa: E402
 from examples.vc_portfolio_demo.schema import PortfolioKPIExtraction, PortfolioKPIRecord  # noqa: E402
@@ -84,11 +80,7 @@ def _build_bundle() -> bytes:
     return buf.getvalue()
 
 
-async def _ingest_batch(
-    client: CogBaseClient,
-    batch: dict[str, dict],
-    label: str,
-) -> None:
+async def _ingest_batch(client: CogBaseClient, batch: dict[str, dict], label: str) -> None:
     documents = [
         {"doc_id": doc_id, "text": entry["text"], "metadata": entry["metadata"]}
         for doc_id, entry in batch.items()
@@ -130,73 +122,28 @@ async def main() -> None:
             return
         print()
 
-        print("Commands: list | create | delete <name> | ingest all | ingest board | ingest memos | list collections | query structured | reset | q")
+        print("Commands: /list | /create | /delete <name> | /ingest_all | /ingest_board | /ingest_memos | /list_collections | /query_structured [<name>] | /clear | /reset | /q")
         print()
 
-        while True:
-            try:
-                raw = input("> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\nGoodbye!")
-                break
-
-            if not raw:
-                continue
-
-            lower = raw.lower()
-
-            if lower in {"q", "quit", "exit"}:
-                print("Goodbye!")
-                break
-
-            if lower == "list":
-                await cmd_list(client)
-                continue
-
-            if lower == "create":
-                await cmd_create(client, _build_bundle())
-                continue
-
-            if lower.startswith("delete "):
-                await cmd_delete(client, raw)
-                continue
-
-            if lower == "reset":
-                if await cmd_reset(client):
-                    break
-                continue
-
-            if lower == "ingest all":
+        async def handler(raw: str, lower: str) -> bool:
+            if lower == "/ingest_all":
                 await _ingest_batch(client, BOARD_UPDATES, "board updates + LP updates")
                 await _ingest_batch(client, DEAL_MEMOS, "investment memos")
-                continue
-
-            if lower == "ingest board":
+                return True
+            if lower == "/ingest_board":
                 await _ingest_batch(client, BOARD_UPDATES, "board updates + LP updates")
-                continue
-
-            if lower == "ingest memos":
+                return True
+            if lower == "/ingest_memos":
                 await _ingest_batch(client, DEAL_MEMOS, "investment memos")
-                continue
+                return True
+            return False
 
-            if lower == "list collections":
-                await cmd_list_collections(client)
-                continue
-
-            if lower == "query structured" or lower.startswith("query structured "):
-                collection = (
-                    raw[len("query structured "):].strip()
-                    if lower.startswith("query structured ")
-                    else _KPI_COLLECTION
-                )
-                await cmd_query_structured(client, collection)
-                continue
-
-            print("Thinking...")
-            try:
-                await client.query_stream(raw)
-            except httpx.HTTPStatusError as exc:
-                print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+        await run_interactive_loop(
+            client, _build_bundle,
+            default_collection=_KPI_COLLECTION,
+            handler=handler,
+            extra_commands=["/ingest_all", "/ingest_board", "/ingest_memos"],
+        )
 
 
 if __name__ == "__main__":

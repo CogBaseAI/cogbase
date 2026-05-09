@@ -14,16 +14,17 @@ Set COGBASE_API_URL to override the default http://localhost:8000.
 
 Commands (interactive loop)
 ---------------------------
-    list                        List all applications
-    create                      Create the contract-analyst application
-    delete <name>               Delete an application by name
-    ingest saas                 Ingest the built-in 5 SaaS contract fixtures
-    ingest <path>               Ingest a plain-text contract file from disk
-    list collections            List all structured collections for the application
-    query structured            Query the default contracts collection (all records)
-    query structured <name>     Query a named structured collection (all records)
-    reset                       Delete the application and start fresh
-    q / quit / exit             Exit
+    /list                       List all applications
+    /create                     Create the contract-analyst application
+    /delete <name>              Delete an application by name
+    /ingest_saas                Ingest the built-in 5 SaaS contract fixtures
+    /ingest <path>              Ingest a plain-text contract file from disk
+    /list_collections           List all structured collections for the application
+    /query_structured           Query the default contracts collection (all records)
+    /query_structured <name>    Query a named structured collection (all records)
+    /clear                      Clear chat history
+    /reset                      Delete the application and start fresh
+    /q /quit /exit              Exit
 """
 
 from __future__ import annotations
@@ -33,35 +34,21 @@ import io
 import json
 import os
 import pathlib
-import readline  # noqa: F401 — enables arrow-key line editing in input()
 import sys
 import zipfile
-
-# ---------------------------------------------------------------------------
-# Repo root on the Python path
-# ---------------------------------------------------------------------------
 
 _DEMO_DIR = pathlib.Path(__file__).parent.resolve()
 _REPO_ROOT = _DEMO_DIR.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-# ---------------------------------------------------------------------------
-# Imports (after sys.path is configured)
-# ---------------------------------------------------------------------------
-
 import httpx  # noqa: E402
 
 from examples.cogbase_client import (  # noqa: E402
     CogBaseClient,
-    cmd_create,
-    cmd_delete,
-    cmd_list,
-    cmd_list_collections,
-    cmd_query_structured,
-    cmd_reset,
     cmd_startup,
     configure_logging,
+    run_interactive_loop,
 )
 from examples.contract_analyst_demo.schema import (  # noqa: E402
     ContractExtraction,
@@ -71,13 +58,8 @@ from examples.contract_analyst_demo.saas_contracts import CONTRACTS  # noqa: E40
 
 configure_logging()
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
 _APP_NAME = "contract-analyst"
 _API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000")
-
 _CONTRACTS_COLLECTION = "contracts"
 
 
@@ -89,11 +71,6 @@ def _build_bundle() -> bytes:
         zf.writestr("contracts_extraction_schema.json", json.dumps(ContractExtraction.model_json_schema(), indent=2))
         zf.write(_DEMO_DIR / "contracts_prompt.txt", "contracts_prompt.txt")
     return buf.getvalue()
-
-
-# ---------------------------------------------------------------------------
-# Main async loop
-# ---------------------------------------------------------------------------
 
 
 async def main() -> None:
@@ -111,81 +88,33 @@ async def main() -> None:
             return
         print()
 
-        print("Commands: list | create | delete <name> | ingest saas | ingest <file> | list collections | query structured [<name>] | reset | q")
+        print("Commands: /list | /create | /delete <name> | /ingest_saas | /ingest <file> | /list_collections | /query_structured [<name>] | /clear | /reset | /q")
         print()
 
-        while True:
-            try:
-                raw = input("> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\nGoodbye!")
-                break
-
-            if not raw:
-                continue
-
-            lower = raw.lower()
-
-            if lower in {"q", "quit", "exit"}:
-                print("Goodbye!")
-                break
-
-            if lower == "list":
-                await cmd_list(client)
-                continue
-
-            if lower == "create":
-                await cmd_create(client, _build_bundle())
-                continue
-
-            if lower.startswith("delete "):
-                await cmd_delete(client, raw)
-                continue
-
-            if lower == "reset":
-                if await cmd_reset(client):
-                    break
-                continue
-
-            if lower == "ingest saas":
+        async def handler(raw: str, lower: str) -> bool:
+            if lower == "/ingest_saas":
                 print(f"Ingesting {len(CONTRACTS)} built-in SaaS contracts...")
-                documents = [
-                    {"doc_id": doc_id, "text": text}
-                    for doc_id, text in CONTRACTS.items()
-                ]
+                documents = [{"doc_id": doc_id, "text": text} for doc_id, text in CONTRACTS.items()]
                 try:
                     results = await client.ingest_documents(documents)
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                    continue
+                    return True
                 for r in results:
                     if r["success"]:
                         print(f"  {r['doc_id']:<12}  OK  ({r['records_extracted']} record extracted)")
                     else:
                         print(f"  {r['doc_id']:<12}  FAILED: {r['error']}")
-                continue
+                return True
 
-            if lower == "list collections":
-                await cmd_list_collections(client)
-                continue
-
-            if lower == "query structured" or lower.startswith("query structured "):
-                collection = (
-                    raw[len("query structured "):].strip()
-                    if lower.startswith("query structured ")
-                    else _CONTRACTS_COLLECTION
-                )
-                await cmd_query_structured(client, collection)
-                continue
-
-            if lower.startswith("ingest "):
-                rest = raw[len("ingest "):].strip()
+            if lower.startswith("/ingest "):
+                rest = raw[len("/ingest "):].strip()
                 file_path = pathlib.Path(rest).expanduser()
                 if not file_path.is_absolute():
                     file_path = pathlib.Path.cwd() / file_path
                 if not file_path.exists():
                     print(f"  File not found: {file_path}")
-                    continue
+                    return True
                 doc_id = file_path.stem
                 text = file_path.read_text(errors="replace")
                 print(f"Ingesting {file_path.name} as doc_id={doc_id!r}...")
@@ -193,19 +122,22 @@ async def main() -> None:
                     results = await client.ingest_documents([{"doc_id": doc_id, "text": text}])
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                    continue
+                    return True
                 r = results[0]
                 if r["success"]:
                     print(f"  {doc_id}  OK")
                 else:
                     print(f"  {doc_id}  FAILED: {r['error']}")
-                continue
+                return True
 
-            print("Thinking...")
-            try:
-                await client.query_stream(raw)
-            except httpx.HTTPStatusError as exc:
-                print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+            return False
+
+        await run_interactive_loop(
+            client, _build_bundle,
+            default_collection=_CONTRACTS_COLLECTION,
+            handler=handler,
+            extra_commands=["/ingest_saas", "/ingest"],
+        )
 
 
 if __name__ == "__main__":

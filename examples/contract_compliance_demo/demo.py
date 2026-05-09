@@ -17,21 +17,22 @@ and vector_store.type=faiss, or set COGBASE_CONFIG to point to your system confi
 
 Commands (interactive loop)
 ---------------------------
-    create                      Create the contract-compliance application
-    ingest rules                Ingest the built-in company rules documents
-    ingest rules <path>         Ingest a rules document from disk
-    ingest contracts            Ingest the built-in sample contracts (3 contracts)
-    ingest contract <path>      Ingest a contract from disk
-    check <doc_id>              Run clause-by-clause compliance check
-    report <doc_id>             Print stored compliance report for one contract
-    alerts                      List high and critical findings across all contracts
-    list                        List all applications
-    list collections            List all collections for the compliance app
-    query structured            Dump the contract_metadata collection
-    query structured <name>     Dump a named collection
-    delete <name>               Delete an application by name
-    reset                       Delete the application and all demo data
-    q / quit / exit             Exit
+    /create                     Create the contract-compliance application
+    /ingest_rules               Ingest the built-in company rules documents
+    /ingest_rules <path>        Ingest a rules document from disk
+    /ingest_contracts           Ingest the built-in sample contracts (3 contracts)
+    /ingest_contract <path>     Ingest a contract from disk
+    /check <doc_id>             Run clause-by-clause compliance check
+    /report <doc_id>            Print stored compliance report for one contract
+    /alerts                     List high and critical findings across all contracts
+    /list                       List all applications
+    /list_collections           List all collections for the compliance app
+    /query_structured           Dump the contract_metadata collection
+    /query_structured <name>    Dump a named collection
+    /clear                      Clear chat history
+    /delete <name>              Delete an application by name
+    /reset                      Delete the application and all demo data
+    /q /quit /exit              Exit
 
 Any other input is sent as a natural-language query to the contract-compliance app.
 """
@@ -43,39 +44,23 @@ import io
 import json
 import os
 import pathlib
-import readline  # noqa: F401 — enables arrow-key line editing in input()
 import sys
 import zipfile
-
-# ---------------------------------------------------------------------------
-# Repo root on the Python path
-# ---------------------------------------------------------------------------
 
 _DEMO_DIR = pathlib.Path(__file__).parent.resolve()
 _REPO_ROOT = _DEMO_DIR.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-# ---------------------------------------------------------------------------
-# Imports (after sys.path is configured)
-# ---------------------------------------------------------------------------
-
 import httpx  # noqa: E402
 
 from examples.cogbase_client import (  # noqa: E402
     CogBaseClient,
-    cmd_create,
-    cmd_delete,
-    cmd_list,
-    cmd_list_collections,
-    cmd_query_structured,
-    cmd_reset,
     cmd_startup,
     configure_logging,
+    run_interactive_loop,
 )
-from examples.contract_compliance_demo.contracts_data import (  # noqa: E402
-    CONTRACTS_DOCUMENTS,
-)
+from examples.contract_compliance_demo.contracts_data import CONTRACTS_DOCUMENTS  # noqa: E402
 from examples.contract_compliance_demo.rules_data import RULES_DOCUMENTS  # noqa: E402
 from examples.contract_compliance_demo.schema import (  # noqa: E402
     ClauseComplianceFinding,
@@ -87,13 +72,8 @@ from examples.contract_compliance_demo.schema import (  # noqa: E402
 
 configure_logging()
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
 _APP_NAME = "contract-compliance"
 _API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000")
-
 _DEFAULT_STRUCTURED_COLLECTION = "contract_metadata"
 
 
@@ -112,11 +92,6 @@ def _build_bundle() -> bytes:
     return buf.getvalue()
 
 
-# ---------------------------------------------------------------------------
-# Main async loop
-# ---------------------------------------------------------------------------
-
-
 async def main() -> None:
     print()
     print("Contract Compliance Demo (REST API)")
@@ -133,68 +108,23 @@ async def main() -> None:
         print()
 
         print(
-            "Commands: create | ingest rules [<file>] | ingest contracts | "
-            "ingest contract <file> | check <doc_id> | report <doc_id> | alerts | "
-            "list | list collections | query structured [<name>] | "
-            "reset | delete <name> | q"
+            "Commands: /create | /ingest_rules [<file>] | /ingest_contracts | "
+            "/ingest_contract <file> | /check <doc_id> | /report <doc_id> | /alerts | "
+            "/list | /list_collections | /query_structured [<name>] | "
+            "/clear | /reset | /delete <name> | /q"
         )
         print()
 
-        while True:
-            try:
-                raw = input("> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\nGoodbye!")
-                break
-
-            if not raw:
-                continue
-
-            lower = raw.lower()
-
-            if lower in {"q", "quit", "exit"}:
-                print("Goodbye!")
-                break
-
-            if lower == "list":
-                await cmd_list(client)
-                continue
-
-            if lower == "create":
-                await cmd_create(client, _build_bundle())
-                continue
-
-            if lower.startswith("delete "):
-                await cmd_delete(client, raw)
-                continue
-
-            if lower == "reset":
-                if await cmd_reset(client):
-                    break
-                continue
-
-            if lower == "list collections":
-                await cmd_list_collections(client)
-                continue
-
-            if lower == "query structured" or lower.startswith("query structured "):
-                collection = (
-                    raw[len("query structured "):].strip()
-                    if lower.startswith("query structured ")
-                    else _DEFAULT_STRUCTURED_COLLECTION
-                )
-                await cmd_query_structured(client, collection)
-                continue
-
-            if lower == "ingest rules" or lower.startswith("ingest rules "):
-                rest = raw[len("ingest rules"):].strip()
+        async def handler(raw: str, lower: str) -> bool:
+            if lower == "/ingest_rules" or lower.startswith("/ingest_rules "):
+                rest = raw[len("/ingest_rules"):].strip()
                 if rest:
                     file_path = pathlib.Path(rest).expanduser()
                     if not file_path.is_absolute():
                         file_path = pathlib.Path.cwd() / file_path
                     if not file_path.exists():
                         print(f"  File not found: {file_path}")
-                        continue
+                        return True
                     doc_id = file_path.stem
                     text = file_path.read_text(errors="replace")
                     documents = [{"doc_id": doc_id, "text": text, "metadata": {"doc_type": "rules"}}]
@@ -209,15 +139,15 @@ async def main() -> None:
                     results = await client.ingest_documents(documents, timeout=180)
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                    continue
+                    return True
                 for r in results:
                     if r["success"]:
                         print(f"  {r['doc_id']:<14}  OK  (rule chunks indexed)")
                     else:
                         print(f"  {r['doc_id']:<14}  FAILED: {r['error']}")
-                continue
+                return True
 
-            if lower == "ingest contracts":
+            if lower == "/ingest_contracts":
                 print(f"Ingesting {len(CONTRACTS_DOCUMENTS)} built-in contracts...")
                 documents = [
                     {"doc_id": doc.doc_id, "text": doc.text, "metadata": dict(doc.metadata)}
@@ -227,49 +157,47 @@ async def main() -> None:
                     results = await client.ingest_documents(documents, timeout=180)
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                    continue
+                    return True
                 for r in results:
                     if r["success"]:
                         print(f"  {r['doc_id']:<14}  OK  ({r['records_extracted']} records extracted)")
                     else:
                         print(f"  {r['doc_id']:<14}  FAILED: {r['error']}")
-                continue
+                return True
 
-            if lower.startswith("ingest contract "):
-                rest = raw[len("ingest contract "):].strip()
+            if lower.startswith("/ingest_contract "):
+                rest = raw[len("/ingest_contract "):].strip()
                 file_path = pathlib.Path(rest).expanduser()
                 if not file_path.is_absolute():
                     file_path = pathlib.Path.cwd() / file_path
                 if not file_path.exists():
                     print(f"  File not found: {file_path}")
-                    continue
+                    return True
                 doc_id = file_path.stem
                 text = file_path.read_text(errors="replace")
-                documents = [{"doc_id": doc_id, "text": text, "metadata": {"doc_type": "contract"}}]
                 print(f"Ingesting {file_path.name} as doc_id={doc_id!r}...")
                 try:
-                    results = await client.ingest_documents(documents, timeout=180)
+                    results = await client.ingest_documents(
+                        [{"doc_id": doc_id, "text": text, "metadata": {"doc_type": "contract"}}],
+                        timeout=180,
+                    )
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                    continue
+                    return True
                 r = results[0]
                 if r["success"]:
                     print(f"  {doc_id}  OK  ({r['records_extracted']} records extracted)")
                 else:
                     print(f"  {doc_id}  FAILED: {r['error']}")
-                continue
+                return True
 
-            if lower.startswith("check "):
-                doc_id = raw[len("check "):].strip()
+            if lower.startswith("/check"):
+                doc_id = raw[len("/check"):].strip()
                 if not doc_id:
-                    print("  Usage: check <doc_id>")
-                    continue
-
+                    print("  Usage: /check <doc_id>")
+                    return True
                 print(f"Checking compliance for {doc_id!r}...")
-                count = 0
-                non_compliant = 0
-                needs_review = 0
-
+                count = non_compliant = needs_review = 0
                 try:
                     async with http.stream(
                         "POST",
@@ -301,24 +229,22 @@ async def main() -> None:
                                 needs_review += 1
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                    continue
-
+                    return True
                 if count == 0:
-                    print(f"  No clauses found for {doc_id!r}. Run 'ingest contracts' first.")
+                    print(f"  No clauses found for {doc_id!r}. Run '/ingest_contracts' first.")
                 else:
                     compliant = count - non_compliant - needs_review
                     print(f"\n  {count} findings saved.  "
                           f"non-compliant: {non_compliant}  "
                           f"needs-review: {needs_review}  "
                           f"compliant: {compliant}")
-                continue
+                return True
 
-            if lower.startswith("report "):
-                doc_id = raw[len("report "):].strip()
+            if lower.startswith("/report"):
+                doc_id = raw[len("/report"):].strip()
                 if not doc_id:
-                    print("  Usage: report <doc_id>")
-                    continue
-
+                    print("  Usage: /report <doc_id>")
+                    return True
                 try:
                     findings = await client.query_structured(
                         "clause_compliance_findings",
@@ -326,25 +252,23 @@ async def main() -> None:
                     )
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                    continue
+                    return True
                 if not findings:
-                    print(f"  No findings for {doc_id!r}. Run 'check {doc_id}' first.")
-                    continue
-
+                    print(f"  No findings for {doc_id!r}. Run '/check {doc_id}' first.")
+                    return True
                 print(f"\nCompliance report for {doc_id}")
                 print("-" * 60)
                 by_status: dict[str, list] = {}
                 for f in findings:
                     by_status.setdefault(f.get("status", "unknown"), []).append(f)
-
                 for status, group in by_status.items():
                     print(f"\n[{status.upper()}] — {len(group)} clause(s)")
                     for f in group:
                         print(json.dumps(f, indent=2))
                 print()
-                continue
+                return True
 
-            if lower == "alerts":
+            if lower == "/alerts":
                 try:
                     findings = await client.query_structured(
                         "clause_compliance_findings",
@@ -355,11 +279,10 @@ async def main() -> None:
                     )
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                    continue
+                    return True
                 if not findings:
                     print("  No high/critical non-compliant findings.")
-                    continue
-
+                    return True
                 print(f"\nHigh / Critical non-compliant findings ({len(findings)})")
                 print("-" * 70)
                 for f in sorted(
@@ -375,13 +298,16 @@ async def main() -> None:
                     summary = f.get("summary", "")
                     print(f"  {sev:<8}  {doc:<14}  {cid:<28}  {summary}")
                 print()
-                continue
+                return True
 
-            print("Thinking...")
-            try:
-                await client.query_stream(raw)
-            except httpx.HTTPStatusError as exc:
-                print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+            return False
+
+        await run_interactive_loop(
+            client, _build_bundle,
+            default_collection=_DEFAULT_STRUCTURED_COLLECTION,
+            handler=handler,
+            extra_commands=["/ingest_rules", "/ingest_contracts", "/ingest_contract", "/check", "/report", "/alerts"],
+        )
 
 
 if __name__ == "__main__":
