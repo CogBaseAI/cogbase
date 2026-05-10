@@ -1,12 +1,13 @@
 """App generator endpoints — agentic, conversational config.yaml creation.
 
-The LLM drives the conversation: it asks what it needs, proposes config sections
-as they become clear, and refines on feedback. No explicit phases or session state
-on the server — the client owns the full message history.
+The LLM drives the conversation via two tools: propose_extraction_schema and
+propose_app_config. Both validate server-side and return errors for the LLM
+to fix. The client owns the full message history (role: user/assistant only);
+tool call/result messages live only within a single server turn.
 
 Endpoints
 ---------
-  POST /generate/chat    stateless chat turn; LLM may embed a ---CONFIG--- block
+  POST /generate/chat    stateless chat turn; agent loop runs server-side
   POST /generate/deploy  create and activate an application from a config_yaml
 """
 
@@ -31,20 +32,96 @@ from api.models import (
 from api.system_store import AppRecord
 from cogbase.config.config import AppConfig
 from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
+from cogbase.llms.base import LLMBase, ToolDefinition
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/generate", tags=["generate"])
 
+_MAX_AGENT_CALLS = 10
+
 # ---------------------------------------------------------------------------
-# Block markers — stripped before display; stored verbatim in history for LLM context.
+# Tool definitions
 # ---------------------------------------------------------------------------
 
-_CONFIG_START = "---CONFIG---"
-_CONFIG_END = "---END CONFIG---"
-_SCHEMA_START = "---EXTRACTION SCHEMA---"
-_SCHEMA_END = "---END EXTRACTION SCHEMA---"
-_RESOLVED_START = "---SCHEMA RESOLVED---"
-_RESOLVED_END = "---END SCHEMA RESOLVED---"
+_PROPOSE_SCHEMA_TOOL: ToolDefinition = {
+    "name": "propose_extraction_schema",
+    "description": (
+        "Generate and validate extraction schemas for all structured collections. "
+        "Call this once you understand the domain and document types — do not ask the "
+        "user to enumerate fields. The schemas are derived from the conversation and "
+        "domain knowledge, then presented to the user for review."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    },
+}
+
+_PROPOSE_CONFIG_TOOL: ToolDefinition = {
+    "name": "propose_app_config",
+    "description": (
+        "Validate a complete CogBase app config YAML. "
+        "Call this after propose_extraction_schema has succeeded. "
+        "Use the resolved JSON strings it returned verbatim for extraction_schema and schema fields. "
+        "Returns 'Config validated.' on success, or a validation error to fix."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "config_yaml": {
+                "type": "string",
+                "description": "Complete config.yaml content",
+            }
+        },
+        "required": ["config_yaml"],
+        "additionalProperties": False,
+    },
+}
+
+_GENERATOR_TOOLS: list[ToolDefinition] = [_PROPOSE_SCHEMA_TOOL, _PROPOSE_CONFIG_TOOL]
+
+_SCHEMA_AGENT_SYSTEM_PROMPT = """\
+You are a CogBase schema designer. Given a conversation about building a CogBase \
+application, propose complete JSON Schema definitions for every structured collection \
+the application needs.
+
+Use domain knowledge to propose sensible fields — do not wait for the user to enumerate \
+them. For example, if the application is a contract analyst, include fields like \
+vendor_name, effective_date, expiry_date, total_value, and governing_law without being asked.
+
+Output ONLY a YAML mapping of collection_name → JSON Schema object. No explanation, \
+no markdown fences, just the raw YAML.
+
+Schema rules:
+- Top-level keys are collection names (snake_case)
+- Each collection must be type: object with a non-empty properties block
+- Do NOT include doc_id — it is injected automatically
+- Optional/nullable scalars: anyOf: [{type: <T>}, {type: "null"}]
+- List fields: type: array, items: {...}, default: []
+- Nested objects: type: object with inline properties
+- Add a description to every field
+
+Example output:
+  contracts:
+    type: object
+    properties:
+      vendor_name:
+        anyOf: [{type: string}, {type: "null"}]
+        description: Name of the vendor
+      effective_date:
+        anyOf: [{type: string}, {type: "null"}]
+        description: Contract start date (ISO 8601)
+      line_items:
+        type: array
+        items:
+          type: object
+          properties:
+            description: {type: string, description: Item description}
+            amount: {anyOf: [{type: number}, {type: "null"}], description: Amount in USD}
+        description: Contract line items
+        default: []\
+"""
 
 _MAX_SCHEMA_RETRIES = 3
 
@@ -69,70 +146,17 @@ natural-language questions via semantic search and structured lookup.
        * Semantic search over document text → needs chunk-embed-upsert step
        * High-level summary or topic queries → needs document-embed-upsert step
 
-2. Propose and finalize the extraction schema(s) before writing the full config.
-   Use full JSON Schema (YAML-encoded) for every collection. One block covers all:
+2. Once you understand the domain and document types, call propose_extraction_schema.
+   It generates schemas from the conversation — you do not write the schemas yourself.
+   When it succeeds, present the proposed schemas to the user and ask for confirmation
+   or corrections. Include the resolved JSON strings in your response so they persist
+   in conversation history.
 
----EXTRACTION SCHEMA---
-<collection_name>:
-  type: object
-  properties:
-    <scalar_field>:
-      anyOf:
-        - type: <string|integer|number|boolean>
-        - type: "null"
-      description: "<what this field captures>"
-    <nested_object_field>:
-      anyOf:
-        - type: object
-          properties:
-            <subfield>:
-              anyOf: [{{type: string}}, {{type: "null"}}]
-              description: "..."
-        - type: "null"
-      description: "<what the nested object captures>"
-    <list_of_objects_field>:
-      type: array
-      items:
-        type: object
-        properties:
-          <subfield>:
-            type: string
-            description: "..."
-      description: "<what each list item represents>"
-      default: []
-<another_collection>:
-  type: object
-  properties:
-    ...
----END EXTRACTION SCHEMA---
-
-   Rules:
-   - Top-level keys are structured collection names (matching the config exactly)
-   - Each collection value is a JSON Schema object (must have type: object)
-   - Do not include doc_id — it is injected automatically
-   - Nullable/optional scalars use anyOf with null
-   - List fields use type: array; add default: [] so they are never null
-   - Nested objects use type: object with inline properties (or $defs for reuse)
-
-   The system validates immediately by building a Pydantic model from each schema.
-   Errors will be returned; fix and re-propose the full ---EXTRACTION SCHEMA--- block.
-   Do not propose the full config until confirmed.
-
-   After validation, the system appends a ---SCHEMA RESOLVED--- block to this message
-   with the exact JSON strings to paste into the config. Use them verbatim.
-
-3. Propose the full config once the schema is confirmed (---SCHEMA RESOLVED--- block
-   has appeared). Use the JSON strings from that block for extraction_schema and schema.
-
-4. When proposing or updating a config, embed it in your response like this:
-
----CONFIG---
-name: my-app
-... full config.yaml ...
----END CONFIG---
-
-   Always include a plain-language explanation alongside: what you set up and why,
-   and what (if anything) you still need.
+3. Once the schema is confirmed, call propose_app_config with the complete config YAML.
+   Use the resolved JSON strings verbatim for extraction_schema and schema fields.
+   Fix any errors and call again until it succeeds.
+   When it succeeds, include the validated config in your response with a plain-language
+   explanation of what you set up and why.
 
 ## Config rules
 
@@ -142,7 +166,7 @@ name: my-app
 4. All content is INLINE — do not use .json or .txt filenames as values anywhere
 5. Pipeline step collections must exactly match declared vector/structured collection names
 6. Use snake_case for all collection names and field names
-7. Copy extraction_schema and schema values verbatim from ---SCHEMA RESOLVED---
+7. Use the resolved JSON strings from propose_extraction_schema verbatim
 
 ## Config format
 
@@ -155,36 +179,6 @@ name: my-app
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _strip_fences(text: str) -> str:
-    lines = text.strip().splitlines()
-    if lines and lines[0].strip().startswith("```"):
-        lines = lines[1:]
-    if lines and lines[-1].strip().startswith("```"):
-        lines = lines[:-1]
-    return "\n".join(lines).strip()
-
-
-def _extract_block(text: str, start_marker: str, end_marker: str) -> tuple[str, str | None]:
-    """Extract a delimited block from *text*, returning (text_without_block, block | None)."""
-    if start_marker not in text:
-        return text, None
-
-    before, rest = text.split(start_marker, 1)
-    if end_marker in rest:
-        raw_block, after = rest.split(end_marker, 1)
-    else:
-        raw_block, after = rest, ""
-
-    content = _strip_fences(raw_block)
-    display = (before.strip() + ("\n\n" + after.strip() if after.strip() else "")).strip()
-    return display, content
-
-
-def _extract_config(text: str) -> tuple[str, str | None]:
-    """Split LLM response into (display_text, config_yaml | None)."""
-    return _extract_block(text, _CONFIG_START, _CONFIG_END)
 
 
 def _make_record_schema(extraction_schema: dict) -> dict:
@@ -201,10 +195,6 @@ def _make_record_schema(extraction_schema: dict) -> dict:
 
 
 def _validate_extraction_schema(schema_dict: dict, collection_name: str) -> list[str]:
-    """Validate a JSON Schema dict for use as an extraction schema.
-
-    Builds an actual Pydantic model from it so errors are structural, not syntactic.
-    """
     errors: list[str] = []
     if not isinstance(schema_dict, dict):
         return [f"[{collection_name}] must be a JSON Schema object (mapping)"]
@@ -226,33 +216,16 @@ def _validate_extraction_schema(schema_dict: dict, collection_name: str) -> list
 
 
 def _parse_and_validate_schemas(raw: str) -> tuple[dict | None, list[str]]:
-    """Parse a YAML-encoded schema block (collection_name → JSON Schema) and validate all collections.
-
-    Returns (schemas_dict, errors). On parse failure schemas_dict is None.
-    """
     try:
         parsed = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
-        return None, [f"Schema block is not valid YAML: {exc}"]
+        return None, [f"Schema YAML is not valid: {exc}"]
     if not isinstance(parsed, dict):
-        return None, ["Schema block must be a mapping of collection_name → JSON Schema object"]
+        return None, ["schemas_yaml must be a mapping of collection_name → JSON Schema object"]
     errors: list[str] = []
     for collection_name, schema_dict in parsed.items():
         errors.extend(_validate_extraction_schema(schema_dict, collection_name))
     return parsed, errors
-
-
-def _build_resolved_block(schemas: dict) -> str:
-    """Produce a ---SCHEMA RESOLVED--- block with verbatim JSON strings for the config."""
-    lines = [_RESOLVED_START]
-    for name, schema_dict in schemas.items():
-        ext_json = json.dumps(schema_dict, separators=(",", ":"))
-        rec_json = json.dumps(_make_record_schema(schema_dict), separators=(",", ":"))
-        lines.append(f"{name}:")
-        lines.append(f"  extraction_schema: '{ext_json}'")
-        lines.append(f"  schema: '{rec_json}'")
-    lines.append(_RESOLVED_END)
-    return "\n".join(lines)
 
 
 def _serialize_config(config: AppConfig) -> str:
@@ -261,6 +234,64 @@ def _serialize_config(config: AppConfig) -> str:
         allow_unicode=True,
         default_flow_style=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# Tool handlers
+# ---------------------------------------------------------------------------
+
+
+async def _run_propose_schema(llm: LLMBase, conversation_messages: list) -> str:
+    sub_messages = [{"role": "system", "content": _SCHEMA_AGENT_SYSTEM_PROMPT}] + [
+        m for m in conversation_messages if m.get("role") in ("user", "assistant")
+    ]
+
+    for attempt in range(_MAX_SCHEMA_RETRIES):
+        result = await llm.complete(sub_messages, temperature=0.2)
+        schemas_yaml = (result.get("content") or "").strip()
+        schemas, errors = _parse_and_validate_schemas(schemas_yaml)
+
+        if not errors:
+            logger.info(
+                "generate/propose_schema validated collections=%s attempt=%d",
+                list(schemas),
+                attempt + 1,
+            )
+            lines = ["Schema validated. Use these values verbatim in your config:"]
+            for name, schema_dict in schemas.items():
+                ext_json = json.dumps(schema_dict, separators=(",", ":"))
+                rec_json = json.dumps(_make_record_schema(schema_dict), separators=(",", ":"))
+                lines.append(f"\n{name}:")
+                lines.append(f"  extraction_schema: '{ext_json}'")
+                lines.append(f"  schema: '{rec_json}'")
+            return "\n".join(lines)
+
+        logger.warning(
+            "generate/propose_schema attempt=%d errors=%s", attempt + 1, errors
+        )
+        error_text = "\n".join(f"- {e}" for e in errors)
+        sub_messages += [
+            {"role": "assistant", "content": schemas_yaml},
+            {
+                "role": "user",
+                "content": f"Validation errors — fix and output the corrected YAML only:\n{error_text}",
+            },
+        ]
+
+    return f"Schema generation failed after {_MAX_SCHEMA_RETRIES} attempts. Last errors:\n" + "\n".join(
+        f"- {e}" for e in errors  # type: ignore[possibly-undefined]
+    )
+
+
+def _run_propose_config(inputs: dict) -> tuple[str, str | None]:
+    config_yaml = inputs.get("config_yaml", "")
+    try:
+        config = AppConfig.from_yaml(config_yaml)
+    except Exception as exc:
+        return f"Config validation error: {exc}\nFix and call again.", None
+    stored_yaml = _serialize_config(config)
+    logger.info("generate/propose_config validated app=%s", config.name)
+    return "Config validated.", stored_yaml
 
 
 # ---------------------------------------------------------------------------
@@ -273,72 +304,83 @@ async def chat(
     body: GenerateChatRequest,
     system_resources: SystemResourcesDep,
 ) -> GenerateChatResponse:
-    """One turn of the generator conversation.
+    """One stateless chat turn.
 
-    The client maintains the full message history and sends it each call.
-    The LLM may embed a ``---SCHEMA---`` block (validated here, with auto-retry on
-    errors) and/or a ``---CONFIG---`` block.  The client should store the full
-    ``content`` (markers included) in its local history so the LLM retains context.
+    The client maintains the full message history (role: user/assistant) and sends
+    it each call. The agent loop runs entirely server-side: the LLM calls tools,
+    gets results, and may call tools again — the client sees only the final response.
     """
     llm = system_resources.llm
     if llm is None:
         raise HTTPException(status_code=503, detail="No LLM configured on the system")
 
     from cogbase.llms.base import ChatMessage as LLMChatMessage
-    messages: list[LLMChatMessage] = [
-        {"role": m.role, "content": m.content} for m in body.history
-    ] + [{"role": "user", "content": body.text}]
 
-    validated_schema: dict | None = None
-    full_content: str = ""
+    messages: list[LLMChatMessage] = (
+        [{"role": "system", "content": _SYSTEM_PROMPT}]
+        + [{"role": m.role, "content": m.content} for m in body.history]
+        + [{"role": "user", "content": body.text}]
+    )
 
-    for attempt in range(_MAX_SCHEMA_RETRIES + 1):
-        result = await llm.complete(
-            [{"role": "system", "content": _SYSTEM_PROMPT}] + messages,
-            temperature=0.3,
-        )
-        full_content = (result["content"] or "").strip()
+    validated_config_yaml: str | None = None
+    final_content: str = ""
 
-        _, schema_raw = _extract_block(full_content, _SCHEMA_START, _SCHEMA_END)
-        if schema_raw is None:
-            break  # no schema block proposed — nothing to validate
+    for call_num in range(_MAX_AGENT_CALLS):
+        result = await llm.complete(messages, tools=_GENERATOR_TOOLS, temperature=0.3)
+        tool_calls = result.get("tool_calls")
 
-        schemas, errors = _parse_and_validate_schemas(schema_raw)
-        if not errors:
-            validated_schema = schemas
-            logger.info(
-                "generate/chat schemas validated collections=%s",
-                list(schemas),
-            )
+        if not tool_calls:
+            final_content = (result["content"] or "").strip()
             break
 
-        if attempt < _MAX_SCHEMA_RETRIES:
-            error_text = "Schema validation errors:\n" + "\n".join(f"- {e}" for e in errors)
-            error_text += "\nPlease fix the schema and re-propose the full ---EXTRACTION SCHEMA--- block."
-            logger.info("generate/chat schema attempt=%d errors=%d", attempt + 1, len(errors))
-            messages = messages + [
-                {"role": "assistant", "content": full_content},
-                {"role": "user", "content": error_text},
-            ]
-        else:
-            logger.warning("generate/chat schema still invalid after %d retries", _MAX_SCHEMA_RETRIES)
+        messages.append({
+            "role": "assistant",
+            "content": result.get("content"),
+            "tool_calls": [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                }
+                for tc in tool_calls
+            ],
+        })
 
-    if validated_schema is not None:
-        full_content = full_content + "\n\n" + _build_resolved_block(validated_schema)
+        tool_names = ", ".join(tc["name"] for tc in tool_calls)
+        logger.info("generate/chat call=%d tools=%s", call_num + 1, tool_names)
 
-    display_text, _ = _extract_block(full_content, _SCHEMA_START, _SCHEMA_END)
-    display_text, _ = _extract_block(display_text, _RESOLVED_START, _RESOLVED_END)
-    display_text, config_yaml = _extract_config(display_text)
+        for tc in tool_calls:
+            try:
+                inputs: dict = json.loads(tc["arguments"])
+            except json.JSONDecodeError:
+                inputs = {}
+
+            if tc["name"] == "propose_extraction_schema":
+                tool_output = await _run_propose_schema(llm, messages)
+            elif tc["name"] == "propose_app_config":
+                tool_output, config_yaml = _run_propose_config(inputs)
+                if config_yaml is not None:
+                    validated_config_yaml = config_yaml
+            else:
+                tool_output = f"Unknown tool: {tc['name']}"
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": tool_output,
+            })
+    else:
+        logger.warning("generate/chat reached max_calls=%d without final answer", _MAX_AGENT_CALLS)
+        final_content = result.get("content") or ""  # type: ignore[possibly-undefined]
 
     logger.info(
-        "generate/chat turn=%d schema_confirmed=%s config_proposed=%s",
+        "generate/chat turn=%d config_validated=%s",
         len(body.history) + 1,
-        validated_schema is not None,
-        config_yaml is not None,
+        validated_config_yaml is not None,
     )
     return GenerateChatResponse(
-        content=full_content,
-        config_yaml=config_yaml,
+        content=final_content,
+        config_yaml=validated_config_yaml,
     )
 
 
