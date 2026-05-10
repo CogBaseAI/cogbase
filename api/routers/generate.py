@@ -12,6 +12,8 @@ Endpoints
 
 from __future__ import annotations
 
+import copy
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -28,6 +30,7 @@ from api.models import (
 )
 from api.system_store import AppRecord
 from cogbase.config.config import AppConfig
+from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/generate", tags=["generate"])
@@ -40,12 +43,10 @@ _CONFIG_START = "---CONFIG---"
 _CONFIG_END = "---END CONFIG---"
 _SCHEMA_START = "---EXTRACTION SCHEMA---"
 _SCHEMA_END = "---END EXTRACTION SCHEMA---"
+_RESOLVED_START = "---SCHEMA RESOLVED---"
+_RESOLVED_END = "---END SCHEMA RESOLVED---"
 
 _MAX_SCHEMA_RETRIES = 3
-
-# Scalar types the generator supports.  Complex nested schemas are for
-# manually authored configs and are not validated here.
-_SCALAR_TYPES = {"string", "integer", "number", "boolean"}
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -69,32 +70,59 @@ natural-language questions via semantic search and structured lookup.
        * High-level summary or topic queries → needs document-embed-upsert step
 
 2. Propose and finalize the extraction schema(s) before writing the full config.
-   Group fields by structured collection name — one block covers all collections at once.
-   If an app has multiple pipelines or a pipeline has multiple extract-structured steps,
-   include every collection that needs extraction:
+   Use full JSON Schema (YAML-encoded) for every collection. One block covers all:
 
 ---EXTRACTION SCHEMA---
 <collection_name>:
-  <field_name>:
-    type: ["<basetype>", "null"]
-    description: "<what this field captures>"
-<another_collection_name>:
-  <field_name>:
-    type: ["<basetype>", "null"]
-    description: "<what this field captures>"
+  type: object
+  properties:
+    <scalar_field>:
+      anyOf:
+        - type: <string|integer|number|boolean>
+        - type: "null"
+      description: "<what this field captures>"
+    <nested_object_field>:
+      anyOf:
+        - type: object
+          properties:
+            <subfield>:
+              anyOf: [{type: string}, {type: "null"}]
+              description: "..."
+        - type: "null"
+      description: "<what the nested object captures>"
+    <list_of_objects_field>:
+      type: array
+      items:
+        type: object
+        properties:
+          <subfield>:
+            type: string
+            description: "..."
+      description: "<what each list item represents>"
+      default: []
+<another_collection>:
+  type: object
+  properties:
+    ...
 ---END EXTRACTION SCHEMA---
 
    Rules:
-   - Top-level keys must be structured collection names (matching the config exactly)
-   - Supported base types: string, integer, number, boolean
-   - Every field must be nullable: type is always ["<basetype>", "null"]
-   - Every field must have a description
-   - Do not include doc_id in any schema — it is injected automatically
-   The system validates immediately. Errors will be returned; fix and re-propose the
-   full ---EXTRACTION SCHEMA--- block. Do not propose the full config until confirmed.
+   - Top-level keys are structured collection names (matching the config exactly)
+   - Each collection value is a JSON Schema object (must have type: object)
+   - Do not include doc_id — it is injected automatically
+   - Nullable/optional scalars use anyOf with null
+   - List fields use type: array; add default: [] so they are never null
+   - Nested objects use type: object with inline properties (or $defs for reuse)
 
-3. Propose the full config once the schema is confirmed. Don't wait for every
-   detail — propose early and refine. Whenever something changes, re-propose.
+   The system validates immediately by building a Pydantic model from each schema.
+   Errors will be returned; fix and re-propose the full ---EXTRACTION SCHEMA--- block.
+   Do not propose the full config until confirmed.
+
+   After validation, the system appends a ---SCHEMA RESOLVED--- block to this message
+   with the exact JSON strings to paste into the config. Use them verbatim.
+
+3. Propose the full config once the schema is confirmed (---SCHEMA RESOLVED--- block
+   has appeared). Use the JSON strings from that block for extraction_schema and schema.
 
 4. When proposing or updating a config, embed it in your response like this:
 
@@ -103,19 +131,18 @@ name: my-app
 ... full config.yaml ...
 ---END CONFIG---
 
-   The markers are stripped before display. Always include a plain-language explanation
-   alongside: what you set up and why, and what (if anything) you still need.
+   Always include a plain-language explanation alongside: what you set up and why,
+   and what (if anything) you still need.
 
 ## Config rules
 
 1. name must be kebab-case (lowercase, alphanumeric, hyphens only)
 2. chunk-embed-upsert is always the first pipeline step
-3. Do NOT include doc_id in extraction_schema — injected automatically; doc_id is
-   added to the record automatically and does not need to appear anywhere in the config
-4. Every extractable field must be nullable: use ["<type>", "null"], never just "<type>"
-5. All content is INLINE — do not use .json or .txt filenames as values anywhere
-6. Pipeline step collections must exactly match declared vector/structured collection names
-7. Use snake_case for all collection names and field names
+3. Do NOT include doc_id in extraction schemas — it is injected automatically
+4. All content is INLINE — do not use .json or .txt filenames as values anywhere
+5. Pipeline step collections must exactly match declared vector/structured collection names
+6. Use snake_case for all collection names and field names
+7. Copy extraction_schema and schema values verbatim from ---SCHEMA RESOLVED---
 
 ## Config format
 
@@ -128,6 +155,7 @@ vector_collections:
 structured_collections:
   - name: <snake_case>
     description: "<shown to the LLM as context during lookup>"
+    schema: '<record_schema JSON string from ---SCHEMA RESOLVED--->'
     primary_fields: [doc_id]
 
 pipelines:
@@ -142,7 +170,7 @@ pipelines:
         collection: <structured_collection>
         extractor:
           type: llm
-          extraction_schema: <collection_extraction_schema>
+          extraction_schema: '<extraction_schema JSON string from ---SCHEMA RESOLVED--->'
           prompt: |
             <System instructions for the extraction LLM. Be specific.>
 
@@ -189,57 +217,72 @@ def _extract_config(text: str) -> tuple[str, str | None]:
     return _extract_block(text, _CONFIG_START, _CONFIG_END)
 
 
-def _validate_schema_properties(properties: dict) -> list[str]:
-    """Return a list of human-readable error strings for invalid schema fields."""
+def _make_record_schema(extraction_schema: dict) -> dict:
+    """Add a required doc_id string field to produce the record schema."""
+    record = copy.deepcopy(extraction_schema)
+    record.setdefault("properties", {})["doc_id"] = {
+        "type": "string",
+        "description": "document identifier",
+    }
+    required = record.setdefault("required", [])
+    if "doc_id" not in required:
+        required.insert(0, "doc_id")
+    return record
+
+
+def _validate_extraction_schema(schema_dict: dict, collection_name: str) -> list[str]:
+    """Validate a JSON Schema dict for use as an extraction schema.
+
+    Builds an actual Pydantic model from it so errors are structural, not syntactic.
+    """
     errors: list[str] = []
-    for name, field in properties.items():
-        if name == "doc_id":
-            errors.append("doc_id must not appear in the schema — it is injected automatically")
-            continue
-        t = field.get("type")
-        if not isinstance(t, list):
-            errors.append(
-                f"'{name}': type must be a two-element list like [\"string\", \"null\"], got {t!r}"
-            )
-            continue
-        if "null" not in t:
-            errors.append(f"'{name}': type must include \"null\" (all fields must be nullable)")
-        base_types = [x for x in t if x != "null"]
-        if not base_types:
-            errors.append(f"'{name}': type must have at least one non-null base type")
-        unknown = [x for x in base_types if x not in _SCALAR_TYPES]
-        if unknown:
-            errors.append(
-                f"'{name}': unsupported type(s) {unknown!r}. Supported: {sorted(_SCALAR_TYPES)}"
-            )
-        if not field.get("description", "").strip():
-            errors.append(f"'{name}': description is required")
+    if not isinstance(schema_dict, dict):
+        return [f"[{collection_name}] must be a JSON Schema object (mapping)"]
+    props = schema_dict.get("properties", {})
+    if "doc_id" in props:
+        errors.append(
+            f"[{collection_name}] doc_id must not appear in the extraction schema"
+            " — it is injected automatically"
+        )
+    if not props:
+        errors.append(f"[{collection_name}] schema must have at least one field in 'properties'")
+    if errors:
+        return errors
+    try:
+        build_model_from_json_schema(schema_dict, model_name=collection_name)
+    except Exception as exc:
+        errors.append(f"[{collection_name}] invalid JSON Schema: {exc}")
     return errors
 
 
 def _parse_and_validate_schemas(raw: str) -> tuple[dict | None, list[str]]:
-    """Parse a YAML schema block (collection_name → fields) and validate all collections.
+    """Parse a YAML-encoded schema block (collection_name → JSON Schema) and validate all collections.
 
-    Returns (schemas_dict, errors) where schemas_dict maps collection name → properties.
-    On parse failure, schemas_dict is None.
+    Returns (schemas_dict, errors). On parse failure schemas_dict is None.
     """
     try:
         parsed = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
-        return None, [f"Schema is not valid YAML: {exc}"]
+        return None, [f"Schema block is not valid YAML: {exc}"]
     if not isinstance(parsed, dict):
-        return None, ["Schema must be a YAML mapping of collection_name → fields"]
-
+        return None, ["Schema block must be a mapping of collection_name → JSON Schema object"]
     errors: list[str] = []
-    for collection_name, fields in parsed.items():
-        if not isinstance(fields, dict):
-            errors.append(
-                f"[{collection_name}] must be a mapping of field_name → {{type, description}}"
-            )
-            continue
-        for err in _validate_schema_properties(fields):
-            errors.append(f"[{collection_name}] {err}")
+    for collection_name, schema_dict in parsed.items():
+        errors.extend(_validate_extraction_schema(schema_dict, collection_name))
     return parsed, errors
+
+
+def _build_resolved_block(schemas: dict) -> str:
+    """Produce a ---SCHEMA RESOLVED--- block with verbatim JSON strings for the config."""
+    lines = [_RESOLVED_START]
+    for name, schema_dict in schemas.items():
+        ext_json = json.dumps(schema_dict, separators=(",", ":"))
+        rec_json = json.dumps(_make_record_schema(schema_dict), separators=(",", ":"))
+        lines.append(f"{name}:")
+        lines.append(f"  extraction_schema: '{ext_json}'")
+        lines.append(f"  schema: '{rec_json}'")
+    lines.append(_RESOLVED_END)
+    return "\n".join(lines)
 
 
 def _serialize_config(config: AppConfig) -> str:
@@ -301,7 +344,7 @@ async def chat(
 
         if attempt < _MAX_SCHEMA_RETRIES:
             error_text = "Schema validation errors:\n" + "\n".join(f"- {e}" for e in errors)
-            error_text += "\nPlease fix the schema and re-propose the full ---SCHEMA--- block."
+            error_text += "\nPlease fix the schema and re-propose the full ---EXTRACTION SCHEMA--- block."
             logger.info("generate/chat schema attempt=%d errors=%d", attempt + 1, len(errors))
             messages = messages + [
                 {"role": "assistant", "content": full_content},
@@ -310,7 +353,11 @@ async def chat(
         else:
             logger.warning("generate/chat schema still invalid after %d retries", _MAX_SCHEMA_RETRIES)
 
+    if validated_schema is not None:
+        full_content = full_content + "\n\n" + _build_resolved_block(validated_schema)
+
     display_text, _ = _extract_block(full_content, _SCHEMA_START, _SCHEMA_END)
+    display_text, _ = _extract_block(display_text, _RESOLVED_START, _RESOLVED_END)
     display_text, config_yaml = _extract_config(display_text)
 
     logger.info(
