@@ -324,6 +324,34 @@ class TestAppConfig:
         doc_step = cfg.pipelines[0].steps[2]
         assert doc_step.doc_prompt == "Summarize in one sentence."
 
+    def test_config_format_prompt_returns_string(self):
+        result = AppConfig.config_format_prompt()
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_config_format_prompt_contains_all_pipeline_tools(self):
+        from typing import get_args
+        from cogbase.config.config import PipelineStepConfig
+
+        tools = get_args(PipelineStepConfig.model_fields["tool"].annotation)
+        result = AppConfig.config_format_prompt()
+        for tool in tools:
+            assert tool in result, f"tool {tool!r} missing from config_format_prompt output"
+
+    def test_config_format_prompt_contains_top_level_sections(self):
+        result = AppConfig.config_format_prompt()
+        for section in ("name:", "vector_collections:", "structured_collections:", "pipelines:"):
+            assert section in result, f"{section!r} missing from config_format_prompt output"
+
+    def test_config_format_prompt_tool_order_matches_literal(self):
+        from typing import get_args
+        from cogbase.config.config import PipelineStepConfig
+
+        tools = get_args(PipelineStepConfig.model_fields["tool"].annotation)
+        result = AppConfig.config_format_prompt()
+        positions = [result.index(t) for t in tools]
+        assert positions == sorted(positions), "tools appear out of Literal order in prompt"
+
     def test_structured_collection_description_is_required(self):
         _SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
         yaml_text = textwrap.dedent(f"""\

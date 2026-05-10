@@ -52,7 +52,7 @@ _MAX_SCHEMA_RETRIES = 3
 # System prompt
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT = """\
+_SYSTEM_PROMPT = f"""\
 You are an agentic CogBase application generator. Help the user build a complete, \
 correct CogBase app configuration through natural conversation. You drive the process.
 
@@ -86,7 +86,7 @@ natural-language questions via semantic search and structured lookup.
         - type: object
           properties:
             <subfield>:
-              anyOf: [{type: string}, {type: "null"}]
+              anyOf: [{{type: string}}, {{type: "null"}}]
               description: "..."
         - type: "null"
       description: "<what the nested object captures>"
@@ -146,37 +146,7 @@ name: my-app
 
 ## Config format
 
-name: <kebab-case-name>
-
-vector_collections:
-  - name: <snake_case>
-    description: "<shown to the LLM as context during retrieval>"
-
-structured_collections:
-  - name: <snake_case>
-    description: "<shown to the LLM as context during lookup>"
-    schema: '<record_schema JSON string from ---SCHEMA RESOLVED--->'
-    primary_fields: [doc_id]
-
-pipelines:
-  - name: <name>
-    steps:
-      - tool: chunk-embed-upsert
-        collection: <vector_collection>
-        chunker:
-          type: langchain
-
-      - tool: extract-structured          # include only if structured extraction is needed
-        collection: <structured_collection>
-        extractor:
-          type: llm
-          extraction_schema: '<extraction_schema JSON string from ---SCHEMA RESOLVED--->'
-          prompt: |
-            <System instructions for the extraction LLM. Be specific.>
-
-      - tool: document-embed-upsert       # include only if summary/topic queries are needed
-        collection: <vector_collection>
-"""
+{AppConfig.config_format_prompt()}"""
 
 # ---------------------------------------------------------------------------
 # Helpers

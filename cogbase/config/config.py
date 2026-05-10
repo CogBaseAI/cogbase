@@ -168,3 +168,43 @@ class AppConfig(BaseModel):
         if not isinstance(data, dict):
             raise ValueError("YAML must be a mapping at the top level")
         return cls.model_validate(data)
+
+    @classmethod
+    def config_format_prompt(cls) -> str:
+        """YAML config template for LLM system prompts; derived from the live model."""
+        from typing import get_args
+
+        tools = get_args(PipelineStepConfig.model_fields["tool"].annotation)
+        chunk_tool, extract_tool, doc_tool = tools
+        return (
+            "name: <kebab-case-name>\n"
+            "\n"
+            "vector_collections:\n"
+            "  - name: <snake_case>\n"
+            '    description: "<shown to the LLM as context during retrieval>"\n'
+            "\n"
+            "structured_collections:\n"
+            "  - name: <snake_case>\n"
+            '    description: "<shown to the LLM as context during lookup>"\n'
+            "    schema: '<record_schema JSON string from ---SCHEMA RESOLVED--->'\n"
+            "    primary_fields: [doc_id]\n"
+            "\n"
+            "pipelines:\n"
+            "  - name: <name>\n"
+            "    steps:\n"
+            f"      - tool: {chunk_tool}\n"
+            "        collection: <vector_collection>\n"
+            "        chunker:\n"
+            "          type: langchain\n"
+            "\n"
+            f"      - tool: {extract_tool}          # include only if structured extraction is needed\n"
+            "        collection: <structured_collection>\n"
+            "        extractor:\n"
+            "          type: llm\n"
+            "          extraction_schema: '<extraction_schema JSON string from ---SCHEMA RESOLVED--->'\n"
+            "          prompt: |\n"
+            "            <System instructions for the extraction LLM. Be specific.>\n"
+            "\n"
+            f"      - tool: {doc_tool}       # include only if summary/topic queries are needed\n"
+            "        collection: <vector_collection>\n"
+        )
