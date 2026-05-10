@@ -69,10 +69,12 @@ class WhenCondition(BaseModel):
 class PipelineStepConfig(BaseModel):
     tool: Literal["chunk-embed-upsert", "extract-structured", "document-embed-upsert"]
     collection: str
-    when: WhenCondition | None = None
     chunker: ChunkerConfig | None = None
     extractor: ExtractorConfig | None = None
-    doc_prompt: str | None = None
+    doc_prompt: str | None = Field(
+        default=None,
+        description="System instructions for the document level summarization LLM. Be specific."
+    )
 
 
 class PipelineConfig(BaseModel):
@@ -207,4 +209,6 @@ class AppConfig(BaseModel):
             "\n"
             f"      - tool: {doc_tool}       # include only if summary/topic queries are needed\n"
             "        collection: <vector_collection>\n"
+            "        doc_prompt: |\n"
+            "          <System instructions for the document level summarization LLM. Be specific.>\n"
         )

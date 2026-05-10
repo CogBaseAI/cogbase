@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel
 
+from cogbase.core.app import CogBaseApp
 from cogbase.core.models import Document
+from cogbase.core.query_runner import QueryRunner
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
@@ -20,6 +22,7 @@ from cogbase.pipeline.ingestion_pipeline import (
     PipelineStep,
 )
 from cogbase.stores import CollectionSchema, FieldSchema, FieldType, VectorCollectionSchema
+from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.structured.base import StructuredStoreBase
 from cogbase.stores.vector.base import VectorStoreBase
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
@@ -382,7 +385,7 @@ class TestVectorCollectionConfig:
         step = cfg.pipelines[0].steps[0]
         assert step.doc_prompt == "Summarize in one sentence."
 
-    def test_vector_collection_requires_embedding(self):
+    def test_vector_collection_without_embedding_is_valid(self):
         import textwrap
         from cogbase.config.config import AppConfig
 
@@ -394,8 +397,9 @@ class TestVectorCollectionConfig:
               - name: document_summary
                 description: One summary vector per document for topic-level search.
         """)
-        with pytest.raises(Exception, match="embedding is required when vector_collections"):
-            AppConfig.from_yaml(yaml_text)
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert cfg.embedding is None
+        assert len(cfg.vector_collections) == 1
 
     def test_unknown_vector_collection_in_step_raises(self):
         import textwrap
@@ -422,7 +426,7 @@ class TestVectorCollectionConfig:
 
 
 # ---------------------------------------------------------------------------
-# metadata.doc_type routing via when conditions
+# metadata.doc_type routing via pipeline.match
 # ---------------------------------------------------------------------------
 
 def _make_vector_collection(
@@ -436,6 +440,14 @@ def _make_vector_collection(
 
 
 class TestWhenConditionRouting:
+    @staticmethod
+    def _make_app(pipelines: list[IngestionPipeline]) -> CogBaseApp:
+        store = InMemoryStructuredStore()
+        llm = MagicMock()
+        llm.complete = AsyncMock(return_value={"content": "ok", "tool_calls": None})
+        runner = QueryRunner(llm=llm, structured_store=store)
+        return CogBaseApp("app", pipelines, runner)
+
     @pytest.mark.asyncio
     async def test_matching_doc_type_runs_step(self, make_vector_store):
         """A rules document goes to rule_chunks (doc_type matches)."""
@@ -445,16 +457,18 @@ class TestWhenConditionRouting:
 
         vc = _make_vector_collection(rule_store, "rule_chunks")
         pipeline = IngestionPipeline(
-            name="app",
-            steps=[PipelineStep(tool="chunk-embed-upsert", collection="rule_chunks", when={"doc_type": "rules"}, chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
+            name="rules",
+            match={"doc_type": "rules"},
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="rule_chunks", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
             vector_collections=[vc],
         )
+        app = self._make_app([pipeline])
 
-        await pipeline._ingest(Document(
+        await app.ingest_documents([Document(
             doc_id="rules-001",
             text="Vendors must comply with ISO 27001.",
             metadata={"doc_type": "rules"},
-        ))
+        )])
 
         assert rule_store.ntotal("rule_chunks") > 0
 
@@ -467,17 +481,20 @@ class TestWhenConditionRouting:
 
         vc = _make_vector_collection(rule_store, "rule_chunks")
         pipeline = IngestionPipeline(
-            name="app",
-            steps=[PipelineStep(tool="chunk-embed-upsert", collection="rule_chunks", when={"doc_type": "rules"}, chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
+            name="rules",
+            match={"doc_type": "rules"},
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="rule_chunks", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
             vector_collections=[vc],
         )
+        app = self._make_app([pipeline])
 
-        await pipeline._ingest(Document(
+        results = await app.ingest_documents([Document(
             doc_id="contract-001",
             text="This agreement is entered into by the parties.",
             metadata={"doc_type": "contract"},
-        ))
+        )])
 
+        assert results[0].success is False
         assert rule_store.ntotal("rule_chunks") == 0
 
     @pytest.mark.asyncio
@@ -493,9 +510,10 @@ class TestWhenConditionRouting:
             steps=[PipelineStep(tool="chunk-embed-upsert", collection="all_chunks", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
             vector_collections=[vc],
         )
+        app = self._make_app([pipeline])
 
-        await pipeline._ingest(Document(doc_id="d1", text="rules text", metadata={"doc_type": "rules"}))
-        await pipeline._ingest(Document(doc_id="d2", text="contract text", metadata={"doc_type": "contract"}))
+        await app.ingest_documents([Document(doc_id="d1", text="rules text", metadata={"doc_type": "rules"})])
+        await app.ingest_documents([Document(doc_id="d2", text="contract text", metadata={"doc_type": "contract"})])
 
         assert store.ntotal("all_chunks") > 0
 
@@ -513,32 +531,37 @@ class TestWhenConditionRouting:
         rule_vc = _make_vector_collection(rule_store, "rule_chunks")
         contract_vc = _make_vector_collection(contract_store, "contract_chunks")
 
-        pipeline = IngestionPipeline(
-            name="app",
+        rules_pipeline = IngestionPipeline(
+            name="rules",
+            match={"doc_type": "rules"},
             steps=[
-                PipelineStep(tool="chunk-embed-upsert", collection="rule_chunks",     when={"doc_type": "rules"},    chunker=FixedSizeChunker(chunk_size=20, overlap=0)),
-                PipelineStep(tool="chunk-embed-upsert", collection="contract_chunks", when={"doc_type": "contract"}, chunker=FixedSizeChunker(chunk_size=20, overlap=0)),
+                PipelineStep(tool="chunk-embed-upsert", collection="rule_chunks", chunker=FixedSizeChunker(chunk_size=20, overlap=0)),
             ],
-            vector_collections=[rule_vc, contract_vc],
+            vector_collections=[rule_vc],
         )
+        contract_pipeline = IngestionPipeline(
+            name="contracts",
+            match={"doc_type": "contract"},
+            steps=[
+                PipelineStep(tool="chunk-embed-upsert", collection="contract_chunks", chunker=FixedSizeChunker(chunk_size=20, overlap=0)),
+            ],
+            vector_collections=[contract_vc],
+        )
+        app = self._make_app([rules_pipeline, contract_pipeline])
 
-        await pipeline._ingest(Document(
+        await app.ingest_documents([Document(
             doc_id="rules-001",
             text="ISO 27001 compliance required.",
             metadata={"doc_type": "rules"},
-        ))
-        await pipeline._ingest(Document(
+        )])
+        await app.ingest_documents([Document(
             doc_id="contract-001",
             text="This agreement is between vendor and buyer.",
             metadata={"doc_type": "contract"},
-        ))
+        )])
 
         assert rule_store.ntotal("rule_chunks") > 0, "rules doc did not land in rule_chunks"
         assert contract_store.ntotal("contract_chunks") > 0, "contract doc did not land in contract_chunks"
-
-        assert contract_store.ntotal("contract_chunks") == pytest.approx(
-            contract_store.ntotal("contract_chunks")
-        )
 
     @pytest.mark.asyncio
     async def test_partial_metadata_match_skips_step(self, make_vector_store):
@@ -550,16 +573,19 @@ class TestWhenConditionRouting:
         vc = _make_vector_collection(store, "chunks")
         pipeline = IngestionPipeline(
             name="app",
-            steps=[PipelineStep(tool="chunk-embed-upsert", collection="chunks", when={"doc_type": "rules", "region": "us"}, chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
+            match={"doc_type": "rules", "region": "us"},
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="chunks", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
             vector_collections=[vc],
         )
+        app = self._make_app([pipeline])
 
-        await pipeline._ingest(Document(
+        results = await app.ingest_documents([Document(
             doc_id="d1",
             text="Some rules.",
             metadata={"doc_type": "rules", "region": "eu"},
-        ))
+        )])
 
+        assert results[0].success is False
         assert store.ntotal("chunks") == 0
 
     @pytest.mark.asyncio
@@ -572,10 +598,13 @@ class TestWhenConditionRouting:
         vc = _make_vector_collection(store, "chunks")
         pipeline = IngestionPipeline(
             name="app",
-            steps=[PipelineStep(tool="chunk-embed-upsert", collection="chunks", when={"doc_type": "rules"}, chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
+            match={"doc_type": "rules"},
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="chunks", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
             vector_collections=[vc],
         )
+        app = self._make_app([pipeline])
 
-        await pipeline._ingest(Document(doc_id="d1", text="Some text.", metadata={}))
+        results = await app.ingest_documents([Document(doc_id="d1", text="Some text.", metadata={})])
 
+        assert results[0].success is False
         assert store.ntotal("chunks") == 0

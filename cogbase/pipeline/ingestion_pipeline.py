@@ -100,8 +100,6 @@ class PipelineStep:
         tool:       One of ``"chunk-embed-upsert"``, ``"extract-structured"``,
                     or ``"document-embed-upsert"``.
         collection: Name of the target collection for this step.
-        when:       Optional metadata filter — step is skipped unless all
-                    key/value pairs match the document's metadata.
         chunker:    Chunker for ``chunk-embed-upsert`` steps.
         extractor:  Extractor for ``extract-structured`` steps.
         llm:        Optional LLM for ``document-embed-upsert`` steps.  When
@@ -111,7 +109,6 @@ class PipelineStep:
 
     tool: str
     collection: str
-    when: dict[str, str] | None = None
     chunker: ChunkerBase | None = None
     extractor: ExtractorBase | None = None
     llm: LLMBase | None = None
@@ -184,17 +181,12 @@ class IngestionPipeline:
         """
         logger.info("ingestion_pipeline.ingest.start name=%s doc_id=%s", self.name, doc.doc_id)
 
-        active_steps = [
-            step for step in self._steps
-            if not (step.when and not all(doc.metadata.get(k) == v for k, v in step.when.items()))
-        ]
-
         if self.parallel:
-            counts = await asyncio.gather(*[self._run_step(doc, step) for step in active_steps])
+            counts = await asyncio.gather(*[self._run_step(doc, step) for step in self._steps])
             records_extracted = sum(counts)
         else:
             records_extracted = 0
-            for step in active_steps:
+            for step in self._steps:
                 records_extracted += await self._run_step(doc, step)
 
         logger.info(

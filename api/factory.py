@@ -178,7 +178,6 @@ async def build_app(
             ps = PipelineStep(
                 tool=s.tool,
                 collection=s.collection,
-                when=s.when.metadata if s.when else None,
             )
             if s.tool == "chunk-embed-upsert":
                 chunker_cfg = s.chunker or ChunkerConfig()
