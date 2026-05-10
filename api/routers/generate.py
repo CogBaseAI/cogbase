@@ -33,13 +33,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/generate", tags=["generate"])
 
 # ---------------------------------------------------------------------------
-# Config block markers
-# The LLM embeds a config proposal in its response using these sentinels.
-# The backend extracts it; the CLI never shows the raw markers.
+# Block markers — stripped before display; stored verbatim in history for LLM context.
 # ---------------------------------------------------------------------------
 
 _CONFIG_START = "---CONFIG---"
 _CONFIG_END = "---END CONFIG---"
+_SCHEMA_START = "---EXTRACTION SCHEMA---"
+_SCHEMA_END = "---END EXTRACTION SCHEMA---"
+
+_MAX_SCHEMA_RETRIES = 3
+
+# Scalar types the generator supports.  Complex nested schemas are for
+# manually authored configs and are not validated here.
+_SCALAR_TYPES = {"string", "integer", "number", "boolean"}
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -62,11 +68,35 @@ natural-language questions via semantic search and structured lookup.
        * Semantic search over document text → needs chunk-embed-upsert step
        * High-level summary or topic queries → needs document-embed-upsert step
 
-2. Propose the config as soon as you have enough to work with. Don't wait for every
-   detail — propose early and refine. Whenever something changes, re-propose the full
-   updated config.
+2. Propose and finalize the extraction schema(s) before writing the full config.
+   Group fields by structured collection name — one block covers all collections at once.
+   If an app has multiple pipelines or a pipeline has multiple extract-structured steps,
+   include every collection that needs extraction:
 
-3. When proposing or updating a config, embed it in your response like this:
+---EXTRACTION SCHEMA---
+<collection_name>:
+  <field_name>:
+    type: ["<basetype>", "null"]
+    description: "<what this field captures>"
+<another_collection_name>:
+  <field_name>:
+    type: ["<basetype>", "null"]
+    description: "<what this field captures>"
+---END EXTRACTION SCHEMA---
+
+   Rules:
+   - Top-level keys must be structured collection names (matching the config exactly)
+   - Supported base types: string, integer, number, boolean
+   - Every field must be nullable: type is always ["<basetype>", "null"]
+   - Every field must have a description
+   - Do not include doc_id in any schema — it is injected automatically
+   The system validates immediately. Errors will be returned; fix and re-propose the
+   full ---EXTRACTION SCHEMA--- block. Do not propose the full config until confirmed.
+
+3. Propose the full config once the schema is confirmed. Don't wait for every
+   detail — propose early and refine. Whenever something changes, re-propose.
+
+4. When proposing or updating a config, embed it in your response like this:
 
 ---CONFIG---
 name: my-app
@@ -74,18 +104,18 @@ name: my-app
 ---END CONFIG---
 
    The markers are stripped before display. Always include a plain-language explanation
-   alongside the config: what you set up and why, and what (if anything) you still need.
+   alongside: what you set up and why, and what (if anything) you still need.
 
 ## Config rules
 
 1. name must be kebab-case (lowercase, alphanumeric, hyphens only)
 2. chunk-embed-upsert is always the first pipeline step
-3. schema (record schema) MUST include "doc_id" as a required string field
-4. extraction_schema MUST NOT include "doc_id" — the extractor injects it automatically
-5. Every extractable field must be nullable: use ["<type>", "null"], never just "<type>"
-6. All content is INLINE — do not use .json or .txt filenames as values anywhere
-7. Pipeline step collections must exactly match declared vector/structured collection names
-8. Use snake_case for all collection names and field names
+3. Do NOT include doc_id in extraction_schema — injected automatically; doc_id is
+   added to the record automatically and does not need to appear anywhere in the config
+4. Every extractable field must be nullable: use ["<type>", "null"], never just "<type>"
+5. All content is INLINE — do not use .json or .txt filenames as values anywhere
+6. Pipeline step collections must exactly match declared vector/structured collection names
+7. Use snake_case for all collection names and field names
 
 ## Config format
 
@@ -98,15 +128,6 @@ vector_collections:
 structured_collections:
   - name: <snake_case>
     description: "<shown to the LLM as context during lookup>"
-    schema: |
-      {
-        "type": "object",
-        "required": ["doc_id"],
-        "properties": {
-          "doc_id": {"type": "string"},
-          "<field>": {"type": ["<type>", "null"], "description": "<what this field captures>"}
-        }
-      }
     primary_fields: [doc_id]
 
 pipelines:
@@ -121,13 +142,7 @@ pipelines:
         collection: <structured_collection>
         extractor:
           type: llm
-          extraction_schema: |            # must NOT include doc_id
-            {
-              "type": "object",
-              "properties": {
-                "<field>": {"type": ["<type>", "null"], "description": "<desc>"}
-              }
-            }
+          extraction_schema: <collection_extraction_schema>
           prompt: |
             <System instructions for the extraction LLM. Be specific.>
 
@@ -153,25 +168,78 @@ def _strip_fences(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _extract_config(text: str) -> tuple[str, str | None]:
-    """Split LLM response into (display_text, config_yaml | None).
-
-    The full response (with markers) should be stored in conversation history so
-    the LLM retains context of its previous proposals. Only the display_text is
-    shown to the user.
-    """
-    if _CONFIG_START not in text:
+def _extract_block(text: str, start_marker: str, end_marker: str) -> tuple[str, str | None]:
+    """Extract a delimited block from *text*, returning (text_without_block, block | None)."""
+    if start_marker not in text:
         return text, None
 
-    before, rest = text.split(_CONFIG_START, 1)
-    if _CONFIG_END in rest:
-        raw_config, after = rest.split(_CONFIG_END, 1)
+    before, rest = text.split(start_marker, 1)
+    if end_marker in rest:
+        raw_block, after = rest.split(end_marker, 1)
     else:
-        raw_config, after = rest, ""
+        raw_block, after = rest, ""
 
-    config_yaml = _strip_fences(raw_config)
+    content = _strip_fences(raw_block)
     display = (before.strip() + ("\n\n" + after.strip() if after.strip() else "")).strip()
-    return display, config_yaml
+    return display, content
+
+
+def _extract_config(text: str) -> tuple[str, str | None]:
+    """Split LLM response into (display_text, config_yaml | None)."""
+    return _extract_block(text, _CONFIG_START, _CONFIG_END)
+
+
+def _validate_schema_properties(properties: dict) -> list[str]:
+    """Return a list of human-readable error strings for invalid schema fields."""
+    errors: list[str] = []
+    for name, field in properties.items():
+        if name == "doc_id":
+            errors.append("doc_id must not appear in the schema — it is injected automatically")
+            continue
+        t = field.get("type")
+        if not isinstance(t, list):
+            errors.append(
+                f"'{name}': type must be a two-element list like [\"string\", \"null\"], got {t!r}"
+            )
+            continue
+        if "null" not in t:
+            errors.append(f"'{name}': type must include \"null\" (all fields must be nullable)")
+        base_types = [x for x in t if x != "null"]
+        if not base_types:
+            errors.append(f"'{name}': type must have at least one non-null base type")
+        unknown = [x for x in base_types if x not in _SCALAR_TYPES]
+        if unknown:
+            errors.append(
+                f"'{name}': unsupported type(s) {unknown!r}. Supported: {sorted(_SCALAR_TYPES)}"
+            )
+        if not field.get("description", "").strip():
+            errors.append(f"'{name}': description is required")
+    return errors
+
+
+def _parse_and_validate_schemas(raw: str) -> tuple[dict | None, list[str]]:
+    """Parse a YAML schema block (collection_name → fields) and validate all collections.
+
+    Returns (schemas_dict, errors) where schemas_dict maps collection name → properties.
+    On parse failure, schemas_dict is None.
+    """
+    try:
+        parsed = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        return None, [f"Schema is not valid YAML: {exc}"]
+    if not isinstance(parsed, dict):
+        return None, ["Schema must be a YAML mapping of collection_name → fields"]
+
+    errors: list[str] = []
+    for collection_name, fields in parsed.items():
+        if not isinstance(fields, dict):
+            errors.append(
+                f"[{collection_name}] must be a mapping of field_name → {{type, description}}"
+            )
+            continue
+        for err in _validate_schema_properties(fields):
+            errors.append(f"[{collection_name}] {err}")
+    return parsed, errors
 
 
 def _serialize_config(config: AppConfig) -> str:
@@ -195,10 +263,9 @@ async def chat(
     """One turn of the generator conversation.
 
     The client maintains the full message history and sends it each call.
-    The LLM may embed a ``---CONFIG---`` block in its response; if so,
-    ``config_yaml`` is populated in the response and the client should store
-    the full ``content`` (markers included) in its local history so the LLM
-    retains context of its previous proposals.
+    The LLM may embed a ``---SCHEMA---`` block (validated here, with auto-retry on
+    errors) and/or a ``---CONFIG---`` block.  The client should store the full
+    ``content`` (markers included) in its local history so the LLM retains context.
     """
     llm = system_resources.llm
     if llm is None:
@@ -209,19 +276,53 @@ async def chat(
         {"role": m.role, "content": m.content} for m in body.history
     ] + [{"role": "user", "content": body.text}]
 
-    result = await llm.complete(
-        [{"role": "system", "content": _SYSTEM_PROMPT}] + messages,
-        temperature=0.3,
-    )
-    full_content = (result["content"] or "").strip()
-    display_text, config_yaml = _extract_config(full_content)
+    validated_schema: dict | None = None
+    full_content: str = ""
+
+    for attempt in range(_MAX_SCHEMA_RETRIES + 1):
+        result = await llm.complete(
+            [{"role": "system", "content": _SYSTEM_PROMPT}] + messages,
+            temperature=0.3,
+        )
+        full_content = (result["content"] or "").strip()
+
+        _, schema_raw = _extract_block(full_content, _SCHEMA_START, _SCHEMA_END)
+        if schema_raw is None:
+            break  # no schema block proposed — nothing to validate
+
+        schemas, errors = _parse_and_validate_schemas(schema_raw)
+        if not errors:
+            validated_schema = schemas
+            logger.info(
+                "generate/chat schemas validated collections=%s",
+                list(schemas),
+            )
+            break
+
+        if attempt < _MAX_SCHEMA_RETRIES:
+            error_text = "Schema validation errors:\n" + "\n".join(f"- {e}" for e in errors)
+            error_text += "\nPlease fix the schema and re-propose the full ---SCHEMA--- block."
+            logger.info("generate/chat schema attempt=%d errors=%d", attempt + 1, len(errors))
+            messages = messages + [
+                {"role": "assistant", "content": full_content},
+                {"role": "user", "content": error_text},
+            ]
+        else:
+            logger.warning("generate/chat schema still invalid after %d retries", _MAX_SCHEMA_RETRIES)
+
+    display_text, _ = _extract_block(full_content, _SCHEMA_START, _SCHEMA_END)
+    display_text, config_yaml = _extract_config(display_text)
 
     logger.info(
-        "generate/chat turn=%d config_proposed=%s",
+        "generate/chat turn=%d schema_confirmed=%s config_proposed=%s",
         len(body.history) + 1,
+        validated_schema is not None,
         config_yaml is not None,
     )
-    return GenerateChatResponse(content=full_content, config_yaml=config_yaml)
+    return GenerateChatResponse(
+        content=full_content,
+        config_yaml=config_yaml,
+    )
 
 
 @router.post("/deploy", response_model=DeployResponse, status_code=status.HTTP_201_CREATED)
