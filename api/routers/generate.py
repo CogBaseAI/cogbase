@@ -61,20 +61,14 @@ _PROPOSE_SCHEMA_TOOL: ToolDefinition = {
 _PROPOSE_CONFIG_TOOL: ToolDefinition = {
     "name": "propose_app_config",
     "description": (
-        "Validate a complete CogBase app config YAML. "
+        "Generate and validate a complete CogBase app config YAML. "
         "Call this after propose_extraction_schema has succeeded. "
-        "Use the resolved JSON strings it returned verbatim for extraction_schema and schema fields. "
-        "Returns 'Config validated.' on success, or a validation error to fix."
+        "The config is generated from the conversation and validated server-side. "
+        "Returns 'Config validated.' on success, or a validation error message."
     ),
     "parameters": {
         "type": "object",
-        "properties": {
-            "config_yaml": {
-                "type": "string",
-                "description": "Complete config.yaml content",
-            }
-        },
-        "required": ["config_yaml"],
+        "properties": {},
         "additionalProperties": False,
     },
 }
@@ -124,6 +118,29 @@ Example output:
 """
 
 _MAX_SCHEMA_RETRIES = 3
+_MAX_CONFIG_RETRIES = 3
+
+_CONFIG_AGENT_SYSTEM_PROMPT = f"""\
+You are a CogBase configuration generator. Given a conversation about building a CogBase \
+application — including resolved extraction schemas from propose_extraction_schema — produce \
+a complete, valid config.yaml.
+
+Output ONLY the raw YAML — no explanation, no markdown fences.
+
+Copy the extraction_schema and schema JSON strings from the conversation verbatim; \
+do not rewrite or reformat them.
+
+## Rules
+1. name must be kebab-case (lowercase, alphanumeric, hyphens only)
+2. chunk-embed-upsert is always the first pipeline step
+3. Do NOT include doc_id in extraction schemas — it is injected automatically
+4. All content is INLINE — do not use .json or .txt filenames as values anywhere
+5. Pipeline step collections must exactly match declared vector/structured collection names
+6. Use snake_case for all collection names and field names
+
+## Config format
+
+{AppConfig.config_format_prompt()}"""
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -139,38 +156,22 @@ natural-language questions via semantic search and structured lookup.
 ## How to work
 
 1. Ask targeted questions — no more than 2-3 per turn — to understand:
-   - What documents will be ingested (type, format, content)
-   - What structured fields to extract (name, data type, description for each field)
+   - What the documents are about (domain and subject matter)
    - What kinds of queries users will run:
-       * Exact/filtered lookup over extracted fields → needs extract-structured step
+       * Exact/filtered lookup over extracted facts → needs extract-structured step
        * Semantic search over document text → needs chunk-embed-upsert step
        * High-level summary or topic queries → needs document-embed-upsert step
 
-2. Once you understand the domain and document types, call propose_extraction_schema.
-   It generates schemas from the conversation — you do not write the schemas yourself.
+2. Once you understand the domain, call propose_extraction_schema.
+   It uses domain expertise to propose fields and schemas for all structured collections —
+   you do not enumerate fields or decide collection structure yourself.
    When it succeeds, present the proposed schemas to the user and ask for confirmation
    or corrections. Include the resolved JSON strings in your response so they persist
    in conversation history.
 
-3. Once the schema is confirmed, call propose_app_config with the complete config YAML.
-   Use the resolved JSON strings verbatim for extraction_schema and schema fields.
-   Fix any errors and call again until it succeeds.
-   When it succeeds, include the validated config in your response with a plain-language
-   explanation of what you set up and why.
-
-## Config rules
-
-1. name must be kebab-case (lowercase, alphanumeric, hyphens only)
-2. chunk-embed-upsert is always the first pipeline step
-3. Do NOT include doc_id in extraction schemas — it is injected automatically
-4. All content is INLINE — do not use .json or .txt filenames as values anywhere
-5. Pipeline step collections must exactly match declared vector/structured collection names
-6. Use snake_case for all collection names and field names
-7. Use the resolved JSON strings from propose_extraction_schema verbatim
-
-## Config format
-
-{AppConfig.config_format_prompt()}"""
+3. Once the schema is confirmed, call propose_app_config.
+   It generates and validates the config from the conversation — you do not write the YAML yourself.
+   When it succeeds, present the result to the user with a plain-language explanation of what was set up and why."""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -283,15 +284,43 @@ async def _run_propose_schema(llm: LLMBase, conversation_messages: list) -> str:
     )
 
 
-def _run_propose_config(inputs: dict) -> tuple[str, str | None]:
-    config_yaml = inputs.get("config_yaml", "")
-    try:
-        config = AppConfig.from_yaml(config_yaml)
-    except Exception as exc:
-        return f"Config validation error: {exc}\nFix and call again.", None
-    stored_yaml = _serialize_config(config)
-    logger.info("generate/propose_config validated app=%s", config.name)
-    return "Config validated.", stored_yaml
+async def _run_propose_config(llm: LLMBase, conversation_messages: list) -> tuple[str, str | None]:
+    sub_messages = [{"role": "system", "content": _CONFIG_AGENT_SYSTEM_PROMPT}] + [
+        m for m in conversation_messages if m.get("role") in ("user", "assistant")
+    ]
+
+    errors: list[str] = []
+    for attempt in range(_MAX_CONFIG_RETRIES):
+        result = await llm.complete(sub_messages, temperature=0.2)
+        config_yaml = (result.get("content") or "").strip()
+        try:
+            config = AppConfig.from_yaml(config_yaml)
+        except Exception as exc:
+            errors = [str(exc)]
+            logger.warning(
+                "generate/propose_config attempt=%d errors=%s", attempt + 1, errors
+            )
+            error_text = "\n".join(f"- {e}" for e in errors)
+            sub_messages += [
+                {"role": "assistant", "content": config_yaml},
+                {
+                    "role": "user",
+                    "content": f"Validation errors — fix and output the corrected YAML only:\n{error_text}",
+                },
+            ]
+            continue
+
+        stored_yaml = _serialize_config(config)
+        logger.info(
+            "generate/propose_config validated app=%s attempt=%d", config.name, attempt + 1
+        )
+        return "Config validated.", stored_yaml
+
+    return (
+        f"Config generation failed after {_MAX_CONFIG_RETRIES} attempts. Last errors:\n"
+        + "\n".join(f"- {e}" for e in errors),
+        None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +387,7 @@ async def chat(
             if tc["name"] == "propose_extraction_schema":
                 tool_output = await _run_propose_schema(llm, messages)
             elif tc["name"] == "propose_app_config":
-                tool_output, config_yaml = _run_propose_config(inputs)
+                tool_output, config_yaml = await _run_propose_config(llm, messages)
                 if config_yaml is not None:
                     validated_config_yaml = config_yaml
             else:
