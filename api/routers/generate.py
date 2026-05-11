@@ -127,8 +127,9 @@ a complete, valid config.yaml.
 
 Output ONLY the raw YAML — no explanation, no markdown fences.
 
-Copy the extraction_schema and schema JSON strings from the conversation verbatim; \
-do not rewrite or reformat them.
+Copy the extraction_schema JSON string from the conversation verbatim; \
+do not rewrite or reformat it. The schema field in structured_collections is derived \
+automatically from the extraction_schema — you do not need to provide it.
 
 ## Rules
 1. name must be kebab-case (lowercase, alphanumeric, hyphens only)
@@ -193,6 +194,27 @@ def _make_record_schema(extraction_schema: dict) -> dict:
     if "doc_id" not in required:
         required.insert(0, "doc_id")
     return record
+
+
+def _inject_record_schemas(config_dict: dict) -> None:
+    """Set schema = extraction_schema + doc_id for each extract-structured collection."""
+    ext_schemas: dict[str, dict] = {}
+    for pipeline in config_dict.get("pipelines", []):
+        for step in pipeline.get("steps", []):
+            if step.get("tool") == "extract-structured":
+                collection = step.get("collection")
+                ext_schema_str = (step.get("extractor") or {}).get("extraction_schema", "")
+                if collection and ext_schema_str:
+                    try:
+                        ext_schemas[collection] = json.loads(ext_schema_str)
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+    for sc in config_dict.get("structured_collections", []):
+        name = sc.get("name")
+        if name in ext_schemas:
+            sc["schema"] = json.dumps(
+                _make_record_schema(ext_schemas[name]), separators=(",", ":")
+            )
 
 
 def _validate_extraction_schema(schema_dict: dict, collection_name: str) -> list[str]:
@@ -263,10 +285,8 @@ async def _run_propose_schema(llm: LLMBase, conversation_messages: list) -> str:
             lines = ["Schema validated. Use these values verbatim in your config:"]
             for name, schema_dict in schemas.items():
                 ext_json = json.dumps(schema_dict, separators=(",", ":"))
-                rec_json = json.dumps(_make_record_schema(schema_dict), separators=(",", ":"))
                 lines.append(f"\n{name}:")
                 lines.append(f"  extraction_schema: '{ext_json}'")
-                lines.append(f"  schema: '{rec_json}'")
             return "\n".join(lines)
 
         logger.warning(
@@ -298,7 +318,11 @@ async def _run_propose_config(llm: LLMBase, conversation_messages: list) -> tupl
         result = await llm.complete(sub_messages, temperature=0.2)
         config_yaml = (result.get("content") or "").strip()
         try:
-            config = AppConfig.from_yaml(config_yaml)
+            config_dict = yaml.safe_load(config_yaml)
+            if not isinstance(config_dict, dict):
+                raise ValueError("YAML must be a mapping at the top level")
+            _inject_record_schemas(config_dict)
+            config = AppConfig.model_validate(config_dict)
         except Exception as exc:
             errors = [str(exc)]
             logger.warning(
