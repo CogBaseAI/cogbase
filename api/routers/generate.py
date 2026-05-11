@@ -80,6 +80,13 @@ You are a CogBase schema designer. Given a conversation about building a CogBase
 application, propose complete JSON Schema definitions for every structured collection \
 the application needs.
 
+CogBase has three store types — design schemas only for structured collections:
+- Structured collections: discrete extractable facts for filtered/exact lookup (what you design here)
+- Vector/chunk collections: full-text passages for semantic search (handled automatically by chunk-embed-upsert)
+- Document collections: LLM summaries for high-level queries (handled automatically by document-embed-upsert)
+Do NOT include fields like document_text, full_text, body, or summary — those are covered \
+by the other two collections automatically.
+
 Use domain knowledge to propose sensible fields — do not wait for the user to enumerate \
 them. For example, if the application is a contract analyst, include fields like \
 vendor_name, effective_date, expiry_date, total_value, and governing_law without being asked.
@@ -141,7 +148,75 @@ automatically from the extraction_schema — you do not need to provide it.
 
 ## Config format
 
-{AppConfig.config_format_prompt()}"""
+{AppConfig.config_format_prompt()}
+
+## Example — two document types, shared vector collections, no workflows
+
+name: vc-portfolio
+
+vector_collections:
+  - name: portfolio_chunks
+    description: >
+      Full-text passage index across all portfolio documents. Use for detailed
+      questions about specific companies, deals, or periods.
+  - name: portfolio_summaries
+    description: >
+      One-per-document summaries. Use for broad questions like "which companies
+      raised a Series B?" or "which board decks mention hiring risk?"
+
+structured_collections:
+  - name: portfolio_kpis
+    description: >
+      Extracted KPIs from board decks and LP updates: company_name,
+      reporting_period, arr_usd, burn_rate_monthly_usd, runway_months,
+      headcount, ndr_pct, key_milestones, notable_risks. Use for exact
+      lookups and cross-company comparisons.
+    primary_fields: [doc_id]
+
+pipelines:
+  # board-update pipeline: chunk + extract KPIs + summarize
+  - name: board-update
+    match:
+      metadata:
+        doc_type: board_update
+    steps:
+      - tool: chunk-embed-upsert
+        collection: portfolio_chunks
+        chunker:
+          type: langchain
+
+      - tool: extract-structured
+        collection: portfolio_kpis
+        extractor:
+          type: llm
+          extraction_schema: '{{"type":"object","properties":{{"company_name":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Portfolio company name"}},...}}}}'
+          prompt: >
+            You are a VC portfolio analyst. Extract structured KPIs from the
+            board deck or LP update. Use null for any field not present.
+            Return ONLY the JSON object.
+
+      - tool: document-embed-upsert
+        collection: portfolio_summaries
+        doc_prompt: >
+          Summarize this board deck or LP update. Include: company name,
+          reporting period, key financials, headcount, milestones, and risks.
+
+  # deal-memo pipeline: chunk + summarize only — no KPI extraction from pitch decks
+  - name: deal-memo
+    match:
+      metadata:
+        doc_type: deal_memo
+    steps:
+      - tool: chunk-embed-upsert
+        collection: portfolio_chunks
+        chunker:
+          type: langchain
+
+      - tool: document-embed-upsert
+        collection: portfolio_summaries
+        doc_prompt: >
+          Summarize this investment memo or pitch deck. Include: company name,
+          stage, sector, investment thesis, key risks, and deal terms if present."""
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -154,14 +229,35 @@ correct CogBase app configuration through natural conversation. You drive the pr
 CogBase applications ingest documents, extract structured facts with an LLM, and answer \
 natural-language questions via semantic search and structured lookup.
 
+## Core concepts
+
+**Pipeline steps and stores** — three step types, each writing to a different store:
+- `chunk-embed-upsert` → vector collection: overlapping text passages for semantic search
+- `extract-structured` → structured collection: discrete typed facts for filtered/exact lookup
+- `document-embed-upsert` → document (vector) collection: one LLM summary per document for high-level queries
+Full text and summaries are covered automatically — structured collections hold only discrete extracted facts.
+
+**Multiple pipelines** — an app can declare multiple named pipelines, each matched to documents \
+by metadata (e.g. `doc_type: board_update` vs `doc_type: deal_memo`). Pipelines can share \
+vector collections; only the steps differ. Ask whether the user has multiple document types \
+that need different treatment.
+
+**Workflows** — YAML-declared analytical pipelines that fan out over all records in a collection \
+(e.g. "flag every contract expiring before Q2", "rank all portfolio companies by ARR"). \
+Use workflows when an example question requires scanning the whole collection, not just retrieving \
+a single document. Single-document retrieval and lookup queries are handled by the query runner \
+without a workflow.
+
 ## How to work
 
 1. Ask targeted questions — no more than 2-3 per turn — to understand:
    - What the documents are about (domain and subject matter)
+   - Whether there are multiple document types that need different pipeline treatment
    - What kinds of queries users will run:
-       * Exact/filtered lookup over extracted facts → needs extract-structured step
-       * Semantic search over document text → needs chunk-embed-upsert step
-       * High-level summary or topic queries → needs document-embed-upsert step
+       * Exact/filtered lookup over extracted facts → extract-structured + structured collection
+       * Semantic search over document text → chunk-embed-upsert + vector collection
+       * High-level summary or topic queries → document-embed-upsert + document collection
+       * Analytical fan-out over all records (e.g. "flag all X that…") → workflow
 
 2. Once you understand the domain, call propose_extraction_schema.
    It uses domain expertise to propose fields and schemas for all structured collections —
@@ -373,7 +469,7 @@ async def chat(
 
     from cogbase.llms.base import ChatMessage as LLMChatMessage
 
-    logger.info("generate/chat text=%s, history=%d", body.text[:50], len(body.history))
+    logger.info("generate/chat start text=%s ..., history=%d", body.text[:50], len(body.history))
 
     messages: list[LLMChatMessage] = (
         [{"role": "system", "content": _SYSTEM_PROMPT}]
@@ -433,7 +529,7 @@ async def chat(
         final_content = result.get("content") or ""  # type: ignore[possibly-undefined]
 
     logger.info(
-        "generate/chat turn=%d config_validated=%s, final_content=%d, %s",
+        "generate/chat turn=%d config_validated=%s, final_content=%d, %s ...",
         len(body.history) + 1,
         validated_config_yaml is not None,
         len(final_content),

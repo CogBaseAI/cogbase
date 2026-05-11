@@ -36,6 +36,10 @@ def _coerce_message_content(content: Any) -> str:
     return str(content)
 
 
+# Models that reject the temperature parameter entirely.
+_NO_TEMPERATURE_MODELS: frozenset[str] = frozenset({"gpt-5.5"})
+
+
 class OpenAILLM(LLMBase):
     """LLM backend that calls ``client.chat.completions.create``."""
 
@@ -137,7 +141,7 @@ class OpenAILLM(LLMBase):
             ]
         if max_tokens is not None:
             kwargs["max_completion_tokens"] = max_tokens
-        if temperature is not None:
+        if temperature is not None and self._model not in _NO_TEMPERATURE_MODELS:
             kwargs["temperature"] = temperature
         effective_reasoning_effort = reasoning_effort or self._reasoning_effort
         if effective_reasoning_effort is not None:

@@ -46,7 +46,7 @@ document_store:
 
 llm:
   provider: openai           # only "openai" supported today
-  model: gpt-5.4-mini
+  model: gpt-5.5
   # api_key: sk-...          # omit to use OPENAI_API_KEY env var
 
 embedding:                   # shared across all vector and summarize collections
