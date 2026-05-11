@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Annotated, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -53,25 +53,24 @@ class VectorCollectionConfig(ConfigPromptMixin, BaseModel):
 class ExtractorConfig(ConfigPromptMixin, BaseModel):
     type: Literal["llm"] = Field(default="llm", description="Extractor implementation.")
     extraction_schema: str = Field(description="Resolved JSON schema used for extraction.")
-    prompt: str | None = Field(
-        default=None,
+    prompt: str = Field(
         description="System prompt for the extraction LLM.",
     )
     record_mode: RecordMode = Field(
         default=RecordMode.ONE,
         description="Whether the extractor returns one record or many.",
     )
-    response_field: str = Field(
+    response_field: str | None = Field(
         default="items",
-        description="Top-level response field containing extracted records.",
+        description="Top-level response field containing extracted records. Only used for RecordMode.MANY",
     )
     id_field: str | None = Field(
         default=None,
-        description="Optional record identifier field name.",
+        description="Optional record identifier field name. Required for RecordMode.MANY.",
     )
     id_template: str | None = Field(
         default=None,
-        description="Optional template for generated record ids.",
+        description="Optional template for generated record ids. Required for RecordMode.MANY.",
     )
 
 
@@ -102,24 +101,47 @@ class WhenCondition(ConfigPromptMixin, BaseModel):
     )
 
 
-class PipelineStepConfig(ConfigPromptMixin, BaseModel):
-    tool: Literal["chunk-embed-upsert", "extract-structured", "document-embed-upsert"] = Field(
-        description="Pipeline tool to run."
-    )
+class PipelineStepBase(ConfigPromptMixin, BaseModel):
     collection: str = Field(description="Target collection name.")
-    chunker: ChunkerConfig | None = Field(
-        default=None,
+
+
+class ChunkEmbedUpsertStepConfig(PipelineStepBase):
+    tool: Literal["chunk-embed-upsert"] = Field(
+        default="chunk-embed-upsert",
+        description="Pipeline tool to run.",
+    )
+    chunker: ChunkerConfig = Field(
+        default_factory=ChunkerConfig,
         description="Chunking settings for chunk-embed-upsert steps.",
         json_schema_extra={"prompt_skip": True},
     )
-    extractor: ExtractorConfig | None = Field(
-        default=None,
+
+
+class ExtractStructuredStepConfig(PipelineStepBase):
+    tool: Literal["extract-structured"] = Field(
+        default="extract-structured",
+        description="Pipeline tool to run.",
+    )
+    extractor: ExtractorConfig = Field(
         description="Extraction settings for extract-structured steps.",
     )
-    doc_prompt: str | None = Field(
-        default=None,
+
+
+class DocumentEmbedUpsertStepConfig(PipelineStepBase):
+    tool: Literal["document-embed-upsert"] = Field(
+        default="document-embed-upsert",
+        description="Pipeline tool to run.",
+    )
+    doc_prompt: str = Field(
+        default="Summarize this document in a concise way, focusing on the most important points and avoiding unnecessary detail.",
         description="System instructions for the document level summarization LLM.",
     )
+
+
+PipelineStepConfig = Annotated[
+    ChunkEmbedUpsertStepConfig | ExtractStructuredStepConfig | DocumentEmbedUpsertStepConfig,
+    Field(discriminator="tool"),
+]
 
 
 class PipelineConfig(ConfigPromptMixin, BaseModel):
@@ -132,7 +154,7 @@ class PipelineConfig(ConfigPromptMixin, BaseModel):
         default=False,
         description="Whether pipeline steps may run in parallel.",
     )
-    steps: list[PipelineStepConfig] = Field(description="Ordered list of pipeline steps.")
+    steps: list[PipelineStepConfig] = Field(description="List of supported pipeline steps. Add the steps required for the application.")
 
 
 # ---------------------------------------------------------------------------
@@ -283,17 +305,13 @@ class AppConfig(ConfigPromptMixin, BaseModel):
         sc_names = {sc.name for sc in self.structured_collections}
         for pipeline in self.pipelines:
             for step in pipeline.steps:
-                if step.tool in ("chunk-embed-upsert", "document-embed-upsert") and step.collection not in vc_names:
+                if isinstance(step, (ChunkEmbedUpsertStepConfig, DocumentEmbedUpsertStepConfig)) and step.collection not in vc_names:
                     raise ValueError(
                         f"Pipeline step references unknown vector collection: {step.collection!r}"
                     )
-                if step.tool == "extract-structured" and step.collection not in sc_names:
+                if isinstance(step, ExtractStructuredStepConfig) and step.collection not in sc_names:
                     raise ValueError(
                         f"Pipeline step references unknown structured collection: {step.collection!r}"
-                    )
-                if step.tool == "extract-structured" and step.extractor is None:
-                    raise ValueError(
-                        f"Pipeline step for {step.collection!r} is missing 'extractor'"
                     )
         return self
 

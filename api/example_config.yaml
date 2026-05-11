@@ -37,10 +37,6 @@ pipelines:
     steps:
       - tool: chunk-embed-upsert
         collection: document_chunks
-        chunker:
-          type: fixed          # fixed | langchain
-          chunk_size: 512
-          overlap: 64
 
       - tool: extract-structured
         collection: contract_extraction

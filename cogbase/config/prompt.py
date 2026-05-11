@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 import sys
-from typing import Any, ForwardRef, Literal, get_args, get_origin, get_type_hints
+import types
+from typing import Annotated, Any, ForwardRef, Literal, Union, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel
 from pydantic_core import PydanticUndefined
@@ -34,7 +35,15 @@ def _literal_values(annotation: Any) -> list[Any]:
     return []
 
 
+def _single_literal_value(annotation: Any) -> Any | None:
+    values = _literal_values(annotation)
+    if len(values) == 1:
+        return values[0]
+    return None
+
+
 def _unwrap_optional(annotation: Any) -> tuple[Any, bool]:
+    annotation = _strip_annotated(annotation)
     origin = get_origin(annotation)
     if origin is None:
         return annotation, False
@@ -46,12 +55,39 @@ def _unwrap_optional(annotation: Any) -> tuple[Any, bool]:
 
 
 def _unwrap_list(annotation: Any) -> Any | None:
+    annotation = _strip_annotated(annotation)
     origin = get_origin(annotation)
     if origin in (list, tuple):
         args = get_args(annotation)
         if args:
             return args[0]
     return None
+
+
+def _strip_annotated(annotation: Any) -> Any:
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return get_args(annotation)[0]
+    return annotation
+
+
+def _union_variants(annotation: Any) -> list[Any]:
+    annotation = _strip_annotated(annotation)
+    origin = get_origin(annotation)
+    if origin not in (types.UnionType, Union):
+        return []
+    return list(get_args(annotation))
+
+
+def _resolve_base_model_variants(annotation: Any, model_cls: type[BaseModel]) -> list[type[BaseModel]]:
+    variants: list[type[BaseModel]] = []
+    for variant in _union_variants(annotation):
+        if variant is type(None):
+            continue
+        variant = _resolve_model_type(variant, model_cls)
+        if isinstance(variant, type) and issubclass(variant, BaseModel):
+            variants.append(variant)
+    return variants
 
 
 def _resolve_model_type(annotation: Any, model_cls: type[BaseModel]) -> Any:
@@ -95,9 +131,32 @@ def _resolved_default(field: Any) -> Any:
     return value
 
 
-def _should_skip_field(field: Any) -> bool:
+def _should_skip_field(field: Any, annotation: Any) -> bool:
     extra = getattr(field, "json_schema_extra", None) or {}
     return bool(extra.get("prompt_skip") or extra.get("prompt_exclude"))
+
+
+def _field_comment_for_annotation(
+    description: str | None,
+    annotation: Any,
+    default: Any = PydanticUndefined,
+    optional: bool = False,
+) -> str:
+    if _single_literal_value(annotation) is not None:
+        default = PydanticUndefined
+    return _field_comment(description, default, optional)
+
+
+def _discriminator_label(model_cls: type[BaseModel], field_name: str = "tool") -> str | None:
+    field = model_cls.model_fields.get(field_name)
+    if field is None:
+        return None
+    type_hints = get_type_hints(model_cls, include_extras=True)
+    annotation, _ = _unwrap_optional(type_hints.get(field_name, field.annotation))
+    value = _single_literal_value(annotation)
+    if value is None:
+        return None
+    return str(value)
 
 
 def _render_model_template(
@@ -112,25 +171,40 @@ def _render_model_template(
     pad = " " * indent
     lines: list[str] = []
     type_hints = get_type_hints(model_cls, include_extras=True)
-    for field_name, field in model_cls.model_fields.items():
-        if _should_skip_field(field):
-            continue
+    field_items = list(model_cls.model_fields.items())
+    if "tool" in model_cls.model_fields:
+        field_items = [("tool", model_cls.model_fields["tool"])] + [
+            (name, field) for name, field in field_items if name != "tool"
+        ]
+    for field_name, field in field_items:
         alias = field.alias or field_name
         annotation, optional = _unwrap_optional(type_hints.get(field_name, field.annotation))
+        if _should_skip_field(field, annotation):
+            continue
         description = field.description
         default = _resolved_default(field)
 
         list_item = _unwrap_list(annotation)
         if list_item is not None:
-            list_item = _resolve_model_type(list_item, model_cls)
-            if isinstance(list_item, type) and issubclass(list_item, BaseModel):
+            model_variants = _resolve_base_model_variants(list_item, model_cls)
+            if model_variants:
+                lines.append(f"{pad}{alias}:{_field_comment(description, default, optional)}")
+                for variant in model_variants:
+                    if variant in _stack:
+                        lines.append(f"{' ' * (indent + 2)}- ...")
+                        continue
+                    item_lines = _render_model_template(variant, indent + 4, _stack + (model_cls,))
+                    if item_lines:
+                        item_lines[0] = f"{' ' * (indent + 2)}- {item_lines[0].lstrip()}"
+                    lines.extend(item_lines)
+            elif isinstance(list_item, type) and issubclass(list_item, BaseModel):
                 lines.append(f"{pad}{alias}:{_field_comment(description, default, optional)}")
                 if list_item in _stack:
                     lines.append(f"{' ' * (indent + 2)}- ...")
                 else:
-                    item_lines = _render_model_template(list_item, indent + 2, _stack + (model_cls,))
+                    item_lines = _render_model_template(list_item, indent + 4, _stack + (model_cls,))
                     if item_lines:
-                        item_lines[0] = f"{' ' * indent}- {item_lines[0].lstrip()}"
+                        item_lines[0] = f"{' ' * (indent + 2)}- {item_lines[0].lstrip()}"
                     lines.extend(item_lines)
             else:
                 if default is PydanticUndefined or default is None or default == []:
@@ -155,7 +229,7 @@ def _render_model_template(
                 value = _yaml_scalar(default)
             else:
                 value = " | ".join(_yaml_scalar(v) for v in literal_values)
-            lines.append(f"{pad}{alias}: {value}{_field_comment(description, default, optional)}")
+            lines.append(f"{pad}{alias}: {value}{_field_comment_for_annotation(description, annotation, default, optional)}")
             continue
 
         if default is not PydanticUndefined:
@@ -164,7 +238,7 @@ def _render_model_template(
             value = "null"
         else:
             value = f"<{field_name}>"
-        lines.append(f"{pad}{alias}: {value}{_field_comment(description, default, optional)}")
+        lines.append(f"{pad}{alias}: {value}{_field_comment_for_annotation(description, annotation, default, optional)}")
 
     if lines and first_line_prefix:
         lines[0] = f"{pad}{first_line_prefix}{lines[0].lstrip()}"

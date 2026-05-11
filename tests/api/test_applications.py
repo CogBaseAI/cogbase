@@ -31,7 +31,7 @@ from api.main import app
 from api.app_cache import AppCache
 from api.routers.applications import _serialize_config
 from api.system_store import SystemStore
-from cogbase.config.config import AppConfig, ExtractorConfig, RecordMode
+from cogbase.config.config import AppConfig, RecordMode
 from cogbase.core.query_runner import QueryResult
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 
@@ -112,8 +112,6 @@ class TestSerializeConfig:
 
     def test_enum_serializes_as_plain_string(self):
         """RecordMode enum must appear as its string value in YAML, not as a Python object tag."""
-        extractor = ExtractorConfig(extraction_schema="{}", record_mode=RecordMode.MANY)
-        # Embed the extractor in a pipeline step so it ends up in the serialized output.
         config_yaml = textwrap.dedent("""\
             name: test-app
             llm:
@@ -132,6 +130,7 @@ class TestSerializeConfig:
                     extractor:
                       type: llm
                       extraction_schema: '{}'
+                      prompt: Extract facts.
                       record_mode: many
         """)
         cfg = AppConfig.model_validate(yaml.safe_load(config_yaml))
@@ -160,6 +159,7 @@ class TestSerializeConfig:
                     extractor:
                       type: llm
                       extraction_schema: '{}'
+                      prompt: Extract facts.
                       record_mode: one
         """)
         original = AppConfig.model_validate(yaml.safe_load(config_yaml))

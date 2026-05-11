@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from cogbase.config.config import AppConfig, ChunkerConfig, ExtractorConfig
+from cogbase.config.config import (
+    AppConfig,
+    ChunkerConfig,
+    DocumentEmbedUpsertStepConfig,
+    ExtractStructuredStepConfig,
+    ExtractorConfig,
+    ChunkEmbedUpsertStepConfig,
+)
 from cogbase.config.stores import StructuredStoreConfig
 from cogbase.embeddings import build_embedding as _build_embedder
 from cogbase.llms import build_llm as _build_llm
@@ -143,7 +150,7 @@ async def build_app(
         structured_schemas.append(sc_schema)
 
         step = step_by_col.get(sc_cfg.name)
-        ext_cfg: ExtractorConfig | None = step.extractor if step else None
+        ext_cfg: ExtractorConfig | None = step.extractor if isinstance(step, ExtractStructuredStepConfig) else None
         if ext_cfg is not None:
             extraction_model = build_model_from_json_schema(
                 ext_cfg.extraction_schema, model_name=sc_cfg.name.upper() + "_EXTRACTION"
@@ -179,12 +186,11 @@ async def build_app(
                 tool=s.tool,
                 collection=s.collection,
             )
-            if s.tool == "chunk-embed-upsert":
-                chunker_cfg = s.chunker or ChunkerConfig()
-                ps.chunker = _build_chunker(chunker_cfg)
-            elif s.tool == "extract-structured":
+            if isinstance(s, ChunkEmbedUpsertStepConfig):
+                ps.chunker = _build_chunker(s.chunker)
+            elif isinstance(s, ExtractStructuredStepConfig):
                 ps.extractor = extractors_by_col.get(s.collection)
-            elif s.tool == "document-embed-upsert":
+            elif isinstance(s, DocumentEmbedUpsertStepConfig):
                 ps.llm = llm
                 ps.doc_prompt = s.doc_prompt or DEFAULT_DOC_PROMPT
             pipeline_steps.append(ps)

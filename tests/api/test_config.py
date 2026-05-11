@@ -9,11 +9,13 @@ import pytest
 from cogbase.config.config import (
     AppConfig,
     ChunkerConfig,
+    ChunkEmbedUpsertStepConfig,
+    DocumentEmbedUpsertStepConfig,
     VectorCollectionConfig,
     EmbeddingConfig,
     ExtractorConfig,
+    ExtractStructuredStepConfig,
     LLMConfig,
-    PipelineStepConfig,
     StructuredStoreConfig,
     VectorStoreConfig,
 )
@@ -183,7 +185,9 @@ class TestAppConfig:
         assert cfg.name == "full-app"
         assert cfg.embedding is not None
         assert len(cfg.vector_collections) == 1
-        assert cfg.pipelines[0].steps[0].chunker.chunk_size == 256
+        step = cfg.pipelines[0].steps[0]
+        assert isinstance(step, ChunkEmbedUpsertStepConfig)
+        assert step.chunker.chunk_size == 256
 
     def test_from_yaml_with_explicit_store(self):
         yaml_text = textwrap.dedent("""\
@@ -257,9 +261,11 @@ class TestAppConfig:
                     doc_prompt: "Summarize in one sentence."
         """)
         cfg = AppConfig.from_yaml(yaml_text)
-        assert cfg.pipelines[0].steps[0].tool == "document-embed-upsert"
-        assert cfg.pipelines[0].steps[0].collection == "doc_summary"
-        assert cfg.pipelines[0].steps[0].doc_prompt == "Summarize in one sentence."
+        step = cfg.pipelines[0].steps[0]
+        assert isinstance(step, DocumentEmbedUpsertStepConfig)
+        assert step.tool == "document-embed-upsert"
+        assert step.collection == "doc_summary"
+        assert step.doc_prompt == "Summarize in one sentence."
 
     def test_step_references_unknown_vector_collection_raises(self):
         yaml_text = textwrap.dedent("""\
@@ -311,6 +317,7 @@ class TestAppConfig:
                     extractor:
                       type: llm
                       extraction_schema: '{_EXTRACTION_SCHEMA}'
+                      prompt: ""
                   - tool: document-embed-upsert
                     collection: document_summary
                     doc_prompt: "Summarize in one sentence."
@@ -322,6 +329,9 @@ class TestAppConfig:
         tools = [s.tool for s in cfg.pipelines[0].steps]
         assert tools == ["chunk-embed-upsert", "extract-structured", "document-embed-upsert"]
         doc_step = cfg.pipelines[0].steps[2]
+        assert isinstance(cfg.pipelines[0].steps[0], ChunkEmbedUpsertStepConfig)
+        assert isinstance(cfg.pipelines[0].steps[1], ExtractStructuredStepConfig)
+        assert isinstance(cfg.pipelines[0].steps[2], DocumentEmbedUpsertStepConfig)
         assert doc_step.doc_prompt == "Summarize in one sentence."
 
     def test_config_format_prompt_returns_string(self):
@@ -330,11 +340,8 @@ class TestAppConfig:
         assert len(result) > 0
 
     def test_config_format_prompt_contains_all_pipeline_tools(self):
-        from typing import get_args
-        from cogbase.config.config import PipelineStepConfig
-
-        tools = get_args(PipelineStepConfig.model_fields["tool"].annotation)
         result = AppConfig.config_format_prompt()
+        tools = ["chunk-embed-upsert", "extract-structured", "document-embed-upsert"]
         for tool in tools:
             assert tool in result, f"tool {tool!r} missing from config_format_prompt output"
 
@@ -344,11 +351,8 @@ class TestAppConfig:
             assert section in result, f"{section!r} missing from config_format_prompt output"
 
     def test_config_format_prompt_tool_order_matches_literal(self):
-        from typing import get_args
-        from cogbase.config.config import PipelineStepConfig
-
-        tools = get_args(PipelineStepConfig.model_fields["tool"].annotation)
         result = AppConfig.config_format_prompt()
+        tools = ["chunk-embed-upsert", "extract-structured", "document-embed-upsert"]
         positions = [result.index(t) for t in tools]
         assert positions == sorted(positions), "tools appear out of Literal order in prompt"
 
@@ -404,22 +408,23 @@ class TestExtractorConfig:
     _EXTRACTION_SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
 
     def test_required_fields(self):
-        cfg = ExtractorConfig(extraction_schema=self._EXTRACTION_SCHEMA)
+        cfg = ExtractorConfig(extraction_schema=self._EXTRACTION_SCHEMA, prompt="")
         assert cfg.type == "llm"
         assert cfg.extraction_schema == self._EXTRACTION_SCHEMA
-        assert cfg.prompt is None
+        assert cfg.prompt == ""
         assert cfg.record_mode == "one"
         assert cfg.response_field == "items"
         assert cfg.id_field is None
         assert cfg.id_template is None
 
     def test_custom_id_field(self):
-        cfg = ExtractorConfig(extraction_schema=self._EXTRACTION_SCHEMA, id_field="clause_id")
+        cfg = ExtractorConfig(extraction_schema=self._EXTRACTION_SCHEMA, prompt="", id_field="clause_id")
         assert cfg.id_field == "clause_id"
 
     def test_record_mode_many(self):
         cfg = ExtractorConfig(
             extraction_schema=self._EXTRACTION_SCHEMA,
+            prompt="",
             record_mode="many",
             response_field="clauses",
             id_field="clause_id",
@@ -485,6 +490,7 @@ class TestExtractorConfig:
                     extractor:
                       type: llm
                       extraction_schema: '{_EXTRACTION_SCHEMA}'
+                      prompt: ""
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         ext = cfg.pipelines[0].steps[0].extractor
@@ -518,8 +524,14 @@ class TestVectorCollectionConfig:
             VectorCollectionConfig(name="chunks", description=" ")
 
     def test_step_prompt_on_step_config(self):
-        cfg = PipelineStepConfig(tool="document-embed-upsert", collection="doc_summary", doc_prompt="One sentence.")
+        cfg = DocumentEmbedUpsertStepConfig(collection="doc_summary", doc_prompt="One sentence.")
         assert cfg.doc_prompt == "One sentence."
+
+    def test_chunk_step_prompt_skips_fixed_tool(self):
+        prompt = ChunkEmbedUpsertStepConfig.config_format_prompt()
+        assert "tool: chunk-embed-upsert  # Pipeline tool to run." in prompt
+        assert "default: chunk-embed-upsert" not in prompt
+        assert "chunker:" not in prompt
 
     def test_vector_collection_metadata_fields(self):
         cfg = VectorCollectionConfig(

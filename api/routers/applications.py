@@ -316,6 +316,7 @@ async def delete_application(
     record = await system_store.get_app(app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
+    # TODO delete actual data from document/vector/structured stores.
     app_cache.remove(app_name)
     await system_store.delete_app(app_name)
     logger.info("Application '%s' deleted", app_name)

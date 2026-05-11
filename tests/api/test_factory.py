@@ -68,6 +68,7 @@ pipelines:
         extractor:
           type: llm
           extraction_schema: '{_EXTRACTION_SCHEMA}'
+          prompt: Extract contract facts.
 """
 
 _FULL_CONFIG_YAML = f"""\
@@ -100,6 +101,7 @@ pipelines:
         extractor:
           type: llm
           extraction_schema: '{_EXTRACTION_SCHEMA}'
+          prompt: Extract contract facts.
 """
 
 
@@ -347,6 +349,7 @@ pipelines:
         extractor:
           type: llm
           extraction_schema: '{_EXTRACTION_SCHEMA}'
+          prompt: Extract contract facts.
       - tool: document-embed-upsert
         collection: document_summary
         doc_prompt: "Summarize in one sentence."
@@ -477,6 +480,7 @@ pipelines:
         extractor:
           type: llm
           extraction_schema: '{_LIST_EXTRACTION_SCHEMA}'
+          prompt: Extract contract clauses.
           record_mode: many
           response_field: clauses
           id_field: clause_id

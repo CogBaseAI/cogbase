@@ -244,7 +244,9 @@ def _serialize_config(config: AppConfig) -> str:
 
 async def _run_propose_schema(llm: LLMBase, conversation_messages: list) -> str:
     sub_messages = [{"role": "system", "content": _SCHEMA_AGENT_SYSTEM_PROMPT}] + [
-        m for m in conversation_messages if m.get("role") in ("user", "assistant")
+        {"role": m["role"], "content": m.get("content") or ""}
+        for m in conversation_messages
+        if m.get("role") in ("user", "assistant") and not m.get("tool_calls")
     ]
 
     for attempt in range(_MAX_SCHEMA_RETRIES):
@@ -254,7 +256,7 @@ async def _run_propose_schema(llm: LLMBase, conversation_messages: list) -> str:
 
         if not errors:
             logger.info(
-                "generate/propose_schema validated collections=%s attempt=%d",
+                "generate/propose_schema validated schemas=%s attempt=%d",
                 list(schemas),
                 attempt + 1,
             )
@@ -286,7 +288,9 @@ async def _run_propose_schema(llm: LLMBase, conversation_messages: list) -> str:
 
 async def _run_propose_config(llm: LLMBase, conversation_messages: list) -> tuple[str, str | None]:
     sub_messages = [{"role": "system", "content": _CONFIG_AGENT_SYSTEM_PROMPT}] + [
-        m for m in conversation_messages if m.get("role") in ("user", "assistant")
+        {"role": m["role"], "content": m.get("content") or ""}
+        for m in conversation_messages
+        if m.get("role") in ("user", "assistant") and not m.get("tool_calls")
     ]
 
     errors: list[str] = []
@@ -344,6 +348,8 @@ async def chat(
         raise HTTPException(status_code=503, detail="No LLM configured on the system")
 
     from cogbase.llms.base import ChatMessage as LLMChatMessage
+
+    logger.info("generate/chat text=%s, history=%d", body.text[:50], len(body.history))
 
     messages: list[LLMChatMessage] = (
         [{"role": "system", "content": _SYSTEM_PROMPT}]
@@ -403,9 +409,11 @@ async def chat(
         final_content = result.get("content") or ""  # type: ignore[possibly-undefined]
 
     logger.info(
-        "generate/chat turn=%d config_validated=%s",
+        "generate/chat turn=%d config_validated=%s, final_content=%d, %s",
         len(body.history) + 1,
         validated_config_yaml is not None,
+        len(final_content),
+        final_content[:50],
     )
     return GenerateChatResponse(
         content=final_content,

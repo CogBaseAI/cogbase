@@ -60,8 +60,6 @@ pipelines:
     steps:
       - tool: chunk-embed-upsert
         collection: rule_chunks
-        chunker:
-          type: langchain
 
   - name: contracts
     match:
@@ -70,8 +68,6 @@ pipelines:
     steps:
       - tool: chunk-embed-upsert
         collection: contract_chunks
-        chunker:
-          type: langchain
 
       - tool: extract-structured
         collection: contract_metadata

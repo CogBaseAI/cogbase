@@ -26,8 +26,6 @@ pipelines:
     steps:
       - tool: chunk-embed-upsert
         collection: document_chunks
-        chunker:
-          type: langchain
 
       - tool: extract-structured
         collection: contracts
