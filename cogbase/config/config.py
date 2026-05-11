@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
 from cogbase.config.models import LLMConfig, EmbeddingConfig
+from cogbase.config.prompt import ConfigPromptMixin, render_config_template
 
 
 class RecordMode(str, Enum):
@@ -18,17 +19,29 @@ class RecordMode(str, Enum):
     MANY = "many"
 
 
-class ChunkerConfig(BaseModel):
-    type: Literal["fixed", "langchain"] = "langchain"
-    chunk_size: int = 1024
-    overlap: int = 128
+class ChunkerConfig(ConfigPromptMixin, BaseModel):
+    type: Literal["fixed", "langchain"] = Field(
+        default="langchain",
+        description="Chunking strategy."
+    )
+    chunk_size: int = Field(default=1024, description="Chunk size in characters.")
+    overlap: int = Field(default=128, description="Chunk overlap in characters.")
 
 
-class VectorCollectionConfig(BaseModel):
-    name: str
-    dimensions: int = 1536
-    description: str
-    metadata_fields: list[str] = []
+class VectorCollectionConfig(ConfigPromptMixin, BaseModel):
+    name: str = Field(description="Collection name.")
+    dimensions: int = Field(
+        default=1536,
+        description="Embedding vector dimensionality.",
+        json_schema_extra={"prompt_skip": True},
+    )
+    description: str = Field(
+        description="Collection description, shown to the LLM as context for a query.",
+    )
+    metadata_fields: list[str] = Field(
+        default_factory=list,
+        description="Metadata keys copied onto each stored vector.",
+    )
 
     @model_validator(mode="after")
     def _non_empty_description(self) -> "VectorCollectionConfig":
@@ -37,23 +50,43 @@ class VectorCollectionConfig(BaseModel):
         return self
 
 
-class ExtractorConfig(BaseModel):
-    type: Literal["llm"] = "llm"
-    extraction_schema: str
-    prompt: str | None = None
-    record_mode: RecordMode = RecordMode.ONE
-    response_field: str = "items"
-    id_field: str | None = None
-    id_template: str | None = None
+class ExtractorConfig(ConfigPromptMixin, BaseModel):
+    type: Literal["llm"] = Field(default="llm", description="Extractor implementation.")
+    extraction_schema: str = Field(description="Resolved JSON schema used for extraction.")
+    prompt: str | None = Field(
+        default=None,
+        description="System prompt for the extraction LLM.",
+    )
+    record_mode: RecordMode = Field(
+        default=RecordMode.ONE,
+        description="Whether the extractor returns one record or many.",
+    )
+    response_field: str = Field(
+        default="items",
+        description="Top-level response field containing extracted records.",
+    )
+    id_field: str | None = Field(
+        default=None,
+        description="Optional record identifier field name.",
+    )
+    id_template: str | None = Field(
+        default=None,
+        description="Optional template for generated record ids.",
+    )
 
 
-class StructuredCollectionConfig(BaseModel):
+class StructuredCollectionConfig(ConfigPromptMixin, BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    name: str
-    schema_: str = Field(alias="schema")
-    primary_fields: list[str] = []
-    description: str
+    name: str = Field(description="Collection name.")
+    schema_: str = Field(alias="schema", description="Resolved JSON schema for the collection.")
+    primary_fields: list[str] = Field(
+        default_factory=list,
+        description="Primary lookup fields for the collection.",
+    )
+    description: str = Field(
+        description="Collection description, shown to the LLM as context for a query.",
+    )
 
     @model_validator(mode="after")
     def _non_empty_description(self) -> "StructuredCollectionConfig":
@@ -62,26 +95,44 @@ class StructuredCollectionConfig(BaseModel):
         return self
 
 
-class WhenCondition(BaseModel):
-    metadata: dict[str, str] = {}
-
-
-class PipelineStepConfig(BaseModel):
-    tool: Literal["chunk-embed-upsert", "extract-structured", "document-embed-upsert"]
-    collection: str
-    chunker: ChunkerConfig | None = None
-    extractor: ExtractorConfig | None = None
-    doc_prompt: str | None = Field(
-        default=None,
-        description="System instructions for the document level summarization LLM. Be specific."
+class WhenCondition(ConfigPromptMixin, BaseModel):
+    metadata: dict[str, str] = Field(
+        default_factory=dict,
+        description="Metadata key/value filters required for the condition.",
     )
 
 
-class PipelineConfig(BaseModel):
-    name: str
-    match: WhenCondition | None = None
-    parallel: bool = False
-    steps: list[PipelineStepConfig]
+class PipelineStepConfig(ConfigPromptMixin, BaseModel):
+    tool: Literal["chunk-embed-upsert", "extract-structured", "document-embed-upsert"] = Field(
+        description="Pipeline tool to run."
+    )
+    collection: str = Field(description="Target collection name.")
+    chunker: ChunkerConfig | None = Field(
+        default=None,
+        description="Chunking settings for chunk-embed-upsert steps.",
+        json_schema_extra={"prompt_skip": True},
+    )
+    extractor: ExtractorConfig | None = Field(
+        default=None,
+        description="Extraction settings for extract-structured steps.",
+    )
+    doc_prompt: str | None = Field(
+        default=None,
+        description="System instructions for the document level summarization LLM.",
+    )
+
+
+class PipelineConfig(ConfigPromptMixin, BaseModel):
+    name: str = Field(description="Pipeline name.")
+    match: WhenCondition | None = Field(
+        default=None,
+        description="Optional condition that selects which documents enter this pipeline.",
+    )
+    parallel: bool = Field(
+        default=False,
+        description="Whether pipeline steps may run in parallel.",
+    )
+    steps: list[PipelineStepConfig] = Field(description="Ordered list of pipeline steps.")
 
 
 # ---------------------------------------------------------------------------
@@ -89,60 +140,142 @@ class PipelineConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class WorkflowTriggerConfig(BaseModel):
-    type: Literal["manual", "after_ingest"] = "manual"
-    when: WhenCondition | None = None
+class WorkflowTriggerConfig(ConfigPromptMixin, BaseModel):
+    type: Literal["manual", "after_ingest"] = Field(
+        default="manual",
+        description="Workflow trigger type.",
+    )
+    when: WhenCondition | None = Field(
+        default=None,
+        description="Optional condition that must match before triggering.",
+    )
 
 
-class WorkflowStepConfig(BaseModel):
+class WorkflowStepConfig(ConfigPromptMixin, BaseModel):
     """One step in a workflow — either a leaf tool call or a foreach loop."""
 
-    id: str
+    id: str = Field(description="Step identifier.")
     # Leaf step
-    tool: Literal["structured-query", "vector-search", "llm-structured", "structured-save"] | None = None
+    tool: Literal["structured-query", "vector-search", "llm-structured", "structured-save"] | None = Field(
+        default=None,
+        description="Leaf workflow tool to run.",
+    )
     # Foreach loop (mutually exclusive with tool)
-    foreach: str | None = None
-    steps: list["WorkflowStepConfig"] | None = None
+    foreach: str | None = Field(
+        default=None,
+        description="Collection or input path to iterate over for foreach loops.",
+    )
+    steps: list["WorkflowStepConfig"] | None = Field(
+        default=None,
+        description="Nested workflow steps for foreach loops.",
+    )
 
     # structured-query / structured-save
-    collection: str | None = None
-    filters: dict[str, str] = {}
+    collection: str | None = Field(
+        default=None,
+        description="Collection name for structured-query or structured-save steps.",
+    )
+    filters: dict[str, str] = Field(
+        default_factory=dict,
+        description="Key/value filters for structured-query or structured-save steps.",
+    )
 
     # vector-search
-    query: str | None = None
-    top_k: int = 5
+    query: str | None = Field(
+        default=None,
+        description="Search query for vector-search steps.",
+    )
+    top_k: int = Field(default=5, description="Maximum number of vector matches to return.")
 
     # llm-structured
-    prompt: str | None = None
-    input: dict[str, Any] = {}
-    output_schema: str | None = None  # JSON schema content (resolved from file ref)
+    prompt: str | None = Field(
+        default=None,
+        description="Prompt for llm-structured steps.",
+    )
+    input: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Input mapping passed to llm-structured steps.",
+    )
+    output_schema: str | None = Field(
+        default=None,
+        description="Resolved JSON schema content for llm-structured output.",
+    )
 
     # structured-save
-    records: list[Any] = []
+    records: list[Any] = Field(
+        default_factory=list,
+        description="Records to save for structured-save steps.",
+    )
 
 
 WorkflowStepConfig.model_rebuild()
 
 
-class WorkflowConfig(BaseModel):
-    name: str
-    trigger: WorkflowTriggerConfig = WorkflowTriggerConfig()
-    input_schema: dict[str, str] = {}
-    steps: list[WorkflowStepConfig] = []
+class WorkflowConfig(ConfigPromptMixin, BaseModel):
+    name: str = Field(description="Workflow name.")
+    trigger: WorkflowTriggerConfig = Field(
+        default_factory=WorkflowTriggerConfig,
+        description="Workflow trigger configuration.",
+    )
+    input_schema: dict[str, str] = Field(
+        default_factory=dict,
+        description="Input schema mapping used by the workflow.",
+    )
+    steps: list[WorkflowStepConfig] = Field(
+        default_factory=list,
+        description="Ordered list of workflow steps.",
+    )
 
 
-class AppConfig(BaseModel):
-    name: str
-    llm: LLMConfig | None = None
-    embedding: EmbeddingConfig | None = None
-    document_store: DocumentStoreConfig | None = None
-    structured_store: StructuredStoreConfig | None = None
-    vector_store: VectorStoreConfig | None = None
-    vector_collections: list[VectorCollectionConfig] = []
-    structured_collections: list[StructuredCollectionConfig] = []
-    pipelines: list[PipelineConfig] = []
-    skills: list[str] = []
-    workflows: list[WorkflowConfig] = []
+class AppConfig(ConfigPromptMixin, BaseModel):
+    name: str = Field(description="Application name, kebab-case (lowercase, alphanumeric, hyphens only).")
+    llm: LLMConfig | None = Field(
+        default=None,
+        description="LLM configuration.",
+        json_schema_extra={"prompt_skip": True},
+    )
+    embedding: EmbeddingConfig | None = Field(
+        default=None,
+        description="Embedding configuration.",
+        json_schema_extra={"prompt_skip": True},
+    )
+    document_store: DocumentStoreConfig | None = Field(
+        default=None,
+        description="Document storage configuration.",
+        json_schema_extra={"prompt_skip": True},
+    )
+    structured_store: StructuredStoreConfig | None = Field(
+        default=None,
+        description="Structured record storage configuration.",
+        json_schema_extra={"prompt_skip": True},
+    )
+    vector_store: VectorStoreConfig | None = Field(
+        default=None,
+        description="Vector index storage configuration.",
+        json_schema_extra={"prompt_skip": True},
+    )
+    vector_collections: list[VectorCollectionConfig] = Field(
+        default_factory=list,
+        description="Vector collections.",
+    )
+    structured_collections: list[StructuredCollectionConfig] = Field(
+        default_factory=list,
+        description="Structured collections available to pipelines.",
+    )
+    pipelines: list[PipelineConfig] = Field(
+        default_factory=list,
+        description="Configured ingestion pipelines.",
+    )
+    skills: list[str] = Field(
+        default_factory=list,
+        description="Additional skill names to load.",
+        json_schema_extra={"prompt_skip": True}, # skip for now, add back when needed
+    )
+    workflows: list[WorkflowConfig] = Field(
+        default_factory=list,
+        description="Configured workflows.",
+        json_schema_extra={"prompt_skip": True}, # skip for now, add back when needed
+    )
 
     @model_validator(mode="after")
     def _validate(self) -> "AppConfig":
@@ -174,41 +307,4 @@ class AppConfig(BaseModel):
     @classmethod
     def config_format_prompt(cls) -> str:
         """YAML config template for LLM system prompts; derived from the live model."""
-        from typing import get_args
-
-        tools = get_args(PipelineStepConfig.model_fields["tool"].annotation)
-        chunk_tool, extract_tool, doc_tool = tools
-        return (
-            "name: <kebab-case-name>\n"
-            "\n"
-            "vector_collections:\n"
-            "  - name: <snake_case>\n"
-            '    description: "<shown to the LLM as context during retrieval>"\n'
-            "\n"
-            "structured_collections:\n"
-            "  - name: <snake_case>\n"
-            '    description: "<shown to the LLM as context during lookup>"\n'
-            "    schema: '<record_schema JSON string from ---SCHEMA RESOLVED--->'\n"
-            "    primary_fields: [doc_id]\n"
-            "\n"
-            "pipelines:\n"
-            "  - name: <name>\n"
-            "    steps:\n"
-            f"      - tool: {chunk_tool}\n"
-            "        collection: <vector_collection>\n"
-            "        chunker:\n"
-            "          type: langchain\n"
-            "\n"
-            f"      - tool: {extract_tool}          # include only if structured extraction is needed\n"
-            "        collection: <structured_collection>\n"
-            "        extractor:\n"
-            "          type: llm\n"
-            "          extraction_schema: '<extraction_schema JSON string from ---SCHEMA RESOLVED--->'\n"
-            "          prompt: |\n"
-            "            <System instructions for the extraction LLM. Be specific.>\n"
-            "\n"
-            f"      - tool: {doc_tool}       # include only if summary/topic queries are needed\n"
-            "        collection: <vector_collection>\n"
-            "        doc_prompt: |\n"
-            "          <System instructions for the document level summarization LLM. Be specific.>\n"
-        )
+        return render_config_template(cls)

@@ -352,6 +352,36 @@ class TestAppConfig:
         positions = [result.index(t) for t in tools]
         assert positions == sorted(positions), "tools appear out of Literal order in prompt"
 
+    def test_config_format_prompt_uses_field_descriptions(self):
+        app_prompt = AppConfig.config_format_prompt()
+        assert "Application name" in app_prompt
+        assert "Configured ingestion pipelines." in app_prompt
+        assert "LLM configuration." not in app_prompt
+
+        llm_prompt = LLMConfig.config_format_prompt()
+        assert "LLM provider to use." in llm_prompt
+        assert "Optional API key. Falls back to OPENAI_API_KEY when omitted." in llm_prompt
+
+    def test_config_format_prompt_respects_prompt_skip_flag(self):
+        from pydantic import BaseModel, Field
+        from cogbase.config.prompt import ConfigPromptMixin
+
+        class _SkipExample(ConfigPromptMixin, BaseModel):
+            visible: str = Field(description="Visible field.")
+            hidden: str = Field(
+                default="secret",
+                description="Hidden field.",
+                json_schema_extra={"prompt_skip": True},
+            )
+
+        prompt = _SkipExample.config_format_prompt()
+        assert "Visible field." in prompt
+        assert "Hidden field." not in prompt
+
+        collection_prompt = VectorCollectionConfig.config_format_prompt()
+        assert "Collection description, shown to the LLM as context for a query." in collection_prompt
+        assert "Metadata keys copied onto each stored vector." in collection_prompt
+
     def test_structured_collection_description_is_required(self):
         _SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'
         yaml_text = textwrap.dedent(f"""\

@@ -4,13 +4,24 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
+
+from cogbase.config.prompt import ConfigPromptMixin
 
 
-class StructuredStoreConfig(BaseModel):
-    type: Literal["sqlite", "postgres", "memory"] = "memory"
-    path: str | None = None  # sqlite only
-    url: str | None = None   # postgres only
+class StructuredStoreConfig(ConfigPromptMixin, BaseModel):
+    type: Literal["sqlite", "postgres", "memory"] = Field(
+        default="memory",
+        description="Structured store backend."
+    )
+    path: str | None = Field(
+        default=None,
+        description="SQLite file path when type is sqlite.",
+    )
+    url: str | None = Field(
+        default=None,
+        description="Database URL when type is postgres.",
+    )
 
     @model_validator(mode="after")
     def _validate(self) -> "StructuredStoreConfig":
@@ -21,10 +32,19 @@ class StructuredStoreConfig(BaseModel):
         return self
 
 
-class VectorStoreConfig(BaseModel):
-    type: Literal["faiss", "pgvector"] = "faiss"
-    path: str | None = None  # faiss only
-    url: str | None = None  # pgvector only
+class VectorStoreConfig(ConfigPromptMixin, BaseModel):
+    type: Literal["faiss", "pgvector"] = Field(
+        default="faiss",
+        description="Vector store backend."
+    )
+    path: str | None = Field(
+        default=None,
+        description="FAISS index path when type is faiss.",
+    )
+    url: str | None = Field(
+        default=None,
+        description="Database URL when type is pgvector.",
+    )
 
     @model_validator(mode="after")
     def _validate(self) -> "VectorStoreConfig":
@@ -33,12 +53,27 @@ class VectorStoreConfig(BaseModel):
         return self
 
 
-class DocumentStoreConfig(BaseModel):
-    type: Literal["local", "s3"] = "local"
-    path: str | None = None      # local only
-    bucket: str | None = None    # s3 only
-    prefix: str = ""             # s3 only
-    region: str | None = None    # s3 only
+class DocumentStoreConfig(ConfigPromptMixin, BaseModel):
+    type: Literal["local", "s3"] = Field(
+        default="local",
+        description="Document store backend."
+    )
+    path: str | None = Field(
+        default=None,
+        description="Local filesystem path when type is local.",
+    )
+    bucket: str | None = Field(
+        default=None,
+        description="S3 bucket name when type is s3.",
+    )
+    prefix: str = Field(
+        default="",
+        description="Optional S3 prefix when type is s3.",
+    )
+    region: str | None = Field(
+        default=None,
+        description="Optional AWS region when type is s3.",
+    )
 
     @model_validator(mode="after")
     def _validate(self) -> "DocumentStoreConfig":

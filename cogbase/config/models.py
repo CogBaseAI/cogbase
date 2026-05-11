@@ -5,20 +5,40 @@ from __future__ import annotations
 import os
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from cogbase.config.prompt import ConfigPromptMixin
 
 
-class LLMConfig(BaseModel):
-    provider: Literal["openai"] = "openai"
-    model: str
-    api_key: str | None = None
+class LLMConfig(ConfigPromptMixin, BaseModel):
+    provider: Literal["openai"] = Field(
+        default="openai",
+        description="LLM provider to use."
+    )
+    model: str = Field(description="Model name to use for LLM calls.")
+    api_key: str | None = Field(
+        default=None,
+        description="Optional API key. Falls back to OPENAI_API_KEY when omitted.",
+    )
 
     def resolved_api_key(self) -> str | None:
         return self.api_key or os.environ.get("OPENAI_API_KEY")
 
 
-class EmbeddingConfig(BaseModel):
-    provider: Literal["openai", "sentence-transformers"] = "openai"
-    model: str = "text-embedding-3-small"
-    api_key: str | None = None
-    dimensions: int | None = None
+class EmbeddingConfig(ConfigPromptMixin, BaseModel):
+    provider: Literal["openai", "sentence-transformers"] = Field(
+        default="openai",
+        description="Embedding provider to use."
+    )
+    model: str = Field(
+        default="text-embedding-3-small",
+        description="Embedding model name."
+    )
+    api_key: str | None = Field(
+        default=None,
+        description="Optional API key. Falls back to OPENAI_API_KEY when omitted.",
+    )
+    dimensions: int | None = Field(
+        default=None,
+        description="Optional output vector dimension override.",
+    )
