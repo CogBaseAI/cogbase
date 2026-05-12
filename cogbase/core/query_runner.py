@@ -60,7 +60,7 @@ from pydantic import BaseModel
 
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
-from cogbase.llms.base import ChatMessage, LLMBase, SystemTool, ToolDefinition
+from cogbase.llms.base import ChatMessage, CompletionResult, LLMBase, SystemTool, ToolDefinition
 from cogbase.stores import CollectionSchema, DocumentStoreBase, Filter, Op, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 
 logger = logging.getLogger(__name__)
@@ -447,36 +447,32 @@ class QueryRunner:
         logger.error("[runner] router returned unknown skill '%s', ignoring", chosen)
         return None
 
-    def build_system_prompt(
-        self,
-        base_prompt: str,
-        skill,
-        runtime_context: dict | None = None,
-    ) -> str:
-        """Merge *base_prompt* with the skill's markdown and optional *runtime_context*."""
-        base_dir = str(skill.source_path.parent) if skill.source_path else ""
-        metadata_block = ""
-        if skill.metadata:
-            metadata_block = (
-                "Skill metadata:\n"
-                f"```json\n{json.dumps(skill.metadata, ensure_ascii=False, indent=2)}\n```\n\n"
+    def build_system_prompt(self, base_prompt: str, skill=None) -> str:
+        """Merge base_prompt, retrieval schema info, and (optionally) skill instructions."""
+        parts = [base_prompt]
+
+        if self._tool_defs:
+            parts.append(self._retrieval_system_prompt)
+
+        if skill is not None:
+            base_dir = str(skill.source_path.parent) if skill.source_path else ""
+            metadata_block = ""
+            if skill.metadata:
+                metadata_block = (
+                    "Skill metadata:\n"
+                    f"```json\n{json.dumps(skill.metadata, ensure_ascii=False, indent=2)}\n```\n\n"
+                )
+            skill_section = (
+                f"## Active Skill: {skill.name}\n\n"
+                + (f"Skill base directory: `{base_dir}`\n\n" if base_dir else "")
+                + metadata_block
+                + "Follow the skill's instructions below to complete the user's request. "
+                "Use the `shell` tool to run any commands it suggests.\n\n"
+                + skill.raw_markdown
             )
+            parts.append(skill_section)
 
-        context_block = ""
-        if runtime_context:
-            lines = "\n".join(f"{k}: `{v}`" for k, v in runtime_context.items())
-            context_block = f"\n\n## Runtime Context\n\n{lines}\n"
-
-        return (
-            f"{base_prompt}\n\n"
-            f"## Active Skill: {skill.name}\n\n"
-            + (f"Skill base directory: `{base_dir}`\n\n" if base_dir else "")
-            + metadata_block
-            + "Follow the skill's instructions below to complete the user's request. "
-            "Use the `shell` tool to run any commands it suggests.\n\n"
-            + skill.raw_markdown
-            + context_block
-        )
+        return "\n\n".join(parts)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -487,16 +483,14 @@ class QueryRunner:
         user_input: str,
         history: list[ChatMessage] | None = None,
         base_prompt: str = "You are a helpful assistant.",
-        runtime_context: dict | None = None,
     ) -> AsyncGenerator[str | QueryResult, None]:
         """Drive the agent loop, yielding str tokens then a final QueryResult.
 
         Args:
-            user_input:      The user's request.
-            history:         Prior conversation messages.
-            base_prompt:     Base system prompt merged with skill instructions when
-                             skills are active.
-            runtime_context: Key-value pairs injected into the skill system prompt.
+            user_input:  The user's request.
+            history:     Prior conversation messages.
+            base_prompt: Base system prompt; merged with retrieval schema info and
+                         skill instructions when those are configured.
         """
         skills = self._skills
         # Slot 0 is reserved for the system prompt; updated each iteration.
@@ -506,49 +500,33 @@ class QueryRunner:
 
         all_records: list[dict] = []
         all_chunks: list[Chunk] = []
+
+        # Select skill once before the loop. Support switching skill in the for loop when needed.
         current_skill = None
+        if skills:
+            current_skill = await self.select(user_input, history)
+            if current_skill is not None:
+                logger.info("[runner] active skill → '%s'", current_skill.name)
+                yield f"Using skill: {current_skill.name}..."
+
+        messages[0] = {"role": "system", "content": self.build_system_prompt(base_prompt, current_skill)}
 
         for _ in range(self._max_calls):
-            # --- System prompt selection ---
-            if skills:
-                selected = await self.select(user_input, messages[1:])
+            # --- LLM completion (streaming) ---
+            tools = self._all_tools(current_skill is not None)
+            tokens = []
+            final_result: CompletionResult | None = None
+            async for chunk in self._llm.complete_stream(messages, tools=tools or None):
+                if isinstance(chunk, str):
+                    tokens.append(chunk)
+                    yield chunk
+                else:
+                    final_result = chunk
 
-                if selected is None and current_skill is None:
-                    # No skill applies — answer directly with base prompt.
-                    messages[0] = {"role": "system", "content": base_prompt}
-                    result = await self._llm.complete(
-                        messages, tools=self._all_tools(has_skills=False) or None
-                    )
-                    answer = result.get("content") or ""
-                    yield answer
-                    yield QueryResult(
-                        answer=answer,
-                        structured_records=all_records,
-                        chunks=all_chunks,
-                    )
-                    return
-
-                if selected is not None and selected is not current_skill:
-                    current_skill = selected
-                    logger.info("[runner] active skill → '%s'", current_skill.name)
-                    yield f"Using skill: {current_skill.name}..."
-
-                system_prompt = self.build_system_prompt(base_prompt, current_skill, runtime_context)
-            else:
-                system_prompt = self._retrieval_system_prompt
-
-            messages[0] = {"role": "system", "content": system_prompt}
-
-            # --- LLM completion ---
-            tools = self._all_tools(has_skills=bool(skills))
-            result = await self._llm.complete(messages, tools=tools or None)
-
-            tool_calls = result.get("tool_calls")
+            tool_calls = final_result.get("tool_calls") if final_result else None
             if not tool_calls:
-                answer = result.get("content") or ""
-                yield answer
                 yield QueryResult(
-                    answer=answer,
+                    answer="".join(tokens),
                     structured_records=all_records,
                     chunks=all_chunks,
                 )
@@ -556,7 +534,7 @@ class QueryRunner:
 
             messages.append({
                 "role": "assistant",
-                "content": result.get("content"),
+                "content": "".join(tokens) or None,
                 "tool_calls": [
                     {
                         "id": tc["id"],
@@ -569,8 +547,8 @@ class QueryRunner:
 
             tool_names = ", ".join(tc["name"] for tc in tool_calls)
             logger.info("[runner] tool_calls (skill=%s): %s", current_skill.name if current_skill else "none", tool_names)
-            if current_skill:
-                yield f"Executing: {tool_names}..."
+
+            yield f"Executing: {tool_names}..."
 
             # --- Tool execution ---
             for tc in tool_calls:
@@ -587,7 +565,6 @@ class QueryRunner:
                     records, tool_output, passthrough = await self._run_structured_lookup(inputs)
                     all_records.extend(records)
                     if passthrough:
-                        yield tool_output
                         yield QueryResult(
                             answer=tool_output,
                             structured_records=all_records,
@@ -615,7 +592,6 @@ class QueryRunner:
             "I was unable to complete your request within the allowed number of steps. "
             "Please try a simpler or more specific request."
         )
-        yield answer
         yield QueryResult(
             answer=answer,
             structured_records=all_records,
@@ -626,9 +602,9 @@ class QueryRunner:
     # Tool helpers
     # ------------------------------------------------------------------
 
-    def _all_tools(self, has_skills: bool) -> list[ToolDefinition]:
+    def _all_tools(self, skill_active: bool) -> list[ToolDefinition]:
         tools: list[ToolDefinition] = []
-        if has_skills:
+        if skill_active:
             tools.extend(_BASE_TOOLS)
         tools.extend(t.definition for t in self._system_tools.values())
         tools.extend(self._tool_defs)

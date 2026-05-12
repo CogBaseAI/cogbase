@@ -47,7 +47,22 @@ def _tool_result(name: str, arguments: dict, call_id: str = "call-1") -> Complet
 
 def _make_llm(*results: CompletionResult) -> MagicMock:
     llm = MagicMock()
-    llm.complete = AsyncMock(side_effect=list(results))
+    queue = list(results)
+    pos = [0]
+
+    async def _stream_gen(result: CompletionResult):
+        if result.get("content"):
+            yield result["content"]
+        if result.get("tool_calls"):
+            yield result
+
+    def _pop():
+        r = queue[pos[0]]
+        pos[0] += 1
+        return r
+
+    llm.complete = AsyncMock(side_effect=lambda *a, **kw: _pop())
+    llm.complete_stream = MagicMock(side_effect=lambda *a, **kw: _stream_gen(_pop()))
     return llm
 
 
@@ -108,13 +123,6 @@ def test_build_system_prompt_includes_skill_markdown():
     assert "Active Skill: weather" in prompt
 
 
-def test_build_system_prompt_includes_runtime_context():
-    skill = _make_skill("weather")
-    runner = Runner(MagicMock())
-    prompt = runner.build_system_prompt("base", skill, runtime_context={"user": "alice", "lang": "en"})
-    assert "user: `alice`" in prompt
-    assert "lang: `en`" in prompt
-
 
 def test_build_system_prompt_includes_metadata():
     skill = _make_skill("weather")
@@ -149,7 +157,6 @@ async def test_run_skill_single_tool_call_then_answer():
     llm = _make_llm(
         _text_result("weather"),                                 # select
         _tool_result("shell", {"command": "curl wttr.in/NYC"}), # tool call
-        _text_result("weather"),                                 # re-select
         _text_result("The weather in NYC is 72°F."),            # answer
     )
     runner = Runner(llm, skills=skills)
@@ -160,31 +167,11 @@ async def test_run_skill_single_tool_call_then_answer():
 
 
 @pytest.mark.asyncio
-async def test_run_skill_switches_between_iterations():
-    skill_a = _make_skill("extract")
-    skill_b = _make_skill("contradiction")
-    llm = _make_llm(
-        _text_result("extract"),                                  # select → extract
-        _tool_result("shell", {"command": "python extract.py"}), # tool call
-        _text_result("contradiction"),                            # re-select → contradiction
-        _text_result("Found 2 contradictions."),                  # answer
-    )
-    runner = Runner(llm, skills=[skill_a, skill_b])
-    with patch.object(runner, "_execute_tool", new=AsyncMock(return_value="facts extracted")):
-        chunks = [c async for c in runner.run("Find contradictions.")]
-    status = [c for c in _str_chunks(chunks) if c.startswith("Using skill:")]
-    assert "Using skill: extract..." in status
-    assert "Using skill: contradiction..." in status
-    assert _str_chunks(chunks)[-1] == "Found 2 contradictions."
-
-
-@pytest.mark.asyncio
-async def test_run_skill_unchanged_emits_status_once():
+async def test_run_skill_emits_status_once():
     skills = [_make_skill("weather")]
     llm = _make_llm(
         _text_result("weather"),                             # select
         _tool_result("shell", {"command": "curl wttr.in"}), # tool call
-        _text_result("weather"),                             # re-select (same)
         _text_result("Sunny."),                              # answer
     )
     runner = Runner(llm, skills=skills)
@@ -212,13 +199,12 @@ async def test_run_max_calls_exceeded_yields_error():
     skills = [_make_skill("weather")]
     tool = _tool_result("shell", {"command": "echo hi"})
     llm = _make_llm(
-        _text_result("weather"), tool, # round 1
-        _text_result("weather"), tool, # round 2
+        _text_result("weather"), tool, tool, # select + 2 tool rounds
     )
     runner = Runner(llm, max_calls=2, skills=skills)
     with patch.object(runner, "_execute_tool", new=AsyncMock(return_value="ok")):
         chunks = [c async for c in runner.run("Weather?")]
-    assert any("unable to complete" in c.lower() for c in _str_chunks(chunks))
+    assert any("unable to complete" in c.answer.lower() for c in chunks if isinstance(c, QueryResult))
     assert isinstance(chunks[-1], QueryResult)
 
 
@@ -301,7 +287,7 @@ async def test_run_retrieval_passthrough_when_records_exceed_threshold():
     assert result.passthrough is True
     assert len(result.structured_records) == 400
     # LLM should NOT have been called for synthesis (only the one tool-call completion)
-    assert llm.complete.call_count == 1
+    assert llm.complete_stream.call_count == 1
 
 
 @pytest.mark.asyncio
