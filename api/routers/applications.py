@@ -11,7 +11,7 @@ import json
 import yaml
 
 logger = logging.getLogger(__name__)
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from cogbase.config.config import AppConfig
@@ -39,6 +39,7 @@ from api.models import (
 )
 from api.system_store import AppRecord, SystemStore
 from cogbase.core.models import Document
+from cogbase.pipeline.document_parser import parse_to_markdown
 from cogbase.stores.filters import Filter, Op
 
 router = APIRouter(prefix="/applications", tags=["applications"])
@@ -383,6 +384,109 @@ async def ingest_documents(
             for r in results
         ]
     )
+
+
+@router.post("/{app_name}/upload_documents", response_model=IngestDocumentsResponse)
+async def upload_documents(
+    app_name: str,
+    files: list[UploadFile],
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+    # Optional JSON object applied to every file in this batch — use for pipeline
+    # routing (match conditions) and workflow triggers (when.metadata).  For
+    # per-file metadata, make separate upload calls.
+    metadata: str = Form(default="{}"),
+) -> IngestDocumentsResponse:
+    """Upload files and ingest them into an active application.
+
+    Each file is parsed to markdown via markitdown.  When the application has a
+    document store configured, the original binary and the parsed markdown are
+    both persisted there — original at ``originals/{doc_id}{ext}``, markdown at
+    ``{doc_id}`` (same key as ``ingest_documents`` would use for the same doc_id).
+
+    The ``doc_id`` for each document is derived from the uploaded filename stem.
+    """
+    import json
+    import pathlib
+    import re
+
+    try:
+        extra_metadata: dict = json.loads(metadata)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail=f"metadata must be a valid JSON object: {exc}")
+    if not isinstance(extra_metadata, dict):
+        raise HTTPException(status_code=422, detail="metadata must be a JSON object")
+
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+
+    def _safe_doc_id(filename: str) -> str:
+        stem = pathlib.Path(filename).stem
+        return re.sub(r"[^\w\-]", "_", stem)
+
+    results: list[IngestResultResponse] = []
+    documents_to_ingest: list[Document] = []
+    original_saves: list[tuple[str, bytes, str]] = []  # (doc_id, content, suffix)
+
+    for upload in files:
+        filename = upload.filename or "upload"
+        suffix = pathlib.Path(filename).suffix.lower()
+        doc_id = _safe_doc_id(filename)
+
+        content = await upload.read()
+        try:
+            markdown_text = parse_to_markdown(content, filename)
+        except Exception as exc:
+            results.append(IngestResultResponse(
+                doc_id=doc_id,
+                success=False,
+                records_extracted=0,
+                error=f"Failed to parse {filename!r}: {exc}",
+            ))
+            continue
+
+        original_saves.append((doc_id, content, suffix))
+        documents_to_ingest.append(Document(
+            doc_id=doc_id,
+            text=markdown_text,
+            # source_filename/source_format are set automatically; extra_metadata
+            # (applied to all files in the batch) is merged in and takes precedence.
+            metadata={"source_filename": filename, "source_format": suffix.lstrip("."), **extra_metadata},
+        ))
+
+    # Save original binary files to document store if configured.
+    if app._document_store is not None:
+        for doc_id, content, suffix in original_saves:
+            try:
+                await app._document_store.save_bytes(
+                    app.name, f"originals/{doc_id}{suffix}", content
+                )
+            except Exception:
+                logger.exception(
+                    "upload_documents: failed to save original file doc_id=%s", doc_id
+                )
+
+    if documents_to_ingest:
+        try:
+            ingest_results = await app.ingest_documents(documents_to_ingest)
+        except Exception:
+            logger.exception("upload_documents: ingest failed for app '%s', retrying", app_name)
+            app = await _get_active_app(
+                app_name, app_cache, system_store, system_resources, force_refresh=True
+            )
+            ingest_results = await app.ingest_documents(documents_to_ingest)
+
+        results.extend(
+            IngestResultResponse(
+                doc_id=r.doc_id,
+                success=r.success,
+                records_extracted=r.records_extracted,
+                error=str(r.error) if r.error is not None else None,
+            )
+            for r in ingest_results
+        )
+
+    return IngestDocumentsResponse(results=results)
 
 
 async def _drain_query(app, text: str, history: list[dict] | None = None):

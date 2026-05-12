@@ -80,6 +80,26 @@ class S3DocumentStore(DocumentStoreBase):
             lambda: self._s3.delete_object(Bucket=self._bucket, Key=key),
         )
 
+    async def save_bytes(self, collection: str, doc_id: str, content: bytes) -> None:
+        key = self._key(collection, doc_id)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            self._executor,
+            lambda: self._s3.put_object(Bucket=self._bucket, Key=key, Body=content),
+        )
+
+    async def load_bytes(self, collection: str, doc_id: str) -> bytes:
+        key = self._key(collection, doc_id)
+        loop = asyncio.get_event_loop()
+        try:
+            response = await loop.run_in_executor(
+                self._executor,
+                lambda: self._s3.get_object(Bucket=self._bucket, Key=key),
+            )
+            return await loop.run_in_executor(self._executor, response["Body"].read)
+        except self._s3.exceptions.NoSuchKey:
+            raise KeyError(doc_id)
+
     async def exists(self, collection: str, doc_id: str) -> bool:
         key = self._key(collection, doc_id)
         loop = asyncio.get_event_loop()

@@ -52,12 +52,30 @@ class LocalFSDocumentStore(DocumentStoreBase):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, path.is_file)
 
+    async def save_bytes(self, collection: str, doc_id: str, content: bytes) -> None:
+        path = self._path(collection, doc_id)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._write_bytes, path, content)
+
+    async def load_bytes(self, collection: str, doc_id: str) -> bytes:
+        path = self._path(collection, doc_id)
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(None, path.read_bytes)
+        except FileNotFoundError:
+            raise KeyError(doc_id)
+
     # -- sync helpers -------------------------------------------------------
 
     @staticmethod
     def _write(path: pathlib.Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+
+    @staticmethod
+    def _write_bytes(path: pathlib.Path, content: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
 
     @staticmethod
     def _unlink(path: pathlib.Path) -> None:

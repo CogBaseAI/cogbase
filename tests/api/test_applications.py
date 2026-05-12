@@ -674,6 +674,261 @@ class TestIngestDocuments:
 
 
 # ---------------------------------------------------------------------------
+# POST /applications/{app_name}/upload_documents
+# ---------------------------------------------------------------------------
+
+def _mock_upload_app(
+    results: list[dict] | None = None,
+    document_store=None,
+) -> MagicMock:
+    """Mock CogBaseApp for upload_documents tests."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _FakeIngestResult:
+        doc_id: str
+        success: bool
+        records_extracted: int
+        error: Exception | None
+
+    if results is None:
+        results = [{"doc_id": "contract", "success": True, "records_extracted": 2, "error": None}]
+
+    fake_results = [_FakeIngestResult(**r) for r in results]
+    inst = MagicMock()
+    inst.ingest_documents = AsyncMock(return_value=fake_results)
+    inst._document_store = document_store
+    inst.name = "my-contract-analyzer"
+    return inst
+
+
+class TestUploadDocuments:
+    @pytest.mark.asyncio
+    async def test_upload_txt_returns_200_with_results(self, client):
+        mock_app = _mock_upload_app()
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.parse_to_markdown", return_value="parsed text"):
+            resp = await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("contract.txt", b"raw text", "text/plain"))],
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["results"]) == 1
+        assert data["results"][0]["doc_id"] == "contract"
+        assert data["results"][0]["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_upload_doc_id_derived_from_filename_stem(self, client):
+        mock_app = _mock_upload_app(
+            results=[{"doc_id": "my_contract_2024", "success": True, "records_extracted": 1, "error": None}]
+        )
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+            await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("my contract 2024.pdf", b"bytes", "application/pdf"))],
+            )
+
+        docs = mock_app.ingest_documents.call_args[0][0]
+        assert docs[0].doc_id == "my_contract_2024"
+
+    @pytest.mark.asyncio
+    async def test_upload_parse_failure_returns_per_file_error(self, client):
+        mock_app = _mock_upload_app(results=[])
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.parse_to_markdown", side_effect=RuntimeError("bad pdf")):
+            resp = await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("broken.pdf", b"not a pdf", "application/pdf"))],
+            )
+
+        assert resp.status_code == 200
+        result = resp.json()["results"][0]
+        assert result["success"] is False
+        assert "bad pdf" in result["error"]
+        mock_app.ingest_documents.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_upload_metadata_merged_into_document(self, client):
+        mock_app = _mock_upload_app()
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+            await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("contract.txt", b"text", "text/plain"))],
+                data={"metadata": '{"doc_type": "contract", "client": "acme"}'},
+            )
+
+        docs = mock_app.ingest_documents.call_args[0][0]
+        assert docs[0].metadata["doc_type"] == "contract"
+        assert docs[0].metadata["client"] == "acme"
+
+    @pytest.mark.asyncio
+    async def test_upload_auto_metadata_always_present(self, client):
+        mock_app = _mock_upload_app()
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+            await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("report.pdf", b"bytes", "application/pdf"))],
+            )
+
+        docs = mock_app.ingest_documents.call_args[0][0]
+        assert docs[0].metadata["source_filename"] == "report.pdf"
+        assert docs[0].metadata["source_format"] == "pdf"
+
+    @pytest.mark.asyncio
+    async def test_upload_caller_metadata_overrides_auto_fields(self, client):
+        mock_app = _mock_upload_app()
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+            await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("doc.txt", b"text", "text/plain"))],
+                data={"metadata": '{"source_format": "custom"}'},
+            )
+
+        docs = mock_app.ingest_documents.call_args[0][0]
+        assert docs[0].metadata["source_format"] == "custom"
+
+    @pytest.mark.asyncio
+    async def test_upload_invalid_json_metadata_returns_422(self, client):
+        mock_app = _mock_upload_app()
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/upload_documents",
+            files=[("files", ("doc.txt", b"text", "text/plain"))],
+            data={"metadata": "not json"},
+        )
+
+        assert resp.status_code == 422
+        assert "metadata" in resp.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_upload_non_dict_metadata_returns_422(self, client):
+        mock_app = _mock_upload_app()
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/upload_documents",
+            files=[("files", ("doc.txt", b"text", "text/plain"))],
+            data={"metadata": '["not", "an", "object"]'},
+        )
+
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_upload_saves_original_bytes_to_document_store(self, client):
+        store = MagicMock()
+        store.save_bytes = AsyncMock()
+        mock_app = _mock_upload_app(document_store=store)
+        await _create_app(client, mock_app)
+
+        raw_bytes = b"original pdf bytes"
+        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+            await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("invoice.pdf", raw_bytes, "application/pdf"))],
+            )
+
+        store.save_bytes.assert_awaited_once_with(
+            "my-contract-analyzer", "originals/invoice.pdf", raw_bytes
+        )
+
+    @pytest.mark.asyncio
+    async def test_upload_skips_store_save_when_no_document_store(self, client):
+        mock_app = _mock_upload_app(document_store=None)
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+            resp = await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("doc.txt", b"text", "text/plain"))],
+            )
+
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_upload_404_when_app_not_found(self, client):
+        resp = await client.post(
+            "/applications/nonexistent/upload_documents",
+            files=[("files", ("doc.txt", b"text", "text/plain"))],
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_upload_retries_on_first_ingest_failure(self, client):
+        from dataclasses import dataclass
+
+        @dataclass
+        class _R:
+            doc_id: str
+            success: bool
+            records_extracted: int
+            error: Exception | None
+
+        good = [_R("contract", True, 1, None)]
+        call_count = 0
+
+        async def _flaky(documents, *, concurrency=5):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("transient failure")
+            return good
+
+        mock_app = _mock_upload_app()
+        mock_app.ingest_documents = _flaky
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=mock_app):
+            with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+                resp = await client.post(
+                    "/applications/my-contract-analyzer/upload_documents",
+                    files=[("files", ("contract.txt", b"text", "text/plain"))],
+                )
+
+        assert resp.status_code == 200
+        assert resp.json()["results"][0]["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_upload_mixed_success_and_parse_failure(self, client):
+        mock_app = _mock_upload_app(
+            results=[{"doc_id": "good", "success": True, "records_extracted": 1, "error": None}]
+        )
+        await _create_app(client, mock_app)
+
+        def _parse(content, filename):
+            if "bad" in filename:
+                raise RuntimeError("cannot parse")
+            return "parsed text"
+
+        with patch("api.routers.applications.parse_to_markdown", side_effect=_parse):
+            resp = await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[
+                    ("files", ("good.txt", b"text", "text/plain")),
+                    ("files", ("bad.pdf", b"broken", "application/pdf")),
+                ],
+            )
+
+        assert resp.status_code == 200
+        by_id = {r["doc_id"]: r for r in resp.json()["results"]}
+        assert by_id["good"]["success"] is True
+        assert by_id["bad"]["success"] is False
+        assert "cannot parse" in by_id["bad"]["error"]
+
+
+# ---------------------------------------------------------------------------
 # Helpers shared by query tests
 # ---------------------------------------------------------------------------
 

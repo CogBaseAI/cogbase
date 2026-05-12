@@ -39,3 +39,19 @@ class DocumentStoreBase(abc.ABC):
     @abc.abstractmethod
     async def exists(self, collection: str, doc_id: str) -> bool:
         """Return ``True`` if *doc_id* is present in *collection*."""
+
+    async def save_bytes(self, collection: str, doc_id: str, content: bytes) -> None:
+        """Persist raw *content* bytes for *doc_id* in *collection*.
+
+        Subclasses should override for efficient binary storage.  The default
+        implementation raises ``NotImplementedError``.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support save_bytes")
+
+    async def load_bytes(self, collection: str, doc_id: str) -> bytes:
+        """Return the stored bytes for *doc_id* in *collection*.
+
+        Raises ``KeyError`` if the document does not exist.  Subclasses should
+        override for efficient binary storage.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support load_bytes")
