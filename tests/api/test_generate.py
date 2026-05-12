@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from api.routers.generate import (
+    _chat_turn_events,
     _inject_record_schemas,
     _make_record_schema,
     _parse_and_validate_schemas,
@@ -16,7 +17,9 @@ from api.routers.generate import (
     _run_propose_schema,
     _serialize_config,
     _validate_extraction_schema,
+    chat,
 )
+from api.models import GenerateChatRequest
 from cogbase.config.config import AppConfig
 
 
@@ -523,3 +526,33 @@ class TestRunProposeConfig:
         assert message == "Config validated."
         data = yaml.safe_load(stored_yaml)
         assert data.get("structured_collections", []) == []
+
+
+# ---------------------------------------------------------------------------
+# chat / chat stream
+# ---------------------------------------------------------------------------
+
+
+class TestChatTurn:
+    async def test_chat_drains_shared_stream_and_returns_final_response(self):
+        llm = _make_llm("A final response")
+        system_resources = MagicMock(llm=llm)
+        body = GenerateChatRequest(text="hello", history=[])
+
+        response = await chat(body, system_resources)
+
+        assert response.content == "A final response"
+        assert response.config_yaml is None
+        assert llm.complete.call_count == 1
+
+    async def test_chat_turn_events_emit_result(self):
+        llm = _make_llm("A final response")
+        system_resources = MagicMock(llm=llm)
+        body = GenerateChatRequest(text="hello", history=[])
+
+        events = []
+        async for event in _chat_turn_events(body, system_resources, log_prefix="test/chat"):
+            events.append(event)
+
+        assert events[-1]["type"] == "result"
+        assert events[-1]["result"]["content"] == "A final response"

@@ -23,7 +23,8 @@ class GeneratorClient:
     proposals in its responses; this client extracts and tracks them.
 
     Lifecycle:
-      chat(message)*  →  (display_text, config_yaml | None)
+      chat_stream(message)*  →  (display_text, config_yaml | None)
+      chat(message)*         →  compatibility wrapper around chat_stream()
       deploy()        →  {name, status, error}
     """
 
@@ -36,23 +37,44 @@ class GeneratorClient:
         self.messages: list[dict] = []   # full history sent to the server each turn
         self.config_yaml: str | None = None
 
-    async def chat(self, user_message: str) -> tuple[str, str | None]:
-        """Send a user message and return (display_text, config_yaml | None).
+    async def chat_stream(self, user_message: str) -> tuple[str, str | None]:
+        """Send a user message via the streaming endpoint.
 
         ``display_text`` has CONFIG markers stripped — safe to print directly.
         The full server response (markers included) is stored in ``self.messages``
         so the LLM retains context of its previous proposals.
         """
-        resp = await self._http.post(
-            f"{self.api_base}/generate/chat",
+        full_content = ""
+        config_yaml: str | None = None
+
+        async with self._http.stream(
+            "POST",
+            f"{self.api_base}/generate/chat/stream",
             json={"text": user_message, "history": self.messages},
             timeout=120,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                payload = line[len("data:"):].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    data = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                if "token" in data:
+                    print(data["token"], end="", flush=True)
+                    full_content += data["token"]
+                elif "result" in data:
+                    result = data["result"]
+                    full_content = result.get("content") or full_content
+                    config_yaml = result.get("config_yaml")
+                elif "error" in data:
+                    raise RuntimeError(data["error"])
 
-        full_content: str = data["content"]
-        config_yaml: str | None = data.get("config_yaml")
+        print()
 
         # Store the full history so the LLM sees its own proposals on the next turn.
         self.messages.append({"role": "user", "content": user_message})
@@ -62,6 +84,10 @@ class GeneratorClient:
 
         display_text = self._strip_config_block(full_content)
         return display_text, config_yaml
+
+    async def chat(self, user_message: str) -> tuple[str, str | None]:
+        """Compatibility wrapper around ``chat_stream``."""
+        return await self.chat_stream(user_message)
 
     async def deploy(self) -> dict:
         """Deploy the current config_yaml as a new application."""

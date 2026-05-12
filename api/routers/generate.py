@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 import yaml
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import StreamingResponse
 
 from api.dependencies import AppCacheDep, SystemResourcesDep, SystemStoreDep
 from api.factory import build_app
@@ -365,6 +366,104 @@ def _serialize_config(config: AppConfig) -> str:
     )
 
 
+async def _chat_turn_events(
+    body: GenerateChatRequest,
+    system_resources: SystemResourcesDep,
+    *,
+    log_prefix: str,
+):
+    llm = system_resources.llm
+    if llm is None:
+        raise HTTPException(status_code=503, detail="No LLM configured on the system")
+
+    from cogbase.llms.base import ChatMessage as LLMChatMessage
+
+    logger.info("%s start text=%s ..., history=%d", log_prefix, body.text[:50], len(body.history))
+
+    messages: list[LLMChatMessage] = (
+        [{"role": "system", "content": _SYSTEM_PROMPT}]
+        + [{"role": m.role, "content": m.content} for m in body.history]
+        + [{"role": "user", "content": body.text}]
+    )
+
+    validated_config_yaml: str | None = None
+    extracted_schemas: dict[str, str] = {}
+    final_content: str = ""
+    result = None
+
+    try:
+        for call_num in range(_MAX_AGENT_CALLS):
+            result = await llm.complete(messages, tools=_GENERATOR_TOOLS, temperature=0.3)
+            tool_calls = result.get("tool_calls")
+
+            if not tool_calls:
+                final_content = (result["content"] or "").strip()
+                yield {"type": "token", "token": final_content}
+                break
+
+            messages.append({
+                "role": "assistant",
+                "content": result.get("content"),
+                "tool_calls": [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                    for tc in tool_calls
+                ],
+            })
+
+            tool_names = ", ".join(tc["name"] for tc in tool_calls)
+            logger.info("%s call=%d tools=%s", log_prefix, call_num + 1, tool_names)
+
+            for tc in tool_calls:
+                if tc["name"] == "propose_extraction_schema":
+                    yield {"type": "token", "token": "Generating extraction schema..."}
+                    tool_output, schemas = await _run_propose_schema(llm, messages)
+                    if schemas is not None:
+                        extracted_schemas = schemas
+                elif tc["name"] == "propose_app_config":
+                    yield {"type": "token", "token": "Generating app config..."}
+                    tool_output, config_yaml = await _run_propose_config(
+                        llm, messages, extracted_schemas
+                    )
+                    if config_yaml is not None:
+                        validated_config_yaml = config_yaml
+                else:
+                    tool_output = f"Unknown tool: {tc['name']}"
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": tool_output,
+                })
+        else:
+            logger.warning(
+                "%s reached max_calls=%d without final answer",
+                log_prefix,
+                _MAX_AGENT_CALLS,
+            )
+            final_content = (result.get("content") or "") if result else ""  # type: ignore[union-attr]
+            if final_content:
+                yield {"type": "token", "token": final_content}
+
+        logger.info(
+            "%s turn=%d config_validated=%s final_content=%d",
+            log_prefix,
+            len(body.history) + 1,
+            validated_config_yaml is not None,
+            len(final_content),
+        )
+        yield {
+            "type": "result",
+            "result": {"content": final_content, "config_yaml": validated_config_yaml},
+        }
+    except Exception:
+        logger.exception("%s failed", log_prefix)
+        yield {"type": "error", "error": "stream failed"}
+
+
 # ---------------------------------------------------------------------------
 # Tool handlers
 # ---------------------------------------------------------------------------
@@ -490,73 +589,15 @@ async def chat(
     it each call. The agent loop runs entirely server-side: the LLM calls tools,
     gets results, and may call tools again — the client sees only the final response.
     """
-    llm = system_resources.llm
-    if llm is None:
-        raise HTTPException(status_code=503, detail="No LLM configured on the system")
-
-    from cogbase.llms.base import ChatMessage as LLMChatMessage
-
-    logger.info("generate/chat start text=%s ..., history=%d", body.text[:50], len(body.history))
-
-    messages: list[LLMChatMessage] = (
-        [{"role": "system", "content": _SYSTEM_PROMPT}]
-        + [{"role": m.role, "content": m.content} for m in body.history]
-        + [{"role": "user", "content": body.text}]
-    )
-
     validated_config_yaml: str | None = None
-    extracted_schemas: dict[str, str] = {}
     final_content: str = ""
-
-    for call_num in range(_MAX_AGENT_CALLS):
-        result = await llm.complete(messages, tools=_GENERATOR_TOOLS, temperature=0.3)
-        tool_calls = result.get("tool_calls")
-
-        if not tool_calls:
-            final_content = (result["content"] or "").strip()
-            break
-
-        messages.append({
-            "role": "assistant",
-            "content": result.get("content"),
-            "tool_calls": [
-                {
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                }
-                for tc in tool_calls
-            ],
-        })
-
-        tool_names = ", ".join(tc["name"] for tc in tool_calls)
-        logger.info("generate/chat call=%d tools=%s", call_num + 1, tool_names)
-
-        for tc in tool_calls:
-            try:
-                inputs: dict = json.loads(tc["arguments"])
-            except json.JSONDecodeError:
-                inputs = {}
-
-            if tc["name"] == "propose_extraction_schema":
-                tool_output, schemas = await _run_propose_schema(llm, messages)
-                if schemas is not None:
-                    extracted_schemas = schemas
-            elif tc["name"] == "propose_app_config":
-                tool_output, config_yaml = await _run_propose_config(llm, messages, extracted_schemas)
-                if config_yaml is not None:
-                    validated_config_yaml = config_yaml
-            else:
-                tool_output = f"Unknown tool: {tc['name']}"
-
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc["id"],
-                "content": tool_output,
-            })
-    else:
-        logger.warning("generate/chat reached max_calls=%d without final answer", _MAX_AGENT_CALLS)
-        final_content = result.get("content") or ""  # type: ignore[possibly-undefined]
+    async for event in _chat_turn_events(body, system_resources, log_prefix="generate/chat"):
+        if event["type"] == "result":
+            result = event["result"]
+            final_content = result["content"]
+            validated_config_yaml = result["config_yaml"]
+        elif event["type"] == "error":
+            raise HTTPException(status_code=500, detail=event["error"])
 
     logger.info(
         "generate/chat turn=%d config_validated=%s, final_content=%d, %s ...",
@@ -569,6 +610,38 @@ async def chat(
         content=final_content,
         config_yaml=validated_config_yaml,
     )
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    body: GenerateChatRequest,
+    system_resources: SystemResourcesDep,
+) -> StreamingResponse:
+    """Stream a generate chat turn as Server-Sent Events.
+
+    Token events:  ``{"token": "<text>"}``
+    Final event:   ``{"result": {"content": "...", "config_yaml": "..."}}``
+    Sentinel:      ``data: [DONE]``
+    """
+    async def event_stream():
+        try:
+            async for event in _chat_turn_events(
+                body,
+                system_resources,
+                log_prefix="generate/chat/stream",
+            ):
+                if event["type"] == "token":
+                    yield f"data: {json.dumps({'token': event['token']})}\n\n"
+                elif event["type"] == "result":
+                    yield f"data: {json.dumps({'result': event['result']})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'error': event['error']})}\n\n"
+        except Exception:
+            logger.exception("generate/chat/stream failed")
+            yield f"data: {json.dumps({'error': 'stream failed'})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.post("/deploy", response_model=DeployResponse, status_code=status.HTTP_201_CREATED)

@@ -182,17 +182,18 @@ async def main() -> None:
 
             # Natural-language message — send to the LLM
             try:
-                display_text, config_yaml = await gen.chat(raw)
+                _, config_yaml = await gen.chat_stream(raw)
             except httpx.HTTPStatusError as exc:
                 print(f"  ERROR {exc.response.status_code}: {exc.response.text}")
                 continue
-
-            print()
-            print(display_text)
+            except httpx.RequestError as exc:
+                print(f"  ERROR: {exc}")
+                continue
+            except RuntimeError as exc:
+                print(f"  ERROR: {exc}")
+                continue
             if config_yaml:
                 print("\n  (config updated — /preview to inspect, /deploy when ready)")
-            print()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
