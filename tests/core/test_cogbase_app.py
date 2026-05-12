@@ -107,7 +107,10 @@ def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        config=ExtractorConfig(extraction_schema='{"type":"object","properties":{"value":{"type":"string"}}}'),
+        config=ExtractorConfig(
+            extraction_schema='{"type":"object","properties":{"value":{"type":"string"}}}',
+            prompt="Extract the relevant fields from the document.",
+        ),
         record_model=_build_record_model(ContractExtraction),
     )
 
@@ -297,16 +300,13 @@ class TestCogBaseAppQuery:
     async def test_structured_lookup_populates_records(self):
         store = InMemoryStructuredStore()
         llm = MagicMock(spec=LLMBase)
-        call_count = 0
+        stream_call_count = 0
 
-        async def _complete(messages, **kwargs):
-            nonlocal call_count
-            system_content = messages[0].get("content", "") if messages else ""
-            if "extract structured" in system_content.lower():
-                return "{}"
-            call_count += 1
-            if call_count == 1:
-                return {
+        async def _stream(messages, **kwargs):
+            nonlocal stream_call_count
+            stream_call_count += 1
+            if stream_call_count == 1:
+                yield {
                     "content": None,
                     "tool_calls": [{
                         "id": "call_1",
@@ -314,12 +314,8 @@ class TestCogBaseAppQuery:
                         "arguments": json.dumps({"collection": _CONTRACTS_COLLECTION, "filters": []}),
                     }],
                 }
-            return {"content": "Found NDA contracts: Acme Corp and Supplier Ltd.", "tool_calls": None}
-
-        llm.complete = AsyncMock(side_effect=_complete)
-
-        async def _stream(messages, **kwargs):
-            yield "Found NDA contracts: Acme Corp and Supplier Ltd."
+            else:
+                yield "Found NDA contracts: Acme Corp and Supplier Ltd."
 
         llm.complete_stream = _stream
         app = await _make_app(llm, store)

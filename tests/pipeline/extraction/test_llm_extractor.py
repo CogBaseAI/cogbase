@@ -36,7 +36,7 @@ def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA),
+        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA, prompt="Extract."),
         record_model=_build_record_model(ContractExtraction),
     )
 
@@ -282,7 +282,7 @@ async def test_extract_succeeds_on_retry_after_bad_json(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA),
+        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA, prompt="Extract."),
         record_model=_build_record_model(ContractExtraction),
         max_retries=2,
     )
@@ -300,7 +300,7 @@ async def test_extract_returns_none_after_all_retries_exhausted(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA),
+        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA, prompt="Extract."),
         record_model=_build_record_model(ContractExtraction),
         max_retries=2,
     )
@@ -318,7 +318,7 @@ async def test_extract_no_retry_on_success(monkeypatch):
     extractor = LLMExtractor(
         _make_llm(_full_payload()),
         extraction_model=ContractExtraction,
-        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA),
+        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA, prompt="Extract."),
         record_model=_build_record_model(ContractExtraction),
         max_retries=2,
     )
@@ -337,7 +337,7 @@ async def test_extract_retry_uses_exponential_backoff(monkeypatch):
     extractor = LLMExtractor(
         llm,
         extraction_model=ContractExtraction,
-        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA),
+        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA, prompt="Extract."),
         record_model=_build_record_model(ContractExtraction),
         max_retries=2,
     )
@@ -356,7 +356,7 @@ async def test_extract_max_retries_zero_no_sleep(monkeypatch):
     extractor = LLMExtractor(
         _make_llm("bad json"),
         extraction_model=ContractExtraction,
-        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA),
+        config=ExtractorConfig(extraction_schema=_DEFAULT_EXTRACTION_SCHEMA, prompt="Extract."),
         record_model=_build_record_model(ContractExtraction),
         max_retries=0,
     )
@@ -388,6 +388,7 @@ def _make_list_extractor(
         extraction_model=_Clause,
         config=ExtractorConfig(
             extraction_schema=_DEFAULT_EXTRACTION_SCHEMA,
+            prompt="Extract.",
             record_mode="many",
             response_field=response_field,
             id_field=item_id_field,
@@ -426,6 +427,7 @@ async def test_config_driven_list_extractor_builds_prompt_and_injected_fields():
 def test_config_driven_extractor_rejects_doc_id_in_extraction_schema():
     cfg = ExtractorConfig(
         extraction_schema='{"type":"object","properties":{"doc_id":{"type":"string"}}}',
+        prompt="Extract.",
     )
     extraction_model = create_model("_BadExtraction", doc_id=(str, ...))
     record_model = create_model("_GoodRecord", doc_id=(str, ...))
@@ -442,6 +444,7 @@ def test_config_driven_extractor_rejects_doc_id_in_extraction_schema():
 def test_config_driven_extractor_rejects_missing_doc_id_in_record_schema():
     cfg = ExtractorConfig(
         extraction_schema='{"type":"object","properties":{"text":{"type":"string"}}}',
+        prompt="Extract.",
         record_mode="many",
         id_field="clause_id",
     )
@@ -583,6 +586,7 @@ async def test_list_extract_retry_on_bad_json(monkeypatch):
         extraction_model=_Clause,
         config=ExtractorConfig(
             extraction_schema=_DEFAULT_EXTRACTION_SCHEMA,
+            prompt="Extract.",
             record_mode="many",
             response_field="clauses",
             id_field="item_id",
