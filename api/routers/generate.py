@@ -46,10 +46,10 @@ _MAX_AGENT_CALLS = 10
 _PROPOSE_SCHEMA_TOOL: ToolDefinition = {
     "name": "propose_extraction_schema",
     "description": (
-        "Generate and validate extraction schemas for all structured collections. "
-        "Call this once you understand the domain and document types — do not ask the "
-        "user to enumerate fields. The schemas are derived from the conversation and "
-        "domain knowledge, then presented to the user for review."
+        "Formalize the user-confirmed field list into validated JSON Schemas for all "
+        "structured collections. Call this only after the user has confirmed the field "
+        "list in the conversation — the schemas are derived from those confirmed fields. "
+        "Returns a brief validation summary on success, or a validation error message."
     ),
     "parameters": {
         "type": "object",
@@ -77,8 +77,9 @@ _GENERATOR_TOOLS: list[ToolDefinition] = [_PROPOSE_SCHEMA_TOOL, _PROPOSE_CONFIG_
 
 _SCHEMA_AGENT_SYSTEM_PROMPT = """\
 You are a CogBase schema designer. Given a conversation about building a CogBase \
-application, propose complete JSON Schema definitions for every structured collection \
-the application needs.
+application, produce JSON Schema definitions for every structured collection \
+the application needs. Generate schemas that match exactly the fields the user \
+has already confirmed in the conversation — do not add, remove, or rename fields.
 
 CogBase has three store types — design schemas only for structured collections:
 - Structured collections: discrete extractable facts for filtered/exact lookup (what you design here)
@@ -129,13 +130,13 @@ _MAX_CONFIG_RETRIES = 3
 
 _CONFIG_AGENT_SYSTEM_PROMPT = f"""\
 You are a CogBase configuration generator. Given a conversation about building a CogBase \
-application — including resolved extraction schemas from propose_extraction_schema — produce \
+application — including the validated extraction schemas injected below — produce \
 a complete, valid config.yaml.
 
 Output ONLY the raw YAML — no explanation, no markdown fences.
 
-Copy the extraction_schema JSON string from the conversation verbatim; \
-do not rewrite or reformat it. The schema field in structured_collections is derived \
+Use the extraction_schema values from the "Validated extraction schemas" section verbatim — \
+do not rewrite or reformat them. The schema field in structured_collections is derived \
 automatically from the extraction_schema — you do not need to provide it.
 
 ## Rules
@@ -259,12 +260,21 @@ without a workflow.
        * High-level summary or topic queries → document-embed-upsert + document collection
        * Analytical fan-out over all records (e.g. "flag all X that…") → workflow
 
-2. Once you understand the domain, call propose_extraction_schema.
-   It uses domain expertise to propose fields and schemas for all structured collections —
-   you do not enumerate fields or decide collection structure yourself.
-   When it succeeds, present the proposed schemas to the user and ask for confirmation
-   or corrections. Include the resolved JSON strings in your response so they persist
-   in conversation history.
+2. Once you understand the domain, propose the target fields for each structured collection
+   as a bullet list. Use nested bullets for object or array fields. For example:
+
+   **contracts**
+   - vendor_name — name of the vendor
+   - effective_date — contract start date (ISO 8601)
+   - payment_terms
+     - schedule - payment schedule, e.g. "net-30", "monthly", "upfront", "milestone-based"
+     - late_penalty - penalty or interest rate for late payment, verbatim if present
+   - key_terms (list) - significant defined terms, unusual provisions
+
+   Use domain knowledge to propose sensible fields — do not ask the user to enumerate them.
+   Ask the user to confirm, add, remove, or rename fields. Revise conversationally until confirmed.
+   Once the user confirms the field list, call propose_extraction_schema to formalize the schemas.
+   When it succeeds, immediately call propose_app_config — no additional confirmation needed.
 
 3. Once the schema is confirmed, call propose_app_config.
    It generates and validates the config from the conversation — you do not write the YAML yourself.
@@ -360,13 +370,16 @@ def _serialize_config(config: AppConfig) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _run_propose_schema(llm: LLMBase, conversation_messages: list) -> str:
+async def _run_propose_schema(
+    llm: LLMBase, conversation_messages: list
+) -> tuple[str, dict[str, str] | None]:
     sub_messages = [{"role": "system", "content": _SCHEMA_AGENT_SYSTEM_PROMPT}] + [
         {"role": m["role"], "content": m.get("content") or ""}
         for m in conversation_messages
         if m.get("role") in ("user", "assistant") and not m.get("tool_calls")
     ]
 
+    errors: list[str] = []
     for attempt in range(_MAX_SCHEMA_RETRIES):
         result = await llm.complete(sub_messages, temperature=0.2)
         schemas_yaml = (result.get("content") or "").strip()
@@ -378,12 +391,15 @@ async def _run_propose_schema(llm: LLMBase, conversation_messages: list) -> str:
                 list(schemas),
                 attempt + 1,
             )
-            lines = ["Schema validated. Use these values verbatim in your config:"]
-            for name, schema_dict in schemas.items():
-                ext_json = json.dumps(schema_dict, separators=(",", ":"))
-                lines.append(f"\n{name}:")
-                lines.append(f"  extraction_schema: '{ext_json}'")
-            return "\n".join(lines)
+            schemas_as_json = {
+                name: json.dumps(schema_dict, separators=(",", ":"))
+                for name, schema_dict in schemas.items()
+            }
+            field_summary = "\n".join(
+                f"  {name}: {', '.join(schema_dict.get('properties', {}).keys())}"
+                for name, schema_dict in schemas.items()
+            )
+            return f"Schemas validated.\n{field_summary}", schemas_as_json
 
         logger.warning(
             "generate/propose_schema attempt=%d errors=%s", attempt + 1, errors
@@ -397,13 +413,24 @@ async def _run_propose_schema(llm: LLMBase, conversation_messages: list) -> str:
             },
         ]
 
-    return f"Schema generation failed after {_MAX_SCHEMA_RETRIES} attempts. Last errors:\n" + "\n".join(
-        f"- {e}" for e in errors  # type: ignore[possibly-undefined]
+    return (
+        f"Schema generation failed after {_MAX_SCHEMA_RETRIES} attempts. Last errors:\n"
+        + "\n".join(f"- {e}" for e in errors),
+        None,
     )
 
 
-async def _run_propose_config(llm: LLMBase, conversation_messages: list) -> tuple[str, str | None]:
-    sub_messages = [{"role": "system", "content": _CONFIG_AGENT_SYSTEM_PROMPT}] + [
+async def _run_propose_config(
+    llm: LLMBase,
+    conversation_messages: list,
+    extraction_schemas: dict[str, str],
+) -> tuple[str, str | None]:
+    schema_lines = ["\n\n## Validated extraction schemas\n\nUse these extraction_schema values verbatim:"]
+    for coll_name, schema_json in extraction_schemas.items():
+        schema_lines.append(f"  {coll_name}: '{schema_json}'")
+    system_prompt = _CONFIG_AGENT_SYSTEM_PROMPT + "\n".join(schema_lines)
+
+    sub_messages = [{"role": "system", "content": system_prompt}] + [
         {"role": m["role"], "content": m.get("content") or ""}
         for m in conversation_messages
         if m.get("role") in ("user", "assistant") and not m.get("tool_calls")
@@ -478,6 +505,7 @@ async def chat(
     )
 
     validated_config_yaml: str | None = None
+    extracted_schemas: dict[str, str] = {}
     final_content: str = ""
 
     for call_num in range(_MAX_AGENT_CALLS):
@@ -511,9 +539,11 @@ async def chat(
                 inputs = {}
 
             if tc["name"] == "propose_extraction_schema":
-                tool_output = await _run_propose_schema(llm, messages)
+                tool_output, schemas = await _run_propose_schema(llm, messages)
+                if schemas is not None:
+                    extracted_schemas = schemas
             elif tc["name"] == "propose_app_config":
-                tool_output, config_yaml = await _run_propose_config(llm, messages)
+                tool_output, config_yaml = await _run_propose_config(llm, messages, extracted_schemas)
                 if config_yaml is not None:
                     validated_config_yaml = config_yaml
             else:

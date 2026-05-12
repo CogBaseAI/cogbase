@@ -422,32 +422,35 @@ class TestSerializeConfig:
 class TestRunProposeSchema:
     async def test_success_on_first_attempt(self):
         llm = _make_llm(_MINIMAL_SCHEMA_YAML)
-        result = await _run_propose_schema(llm, _CONVERSATION)
-        assert result.startswith("Schema validated.")
-        assert "extraction_schema:" in result
+        message, schemas = await _run_propose_schema(llm, _CONVERSATION)
+        assert message.startswith("Schemas validated.")
+        assert schemas is not None
+        assert "contracts" in schemas
 
     async def test_output_has_no_schema_record_line(self):
         llm = _make_llm(_MINIMAL_SCHEMA_YAML)
-        result = await _run_propose_schema(llm, _CONVERSATION)
-        assert "  schema: '" not in result
+        message, schemas = await _run_propose_schema(llm, _CONVERSATION)
+        assert "  schema: '" not in message
 
     async def test_retry_then_success(self):
         llm = _make_llm("not: valid: yaml: [[[", _MINIMAL_SCHEMA_YAML)
-        result = await _run_propose_schema(llm, _CONVERSATION)
-        assert result.startswith("Schema validated.")
+        message, schemas = await _run_propose_schema(llm, _CONVERSATION)
+        assert message.startswith("Schemas validated.")
+        assert schemas is not None
         assert llm.complete.call_count == 2
 
     async def test_exhausted_retries_returns_failure_message(self):
         llm = _make_llm("bad", "bad", "bad")
-        result = await _run_propose_schema(llm, _CONVERSATION)
-        assert "failed after" in result
+        message, schemas = await _run_propose_schema(llm, _CONVERSATION)
+        assert "failed after" in message
+        assert schemas is None
         assert llm.complete.call_count == 3
 
     async def test_tool_call_messages_excluded_from_sub_messages(self):
         messages_with_tool_calls = [
             {"role": "user", "content": "build app"},
             {"role": "assistant", "content": None, "tool_calls": [{"id": "1", "name": "propose_extraction_schema", "arguments": "{}"}]},
-            {"role": "tool", "tool_call_id": "1", "content": "Schema validated."},
+            {"role": "tool", "tool_call_id": "1", "content": "Schemas validated."},
         ]
         llm = _make_llm(_MINIMAL_SCHEMA_YAML)
         await _run_propose_schema(llm, messages_with_tool_calls)
@@ -469,8 +472,9 @@ class TestRunProposeSchema:
             "    text: {type: string, description: Clause text}\n"
         )
         llm = _make_llm(two_collection_yaml)
-        result = await _run_propose_schema(llm, _CONVERSATION)
-        assert result.count("extraction_schema:") == 2
+        message, schemas = await _run_propose_schema(llm, _CONVERSATION)
+        assert schemas is not None
+        assert set(schemas.keys()) == {"contracts", "clauses"}
 
 
 # ---------------------------------------------------------------------------
@@ -481,19 +485,19 @@ class TestRunProposeSchema:
 class TestRunProposeConfig:
     async def test_success_returns_validated_message_and_yaml(self):
         llm = _make_llm(_MINIMAL_CONFIG_YAML)
-        message, stored_yaml = await _run_propose_config(llm, _CONVERSATION)
+        message, stored_yaml = await _run_propose_config(llm, _CONVERSATION, {})
         assert message == "Config validated."
         assert stored_yaml is not None
 
     async def test_stored_yaml_is_valid_app_config(self):
         llm = _make_llm(_MINIMAL_CONFIG_YAML)
-        _, stored_yaml = await _run_propose_config(llm, _CONVERSATION)
+        _, stored_yaml = await _run_propose_config(llm, _CONVERSATION, {})
         config = AppConfig.from_yaml(stored_yaml)
         assert config.name == "test-app"
 
     async def test_injects_doc_id_into_structured_collection_schema(self):
         llm = _make_llm(_CONFIG_YAML_WITH_STRUCTURED)
-        _, stored_yaml = await _run_propose_config(llm, _CONVERSATION)
+        _, stored_yaml = await _run_propose_config(llm, _CONVERSATION, {})
         data = yaml.safe_load(stored_yaml)
         sc = data["structured_collections"][0]
         record_schema = json.loads(sc["schema"])
@@ -502,20 +506,20 @@ class TestRunProposeConfig:
 
     async def test_retry_then_success(self):
         llm = _make_llm("not: valid: yaml: [[[", _MINIMAL_CONFIG_YAML)
-        message, stored_yaml = await _run_propose_config(llm, _CONVERSATION)
+        message, stored_yaml = await _run_propose_config(llm, _CONVERSATION, {})
         assert message == "Config validated."
         assert llm.complete.call_count == 2
 
     async def test_exhausted_retries_returns_failure_and_none(self):
         llm = _make_llm("bad", "bad", "bad")
-        message, stored_yaml = await _run_propose_config(llm, _CONVERSATION)
+        message, stored_yaml = await _run_propose_config(llm, _CONVERSATION, {})
         assert "failed after" in message
         assert stored_yaml is None
         assert llm.complete.call_count == 3
 
     async def test_config_without_structured_collections(self):
         llm = _make_llm(_MINIMAL_CONFIG_YAML)
-        message, stored_yaml = await _run_propose_config(llm, _CONVERSATION)
+        message, stored_yaml = await _run_propose_config(llm, _CONVERSATION, {})
         assert message == "Config validated."
         data = yaml.safe_load(stored_yaml)
         assert data.get("structured_collections", []) == []
