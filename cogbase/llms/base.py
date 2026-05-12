@@ -100,9 +100,12 @@ class LLMBase(abc.ABC):
         max_tokens: int | None = None,
         temperature: float | None = None,
         reasoning_effort: ReasoningEffort | None = None,
-    ) -> AsyncGenerator[str, None]:
-        """Stream text completion deltas for *messages*.
+    ) -> AsyncGenerator[str | CompletionResult, None]:
+        """Stream a completion for *messages*.
 
-        Tool calls are not yielded as deltas; use :meth:`complete` when tool
-        call results are required.
+        Yields ``str`` deltas for text content.  If the model requests tool
+        calls instead of (or after) text, a single ``CompletionResult`` is
+        yielded at the end with ``tool_calls`` populated and ``content=None``.
+        Callers should check ``isinstance(chunk, dict)`` (TypedDict) to
+        distinguish the final result from text deltas.
         """

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cogbase.llms.base import LLMBase, ChatMessage, ToolDefinition
+from cogbase.llms.base import LLMBase, ChatMessage, CompletionResult, ToolDefinition
 from cogbase.llms.openai import OpenAILLM
 
 
@@ -31,9 +31,38 @@ def _make_non_stream_client(
 def _make_streaming_client(*deltas: str | None) -> MagicMock:
     async def _stream():
         for delta_text in deltas:
-            delta = SimpleNamespace(content=delta_text)
+            delta = SimpleNamespace(content=delta_text, tool_calls=None)
             choice = SimpleNamespace(delta=delta)
             yield SimpleNamespace(choices=[choice])
+
+    client = MagicMock()
+    client.chat = MagicMock()
+    client.chat.completions = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_stream())
+    return client
+
+
+def _make_streaming_tool_call_client(tool_calls: list[dict]) -> MagicMock:
+    """Client that streams tool call deltas (no text content)."""
+    async def _stream():
+        for i, tc in enumerate(tool_calls):
+            tc_delta = SimpleNamespace(
+                index=i,
+                id=tc["id"],
+                function=SimpleNamespace(name=tc["name"], arguments=""),
+            )
+            yield SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(content=None, tool_calls=[tc_delta])
+            )])
+            if tc["arguments"]:
+                tc_delta = SimpleNamespace(
+                    index=i,
+                    id=None,
+                    function=SimpleNamespace(name=None, arguments=tc["arguments"]),
+                )
+                yield SimpleNamespace(choices=[SimpleNamespace(
+                    delta=SimpleNamespace(content=None, tool_calls=[tc_delta])
+                )])
 
     client = MagicMock()
     client.chat = MagicMock()
@@ -268,6 +297,64 @@ async def test_complete_stream_passes_tools() -> None:
     call = client.chat.completions.create.call_args.kwargs
     assert "tools" in call
     assert call["tools"][0]["function"]["name"] == "get_weather"
+
+
+@pytest.mark.asyncio
+async def test_complete_stream_yields_tool_calls() -> None:
+    raw_args = json.dumps({"city": "Paris"})
+    client = _make_streaming_tool_call_client([
+        {"id": "call_1", "name": "get_weather", "arguments": raw_args},
+    ])
+    llm = OpenAILLM(client, model="test-model")
+
+    chunks = [
+        chunk
+        async for chunk in llm.complete_stream(
+            [{"role": "user", "content": "weather?"}], tools=[_WEATHER_TOOL]
+        )
+    ]
+
+    assert len(chunks) == 1
+    result = chunks[0]
+    assert isinstance(result, dict)
+    assert result["content"] is None
+    assert result["tool_calls"] is not None
+    assert len(result["tool_calls"]) == 1
+    assert result["tool_calls"][0]["id"] == "call_1"
+    assert result["tool_calls"][0]["name"] == "get_weather"
+    assert result["tool_calls"][0]["arguments"] == raw_args
+
+
+@pytest.mark.asyncio
+async def test_complete_stream_yields_text_then_tool_calls() -> None:
+    raw_args = json.dumps({"city": "Berlin"})
+
+    async def _mixed_stream():
+        yield SimpleNamespace(choices=[SimpleNamespace(
+            delta=SimpleNamespace(content="Sure! ", tool_calls=None)
+        )])
+        tc_delta = SimpleNamespace(
+            index=0, id="call_2",
+            function=SimpleNamespace(name="get_weather", arguments=raw_args),
+        )
+        yield SimpleNamespace(choices=[SimpleNamespace(
+            delta=SimpleNamespace(content=None, tool_calls=[tc_delta])
+        )])
+
+    client = MagicMock()
+    client.chat = MagicMock()
+    client.chat.completions = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_mixed_stream())
+    llm = OpenAILLM(client, model="test-model")
+
+    chunks = [chunk async for chunk in llm.complete_stream(
+        [{"role": "user", "content": "weather?"}], tools=[_WEATHER_TOOL]
+    )]
+
+    assert chunks[0] == "Sure! "
+    result: CompletionResult = chunks[1]  # type: ignore[assignment]
+    assert result["tool_calls"][0]["id"] == "call_2"
+    assert result["tool_calls"][0]["arguments"] == raw_args
 
 
 # ---------------------------------------------------------------------------

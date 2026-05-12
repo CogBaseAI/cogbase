@@ -97,7 +97,7 @@ class OpenAILLM(LLMBase):
         max_tokens: int | None = None,
         temperature: float | None = None,
         reasoning_effort: ReasoningEffort | None = None,
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[str | CompletionResult, None]:
         kwargs = self._build_kwargs(
             messages=messages,
             tools=tools,
@@ -107,10 +107,29 @@ class OpenAILLM(LLMBase):
             stream=True,
         )
         stream = await self._client.chat.completions.create(**kwargs)
+        tool_call_accum: dict[int, dict] = {}
         async for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield delta.content
+            for tc_delta in delta.tool_calls or []:
+                idx = tc_delta.index
+                if idx not in tool_call_accum:
+                    tool_call_accum[idx] = {"id": "", "name": "", "arguments": ""}
+                if tc_delta.id:
+                    tool_call_accum[idx]["id"] = tc_delta.id
+                if tc_delta.function and tc_delta.function.name:
+                    tool_call_accum[idx]["name"] = tc_delta.function.name
+                if tc_delta.function and tc_delta.function.arguments:
+                    tool_call_accum[idx]["arguments"] += tc_delta.function.arguments
+        if tool_call_accum:
+            yield CompletionResult(
+                content=None,
+                tool_calls=[
+                    ToolCall(id=v["id"], name=v["name"], arguments=v["arguments"])
+                    for _, v in sorted(tool_call_accum.items())
+                ],
+            )
 
     def _build_kwargs(
         self,
