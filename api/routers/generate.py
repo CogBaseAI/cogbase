@@ -147,6 +147,7 @@ automatically from the extraction_schema — you do not need to provide it.
 4. All content is INLINE — do not use .json or .txt filenames as values anywhere
 5. Pipeline step collections must exactly match declared vector/structured collection names
 6. Use snake_case for all collection names and field names
+7. Every pipeline must have a routing_description — a plain-language sentence describing which documents belong in that pipeline (used by LLM routing to classify documents)
 
 ## Config format
 
@@ -178,6 +179,7 @@ structured_collections:
 pipelines:
   # board-update pipeline: chunk + extract KPIs + summarize
   - name: board-update
+    routing_description: Board decks and LP updates from portfolio companies containing financial KPIs, headcount, milestones, and risk sections.
     match:
       metadata:
         doc_type: board_update
@@ -205,6 +207,7 @@ pipelines:
 
   # deal-memo pipeline: chunk + summarize only — no KPI extraction from pitch decks
   - name: deal-memo
+    routing_description: Investment memos and pitch decks for prospective deals containing investment thesis, deal terms, and sector analysis.
     match:
       metadata:
         doc_type: deal_memo

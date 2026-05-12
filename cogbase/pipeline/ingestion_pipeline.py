@@ -146,8 +146,10 @@ class IngestionPipeline:
         structured_collections: list[StructuredCollection] | None = None,
         match: dict[str, str] | None = None,
         parallel: bool = False,
+        description: str = "",
     ) -> None:
         self.name = name
+        self.description = description or name
         self.match = match
         self.parallel = parallel
 

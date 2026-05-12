@@ -160,6 +160,7 @@ _FULL_YAML = textwrap.dedent("""\
         description: Full-text document chunks for detailed retrieval.
     pipelines:
       - name: main
+        routing_description: Full-text documents for chunked vector indexing.
         steps:
           - tool: chunk-embed-upsert
             collection: doc_chunks
@@ -255,6 +256,7 @@ class TestAppConfig:
                 description: One summary vector per document for topic-level search.
             pipelines:
               - name: main
+                routing_description: Documents to embed as per-document summaries.
                 steps:
                   - tool: document-embed-upsert
                     collection: doc_summary
@@ -280,6 +282,7 @@ class TestAppConfig:
                 description: One summary vector per document for topic-level search.
             pipelines:
               - name: main
+                routing_description: Documents to embed.
                 steps:
                   - tool: document-embed-upsert
                     collection: nonexistent
@@ -309,6 +312,7 @@ class TestAppConfig:
                 primary_fields: [doc_id]
             pipelines:
               - name: main
+                routing_description: Contract documents for full three-step ingestion.
                 steps:
                   - tool: chunk-embed-upsert
                     collection: document_chunks
@@ -449,6 +453,7 @@ class TestExtractorConfig:
                 primary_fields: [clause_id]
             pipelines:
               - name: main
+                routing_description: Contract documents to extract individual clauses from.
                 steps:
                   - tool: extract-structured
                     collection: contract_clauses
@@ -484,6 +489,7 @@ class TestExtractorConfig:
                 primary_fields: [doc_id]
             pipelines:
               - name: main
+                routing_description: Generic documents to extract structured records from.
                 steps:
                   - tool: extract-structured
                     collection: records

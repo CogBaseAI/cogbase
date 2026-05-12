@@ -62,6 +62,7 @@ structured_collections:
     primary_fields: [doc_id]
 pipelines:
   - name: main
+    routing_description: Contract documents to extract structured facts from.
     steps:
       - tool: extract-structured
         collection: contract_extraction
@@ -89,6 +90,7 @@ structured_collections:
     primary_fields: [doc_id]
 pipelines:
   - name: main
+    routing_description: Contract documents for chunked indexing and structured extraction.
     steps:
       - tool: chunk-embed-upsert
         collection: document_chunks
@@ -311,6 +313,7 @@ vector_collections:
     description: One summary vector per document for topic-level search.
 pipelines:
   - name: main
+    routing_description: Documents to index as per-document summaries.
     steps:
       - tool: document-embed-upsert
         collection: document_summary
@@ -337,6 +340,7 @@ structured_collections:
     primary_fields: [doc_id]
 pipelines:
   - name: main
+    routing_description: Contract documents for full three-step ingestion.
     steps:
       - tool: chunk-embed-upsert
         collection: document_chunks
@@ -474,6 +478,7 @@ structured_collections:
     primary_fields: [clause_id]
 pipelines:
   - name: main
+    routing_description: Contract documents to extract individual clauses from.
     steps:
       - tool: extract-structured
         collection: contract_clauses
@@ -498,6 +503,7 @@ structured_collections:
     primary_fields: [clause_id]
 pipelines:
   - name: main
+    routing_description: Contract documents to extract individual clauses with custom prompt.
     steps:
       - tool: extract-structured
         collection: contract_clauses
@@ -522,6 +528,7 @@ structured_collections:
     primary_fields: [doc_id]
 pipelines:
   - name: main
+    routing_description: Contract documents to extract metadata fields from.
     steps:
       - tool: extract-structured
         collection: contract_metadata

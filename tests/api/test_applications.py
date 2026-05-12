@@ -124,6 +124,7 @@ class TestSerializeConfig:
                 primary_fields: [doc_id]
             pipelines:
               - name: main
+                routing_description: Documents to extract facts from.
                 steps:
                   - tool: extract-structured
                     collection: facts
@@ -153,6 +154,7 @@ class TestSerializeConfig:
                 primary_fields: [doc_id]
             pipelines:
               - name: main
+                routing_description: Documents to extract facts from.
                 steps:
                   - tool: extract-structured
                     collection: facts
@@ -286,6 +288,7 @@ class TestCreateApplication:
                 primary_fields: [doc_id]
             pipelines:
               - name: main
+                routing_description: Contract documents to extract facts from.
                 steps:
                   - tool: extract-structured
                     collection: contract_extraction

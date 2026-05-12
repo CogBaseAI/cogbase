@@ -23,6 +23,9 @@ structured_collections:
 
 pipelines:
   - name: contracts
+    routing_description: >-
+      Any contract document — vendor agreements, service contracts, NDAs, or
+      similar legal agreements to be analyzed for key facts and entities.
     steps:
       - tool: chunk-embed-upsert
         collection: document_chunks

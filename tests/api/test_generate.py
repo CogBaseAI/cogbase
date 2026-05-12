@@ -43,6 +43,7 @@ vector_collections:
     description: Semantic search chunks.
 pipelines:
   - name: main
+    routing_description: Documents for chunked vector indexing.
     steps:
       - tool: chunk-embed-upsert
         collection: chunks
@@ -59,6 +60,7 @@ structured_collections:
     primary_fields: [doc_id]
 pipelines:
   - name: main
+    routing_description: Contract documents for chunked indexing and structured extraction.
     steps:
       - tool: chunk-embed-upsert
         collection: chunks

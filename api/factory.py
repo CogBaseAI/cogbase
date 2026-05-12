@@ -196,6 +196,7 @@ async def build_app(
             pipeline_steps.append(ps)
         pipelines.append(IngestionPipeline(
             name=p_cfg.name or config.name,
+            description=p_cfg.routing_description,
             steps=pipeline_steps,
             vector_collections=vector_collections or None,
             structured_collections=structured_collections or None,
@@ -228,4 +229,12 @@ async def build_app(
         )
         logger.info("registered workflow=%s app=%s trigger=%s", wf_cfg.name, config.name, wf_cfg.trigger.type)
 
-    return CogBaseApp(config.name, pipelines, qrunner, document_store=document_store, workflow_runners=workflow_runners)
+    return CogBaseApp(
+        config.name,
+        pipelines,
+        qrunner,
+        document_store=document_store,
+        workflow_runners=workflow_runners,
+        llm=llm,
+        routing_strategy=config.pipeline_routing.strategy,
+    )

@@ -259,8 +259,7 @@ About 90% of the codebase — the ingestion pipeline, workflow engine, query run
 
 See [docs/api.md](docs/api.md) for the full endpoint reference.
 
-For the annotated reference bundle, see [`api/example_config.yaml`](../api/example_config.yaml).
-For fully working zipped examples, see:
+For working config examples, see:
 - [`examples/contract_analyst_demo/config.yaml`](../examples/contract_analyst_demo/config.yaml)
 - [`examples/contract_compliance_demo/config.yaml`](../examples/contract_compliance_demo/config.yaml)
 - [`examples/vc_portfolio_demo/config.yaml`](../examples/vc_portfolio_demo/config.yaml)

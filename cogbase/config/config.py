@@ -146,6 +146,12 @@ PipelineStepConfig = Annotated[
 
 class PipelineConfig(ConfigPromptMixin, BaseModel):
     name: str = Field(description="Pipeline name.")
+    routing_description: str = Field(
+        description=(
+            "Human-readable description of which documents belong in this pipeline. "
+            "Used by LLM routing (strategy: llm or auto) to classify documents into the correct pipeline."
+        ),
+    )
     match: WhenCondition | None = Field(
         default=None,
         description="Optional condition that selects which documents enter this pipeline.",
@@ -249,8 +255,31 @@ class WorkflowConfig(ConfigPromptMixin, BaseModel):
     )
 
 
+class RoutingStrategy(str, Enum):
+    AUTO = "auto"
+    METADATA = "metadata"
+    LLM = "llm"
+
+
+class PipelineRoutingConfig(BaseModel):
+    strategy: RoutingStrategy = Field(
+        default=RoutingStrategy.AUTO,
+        description=(
+            "Pipeline routing strategy. "
+            "'auto' (default) — try metadata first; fall back to LLM if no metadata match. "
+            "'metadata' — match by document metadata key/value pairs. "
+            "'llm' — always use LLM to classify the document into a pipeline."
+        ),
+    )
+
+
 class AppConfig(ConfigPromptMixin, BaseModel):
     name: str = Field(description="Application name, kebab-case (lowercase, alphanumeric, hyphens only).")
+    pipeline_routing: PipelineRoutingConfig = Field(
+        default_factory=PipelineRoutingConfig,
+        description="Pipeline routing configuration.",
+        json_schema_extra={"prompt_skip": True},
+    )
     llm: LLMConfig | None = Field(
         default=None,
         description="LLM configuration.",

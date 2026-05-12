@@ -36,8 +36,14 @@ structured_collections:
     schema: kpi_record_schema.json
     primary_fields: [doc_id]
 
+# pipeline_routing:
+#   strategy: auto   # try metadata first; fall back to LLM if doc_type is not set
+
 pipelines:
   - name: board-update
+    routing_description: >
+      Board decks and LP updates from portfolio companies containing financial KPIs
+      (ARR, burn rate, runway), headcount, milestones, and risk sections.
     match:
       metadata:
         doc_type: board_update   # set this on ingest: metadata.doc_type=board_update
@@ -63,6 +69,9 @@ pipelines:
           raised. Be concise and factual.
 
   - name: deal-memo
+    routing_description: >
+      Investment memos and pitch decks for prospective deals, containing investment
+      thesis, deal terms, sector analysis, and early-stage company description.
     match:
       metadata:
         doc_type: deal_memo      # set this on ingest: metadata.doc_type=deal_memo

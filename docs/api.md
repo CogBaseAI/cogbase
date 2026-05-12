@@ -58,8 +58,7 @@ Applications are created and managed through the REST API. Configuration lives i
 
 Applications are configured via a `config.yaml` inside a ZIP bundle. Any files referenced by filename (JSON schemas, prompt templates) must also be present flat at the ZIP root.
 
-For the annotated reference bundle, see [`api/example_config.yaml`](../api/example_config.yaml).
-For fully working zipped examples, see:
+For working config examples, see:
 - [`examples/contract_analyst_demo/config.yaml`](../examples/contract_analyst_demo/config.yaml)
 - [`examples/contract_compliance_demo/config.yaml`](../examples/contract_compliance_demo/config.yaml)
 - [`examples/vc_portfolio_demo/config.yaml`](../examples/vc_portfolio_demo/config.yaml)

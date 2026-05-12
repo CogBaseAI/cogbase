@@ -54,6 +54,9 @@ structured_collections:
 
 pipelines:
   - name: rules
+    routing_description: >-
+      Company policy documents, internal standards, compliance guidelines, and
+      fallback position documents that define rules contracts must be checked against.
     match:
       metadata:
         doc_type: rules
@@ -62,6 +65,9 @@ pipelines:
         collection: rule_chunks
 
   - name: contracts
+    routing_description: >-
+      Vendor contracts, commercial agreements, and service agreements to be
+      reviewed for compliance against company policy.
     match:
       metadata:
         doc_type: contract

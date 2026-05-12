@@ -11,15 +11,23 @@ import asyncio
 import logging
 from typing import Any, Sequence, TYPE_CHECKING
 
+from cogbase.config.config import RoutingStrategy
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
 from cogbase.core.models import Document
 from cogbase.core.query_runner import QueryResult, QueryRunner
+from cogbase.llms.base import ChatMessage, LLMBase
 from cogbase.stores import DocumentStoreBase
 
 if TYPE_CHECKING:
     from cogbase.workflows.runner import WorkflowRunner
 
 logger = logging.getLogger(__name__)
+
+_ROUTING_SYSTEM_PROMPT = (
+    "You are a document router. Classify the document excerpt below into exactly one of the "
+    "following pipelines by responding with the pipeline name only — no explanation, no quotes, "
+    "no other text.\n\nPipelines:\n{pipelines}"
+)
 
 
 class CogBaseApp:
@@ -44,18 +52,54 @@ class CogBaseApp:
         *,
         document_store: DocumentStoreBase | None = None,
         workflow_runners: dict[str, "WorkflowRunner"] | None = None,
+        llm: LLMBase | None = None,
+        routing_strategy: RoutingStrategy = RoutingStrategy.AUTO,
     ) -> None:
         self.name = name
         self._pipelines = pipelines
         self._runner = runner
         self._document_store = document_store
         self._workflows: dict[str, "WorkflowRunner"] = workflow_runners or {}
+        self._llm = llm
+        self._routing_strategy = routing_strategy
 
-    def _find_pipeline(self, doc: Document) -> IngestionPipeline | None:
+    def _find_pipeline_by_metadata(self, doc: Document) -> IngestionPipeline | None:
         for p in self._pipelines:
             if p.match is None or all(doc.metadata.get(k) == v for k, v in p.match.items()):
                 return p
         return None
+
+    async def _find_pipeline_by_llm(self, doc: Document) -> IngestionPipeline | None:
+        if not self._llm or not self._pipelines:
+            return None
+        pipeline_list = "\n".join(f"- {p.name}: {p.description}" for p in self._pipelines)
+        messages: list[ChatMessage] = [
+            {"role": "system", "content": _ROUTING_SYSTEM_PROMPT.format(pipelines=pipeline_list)},
+            {"role": "user", "content": (doc.text or "")[:2000]},
+        ]
+        try:
+            result = await self._llm.complete(messages, temperature=0.0)
+            chosen = (result.get("content") or "").strip()
+        except Exception:
+            logger.exception("app.routing.llm_failed doc_id=%s", doc.doc_id)
+            return None
+        matched = next((p for p in self._pipelines if p.name == chosen), None)
+        if matched is None:
+            logger.warning("app.routing.llm_no_match doc_id=%s response=%r", doc.doc_id, chosen)
+        else:
+            logger.info("app.routing.llm_matched doc_id=%s pipeline=%s", doc.doc_id, matched.name)
+        return matched
+
+    async def _find_pipeline(self, doc: Document) -> IngestionPipeline | None:
+        if self._routing_strategy == RoutingStrategy.LLM:
+            return await self._find_pipeline_by_llm(doc)
+        if self._routing_strategy == RoutingStrategy.AUTO:
+            matched = self._find_pipeline_by_metadata(doc)
+            if matched is not None:
+                return matched
+            logger.info("app.routing.metadata_miss doc_id=%s falling_back_to=llm", doc.doc_id)
+            return await self._find_pipeline_by_llm(doc)
+        return self._find_pipeline_by_metadata(doc)
 
     async def ingest_documents(
         self,
@@ -91,7 +135,7 @@ class CogBaseApp:
         pipeline_groups: dict[int, tuple[IngestionPipeline, list[Document]]] = {}
         unmatched: list[Document] = []
         for doc in docs_to_process:
-            matched = self._find_pipeline(doc)
+            matched = await self._find_pipeline(doc)
             if matched is None:
                 unmatched.append(doc)
             else:

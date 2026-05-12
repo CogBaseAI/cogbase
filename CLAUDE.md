@@ -66,7 +66,6 @@ cogbase/
 │   ├── routers/              # applications.py, skills.py, workflows.py
 │   ├── config.py             # AppConfig (YAML schema)
 │   ├── factory.py            # build_app — registers schemas, wires pipelines
-│   ├── example_config.yaml
 │   └── example_system_config.yaml
 ├── examples/
 │   ├── contract_analyst_demo/

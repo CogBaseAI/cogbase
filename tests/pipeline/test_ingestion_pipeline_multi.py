@@ -374,6 +374,7 @@ class TestVectorCollectionConfig:
                 description: One summary vector per document for topic-level search.
             pipelines:
               - name: main
+                routing_description: Documents to embed as per-document summaries.
                 steps:
                   - tool: document-embed-upsert
                     collection: document_summary
@@ -417,6 +418,7 @@ class TestVectorCollectionConfig:
                 description: One summary vector per document for topic-level search.
             pipelines:
               - name: main
+                routing_description: Documents to embed.
                 steps:
                   - tool: document-embed-upsert
                     collection: nonexistent
