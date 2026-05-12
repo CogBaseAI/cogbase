@@ -71,11 +71,19 @@ pipelines:
 """
 
 
+async def _text_stream(text: str):
+    """Async generator that yields a single text chunk, simulating complete_stream."""
+    yield text
+
+
 def _make_llm(*responses: str) -> MagicMock:
-    """Return a mock LLMBase whose complete() yields each string in order."""
+    """Return a mock LLMBase whose complete() and complete_stream() yield each string in order."""
     llm = MagicMock()
     llm.complete = AsyncMock(
         side_effect=[{"content": r, "tool_calls": None} for r in responses]
+    )
+    llm.complete_stream = MagicMock(
+        side_effect=[_text_stream(r) for r in responses]
     )
     return llm
 
@@ -543,7 +551,7 @@ class TestChatTurn:
 
         assert response.content == "A final response"
         assert response.config_yaml is None
-        assert llm.complete.call_count == 1
+        assert llm.complete_stream.call_count == 1
 
     async def test_chat_turn_events_emit_result(self):
         llm = _make_llm("A final response")

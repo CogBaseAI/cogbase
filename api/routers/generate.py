@@ -393,12 +393,19 @@ async def _chat_turn_events(
 
     try:
         for call_num in range(_MAX_AGENT_CALLS):
-            result = await llm.complete(messages, tools=_GENERATOR_TOOLS, temperature=0.3)
-            tool_calls = result.get("tool_calls")
+            streamed_chunks: list[str] = []
+            result = None
+            async for chunk in llm.complete_stream(messages, tools=_GENERATOR_TOOLS, temperature=0.3):
+                if isinstance(chunk, str):
+                    streamed_chunks.append(chunk)
+                    yield {"type": "token", "token": chunk}
+                else:
+                    result = chunk  # CompletionResult carrying tool_calls
+
+            tool_calls = result.get("tool_calls") if result else None
 
             if not tool_calls:
-                final_content = (result["content"] or "").strip()
-                yield {"type": "token", "token": final_content}
+                final_content = "".join(streamed_chunks).strip()
                 break
 
             messages.append({
@@ -444,9 +451,7 @@ async def _chat_turn_events(
                 log_prefix,
                 _MAX_AGENT_CALLS,
             )
-            final_content = (result.get("content") or "") if result else ""  # type: ignore[union-attr]
-            if final_content:
-                yield {"type": "token", "token": final_content}
+            final_content = "".join(streamed_chunks).strip()
 
         logger.info(
             "%s turn=%d config_validated=%s final_content=%d",
