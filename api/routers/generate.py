@@ -242,10 +242,23 @@ natural-language questions via semantic search and structured lookup.
 - `document-embed-upsert` → document (vector) collection: one LLM summary per document for high-level queries
 Full text and summaries are covered automatically — structured collections hold only discrete extracted facts.
 
-**Multiple pipelines** — an app can declare multiple named pipelines, each matched to documents \
-by metadata (e.g. `doc_type: board_update` vs `doc_type: deal_memo`). Pipelines can share \
-vector collections; only the steps differ. Ask whether the user has multiple document types \
-that need different treatment.
+**Multiple pipelines** — an app can declare multiple named pipelines when different document \
+types need different processing (different extraction fields, different step sets). Pipelines \
+can share vector collections. CogBase routes each document to the right pipeline automatically \
+using one of three strategies — you do not need to ask about metadata availability to decide \
+whether multiple pipelines make sense:
+- Metadata routing (`routing_strategy: metadata`): each pipeline declares a `match` block \
+  (e.g. `doc_type: board_update`); the first matching pipeline wins. Use this when the user \
+  controls document upload and can reliably supply metadata.
+- LLM routing (`routing_strategy: llm`): CogBase reads each pipeline's `routing_description` \
+  and asks an LLM to classify the document. No metadata needed — works on raw document content.
+- Auto routing (`routing_strategy: auto`, the default): tries metadata matching first; if no \
+  pipeline matches, falls back to LLM routing. Best default when metadata may or may not be present.
+
+Ask whether different document types need different pipeline treatment (different steps or \
+extracted fields). If yes, configure multiple pipelines. Use `routing_strategy: auto` unless \
+the user says they will always supply reliable metadata (then use `metadata`) or explicitly \
+wants LLM-only routing (then use `llm`).
 
 **Workflows** — YAML-declared analytical pipelines that fan out over all records in a collection \
 (e.g. "flag every contract expiring before Q2", "rank all portfolio companies by ARR"). \
@@ -363,9 +376,10 @@ def _parse_and_validate_schemas(raw: str) -> tuple[dict | None, list[str]]:
 
 def _serialize_config(config: AppConfig) -> str:
     return yaml.dump(
-        config.model_dump(by_alias=True, mode="json"),
+        config.model_dump(by_alias=True, mode="json", exclude_none=True),
         allow_unicode=True,
         default_flow_style=False,
+        sort_keys=False,
     )
 
 
@@ -429,12 +443,12 @@ async def _chat_turn_events(
 
             for tc in tool_calls:
                 if tc["name"] == "propose_extraction_schema":
-                    yield {"type": "token", "token": "Generating extraction schema..."}
+                    yield {"type": "token", "token": "Generating extraction schema...\n"}
                     tool_output, schemas = await _run_propose_schema(llm, messages)
                     if schemas is not None:
                         extracted_schemas = schemas
                 elif tc["name"] == "propose_app_config":
-                    yield {"type": "token", "token": "Generating app config..."}
+                    yield {"type": "token", "token": "Generating app config...\n"}
                     tool_output, config_yaml = await _run_propose_config(
                         llm, messages, extracted_schemas
                     )
