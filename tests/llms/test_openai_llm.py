@@ -364,3 +364,68 @@ async def test_complete_stream_yields_text_then_tool_calls() -> None:
 
 def test_is_subclass() -> None:
     assert issubclass(OpenAILLM, LLMBase)
+
+
+# ---------------------------------------------------------------------------
+# Model resolution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_complete_uses_default_model_when_no_model_arg() -> None:
+    client = _make_non_stream_client("ok")
+    llm = OpenAILLM(client, model="gpt-4o", mini_model="gpt-4o-mini")
+
+    await llm.complete([{"role": "user", "content": "hi"}])
+
+    assert client.chat.completions.create.call_args.kwargs["model"] == "gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_complete_uses_mini_model_when_configured() -> None:
+    client = _make_non_stream_client("ok")
+    llm = OpenAILLM(client, model="gpt-4o", mini_model="gpt-4o-mini")
+
+    await llm.complete([{"role": "user", "content": "hi"}], model="mini")
+
+    assert client.chat.completions.create.call_args.kwargs["model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_complete_falls_back_to_default_when_mini_not_configured() -> None:
+    client = _make_non_stream_client("ok")
+    llm = OpenAILLM(client, model="gpt-4o")
+
+    await llm.complete([{"role": "user", "content": "hi"}], model="mini")
+
+    assert client.chat.completions.create.call_args.kwargs["model"] == "gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_complete_uses_literal_model_override() -> None:
+    client = _make_non_stream_client("ok")
+    llm = OpenAILLM(client, model="gpt-4o", mini_model="gpt-4o-mini")
+
+    await llm.complete([{"role": "user", "content": "hi"}], model="o3")
+
+    assert client.chat.completions.create.call_args.kwargs["model"] == "o3"
+
+
+@pytest.mark.asyncio
+async def test_complete_stream_uses_mini_model_when_configured() -> None:
+    client = _make_streaming_client("ok")
+    llm = OpenAILLM(client, model="gpt-4o", mini_model="gpt-4o-mini")
+
+    _ = [part async for part in llm.complete_stream([{"role": "user", "content": "hi"}], model="mini")]
+
+    assert client.chat.completions.create.call_args.kwargs["model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_complete_stream_falls_back_to_default_when_mini_not_configured() -> None:
+    client = _make_streaming_client("ok")
+    llm = OpenAILLM(client, model="gpt-4o")
+
+    _ = [part async for part in llm.complete_stream([{"role": "user", "content": "hi"}], model="mini")]
+
+    assert client.chat.completions.create.call_args.kwargs["model"] == "gpt-4o"

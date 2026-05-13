@@ -303,7 +303,7 @@ class IngestionPipeline:
             {"role": "user", "content": doc.text},
         ]
         try:
-            result = await step.llm.complete(messages)
+            result = await step.llm.complete(messages, model="mini")
             return result.get("content") or None
         except Exception:
             logger.exception(

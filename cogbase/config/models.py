@@ -16,6 +16,13 @@ class LLMConfig(ConfigPromptMixin, BaseModel):
         description="LLM provider to use."
     )
     model: str = Field(description="Model name to use for LLM calls.")
+    mini_model: str | None = Field(
+        default=None,
+        description=(
+            "Optional smaller/faster model for lightweight calls. "
+            "Callers request it via model='mini'; falls back to 'model' when unset."
+        ),
+    )
     api_key: str | None = Field(
         default=None,
         description="Optional API key. Falls back to OPENAI_API_KEY when omitted.",

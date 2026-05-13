@@ -48,10 +48,12 @@ class OpenAILLM(LLMBase):
         client: Any,
         model: str,
         *,
+        mini_model: str | None = None,
         reasoning_effort: ReasoningEffort | None = None,
     ) -> None:
         self._client = client
         self._model = model
+        self._mini_model = mini_model
         self._reasoning_effort = reasoning_effort
 
     async def complete(
@@ -62,6 +64,7 @@ class OpenAILLM(LLMBase):
         max_tokens: int | None = None,
         temperature: float | None = None,
         reasoning_effort: ReasoningEffort | None = None,
+        model: str | None = None,
     ) -> CompletionResult:
         kwargs = self._build_kwargs(
             messages=messages,
@@ -69,6 +72,7 @@ class OpenAILLM(LLMBase):
             max_tokens=max_tokens,
             temperature=temperature,
             reasoning_effort=reasoning_effort,
+            model=model,
             stream=False,
         )
         response = await self._client.chat.completions.create(**kwargs)
@@ -97,6 +101,7 @@ class OpenAILLM(LLMBase):
         max_tokens: int | None = None,
         temperature: float | None = None,
         reasoning_effort: ReasoningEffort | None = None,
+        model: str | None = None,
     ) -> AsyncGenerator[str | CompletionResult, None]:
         kwargs = self._build_kwargs(
             messages=messages,
@@ -104,6 +109,7 @@ class OpenAILLM(LLMBase):
             max_tokens=max_tokens,
             temperature=temperature,
             reasoning_effort=reasoning_effort,
+            model=model,
             stream=True,
         )
         stream = await self._client.chat.completions.create(**kwargs)
@@ -131,6 +137,11 @@ class OpenAILLM(LLMBase):
                 ],
             )
 
+    def _resolve_model(self, model: str | None) -> str:
+        if model == "mini":
+            return self._mini_model or self._model
+        return model or self._model
+
     def _build_kwargs(
         self,
         *,
@@ -139,10 +150,12 @@ class OpenAILLM(LLMBase):
         max_tokens: int | None,
         temperature: float | None,
         reasoning_effort: ReasoningEffort | None,
+        model: str | None,
         stream: bool,
     ) -> dict[str, Any]:
+        resolved_model = self._resolve_model(model)
         kwargs: dict[str, Any] = {
-            "model": self._model,
+            "model": resolved_model,
             "messages": messages,
             "stream": stream,
         }
@@ -160,7 +173,7 @@ class OpenAILLM(LLMBase):
             ]
         if max_tokens is not None:
             kwargs["max_completion_tokens"] = max_tokens
-        if temperature is not None and self._model not in _NO_TEMPERATURE_MODELS:
+        if temperature is not None and resolved_model not in _NO_TEMPERATURE_MODELS:
             kwargs["temperature"] = temperature
         effective_reasoning_effort = reasoning_effort or self._reasoning_effort
         if effective_reasoning_effort is not None:

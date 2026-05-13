@@ -16,7 +16,8 @@ document_store:
 
 llm:
   provider: openai
-  model: gpt-5.4-mini
+  model: gpt-5.5
+  mini_model: gpt-5.4-mini
   # api_key: sk-...          # omit to use OPENAI_API_KEY env var
 
 embedding:

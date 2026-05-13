@@ -83,12 +83,17 @@ class LLMBase(abc.ABC):
         max_tokens: int | None = None,
         temperature: float | None = None,
         reasoning_effort: ReasoningEffort | None = None,
+        model: str | None = None,
     ) -> CompletionResult:
         """Return one full completion for *messages*.
 
         When *tools* are provided the model may return tool calls instead of
         (or in addition to) text content.  Callers should check
         ``result["tool_calls"]`` before ``result["content"]``.
+
+        Pass ``model="mini"`` to use the configured mini model (falls back to
+        the default model when no mini model is configured).  Any other string
+        is used verbatim as the model name.
         """
 
     @abc.abstractmethod
@@ -100,6 +105,7 @@ class LLMBase(abc.ABC):
         max_tokens: int | None = None,
         temperature: float | None = None,
         reasoning_effort: ReasoningEffort | None = None,
+        model: str | None = None,
     ) -> AsyncGenerator[str | CompletionResult, None]:
         """Stream a completion for *messages*.
 
@@ -108,4 +114,8 @@ class LLMBase(abc.ABC):
         yielded at the end with ``tool_calls`` populated and ``content=None``.
         Callers should check ``isinstance(chunk, dict)`` (TypedDict) to
         distinguish the final result from text deltas.
+
+        Pass ``model="mini"`` to use the configured mini model (falls back to
+        the default model when no mini model is configured).  Any other string
+        is used verbatim as the model name.
         """

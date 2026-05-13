@@ -54,3 +54,15 @@ def test_build_llm_missing_openai_package_raises(monkeypatch):
     monkeypatch.setitem(sys.modules, "openai", None)
     with pytest.raises(ImportError, match="openai package required"):
         build_llm(_make_openai_cfg(api_key="sk-test"))
+
+
+def test_build_llm_passes_mini_model():
+    with patch("openai.AsyncOpenAI", return_value=MagicMock()):
+        llm = build_llm(LLMConfig(provider="openai", model="gpt-4o", mini_model="gpt-4o-mini", api_key="sk-test"))
+    assert llm._mini_model == "gpt-4o-mini"
+
+
+def test_build_llm_mini_model_none_when_not_configured():
+    with patch("openai.AsyncOpenAI", return_value=MagicMock()):
+        llm = build_llm(_make_openai_cfg(api_key="sk-test"))
+    assert llm._mini_model is None

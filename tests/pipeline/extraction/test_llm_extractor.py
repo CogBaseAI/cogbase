@@ -627,3 +627,19 @@ async def test_custom_item_id_field_records_have_no_item_id_attr():
 
     assert result is not None
     assert not hasattr(result[0], "item_id")
+
+
+# ---------------------------------------------------------------------------
+# Mini-model usage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extract_calls_llm_with_mini_model() -> None:
+    llm = _make_llm(_full_payload())
+    extractor = _make_extractor(llm)
+
+    await extractor.extract(Document(doc_id="doc-mini", text="contract text"))
+
+    llm.complete.assert_called_once()
+    assert llm.complete.call_args.kwargs.get("model") == "mini"
