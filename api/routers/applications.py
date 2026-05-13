@@ -105,9 +105,12 @@ def _resolve_file_refs(data: dict, files: dict[str, str]) -> None:
 def _serialize_config(config: AppConfig) -> str:
     # by_alias=True preserves "schema" as the YAML key (field name is schema_).
     # mode='json' so enums are serialized as their string values.
-    #   - model_dump(by_alias=True) returns Python enum objects (like RecordMode.ONE),
-    #   - so yaml.dump() serializes them with Python-specific tags.
-    return yaml.dump(config.model_dump(by_alias=True, mode="json"), allow_unicode=True, default_flow_style=False)
+    return yaml.dump(
+        config.model_dump(by_alias=True, mode="json", exclude_none=True),
+        allow_unicode=True,
+        default_flow_style=False,
+        sort_keys=False,
+    )
 
 
 def _parse_bundle(raw: bytes) -> tuple[str, AppConfig]:

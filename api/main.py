@@ -135,9 +135,16 @@ app.include_router(applications_router)
 app.include_router(generate_router)
 app.include_router(skills_router)
 
-_DEMO_UI = pathlib.Path(__file__).parent.parent / "examples" / "demo_ui.html"
+_EXAMPLES_DIR = pathlib.Path(__file__).parent.parent / "examples"
+_DEMO_UI = _EXAMPLES_DIR / "demo_ui.html"
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def demo_ui() -> HTMLResponse:
     return HTMLResponse(content=_DEMO_UI.read_text())
+
+
+@app.get("/examples/demos", include_in_schema=False)
+async def demo_catalog() -> dict:
+    from examples.gen_demos_json import build_catalog
+    return build_catalog()

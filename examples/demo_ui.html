@@ -167,6 +167,305 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 .page-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .page-hd h2 { font-size: 17px; font-weight: 600; }
 
+.demo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  gap: 14px;
+}
+.demo-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+}
+.demo-card h3 { font-size: 16px; font-weight: 600; }
+.demo-kicker { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.demo-desc { font-size: 13px; line-height: 1.5; color: var(--text); }
+.demo-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.demo-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 999px; font-size: 11px;
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+}
+.demo-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.demo-block {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.demo-block h4 {
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.demo-status {
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg2);
+  color: var(--muted);
+  font-size: 12px;
+}
+.demo-docs { display: flex; flex-direction: column; gap: 8px; }
+.demo-doc {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+}
+.demo-doc-hd { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.demo-doc-id { font-size: 12px; font-weight: 600; color: var(--text); }
+.demo-doc-meta { font-size: 11px; color: var(--muted); }
+.demo-doc-preview {
+  white-space: pre-wrap;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+  max-height: 120px;
+  overflow: auto;
+}
+.demo-doc-actions { margin-top: 8px; display: flex; justify-content: flex-end; }
+.doc-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 11, 22, 0.78);
+  backdrop-filter: blur(8px);
+  padding: 24px;
+}
+.doc-modal.show { display: flex; }
+.doc-modal-panel {
+  width: min(980px, 100%);
+  max-height: min(88vh, 980px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+}
+.doc-modal-hd {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.doc-modal-hd h3 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+.doc-modal-meta { font-size: 11px; color: var(--muted); }
+.doc-modal-close {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text);
+  cursor: pointer;
+}
+.doc-modal-close:hover { background: var(--border); }
+.doc-modal-body {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  min-height: 0;
+  flex: 1;
+}
+.doc-modal-side {
+  border-right: 1px solid var(--border);
+  padding: 16px 18px;
+  overflow: auto;
+  background: rgba(255,255,255,0.02);
+}
+.doc-modal-main {
+  padding: 16px 18px;
+  overflow: auto;
+  min-width: 0;
+}
+.doc-modal-side h4,
+.doc-modal-main h4 {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  margin-bottom: 8px;
+}
+.doc-modal-text {
+  white-space: pre-wrap;
+  font-family: 'SF Mono', 'Cascadia Code', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.doc-modal-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.doc-modal-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text);
+  font-size: 11px;
+}
+.doc-modal-kv { display: grid; grid-template-columns: 90px 1fr; gap: 8px 10px; font-size: 12px; }
+.doc-modal-kv div:nth-child(odd) { color: var(--muted); }
+.doc-modal-kv div:nth-child(even) { color: var(--text); word-break: break-word; }
+.config-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 11, 22, 0.78);
+  backdrop-filter: blur(8px);
+  padding: 24px;
+}
+.config-modal.show { display: flex; }
+.config-modal-panel {
+  width: min(1100px, 100%);
+  max-height: min(90vh, 1100px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+}
+.config-modal-hd {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.config-modal-hd h3 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+.config-modal-meta { font-size: 11px; color: var(--muted); }
+.config-modal-close {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text);
+  cursor: pointer;
+}
+.config-modal-close:hover { background: var(--border); }
+.config-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.config-modal-body {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  min-height: 0;
+  flex: 1;
+}
+.config-modal-side {
+  border-right: 1px solid var(--border);
+  padding: 16px 18px;
+  overflow: auto;
+  background: rgba(255,255,255,0.02);
+}
+.config-modal-main {
+  padding: 16px 18px;
+  overflow: auto;
+  min-width: 0;
+}
+.config-modal-side h4,
+.config-modal-main h4 {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  margin-bottom: 8px;
+}
+.config-modal-text {
+  font-family: 'SF Mono', 'Cascadia Code', monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.config-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.config-schema-block {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.config-schema-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg3);
+}
+.config-schema-key {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.config-schema-type {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+}
+.config-schema-body {
+  margin: 0;
+  padding: 12px;
+  white-space: pre;
+  overflow: auto;
+  color: var(--text);
+}
+.config-modal-list { display: flex; flex-direction: column; gap: 8px; }
+.config-modal-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg3);
+}
+.config-modal-item-label { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin-bottom: 4px; }
+.config-modal-item-value { font-size: 12px; line-height: 1.45; color: var(--text); word-break: break-word; }
+.demo-pre {
+  font-family: 'SF Mono', 'Cascadia Code', monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  max-height: 220px;
+  overflow: auto;
+}
+
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
 td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
@@ -347,6 +646,7 @@ tr:hover td { background: var(--bg3); }
 <nav>
   <button class="active" onclick="switchTab('build', this)">Build</button>
   <button onclick="switchTab('apps', this)">Apps</button>
+  <button onclick="switchTab('demos', this)">Demos</button>
   <button onclick="switchTab('ingest', this)">Ingest</button>
   <button onclick="switchTab('data', this)">Data</button>
   <button onclick="switchTab('query', this)">Query</button>
@@ -405,6 +705,72 @@ tr:hover td { background: var(--bg3); }
       </div>
       <div id="appsBody">
         <div class="empty"><p>Click Refresh to load apps.</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════ DEMOS TAB ════════════════ -->
+  <div class="panel" id="panel-demos">
+    <div class="page">
+      <div class="page-hd">
+        <div>
+          <h2>Prebuilt Demos</h2>
+          <p class="sub" style="margin:6px 0 0">Deploy a bundled app, ingest its example documents, then switch to Query.</p>
+        </div>
+        <button class="btn btn-ghost" onclick="loadDemos()">⟳ Refresh</button>
+      </div>
+      <div id="demoStatus" class="demo-status">Select a demo to deploy and ingest.</div>
+      <div id="demoBody">
+        <div class="empty"><p>Click Refresh to load the prebuilt demo catalog.</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="doc-modal" id="docModal" onclick="if (event.target === this) closeDocModal()">
+    <div class="doc-modal-panel" role="dialog" aria-modal="true" aria-labelledby="docModalTitle">
+      <div class="doc-modal-hd">
+        <div>
+          <h3 id="docModalTitle">Document</h3>
+          <div class="doc-modal-meta" id="docModalMeta"></div>
+        </div>
+        <button class="doc-modal-close" onclick="closeDocModal()" aria-label="Close document viewer">✕</button>
+      </div>
+      <div class="doc-modal-body">
+        <div class="doc-modal-side">
+          <h4>Metadata</h4>
+          <div class="doc-modal-tags" id="docModalTags"></div>
+          <div class="doc-modal-kv" id="docModalKv"></div>
+        </div>
+        <div class="doc-modal-main">
+          <h4>Full Content</h4>
+          <pre class="doc-modal-text" id="docModalText"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="config-modal" id="configModal" onclick="if (event.target === this) closeConfigModal()">
+    <div class="config-modal-panel" role="dialog" aria-modal="true" aria-labelledby="configModalTitle">
+      <div class="config-modal-hd">
+        <div>
+          <h3 id="configModalTitle">Config</h3>
+          <div class="config-modal-meta" id="configModalMeta"></div>
+        </div>
+        <div class="config-modal-actions">
+          <button class="btn btn-ghost btn-sm" id="configModalViewBtn" onclick="toggleConfigModalView()"
+            style="font-size:10px;padding:2px 7px">simplified</button>
+          <button class="config-modal-close" onclick="closeConfigModal()" aria-label="Close config viewer">✕</button>
+        </div>
+      </div>
+      <div class="config-modal-body">
+        <div class="config-modal-side">
+          <h4>Overview</h4>
+          <div class="config-modal-list" id="configModalSummary"></div>
+        </div>
+        <div class="config-modal-main">
+          <h4>Full Config</h4>
+          <div class="config-modal-text" id="configModalText"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -514,8 +880,11 @@ let currentApp    = '';
 let buildHistory  = [];   // [{role, content}] sent to /generate/chat/stream
 let buildCfgYaml  = null; // last validated config yaml
 let cfgSimplified = true; // show simplified extraction schemas by default
+let configModalYaml      = null; // yaml shown in the config modal (demos tab)
+let configModalSimplified = true;
 let queryHistory  = [];   // [{role, content}] for query session
 let pickedFiles   = [];   // File objects
+let demoCatalog   = [];   // prebuilt demo apps loaded from /examples/demos
 let building      = false;
 let querying      = false;
 
@@ -528,8 +897,14 @@ function switchTab(name, btn) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
-  btn.classList.add('active');
+  if (!btn) {
+    btn = Array.from(document.querySelectorAll('nav button')).find(b => {
+      return (b.getAttribute('onclick') || '').includes(`switchTab('${name}'`);
+    });
+  }
+  if (btn) btn.classList.add('active');
   if (name === 'apps') loadApps();
+  if (name === 'demos') loadDemos();
   if (name === 'data') loadData();
   refreshWarnings();
 }
@@ -774,6 +1149,251 @@ async function confirmDelete(name) {
       alert('Delete failed: ' + resp.statusText);
     }
   } catch (e) { alert('Error: ' + e.message); }
+}
+
+// ════════════════════════════════════════════════════════════
+// DEMOS TAB
+// ════════════════════════════════════════════════════════════
+function previewText(text, maxLines = 6, maxChars = 320) {
+  const lines = String(text || '').trim().split(/\r?\n/);
+  let out = lines.slice(0, maxLines).join('\n');
+  if (lines.length > maxLines) out += '\n…';
+  if (out.length > maxChars) out = out.slice(0, maxChars) + '…';
+  return out;
+}
+
+function metaText(meta) {
+  const entries = Object.entries(meta || {});
+  if (!entries.length) return 'no metadata';
+  return entries.map(([k, v]) => `${k}: ${v}`).join(' • ');
+}
+
+function renderDemoCard(demo) {
+  const docs = (demo.docs || []).map(doc => `
+    <div class="demo-doc">
+      <div class="demo-doc-hd">
+        <div class="demo-doc-id">${esc(doc.doc_id)}</div>
+        <div class="demo-doc-meta">${esc(metaText(doc.metadata))}</div>
+      </div>
+      <div class="demo-doc-preview">${esc(previewText(doc.text))}</div>
+      <div class="demo-doc-actions">
+        <button class="btn btn-ghost btn-sm" onclick="openDocModalByRef('${esc(demo.key)}', '${esc(doc.doc_id)}')">View full text</button>
+      </div>
+    </div>`).join('');
+
+  const examples = (demo.query_examples || []).map(q => `<span class="demo-badge">${esc(q)}</span>`).join('');
+  const configPreview = previewText(demo.config_yaml || '', 18, 1600);
+
+  return `
+    <div class="demo-card" data-demo-key="${esc(demo.key)}">
+      <div>
+        <div class="demo-kicker">${esc(demo.name)}</div>
+        <h3>${esc(demo.title)}</h3>
+      </div>
+      <div class="demo-desc">${esc(demo.description)}</div>
+      ${demo.notes ? `<div class="demo-desc" style="color:var(--muted)">${esc(demo.notes)}</div>` : ''}
+      <div class="demo-badges">
+        <span class="demo-badge">App: ${esc(demo.name)}</span>
+        <span class="demo-badge">${(demo.docs || []).length} docs</span>
+      </div>
+      <div class="demo-actions">
+        <button class="btn btn-green" id="demoDeployBtn-${esc(demo.key)}" onclick="deployDemo('${esc(demo.key)}')">Deploy &amp; Ingest</button>
+        <button class="btn btn-ghost" onclick="openConfigModalByRef('${esc(demo.key)}')">View full config</button>
+      </div>
+      <div class="demo-block">
+        <h4>Query ideas</h4>
+        <div class="demo-badges">${examples || '<span class="demo-badge">Use Query after ingestion</span>'}</div>
+      </div>
+      <div class="demo-block">
+        <h4>Documents</h4>
+        <div class="demo-docs">${docs}</div>
+      </div>
+      <div class="demo-block">
+        <h4>Config preview</h4>
+        <pre class="demo-pre">${esc(configPreview)}</pre>
+      </div>
+    </div>`;
+}
+
+function setDemoStatus(text, error = false) {
+  const el = document.getElementById('demoStatus');
+  if (!el) return;
+  el.style.color = error ? 'var(--red)' : 'var(--muted)';
+  el.textContent = text;
+}
+
+function openDocModal(doc) {
+  const modal = document.getElementById('docModal');
+  document.getElementById('docModalTitle').textContent = doc.docId || 'Document';
+  document.getElementById('docModalMeta').textContent = (doc.demoName ? doc.demoName + ' • ' : '') + (doc.demoKey || '');
+
+  const tags = document.getElementById('docModalTags');
+  const meta = doc.meta || {};
+  const tagHtml = [];
+  if (doc.demoName) tagHtml.push(`<span class="doc-modal-tag">App: ${esc(doc.demoName)}</span>`);
+  if (doc.docId) tagHtml.push(`<span class="doc-modal-tag">Doc: ${esc(doc.docId)}</span>`);
+  for (const [k, v] of Object.entries(meta)) {
+    tagHtml.push(`<span class="doc-modal-tag">${esc(k)}: ${esc(String(v))}</span>`);
+  }
+  tags.innerHTML = tagHtml.join('');
+
+  const kv = document.getElementById('docModalKv');
+  kv.innerHTML = `
+    <div>Document</div><div>${esc(doc.docId || '—')}</div>
+    <div>Demo</div><div>${esc(doc.demoName || '—')}</div>
+    <div>Metadata</div><div>${esc(metaText(meta))}</div>
+  `;
+
+  document.getElementById('docModalText').textContent = doc.text || '';
+  modal.classList.add('show');
+}
+
+
+function openDocModalByRef(demoKey, docId) {
+  const demo = demoCatalog.find(d => d.key === demoKey);
+  if (!demo) return;
+  const doc = (demo.docs || []).find(d => d.doc_id === docId);
+  if (!doc) return;
+  openDocModal({
+    demoKey: demo.key,
+    demoName: demo.name,
+    docId: doc.doc_id,
+    meta: doc.metadata || {},
+    text: doc.text || '',
+  });
+}
+
+function closeDocModal() {
+  const modal = document.getElementById('docModal');
+  if (modal) modal.classList.remove('show');
+}
+
+function openConfigModalByRef(demoKey) {
+  const demo = demoCatalog.find(d => d.key === demoKey);
+  if (!demo) return;
+
+  document.getElementById('configModalTitle').textContent = demo.title + ' Config';
+  document.getElementById('configModalMeta').textContent = demo.name + ' • ' + ((demo.docs || []).length + ' docs');
+  const summary = document.getElementById('configModalSummary');
+  summary.innerHTML = `
+    <div class="config-modal-item">
+      <div class="config-modal-item-label">App</div>
+      <div class="config-modal-item-value">${esc(demo.name)}</div>
+    </div>
+    <div class="config-modal-item">
+      <div class="config-modal-item-label">Description</div>
+      <div class="config-modal-item-value">${esc(demo.description || '—')}</div>
+    </div>
+    <div class="config-modal-item">
+      <div class="config-modal-item-label">Documents</div>
+      <div class="config-modal-item-value">${esc(String((demo.docs || []).length))}</div>
+    </div>
+    <div class="config-modal-item">
+      <div class="config-modal-item-label">Query ideas</div>
+      <div class="config-modal-item-value">${esc((demo.query_examples || []).join(' | ') || '—')}</div>
+    </div>
+  `;
+
+  configModalYaml = demo.config_yaml || '';
+  configModalSimplified = true;
+  document.getElementById('configModalViewBtn').textContent = 'simplified';
+  renderConfigModalPre();
+  document.getElementById('configModal').classList.add('show');
+}
+
+function closeConfigModal() {
+  const modal = document.getElementById('configModal');
+  if (modal) modal.classList.remove('show');
+}
+
+function syncConfigViews() {
+  const buildBtn = document.getElementById('cfgViewBtn');
+  if (buildBtn) buildBtn.textContent = cfgSimplified ? 'simplified' : 'raw';
+  renderCfgPre();
+}
+
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') closeDocModal();
+  if (e.key === 'Escape') closeConfigModal();
+});
+
+async function loadDemos() {
+  const body = document.getElementById('demoBody');
+  body.innerHTML = '<div class="empty"><p><span class="spinning">⟳</span> Loading demo catalog…</p></div>';
+  try {
+    const resp = await fetch(api() + '/examples/demos');
+    if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText);
+    const data = await resp.json();
+    demoCatalog = data.demos || [];
+    if (!demoCatalog.length) {
+      body.innerHTML = '<div class="empty"><p>No demo apps returned by the API.</p></div>';
+      return;
+    }
+    body.innerHTML = `<div class="demo-grid">${demoCatalog.map(renderDemoCard).join('')}</div>`;
+  } catch (e) {
+    body.innerHTML = `<div class="empty"><p style="color:var(--red)">Failed: ${esc(e.message)}</p></div>`;
+  }
+}
+
+async function deployDemo(key) {
+  const demo = demoCatalog.find(d => d.key === key);
+  if (!demo) return;
+
+  const btn = document.getElementById('demoDeployBtn-' + key);
+  const original = btn ? btn.textContent : '';
+  if (btn) btn.disabled = true;
+  if (btn) btn.textContent = 'Working…';
+
+  setDemoStatus('Deploying "' + demo.title + '"...');
+
+  try {
+    const appResp = await fetch(api() + '/applications/' + encodeURIComponent(demo.name));
+    if (appResp.ok) {
+      const app = await appResp.json();
+      if (app.status !== 'active') {
+        throw new Error('Existing app "' + demo.name + '" is not active.');
+      }
+    } else if (appResp.status !== 404) {
+      throw new Error('Failed to check app state: ' + appResp.status + ' ' + appResp.statusText);
+    } else {
+      const deployResp = await fetch(api() + '/generate/deploy', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ config_yaml: demo.config_yaml }),
+      });
+      const deployData = await deployResp.json();
+      if (!deployResp.ok) {
+        throw new Error(deployData.detail || deployResp.statusText);
+      }
+      if (deployData.status !== 'active') {
+        throw new Error('Deploy status: ' + deployData.status + (deployData.error ? ' — ' + deployData.error : ''));
+      }
+    }
+
+    const ingestResp = await fetch(api() + '/applications/' + encodeURIComponent(demo.name) + '/ingest_documents', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ documents: demo.docs, concurrency: 4 }),
+    });
+    const ingestData = await ingestResp.json();
+    if (!ingestResp.ok) {
+      throw new Error(ingestData.detail || ingestResp.statusText);
+    }
+
+    const okCount = (ingestData.results || []).filter(r => r.success).length;
+    setDemoStatus('✓ "' + demo.title + '" is deployed and ' + okCount + ' document batch(es) were ingested.');
+    setApp(demo.name);
+    loadApps();
+    loadData();
+    switchTab('query');
+  } catch (e) {
+    setDemoStatus('Demo failed: ' + e.message, true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = original || 'Deploy & Ingest';
+    }
+  }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1083,7 +1703,12 @@ async function selectCollection(name) {
 // Utilities
 // ════════════════════════════════════════════════════════════
 function esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
 }
 
 function autoResize(el) {
@@ -1095,19 +1720,32 @@ function autoResize(el) {
 // Config panel — simplified schema view
 // ════════════════════════════════════════════════════════════
 function schemaTypeStr(def) {
-  if (def.anyOf) return def.anyOf.map(t => t.type || '?').filter(Boolean).join('|');
-  if (def.type === 'array') return 'list[' + ((def.items && def.items.type) || 'object') + ']';
+  if (def.$ref) return def.$ref.split('/').pop();
+  if (def.anyOf) {
+    var parts = def.anyOf.map(function(t) {
+      return t.$ref ? t.$ref.split('/').pop() : t.type || null;
+    }).filter(Boolean).filter(function(t) { return t !== 'null'; });
+    return parts.join('|') || '?';
+  }
+  if (def.type === 'array') {
+    var items = def.items || {};
+    var itemType = items.$ref ? items.$ref.split('/').pop() : (items.type || 'object');
+    return 'list[' + itemType + ']';
+  }
   return def.type || '?';
 }
 
 function simplifyExtractionSchemas(yamlText) {
   // Match:  extraction_schema: 'json...'  or  "json..."
+  // The value may be a YAML multiline single-quoted scalar (newline + indent = space).
   return yamlText.replace(
-    /^([ \t]*)(extraction_schema:)([ \t]*)('[^']*'|"(?:[^"\\]|\\.)*")/gm,
+    /^([ \t]*)(extraction_schema:|schema:)([ \t]*)('(?:[^']|'')*'|"(?:[^"\\]|\\.)*")/gm,
     function(match, indent, key, _sp, quoted) {
-      var jsonStr = quoted.slice(1, -1);
+      var inner = quoted.slice(1, -1);
+      // Fold YAML single-quoted scalar line continuations: \n<whitespace> → space
+      if (quoted[0] === "'") inner = inner.replace(/\n[ \t]*/g, ' ').replace(/''/g, "'");
       try {
-        var schema = JSON.parse(jsonStr);
+        var schema = JSON.parse(inner);
         var props = schema.properties || {};
         var entries = Object.entries(props);
         if (!entries.length) return match;
@@ -1133,8 +1771,20 @@ function renderCfgPre() {
 
 function toggleCfgView() {
   cfgSimplified = !cfgSimplified;
-  document.getElementById('cfgViewBtn').textContent = cfgSimplified ? 'simplified' : 'raw';
-  renderCfgPre();
+  syncConfigViews();
+}
+
+function renderConfigModalPre() {
+  if (!configModalYaml) return;
+  const text = configModalSimplified ? simplifyExtractionSchemas(configModalYaml) : configModalYaml;
+  document.getElementById('configModalText').innerHTML =
+    `<pre style="white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.5">${esc(text)}</pre>`;
+}
+
+function toggleConfigModalView() {
+  configModalSimplified = !configModalSimplified;
+  document.getElementById('configModalViewBtn').textContent = configModalSimplified ? 'simplified' : 'raw';
+  renderConfigModalPre();
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1147,24 +1797,23 @@ const _SAMPLE_CONFIG_YAML = `name: contract-analyst
 vector_collections:
   - name: contract_chunks
     description: >
-      Full-text passage index across all contract documents. Use for detailed
-      questions about specific clauses, obligations, or terms.
+      Full-text passage index across all contract documents.
 
 structured_collections:
   - name: contracts
     description: >
-      Extracted structured facts from each contract. Use for exact lookups and cross-contract comparisons.
+      Extracted structured facts from each contract.
     schema: '{"type":"object","properties":{"contract_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"type of contract, e.g. NDA, SaaS, employment, vendor, lease"},"purpose":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"one sentence describing what the contract is for"},"effective_date":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"start date in YYYY-MM-DD format"},"expiry_date":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"end/expiry date in YYYY-MM-DD format"},"parties":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","description":"full legal name of the party"},"role":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"role in the contract"},"jurisdiction":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"state or country of incorporation"}}},"description":"all named parties to the contract","default":[]},"contract_value":{"anyOf":[{"type":"number"},{"type":"null"}],"description":"total monetary value as a number (no currency symbol)"},"currency":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"ISO 4217 currency code, e.g. USD"},"payment_terms":{"anyOf":[{"type":"object","properties":{"schedule":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"payment schedule"},"due_date":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"specific payment due date"},"late_penalty":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"penalty for late payment"},"verbatim":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim payment terms clause"}}},{"type":"null"}],"description":"structured payment terms extracted from the contract"},"termination":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim termination clause"},"liability":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim limitation of liability clause"},"governing_law":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim governing law clause"},"confidentiality":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim confidentiality clause"},"indemnification":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim indemnification clause"},"dispute_resolution":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim dispute resolution clause"},"notice_period_days":{"anyOf":[{"type":"integer"},{"type":"null"}],"description":"integer days required for termination notice"},"liability_cap":{"anyOf":[{"type":"number"},{"type":"null"}],"description":"liability cap amount as a number"},"key_terms":{"type":"array","items":{"type":"string"},"description":"significant defined terms or unusual provisions not covered above","default":[]},"special_conditions":{"type":"array","items":{"type":"string"},"description":"verbatim conditions precedent, carve-outs, or anything unusual","default":[]},"doc_id":{"type":"string","description":"document identifier"}},"required":["doc_id"]}'
     primary_fields: [doc_id]
 
 pipelines:
-  - name: default
-    routing_description: Legal contracts of any type including NDAs, SaaS agreements, employment contracts, vendor agreements, and leases.
+  - name: contracts
+    routing_description: >
+      Any contract document — vendor agreements, service contracts, NDAs, or
+      similar legal agreements to be analyzed for key facts and entities.
     steps:
       - tool: chunk-embed-upsert
         collection: contract_chunks
-        chunker:
-          type: langchain
 
       - tool: extract-structured
         collection: contracts
@@ -1172,9 +1821,16 @@ pipelines:
           type: llm
           extraction_schema: '{"type":"object","properties":{"contract_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"type of contract, e.g. NDA, SaaS, employment, vendor, lease"},"purpose":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"one sentence describing what the contract is for"},"effective_date":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"start date in YYYY-MM-DD format"},"expiry_date":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"end/expiry date in YYYY-MM-DD format"},"parties":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","description":"full legal name of the party"},"role":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"role in the contract"},"jurisdiction":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"state or country of incorporation"}}},"description":"all named parties to the contract","default":[]},"contract_value":{"anyOf":[{"type":"number"},{"type":"null"}],"description":"total monetary value as a number (no currency symbol)"},"currency":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"ISO 4217 currency code, e.g. USD"},"payment_terms":{"anyOf":[{"type":"object","properties":{"schedule":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"payment schedule"},"due_date":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"specific payment due date"},"late_penalty":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"penalty for late payment"},"verbatim":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim payment terms clause"}}},{"type":"null"}],"description":"structured payment terms extracted from the contract"},"termination":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim termination clause"},"liability":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim limitation of liability clause"},"governing_law":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim governing law clause"},"confidentiality":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim confidentiality clause"},"indemnification":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim indemnification clause"},"dispute_resolution":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim dispute resolution clause"},"notice_period_days":{"anyOf":[{"type":"integer"},{"type":"null"}],"description":"integer days required for termination notice"},"liability_cap":{"anyOf":[{"type":"number"},{"type":"null"}],"description":"liability cap amount as a number"},"key_terms":{"type":"array","items":{"type":"string"},"description":"significant defined terms or unusual provisions not covered above","default":[]},"special_conditions":{"type":"array","items":{"type":"string"},"description":"verbatim conditions precedent, carve-outs, or anything unusual","default":[]}}}'
           prompt: >
-            You are a legal contract analyst. Extract structured facts from the
-            contract. Use null for any field not present in the document.
-            Return ONLY the JSON object.
+            You are a legal contract analyst. Extract structured information from the
+            contract provided by the user.
+
+            Rules:
+            - Copy all clause text verbatim — do not paraphrase or summarise.
+            - Do not invent information not present in the contract.
+            - Use null for any field not found in the contract.
+            - Return ONLY the JSON object — no explanation, no markdown fences.
+
+            Return a single JSON object with these fields:
 `;
 */
 
