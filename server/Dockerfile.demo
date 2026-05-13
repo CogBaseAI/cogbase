@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 RUN mkdir -p cogbase && touch cogbase/__init__.py
-RUN pip install --no-cache-dir ".[api,faiss,langchain]"
+RUN pip install --no-cache-dir ".[demo]"
 
 COPY . .
 

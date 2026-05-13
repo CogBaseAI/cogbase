@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import pathlib
 import sys
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 from cogbase.config.config import AppConfig
 from api.factory import build_app
@@ -132,3 +134,10 @@ app.add_middleware(
 app.include_router(applications_router)
 app.include_router(generate_router)
 app.include_router(skills_router)
+
+_DEMO_UI = pathlib.Path(__file__).parent.parent / "examples" / "demo_ui.html"
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def demo_ui() -> HTMLResponse:
+    return HTMLResponse(content=_DEMO_UI.read_text())

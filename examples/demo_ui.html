@@ -87,6 +87,7 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
   border-left: 1px solid var(--border);
   background: var(--bg2); display: flex; flex-direction: column;
 }
+#buildAside { border-left: none; }
 .aside-hd {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 14px; border-bottom: 1px solid var(--border);
@@ -141,6 +142,16 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 .btn-red  { background: transparent; color: var(--red); border: 1px solid var(--red); }
 .btn-red:hover:not(:disabled)  { background: rgba(239,68,68,.1); }
 .btn-sm { padding: 5px 10px; font-size: 12px; }
+
+/* ── Build aside resizer ── */
+.build-resizer {
+  width: 5px; flex-shrink: 0; cursor: col-resize;
+  background: transparent;
+  border-left: 1px solid var(--border);
+  transition: background .15s;
+  position: relative; z-index: 1;
+}
+.build-resizer:hover, .build-resizer.dragging { background: var(--accent); border-color: var(--accent); }
 
 /* ── Config preview ── */
 .cfg-pre {
@@ -361,11 +372,18 @@ tr:hover td { background: var(--bg3); }
         </div>
       </div>
 
+      <!-- Drag handle -->
+      <div class="build-resizer" id="buildResizer"></div>
+
       <!-- Config aside -->
-      <div class="chat-aside">
+      <div class="chat-aside" id="buildAside">
         <div class="aside-hd">
           <h3>Generated Config</h3>
-          <span id="cfgStatus" style="font-size:11px;color:var(--muted)">—</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="cfgStatus" style="font-size:11px;color:var(--muted)">—</span>
+            <button class="btn btn-ghost btn-sm" id="cfgViewBtn" onclick="toggleCfgView()"
+              style="display:none;font-size:10px;padding:2px 7px">simplified</button>
+          </div>
         </div>
         <div class="aside-body">
           <pre class="cfg-pre" id="cfgPre">No config yet — keep chatting.</pre>
@@ -495,6 +513,7 @@ tr:hover td { background: var(--bg3); }
 let currentApp    = '';
 let buildHistory  = [];   // [{role, content}] sent to /generate/chat/stream
 let buildCfgYaml  = null; // last validated config yaml
+let cfgSimplified = true; // show simplified extraction schemas by default
 let queryHistory  = [];   // [{role, content}] for query session
 let pickedFiles   = [];   // File objects
 let building      = false;
@@ -641,7 +660,8 @@ async function sendBuild() {
 
     if (cfgYaml) {
       buildCfgYaml = cfgYaml;
-      document.getElementById('cfgPre').textContent    = cfgYaml;
+      renderCfgPre();
+      document.getElementById('cfgViewBtn').style.display = '';
       document.getElementById('cfgStatus').textContent = 'Ready';
       document.getElementById('deployBtn').disabled    = false;
       sysMsg('buildMsgs', '✓ Config ready — click "Deploy App" to activate it.');
@@ -656,12 +676,23 @@ async function sendBuild() {
 }
 
 function resetBuild() {
-  buildHistory = []; buildCfgYaml = null;
+  buildHistory = []; cfgSimplified = true;
   document.getElementById('buildMsgs').innerHTML =
     '<div class="msg sys"><div class="msg-body">Describe the app you want to build — documents, facts to extract, kinds of questions you\'ll ask. The AI will guide you through schema design and produce a deployable config.</div></div>';
-  document.getElementById('cfgPre').textContent    = 'No config yet — keep chatting.';
-  document.getElementById('cfgStatus').textContent = '—';
-  document.getElementById('deployBtn').disabled    = true;
+  document.getElementById('cfgViewBtn').textContent = 'simplified';
+  if (_SAMPLE_CONFIG_YAML.trim()) {
+    buildCfgYaml = _SAMPLE_CONFIG_YAML;
+    renderCfgPre();
+    document.getElementById('cfgViewBtn').style.display = '';
+    document.getElementById('cfgStatus').textContent = 'Sample';
+    document.getElementById('deployBtn').disabled = false;
+  } else {
+    buildCfgYaml = null;
+    document.getElementById('cfgPre').textContent    = 'No config yet — keep chatting.';
+    document.getElementById('cfgStatus').textContent = '—';
+    document.getElementById('cfgViewBtn').style.display = 'none';
+    document.getElementById('deployBtn').disabled    = true;
+  }
 }
 
 async function deployApp() {
@@ -1060,8 +1091,135 @@ function autoResize(el) {
   el.style.height = Math.min(el.scrollHeight, 110) + 'px';
 }
 
-// Boot
+// ════════════════════════════════════════════════════════════
+// Config panel — simplified schema view
+// ════════════════════════════════════════════════════════════
+function schemaTypeStr(def) {
+  if (def.anyOf) return def.anyOf.map(t => t.type || '?').filter(Boolean).join('|');
+  if (def.type === 'array') return 'list[' + ((def.items && def.items.type) || 'object') + ']';
+  return def.type || '?';
+}
+
+function simplifyExtractionSchemas(yamlText) {
+  // Match:  extraction_schema: 'json...'  or  "json..."
+  return yamlText.replace(
+    /^([ \t]*)(extraction_schema:)([ \t]*)('[^']*'|"(?:[^"\\]|\\.)*")/gm,
+    function(match, indent, key, _sp, quoted) {
+      var jsonStr = quoted.slice(1, -1);
+      try {
+        var schema = JSON.parse(jsonStr);
+        var props = schema.properties || {};
+        var entries = Object.entries(props);
+        if (!entries.length) return match;
+        var fieldLines = entries.map(function(pair) {
+          var name = pair[0], def = pair[1];
+          var t = schemaTypeStr(def);
+          var d = def.description
+            ? ' — ' + (def.description.length > 60 ? def.description.slice(0, 60) + '…' : def.description)
+            : '';
+          return indent + '#   ' + name + ': ' + t + d;
+        }).join('\n');
+        return indent + key + '  # ' + entries.length + ' fields\n' + fieldLines;
+      } catch(_) { return match; }
+    }
+  );
+}
+
+function renderCfgPre() {
+  if (!buildCfgYaml) return;
+  document.getElementById('cfgPre').textContent =
+    cfgSimplified ? simplifyExtractionSchemas(buildCfgYaml) : buildCfgYaml;
+}
+
+function toggleCfgView() {
+  cfgSimplified = !cfgSimplified;
+  document.getElementById('cfgViewBtn').textContent = cfgSimplified ? 'simplified' : 'raw';
+  renderCfgPre();
+}
+
+// ════════════════════════════════════════════════════════════
+// Boot — load sample config so the panel is visible without a server
+// ════════════════════════════════════════════════════════════
+const _SAMPLE_CONFIG_YAML = '';
+/*
+const _SAMPLE_CONFIG_YAML = `name: contract-analyst
+
+vector_collections:
+  - name: contract_chunks
+    description: >
+      Full-text passage index across all contract documents. Use for detailed
+      questions about specific clauses, obligations, or terms.
+
+structured_collections:
+  - name: contracts
+    description: >
+      Extracted structured facts from each contract. Use for exact lookups and cross-contract comparisons.
+    schema: '{"type":"object","properties":{"contract_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"type of contract, e.g. NDA, SaaS, employment, vendor, lease"},"purpose":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"one sentence describing what the contract is for"},"effective_date":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"start date in YYYY-MM-DD format"},"expiry_date":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"end/expiry date in YYYY-MM-DD format"},"parties":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","description":"full legal name of the party"},"role":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"role in the contract"},"jurisdiction":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"state or country of incorporation"}}},"description":"all named parties to the contract","default":[]},"contract_value":{"anyOf":[{"type":"number"},{"type":"null"}],"description":"total monetary value as a number (no currency symbol)"},"currency":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"ISO 4217 currency code, e.g. USD"},"payment_terms":{"anyOf":[{"type":"object","properties":{"schedule":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"payment schedule"},"due_date":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"specific payment due date"},"late_penalty":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"penalty for late payment"},"verbatim":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim payment terms clause"}}},{"type":"null"}],"description":"structured payment terms extracted from the contract"},"termination":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim termination clause"},"liability":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim limitation of liability clause"},"governing_law":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim governing law clause"},"confidentiality":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim confidentiality clause"},"indemnification":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim indemnification clause"},"dispute_resolution":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim dispute resolution clause"},"notice_period_days":{"anyOf":[{"type":"integer"},{"type":"null"}],"description":"integer days required for termination notice"},"liability_cap":{"anyOf":[{"type":"number"},{"type":"null"}],"description":"liability cap amount as a number"},"key_terms":{"type":"array","items":{"type":"string"},"description":"significant defined terms or unusual provisions not covered above","default":[]},"special_conditions":{"type":"array","items":{"type":"string"},"description":"verbatim conditions precedent, carve-outs, or anything unusual","default":[]},"doc_id":{"type":"string","description":"document identifier"}},"required":["doc_id"]}'
+    primary_fields: [doc_id]
+
+pipelines:
+  - name: default
+    routing_description: Legal contracts of any type including NDAs, SaaS agreements, employment contracts, vendor agreements, and leases.
+    steps:
+      - tool: chunk-embed-upsert
+        collection: contract_chunks
+        chunker:
+          type: langchain
+
+      - tool: extract-structured
+        collection: contracts
+        extractor:
+          type: llm
+          extraction_schema: '{"type":"object","properties":{"contract_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"type of contract, e.g. NDA, SaaS, employment, vendor, lease"},"purpose":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"one sentence describing what the contract is for"},"effective_date":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"start date in YYYY-MM-DD format"},"expiry_date":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"end/expiry date in YYYY-MM-DD format"},"parties":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","description":"full legal name of the party"},"role":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"role in the contract"},"jurisdiction":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"state or country of incorporation"}}},"description":"all named parties to the contract","default":[]},"contract_value":{"anyOf":[{"type":"number"},{"type":"null"}],"description":"total monetary value as a number (no currency symbol)"},"currency":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"ISO 4217 currency code, e.g. USD"},"payment_terms":{"anyOf":[{"type":"object","properties":{"schedule":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"payment schedule"},"due_date":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"specific payment due date"},"late_penalty":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"penalty for late payment"},"verbatim":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim payment terms clause"}}},{"type":"null"}],"description":"structured payment terms extracted from the contract"},"termination":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim termination clause"},"liability":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim limitation of liability clause"},"governing_law":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim governing law clause"},"confidentiality":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim confidentiality clause"},"indemnification":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim indemnification clause"},"dispute_resolution":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"verbatim dispute resolution clause"},"notice_period_days":{"anyOf":[{"type":"integer"},{"type":"null"}],"description":"integer days required for termination notice"},"liability_cap":{"anyOf":[{"type":"number"},{"type":"null"}],"description":"liability cap amount as a number"},"key_terms":{"type":"array","items":{"type":"string"},"description":"significant defined terms or unusual provisions not covered above","default":[]},"special_conditions":{"type":"array","items":{"type":"string"},"description":"verbatim conditions precedent, carve-outs, or anything unusual","default":[]}}}'
+          prompt: >
+            You are a legal contract analyst. Extract structured facts from the
+            contract. Use null for any field not present in the document.
+            Return ONLY the JSON object.
+`;
+*/
+
+if (_SAMPLE_CONFIG_YAML.trim()) {
+  buildCfgYaml = _SAMPLE_CONFIG_YAML;
+  renderCfgPre();
+  document.getElementById('cfgViewBtn').style.display = '';
+  document.getElementById('cfgStatus').textContent = 'Sample';
+  document.getElementById('deployBtn').disabled = false;
+}
+
 refreshWarnings();
+
+// ── Build-aside drag-to-resize ──────────────────────────────
+(function () {
+  const resizer = document.getElementById('buildResizer');
+  const aside   = document.getElementById('buildAside');
+  const MIN_ASIDE = 200, MAX_ASIDE = 800;
+  let startX, startW;
+
+  resizer.addEventListener('mousedown', e => {
+    startX = e.clientX;
+    startW = aside.getBoundingClientRect().width;
+    resizer.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function onMove(e) {
+      const delta = startX - e.clientX;          // drag left → delta > 0 → wider
+      const newW  = Math.min(MAX_ASIDE, Math.max(MIN_ASIDE, startW + delta));
+      aside.style.width = newW + 'px';
+    }
+
+    function onUp() {
+      resizer.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+    }
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+  });
+})();
 </script>
 </body>
 </html>
