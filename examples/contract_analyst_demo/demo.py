@@ -14,17 +14,7 @@ Set COGBASE_API_URL to override the default http://localhost:8000.
 
 Commands (interactive loop)
 ---------------------------
-    /list                       List all applications
-    /create                     Create the contract-analyst application
-    /delete <name>              Delete an application by name
-    /ingest_saas                Ingest the built-in 5 SaaS contract fixtures
-    /ingest <path>              Ingest a plain-text contract file from disk
-    /list_collections           List all structured collections for the application
-    /query_structured           Query the default contracts collection (all records)
-    /query_structured <name>    Query a named structured collection (all records)
-    /clear                      Clear chat history
-    /reset                      Delete the application and start fresh
-    /q /quit /exit              Exit
+    /ingest_demo_contracts                Ingest the built-in 5 SaaS contract fixtures
 """
 
 from __future__ import annotations
@@ -32,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import os
 import pathlib
 import sys
 import zipfile
@@ -59,7 +48,6 @@ from examples.contract_analyst_demo.saas_contracts import CONTRACTS  # noqa: E40
 configure_logging()
 
 _APP_NAME = "contract-analyst"
-_API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000")
 _CONTRACTS_COLLECTION = "contracts"
 
 
@@ -77,22 +65,19 @@ async def main() -> None:
     print()
     print("Contract Analyst Demo (REST API)")
     print("=" * 40)
-    print(f"  api:    {_API_BASE}")
-    print()
 
-    async with httpx.AsyncClient() as http:
-        client = CogBaseClient(_APP_NAME, _API_BASE, http)
+    async with CogBaseClient() as client:
+        client.use_app(_APP_NAME)
+        print(f"  api:    {client.api_base}")
+        print()
 
         app_info = await cmd_startup(client, _build_bundle())
         if app_info is None:
             return
         print()
 
-        print("Commands: /list | /create | /delete <name> | /ingest_saas | /ingest <file> | /list_collections | /query_structured [<name>] | /clear | /reset | /q")
-        print()
-
         async def handler(raw: str, lower: str) -> bool:
-            if lower == "/ingest_saas":
+            if lower == "/ingest_demo_contracts":
                 print(f"Ingesting {len(CONTRACTS)} built-in SaaS contracts...")
                 documents = [{"doc_id": doc_id, "text": text} for doc_id, text in CONTRACTS.items()]
                 try:
@@ -107,36 +92,13 @@ async def main() -> None:
                         print(f"  {r['doc_id']:<12}  FAILED: {r['error']}")
                 return True
 
-            if lower.startswith("/ingest "):
-                rest = raw[len("/ingest "):].strip()
-                file_path = pathlib.Path(rest).expanduser()
-                if not file_path.is_absolute():
-                    file_path = pathlib.Path.cwd() / file_path
-                if not file_path.exists():
-                    print(f"  File not found: {file_path}")
-                    return True
-                doc_id = file_path.stem
-                text = file_path.read_text(errors="replace")
-                print(f"Ingesting {file_path.name} as doc_id={doc_id!r}...")
-                try:
-                    results = await client.ingest_documents([{"doc_id": doc_id, "text": text}])
-                except httpx.HTTPStatusError as exc:
-                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
-                    return True
-                r = results[0]
-                if r["success"]:
-                    print(f"  {doc_id}  OK")
-                else:
-                    print(f"  {doc_id}  FAILED: {r['error']}")
-                return True
-
             return False
 
         await run_interactive_loop(
             client, _build_bundle,
             default_collection=_CONTRACTS_COLLECTION,
             handler=handler,
-            extra_commands=["/ingest_saas", "/ingest"],
+            extra_commands=["/ingest_demo_contracts"],
         )
 
 

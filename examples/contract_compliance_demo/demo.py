@@ -17,22 +17,13 @@ and vector_store.type=faiss, or set COGBASE_CONFIG to point to your system confi
 
 Commands (interactive loop)
 ---------------------------
-    /create                     Create the contract-compliance application
-    /ingest_rules               Ingest the built-in company rules documents
+    /ingest_demo_rules          Ingest the built-in demo company rules documents
     /ingest_rules <path>        Ingest a rules document from disk
-    /ingest_contracts           Ingest the built-in sample contracts (3 contracts)
+    /ingest_demo_contracts      Ingest the built-in demo sample contracts (3 contracts)
     /ingest_contract <path>     Ingest a contract from disk
     /check <doc_id>             Run clause-by-clause compliance check
     /report <doc_id>            Print stored compliance report for one contract
     /alerts                     List high and critical findings across all contracts
-    /list                       List all applications
-    /list_collections           List all collections for the compliance app
-    /query_structured           Dump the contract_metadata collection
-    /query_structured <name>    Dump a named collection
-    /clear                      Clear chat history
-    /delete <name>              Delete an application by name
-    /reset                      Delete the application and all demo data
-    /q /quit /exit              Exit
 
 Any other input is sent as a natural-language query to the contract-compliance app.
 """
@@ -42,7 +33,6 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import os
 import pathlib
 import sys
 import zipfile
@@ -73,7 +63,6 @@ from examples.contract_compliance_demo.schema import (  # noqa: E402
 configure_logging()
 
 _APP_NAME = "contract-compliance"
-_API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000")
 _DEFAULT_STRUCTURED_COLLECTION = "contract_metadata"
 
 
@@ -96,45 +85,24 @@ async def main() -> None:
     print()
     print("Contract Compliance Demo (REST API)")
     print("=" * 42)
-    print(f"  api:     {_API_BASE}")
-    print()
 
-    async with httpx.AsyncClient() as http:
-        client = CogBaseClient(_APP_NAME, _API_BASE, http)
+    async with CogBaseClient() as client:
+        client.use_app(_APP_NAME)
+        print(f"  api:     {client.api_base}")
+        print()
 
         app_info = await cmd_startup(client, _build_bundle())
         if app_info is None:
             return
         print()
 
-        print(
-            "Commands: /create | /ingest_rules [<file>] | /ingest_contracts | "
-            "/ingest_contract <file> | /check <doc_id> | /report <doc_id> | /alerts | "
-            "/list | /list_collections | /query_structured [<name>] | "
-            "/clear | /reset | /delete <name> | /q"
-        )
-        print()
-
         async def handler(raw: str, lower: str) -> bool:
-            if lower == "/ingest_rules" or lower.startswith("/ingest_rules "):
-                rest = raw[len("/ingest_rules"):].strip()
-                if rest:
-                    file_path = pathlib.Path(rest).expanduser()
-                    if not file_path.is_absolute():
-                        file_path = pathlib.Path.cwd() / file_path
-                    if not file_path.exists():
-                        print(f"  File not found: {file_path}")
-                        return True
-                    doc_id = file_path.stem
-                    text = file_path.read_text(errors="replace")
-                    documents = [{"doc_id": doc_id, "text": text, "metadata": {"doc_type": "rules"}}]
-                    print(f"Ingesting {file_path.name} as doc_id={doc_id!r}...")
-                else:
-                    documents = [
-                        {"doc_id": doc.doc_id, "text": doc.text, "metadata": dict(doc.metadata)}
-                        for doc in RULES_DOCUMENTS
-                    ]
-                    print(f"Ingesting {len(documents)} built-in rule documents...")
+            if lower == "/ingest_demo_rules" or lower.startswith("/ingest_demo_rules "):
+                documents = [
+                    {"doc_id": doc.doc_id, "text": doc.text, "metadata": dict(doc.metadata)}
+                    for doc in RULES_DOCUMENTS
+                ]
+                print(f"Ingesting {len(documents)} built-in rule documents...")
                 try:
                     results = await client.ingest_documents(documents, timeout=180)
                 except httpx.HTTPStatusError as exc:
@@ -147,8 +115,34 @@ async def main() -> None:
                         print(f"  {r['doc_id']:<14}  FAILED: {r['error']}")
                 return True
 
-            if lower == "/ingest_contracts":
-                print(f"Ingesting {len(CONTRACTS_DOCUMENTS)} built-in contracts...")
+            if lower.startswith("/ingest_rules "):
+                rest = raw[len("/ingest_rules "):].strip()
+                file_path = pathlib.Path(rest).expanduser()
+                if not file_path.is_absolute():
+                    file_path = pathlib.Path.cwd() / file_path
+                if not file_path.exists():
+                    print(f"  File not found: {file_path}")
+                    return True
+                doc_id = file_path.stem
+                text = file_path.read_text(errors="replace")
+                print(f"Ingesting {file_path.name} as doc_id={doc_id!r}...")
+                try:
+                    results = await client.ingest_documents(
+                        [{"doc_id": doc_id, "text": text, "metadata": {"doc_type": "rules"}}],
+                        timeout=180,
+                    )
+                except httpx.HTTPStatusError as exc:
+                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+                    return True
+                for r in results:
+                    if r["success"]:
+                        print(f"  {r['doc_id']:<14}  OK  (rule chunks indexed)")
+                    else:
+                        print(f"  {r['doc_id']:<14}  FAILED: {r['error']}")
+                return True
+
+            if lower == "/ingest_demo_contracts":
+                print(f"Ingesting {len(CONTRACTS_DOCUMENTS)} built-in demo contracts...")
                 documents = [
                     {"doc_id": doc.doc_id, "text": doc.text, "metadata": dict(doc.metadata)}
                     for doc in CONTRACTS_DOCUMENTS
@@ -199,7 +193,7 @@ async def main() -> None:
                 print(f"Checking compliance for {doc_id!r}...")
                 count = non_compliant = needs_review = 0
                 try:
-                    async with http.stream(
+                    async with client._http.stream(
                         "POST",
                         f"{client.api_base}/applications/{client.app_name}/workflows/check-contract-compliance/stream",
                         json={"params": {"doc_id": doc_id}},
@@ -231,7 +225,7 @@ async def main() -> None:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     return True
                 if count == 0:
-                    print(f"  No clauses found for {doc_id!r}. Run '/ingest_contracts' first.")
+                    print(f"  No clauses found for {doc_id!r}. Run '/ingest_demo_contracts' first.")
                 else:
                     compliant = count - non_compliant - needs_review
                     print(f"\n  {count} findings saved.  "
@@ -306,7 +300,11 @@ async def main() -> None:
             client, _build_bundle,
             default_collection=_DEFAULT_STRUCTURED_COLLECTION,
             handler=handler,
-            extra_commands=["/ingest_rules", "/ingest_contracts", "/ingest_contract", "/check", "/report", "/alerts"],
+            extra_commands=[
+                "/ingest_demo_rules", "/ingest_rules",
+                "/ingest_demo_contracts", "/ingest_contract",
+                "/check", "/report", "/alerts",
+            ],
         )
 
 

@@ -14,18 +14,9 @@ Set COGBASE_API_URL to override the default http://localhost:8000.
 
 Commands (interactive loop)
 ---------------------------
-    /list                       List all applications
-    /create                     Create the vc-portfolio application
-    /delete <name>              Delete an application by name
     /ingest_all                 Ingest all built-in synthetic board updates + memos
     /ingest_board               Ingest only board updates
     /ingest_memos               Ingest only investment memos
-    /list_collections           List all structured and vector collections
-    /query_structured           Dump all portfolio_kpis records
-    /query_structured <name>    Query a named structured collection
-    /clear                      Clear chat history
-    /reset                      Delete the application and start fresh
-    /q /quit /exit              Exit
 
 Then type any natural-language question to run a query, e.g.:
     Which companies are burning more than $500K per month?
@@ -40,7 +31,6 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import os
 import pathlib
 import sys
 import zipfile
@@ -64,7 +54,6 @@ from examples.vc_portfolio_demo.schema import PortfolioKPIExtraction, PortfolioK
 configure_logging()
 
 _APP_NAME = "vc-portfolio"
-_API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000")
 _KPI_COLLECTION = "portfolio_kpis"
 
 _DEMO_DIR = pathlib.Path(__file__).parent.resolve()
@@ -103,8 +92,6 @@ async def main() -> None:
     print()
     print("VC Portfolio Intelligence Demo (REST API)")
     print("=" * 45)
-    print(f"  api:  {_API_BASE}")
-    print()
     print("Suggested queries after ingestion:")
     print("  Which companies are burning more than $500K per month?")
     print("  What was Nova Analytics' ARR growth across all quarters?")
@@ -114,15 +101,14 @@ async def main() -> None:
     print("  What was the investment thesis for Helix Biotech?")
     print()
 
-    async with httpx.AsyncClient() as http:
-        client = CogBaseClient(_APP_NAME, _API_BASE, http)
+    async with CogBaseClient() as client:
+        client.use_app(_APP_NAME)
+        print(f"  api:  {client.api_base}")
+        print()
 
         app_info = await cmd_startup(client, _build_bundle())
         if app_info is None:
             return
-        print()
-
-        print("Commands: /list | /create | /delete <name> | /ingest_all | /ingest_board | /ingest_memos | /list_collections | /query_structured [<name>] | /clear | /reset | /q")
         print()
 
         async def handler(raw: str, lower: str) -> bool:
