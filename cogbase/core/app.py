@@ -91,6 +91,8 @@ class CogBaseApp:
         return matched
 
     async def _find_pipeline(self, doc: Document) -> IngestionPipeline | None:
+        if len(self._pipelines) == 1:
+            return self._pipelines[0]
         if self._routing_strategy == RoutingStrategy.LLM:
             return await self._find_pipeline_by_llm(doc)
         if self._routing_strategy == RoutingStrategy.AUTO:
