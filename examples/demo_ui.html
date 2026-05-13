@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CogBase Demo</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #0f1117;
+  --bg2:      #16192a;
+  --bg3:      #1e2235;
+  --border:   #2a2f4a;
+  --text:     #e2e8f0;
+  --muted:    #6b7280;
+  --accent:   #6366f1;
+  --accent2:  #4f46e5;
+  --green:    #10b981;
+  --red:      #ef4444;
+  --yellow:   #f59e0b;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Header ── */
+header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 20px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+header h1 { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
+header h1 span { color: var(--accent); }
+
+.api-row { display: flex; align-items: center; gap: 6px; }
+.api-row label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.api-row input {
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text); padding: 4px 8px; border-radius: 6px;
+  font-size: 12px; width: 190px;
+}
+.api-row input:focus { outline: none; border-color: var(--accent); }
+
+.app-pill {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 12px;
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 20px;
+  font-size: 12px; color: var(--muted); user-select: none;
+}
+.app-pill.on { border-color: var(--green); color: var(--green); }
+.app-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+/* ── Tabs ── */
+nav { display: flex; padding: 0 20px; background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+nav button {
+  padding: 9px 16px; background: none; border: none;
+  border-bottom: 2px solid transparent; color: var(--muted);
+  cursor: pointer; font-size: 13px; font-weight: 500;
+  transition: color .15s, border-color .15s;
+}
+nav button:hover { color: var(--text); }
+nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── Panels ── */
+main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.panel { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+.panel.active { display: flex; }
+
+/* ── Chat layout ── */
+.chat-layout { display: flex; flex: 1; overflow: hidden; }
+.chat-col { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+.chat-aside {
+  width: 310px; flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg2); display: flex; flex-direction: column;
+}
+.aside-hd {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px; border-bottom: 1px solid var(--border);
+}
+.aside-hd h3 { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.aside-body { flex: 1; overflow-y: auto; padding: 10px; }
+.aside-ft { padding: 10px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+
+/* ── Messages ── */
+.msgs { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
+.msg { display: flex; flex-direction: column; gap: 3px; max-width: 860px; }
+.msg.user  { align-self: flex-end; align-items: flex-end; }
+.msg.bot   { align-self: flex-start; }
+.msg.sys   { align-self: center; max-width: 500px; }
+.msg-who { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.msg-body {
+  padding: 9px 13px; border-radius: 12px;
+  font-size: 13px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word;
+}
+.msg.user .msg-body  { background: var(--accent); color: #fff; border-bottom-right-radius: 3px; }
+.msg.bot  .msg-body  { background: var(--bg3); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+.msg.sys  .msg-body  { background: transparent; border: 1px solid var(--border); color: var(--muted); font-size: 12px; text-align: center; }
+
+/* ── Chat input ── */
+.chat-input {
+  padding: 12px 16px; border-top: 1px solid var(--border);
+  display: flex; gap: 8px; background: var(--bg2); flex-shrink: 0;
+}
+.chat-input textarea {
+  flex: 1; background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text); padding: 9px 11px; border-radius: 8px;
+  font-size: 13px; resize: none; font-family: inherit;
+  line-height: 1.4; min-height: 38px; max-height: 110px;
+}
+.chat-input textarea:focus { outline: none; border-color: var(--accent); }
+
+/* ── Buttons ── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 8px 15px; border-radius: 8px; font-size: 13px; font-weight: 500;
+  cursor: pointer; border: none; transition: background .15s, opacity .15s;
+  white-space: nowrap; line-height: 1;
+}
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-primary  { background: var(--accent); color: #fff; }
+.btn-primary:hover:not(:disabled)  { background: var(--accent2); }
+.btn-ghost { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+.btn-ghost:hover:not(:disabled)  { background: var(--border); }
+.btn-green  { background: var(--green); color: #fff; }
+.btn-green:hover:not(:disabled)  { background: #059669; }
+.btn-red  { background: transparent; color: var(--red); border: 1px solid var(--red); }
+.btn-red:hover:not(:disabled)  { background: rgba(239,68,68,.1); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+
+/* ── Config preview ── */
+.cfg-pre {
+  font-family: 'SF Mono', 'Cascadia Code', monospace;
+  font-size: 11px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px; white-space: pre;
+  overflow: auto; min-height: 80px; tab-size: 2;
+}
+
+/* ── Apps tab ── */
+.page { flex: 1; overflow-y: auto; padding: 20px; }
+.page-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.page-hd h2 { font-size: 17px; font-weight: 600; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+tr:hover td { background: var(--bg3); }
+
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 500;
+}
+.b-active { background: rgba(16,185,129,.15); color: var(--green); }
+.b-error  { background: rgba(239,68,68,.15); color: var(--red); }
+.b-init   { background: rgba(245,158,11,.15); color: var(--yellow); }
+
+/* ── Ingest tab ── */
+.ingest-wrap { flex: 1; overflow-y: auto; padding: 20px; max-width: 680px; }
+.ingest-wrap h2 { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+.sub { font-size: 13px; color: var(--muted); margin-bottom: 22px; }
+
+.drop-zone {
+  border: 2px dashed var(--border); border-radius: 12px;
+  padding: 36px 20px; text-align: center; cursor: pointer;
+  position: relative; transition: border-color .15s, background .15s;
+}
+.drop-zone:hover, .drop-zone.over { border-color: var(--accent); background: rgba(99,102,241,.05); }
+.drop-zone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.drop-icon { font-size: 30px; margin-bottom: 8px; }
+.drop-txt  { font-size: 13px; color: var(--muted); }
+.drop-hint { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 9px; background: var(--bg3);
+  border: 1px solid var(--border); border-radius: 20px;
+  font-size: 11px; color: var(--text);
+}
+
+.field-label { font-size: 12px; font-weight: 500; color: var(--muted); margin-bottom: 5px; display: block; }
+.field-textarea {
+  width: 100%; background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text); padding: 7px 10px; border-radius: 7px;
+  font-size: 11px; font-family: monospace; resize: vertical; min-height: 56px;
+}
+.field-textarea:focus { outline: none; border-color: var(--accent); }
+
+.result-row {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 12px;
+}
+
+/* ── Warnings ── */
+.warn-bar {
+  display: none; align-items: center; gap: 8px;
+  padding: 10px 20px; background: rgba(245,158,11,.08);
+  border-bottom: 1px solid rgba(245,158,11,.25);
+  font-size: 12px; color: var(--yellow); flex-shrink: 0;
+}
+.warn-bar.show { display: flex; }
+
+/* ── Data tab ── */
+.data-layout { display: flex; flex: 1; overflow: hidden; }
+
+.data-sidebar {
+  width: 220px; flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg2); display: flex; flex-direction: column;
+}
+.data-sidebar-hd {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.data-sidebar-hd h3 { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.coll-list { flex: 1; overflow-y: auto; padding: 6px; }
+.coll-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: 7px; cursor: pointer;
+  font-size: 13px; color: var(--muted);
+  transition: background .1s, color .1s;
+}
+.coll-item:hover { background: var(--bg3); color: var(--text); }
+.coll-item.active { background: rgba(99,102,241,.15); color: var(--accent); font-weight: 500; }
+.coll-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+
+.data-main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.data-main-hd {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  background: var(--bg2);
+}
+.data-main-hd h3 { font-size: 14px; font-weight: 600; }
+.data-main-hd .meta { font-size: 11px; color: var(--muted); }
+.data-table-wrap { flex: 1; overflow: auto; }
+
+/* Data table — separate class to avoid conflicting with Apps table */
+.data-tbl { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+.data-tbl th {
+  position: sticky; top: 0; z-index: 1;
+  text-align: left; padding: 8px 12px;
+  background: var(--bg3); border-bottom: 1px solid var(--border);
+  color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .4px;
+  font-weight: 600;
+}
+.data-tbl td {
+  padding: 7px 12px; border-bottom: 1px solid var(--border);
+  max-width: 280px; overflow: hidden; text-overflow: ellipsis;
+  vertical-align: top;
+}
+.data-tbl tr:hover td { background: var(--bg3); }
+.data-tbl .null-val { color: var(--muted); font-style: italic; }
+.data-tbl .obj-val  { color: var(--muted); font-family: monospace; font-size: 11px; }
+
+/* ── References aside ── */
+.ref-section-hd {
+  font-size: 10px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px;
+  padding: 8px 10px 4px;
+}
+.ref-card {
+  margin: 0 6px 6px;
+  padding: 8px 10px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.ref-meta {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 5px; flex-wrap: wrap;
+}
+.ref-docid {
+  font-size: 11px; font-weight: 600; color: var(--accent);
+  font-family: 'SF Mono', monospace;
+}
+.ref-coll {
+  font-size: 10px; color: var(--muted);
+  background: var(--bg); border: 1px solid var(--border);
+  padding: 1px 5px; border-radius: 4px;
+}
+.ref-score { font-size: 10px; color: var(--green); margin-left: auto; }
+.ref-text {
+  font-size: 11px; color: var(--text); line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+}
+.ref-code {
+  font-size: 10px; font-family: 'SF Mono', monospace;
+  white-space: pre; overflow-x: auto;
+  color: var(--text); line-height: 1.4;
+}
+
+/* ── Misc ── */
+.empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+.empty .ei { font-size: 36px; margin-bottom: 10px; }
+.empty p { font-size: 13px; }
+
+.spinning { display: inline-block; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <h1>⚡ Cog<span>Base</span></h1>
+  <div class="api-row">
+    <label for="apiUrl">API</label>
+    <input id="apiUrl" type="text" value="http://localhost:8000" placeholder="http://localhost:8000">
+  </div>
+  <div class="app-pill" id="appPill">
+    <span class="dot"></span>
+    <span id="pillText">No app selected</span>
+  </div>
+</header>
+
+<!-- ── Tabs ── -->
+<nav>
+  <button class="active" onclick="switchTab('build', this)">Build</button>
+  <button onclick="switchTab('apps', this)">Apps</button>
+  <button onclick="switchTab('ingest', this)">Ingest</button>
+  <button onclick="switchTab('data', this)">Data</button>
+  <button onclick="switchTab('query', this)">Query</button>
+</nav>
+
+<main>
+
+  <!-- ════════════════ BUILD TAB ════════════════ -->
+  <div class="panel active" id="panel-build">
+    <div class="chat-layout">
+
+      <!-- Chat column -->
+      <div class="chat-col">
+        <div class="msgs" id="buildMsgs">
+          <div class="msg sys"><div class="msg-body">Describe the app you want to build — documents, facts to extract, kinds of questions you'll ask. The AI will guide you through schema design and produce a deployable config.</div></div>
+        </div>
+        <div class="chat-input">
+          <textarea id="buildInput" placeholder="Describe your app…" rows="1"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendBuild()}"
+            oninput="autoResize(this)"></textarea>
+          <button class="btn btn-ghost" title="Restart conversation" onclick="resetBuild()">↺</button>
+          <button class="btn btn-primary" id="buildSendBtn" onclick="sendBuild()">Send</button>
+        </div>
+      </div>
+
+      <!-- Config aside -->
+      <div class="chat-aside">
+        <div class="aside-hd">
+          <h3>Generated Config</h3>
+          <span id="cfgStatus" style="font-size:11px;color:var(--muted)">—</span>
+        </div>
+        <div class="aside-body">
+          <pre class="cfg-pre" id="cfgPre">No config yet — keep chatting.</pre>
+        </div>
+        <div class="aside-ft">
+          <button class="btn btn-green" id="deployBtn" disabled onclick="deployApp()">▲ Deploy App</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ════════════════ APPS TAB ════════════════ -->
+  <div class="panel" id="panel-apps">
+    <div class="page">
+      <div class="page-hd">
+        <h2>Applications</h2>
+        <button class="btn btn-ghost" onclick="loadApps()">⟳ Refresh</button>
+      </div>
+      <div id="appsBody">
+        <div class="empty"><p>Click Refresh to load apps.</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════ INGEST TAB ════════════════ -->
+  <div class="panel" id="panel-ingest">
+    <div class="warn-bar" id="ingestWarn">⚠ No app selected — go to Apps and click Use on an app first.</div>
+    <div class="ingest-wrap">
+      <h2>Ingest Documents</h2>
+      <p class="sub">Upload files to be parsed and ingested into the active application.</p>
+
+      <div class="drop-zone" id="dropZone"
+        ondragover="event.preventDefault();this.classList.add('over')"
+        ondragleave="this.classList.remove('over')"
+        ondrop="event.preventDefault();this.classList.remove('over');handleFiles(event.dataTransfer.files)">
+        <input type="file" id="fileInput" multiple
+          onchange="handleFiles(this.files)" onclick="this.value=''">
+        <div class="drop-icon">📄</div>
+        <div class="drop-txt">Drop files here or click to browse</div>
+        <div class="drop-hint">PDF, DOCX, TXT, MD, and more</div>
+      </div>
+      <div class="chips" id="fileChips"></div>
+
+      <div style="margin-top:18px">
+        <label class="field-label">Metadata (JSON — applied to every file in this batch)</label>
+        <textarea class="field-textarea" id="metaInput" rows="2" placeholder='{"doc_type": "contract"}'>{}</textarea>
+      </div>
+
+      <div style="margin-top:14px">
+        <button class="btn btn-primary" id="uploadBtn" disabled onclick="uploadFiles()">Upload &amp; Ingest</button>
+      </div>
+
+      <div id="ingestLog" style="margin-top:20px"></div>
+    </div>
+  </div>
+
+  <!-- ════════════════ DATA TAB ════════════════ -->
+  <div class="panel" id="panel-data">
+    <div class="warn-bar" id="dataWarn">⚠ No app selected — go to Apps and click Use on an app first.</div>
+    <div class="data-layout">
+
+      <!-- Collections sidebar -->
+      <div class="data-sidebar">
+        <div class="data-sidebar-hd">
+          <h3>Collections</h3>
+          <button class="btn btn-ghost btn-sm" onclick="loadData()" title="Refresh">⟳</button>
+        </div>
+        <div class="coll-list" id="collList">
+          <div class="empty" style="padding:30px 10px"><p>Select an app first.</p></div>
+        </div>
+      </div>
+
+      <!-- Records pane -->
+      <div class="data-main">
+        <div class="data-main-hd">
+          <h3 id="dataCollName" style="color:var(--muted)">No collection selected</h3>
+          <span class="meta" id="dataRowCount"></span>
+        </div>
+        <div class="data-table-wrap" id="dataTableWrap">
+          <div class="empty"><p>Click a collection on the left to browse its records.</p></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ════════════════ QUERY TAB ════════════════ -->
+  <div class="panel" id="panel-query">
+    <div class="warn-bar" id="queryWarn">⚠ No app selected — go to Apps and click Use on an app first.</div>
+    <div class="chat-layout">
+
+      <!-- Chat column -->
+      <div class="chat-col">
+        <div class="msgs" id="queryMsgs">
+          <div class="msg sys"><div class="msg-body">Select an app, then start asking questions in natural language.</div></div>
+        </div>
+        <div class="chat-input">
+          <textarea id="queryInput" placeholder="Ask a question…" rows="1"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendQuery()}"
+            oninput="autoResize(this)"></textarea>
+          <button class="btn btn-ghost" title="Clear history" onclick="clearQueryHistory()">↺</button>
+          <button class="btn btn-primary" id="querySendBtn" onclick="sendQuery()">Send</button>
+        </div>
+      </div>
+
+      <!-- References aside -->
+      <div class="chat-aside">
+        <div class="aside-hd">
+          <h3>References</h3>
+          <span id="refsCount" style="font-size:11px;color:var(--muted)">—</span>
+        </div>
+        <div class="aside-body" id="refsBody">
+          <div style="padding:30px 10px;text-align:center;color:var(--muted);font-size:12px">References will appear here after a query.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ════════════════════════════════════════════════════════════
+// State
+// ════════════════════════════════════════════════════════════
+let currentApp    = '';
+let buildHistory  = [];   // [{role, content}] sent to /generate/chat/stream
+let buildCfgYaml  = null; // last validated config yaml
+let queryHistory  = [];   // [{role, content}] for query session
+let pickedFiles   = [];   // File objects
+let building      = false;
+let querying      = false;
+
+function api() { return document.getElementById('apiUrl').value.replace(/\/$/, ''); }
+
+// ════════════════════════════════════════════════════════════
+// Tab switching
+// ════════════════════════════════════════════════════════════
+function switchTab(name, btn) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  btn.classList.add('active');
+  if (name === 'apps') loadApps();
+  if (name === 'data') loadData();
+  refreshWarnings();
+}
+
+// ════════════════════════════════════════════════════════════
+// App selection
+// ════════════════════════════════════════════════════════════
+function setApp(name) {
+  currentApp = name;
+  const pill = document.getElementById('appPill');
+  const txt  = document.getElementById('pillText');
+  if (name) {
+    pill.className = 'app-pill on';
+    txt.textContent = name;
+    queryHistory = [];
+    activeCollection = '';
+    sysMsg('queryMsgs', 'Connected to "' + name + '".');
+  } else {
+    pill.className = 'app-pill';
+    txt.textContent = 'No app selected';
+    activeCollection = '';
+  }
+  refreshWarnings();
+}
+
+function refreshWarnings() {
+  const has = !!currentApp;
+  toggle('ingestWarn', !has);
+  toggle('dataWarn', !has);
+  toggle('queryWarn', !has);
+  document.getElementById('uploadBtn').disabled = !has || pickedFiles.length === 0;
+  document.getElementById('querySendBtn').disabled = !has || querying;
+}
+
+function toggle(id, show) {
+  const el = document.getElementById(id);
+  if (show) el.classList.add('show'); else el.classList.remove('show');
+}
+
+// ════════════════════════════════════════════════════════════
+// BUILD TAB
+// ════════════════════════════════════════════════════════════
+function addMsg(containerId, role, text) {
+  const c = document.getElementById(containerId);
+  const d = document.createElement('div');
+  d.className = 'msg ' + role;
+  const who = role === 'user' ? 'You' : role === 'bot' ? 'CogBase AI' : '';
+  d.innerHTML = `${who ? `<div class="msg-who">${who}</div>` : ''}
+    <div class="msg-body"></div>`;
+  d.querySelector('.msg-body').textContent = text;
+  c.appendChild(d);
+  c.scrollTop = c.scrollHeight;
+  return d.querySelector('.msg-body');
+}
+
+function sysMsg(containerId, text) {
+  const c = document.getElementById(containerId);
+  const d = document.createElement('div');
+  d.className = 'msg sys';
+  d.innerHTML = `<div class="msg-body"></div>`;
+  d.querySelector('.msg-body').textContent = text;
+  c.appendChild(d);
+  c.scrollTop = c.scrollHeight;
+}
+
+function stripConfigMarkers(text) {
+  const S = '---CONFIG---', E = '---END CONFIG---';
+  if (!text.includes(S)) return text;
+  const before = text.split(S)[0].trimEnd();
+  const rest   = text.split(S)[1] || '';
+  const after  = rest.includes(E) ? rest.split(E)[1].trimStart() : '';
+  return [before, after].filter(s => s.trim()).join('\n\n');
+}
+
+async function sendBuild() {
+  if (building) return;
+  const inp  = document.getElementById('buildInput');
+  const text = inp.value.trim();
+  if (!text) return;
+  inp.value = ''; inp.style.height = '';
+  building = true;
+  document.getElementById('buildSendBtn').disabled = true;
+
+  addMsg('buildMsgs', 'user', text);
+  const bodyEl = addMsg('buildMsgs', 'bot', '');
+
+  try {
+    const resp = await fetch(api() + '/generate/chat/stream', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text, history: buildHistory }),
+    });
+    if (!resp.ok) { bodyEl.textContent = 'HTTP ' + resp.status + ': ' + await resp.text(); return; }
+
+    const reader  = resp.body.getReader();
+    const dec     = new TextDecoder();
+    let buf = '', raw = '', cfgYaml = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') break;
+        try {
+          const d = JSON.parse(payload);
+          if (d.token) {
+            raw += d.token;
+            bodyEl.textContent = stripConfigMarkers(raw);
+            document.getElementById('buildMsgs').scrollTop = 999999;
+          } else if (d.result) {
+            if (d.result.config_yaml) cfgYaml = d.result.config_yaml;
+            if (d.result.content)    raw = d.result.content;
+            bodyEl.textContent = stripConfigMarkers(raw);
+          } else if (d.error) {
+            bodyEl.textContent = 'Error: ' + d.error;
+          }
+        } catch (_) {}
+      }
+    }
+
+    buildHistory.push({ role: 'user',      content: text });
+    buildHistory.push({ role: 'assistant', content: raw  });
+
+    if (cfgYaml) {
+      buildCfgYaml = cfgYaml;
+      document.getElementById('cfgPre').textContent    = cfgYaml;
+      document.getElementById('cfgStatus').textContent = 'Ready';
+      document.getElementById('deployBtn').disabled    = false;
+      sysMsg('buildMsgs', '✓ Config ready — click "Deploy App" to activate it.');
+    }
+  } catch (e) {
+    bodyEl.textContent = 'Network error: ' + e.message;
+    bodyEl.style.color = 'var(--red)';
+  } finally {
+    building = false;
+    document.getElementById('buildSendBtn').disabled = false;
+  }
+}
+
+function resetBuild() {
+  buildHistory = []; buildCfgYaml = null;
+  document.getElementById('buildMsgs').innerHTML =
+    '<div class="msg sys"><div class="msg-body">Describe the app you want to build — documents, facts to extract, kinds of questions you\'ll ask. The AI will guide you through schema design and produce a deployable config.</div></div>';
+  document.getElementById('cfgPre').textContent    = 'No config yet — keep chatting.';
+  document.getElementById('cfgStatus').textContent = '—';
+  document.getElementById('deployBtn').disabled    = true;
+}
+
+async function deployApp() {
+  if (!buildCfgYaml) return;
+  const btn = document.getElementById('deployBtn');
+  btn.disabled = true; btn.textContent = '▲ Deploying…';
+  try {
+    const resp = await fetch(api() + '/generate/deploy', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ config_yaml: buildCfgYaml }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      sysMsg('buildMsgs', 'Deploy failed: ' + (data.detail || resp.statusText));
+    } else if (data.status === 'active') {
+      sysMsg('buildMsgs', '✓ "' + data.name + '" is live! Ingest your files and Start chatting.');
+      setApp(data.name);
+    } else {
+      sysMsg('buildMsgs', 'Deploy status: ' + data.status + (data.error ? ' — ' + data.error : ''));
+    }
+  } catch (e) {
+    sysMsg('buildMsgs', 'Error: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '▲ Deploy App';
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// APPS TAB
+// ════════════════════════════════════════════════════════════
+async function loadApps() {
+  const body = document.getElementById('appsBody');
+  body.innerHTML = '<div class="empty"><p><span class="spinning">⟳</span> Loading…</p></div>';
+  try {
+    const resp = await fetch(api() + '/applications');
+    if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText);
+    const { applications: apps = [] } = await resp.json();
+
+    if (!apps.length) {
+      body.innerHTML = '<div class="empty"><div class="ei">📭</div><p>No apps yet. Use the Build tab to create one.</p></div>';
+      return;
+    }
+
+    let html = `<table>
+      <thead><tr><th>Name</th><th>Status</th><th>Created</th><th style="width:140px">Actions</th></tr></thead>
+      <tbody>`;
+    for (const a of apps) {
+      const sc  = a.status === 'active' ? 'b-active' : a.status === 'error' ? 'b-error' : 'b-init';
+      const ts  = a.created_at ? new Date(a.created_at).toLocaleString() : '—';
+      const cur = a.name === currentApp;
+      html += `<tr>
+        <td style="font-weight:${cur?'600':'400'}">${esc(a.name)}${cur?' <span style="font-size:10px;color:var(--accent)">● selected</span>':''}</td>
+        <td><span class="badge ${sc}">${a.status}</span></td>
+        <td style="color:var(--muted);font-size:11px">${ts}</td>
+        <td><div style="display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" onclick="selectApp('${esc(a.name)}')">Use</button>
+          <button class="btn btn-red btn-sm" onclick="confirmDelete('${esc(a.name)}')">Delete</button>
+        </div></td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    body.innerHTML = html;
+  } catch (e) {
+    body.innerHTML = `<div class="empty"><p style="color:var(--red)">Failed: ${esc(e.message)}</p></div>`;
+  }
+}
+
+function selectApp(name) { setApp(name); loadApps(); }
+
+async function confirmDelete(name) {
+  if (!confirm('Delete "' + name + '" and all its data?')) return;
+  try {
+    const resp = await fetch(api() + '/applications/' + encodeURIComponent(name), { method: 'DELETE' });
+    if (resp.ok || resp.status === 204 || resp.status === 404) {
+      if (currentApp === name) setApp('');
+      loadApps();
+    } else {
+      alert('Delete failed: ' + resp.statusText);
+    }
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+// ════════════════════════════════════════════════════════════
+// INGEST TAB
+// ════════════════════════════════════════════════════════════
+function handleFiles(fileList) {
+  pickedFiles = Array.from(fileList);
+  document.getElementById('fileChips').innerHTML = pickedFiles.map(f =>
+    `<span class="chip">📄 ${esc(f.name)} <span style="color:var(--muted)">(${fmtBytes(f.size)})</span></span>`
+  ).join('');
+  refreshWarnings();
+}
+
+function fmtBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
+}
+
+async function uploadFiles() {
+  if (!currentApp || !pickedFiles.length) return;
+  const btn = document.getElementById('uploadBtn');
+  btn.disabled = true; btn.textContent = 'Uploading…';
+
+  const metaRaw = document.getElementById('metaInput').value.trim();
+  let meta = {};
+  try { meta = JSON.parse(metaRaw || '{}'); }
+  catch { alert('Metadata is not valid JSON.'); btn.disabled = false; btn.textContent = 'Upload & Ingest'; return; }
+
+  const form = new FormData();
+  pickedFiles.forEach(f => form.append('files', f));
+  form.append('metadata', JSON.stringify(meta));
+
+  const log = document.getElementById('ingestLog');
+  log.innerHTML = '<p style="color:var(--muted);font-size:12px"><span class="spinning">⟳</span> Ingesting…</p>';
+
+  try {
+    const resp = await fetch(api() + '/applications/' + encodeURIComponent(currentApp) + '/upload_documents', {
+      method: 'POST', body: form,
+    });
+    if (!resp.ok) { log.innerHTML = `<p style="color:var(--red)">Error ${resp.status}: ${esc(await resp.text())}</p>`; return; }
+    const { results } = await resp.json();
+    log.innerHTML = results.map(r => `
+      <div class="result-row">
+        <span style="color:${r.success?'var(--green)':'var(--red)'}">${r.success?'✓':'✗'}</span>
+        <span style="font-weight:500">${esc(r.doc_id)}</span>
+        ${r.success
+          ? `<span style="color:var(--muted)">${r.records_extracted} record${r.records_extracted!==1?'s':''} extracted</span>`
+          : `<span style="color:var(--red)">${esc(r.error||'unknown error')}</span>`}
+      </div>`).join('');
+    pickedFiles = [];
+    document.getElementById('fileChips').innerHTML = '';
+    document.getElementById('fileInput').value = '';
+  } catch (e) {
+    log.innerHTML = `<p style="color:var(--red)">Network error: ${esc(e.message)}</p>`;
+  } finally {
+    btn.textContent = 'Upload & Ingest';
+    refreshWarnings();
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// QUERY TAB
+// ════════════════════════════════════════════════════════════
+async function sendQuery() {
+  if (querying || !currentApp) return;
+  const inp  = document.getElementById('queryInput');
+  const text = inp.value.trim();
+  if (!text) return;
+  inp.value = ''; inp.style.height = '';
+  querying = true;
+  document.getElementById('querySendBtn').disabled = true;
+
+  addMsg('queryMsgs', 'user', text);
+
+  // Create bot bubble
+  const c   = document.getElementById('queryMsgs');
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.innerHTML = '<div class="msg-who">CogBase</div><div class="msg-body" style="color:var(--muted)">Thinking…</div>';
+  c.appendChild(div); c.scrollTop = c.scrollHeight;
+  const bodyEl = div.querySelector('.msg-body');
+
+  try {
+    const resp = await fetch(api() + '/applications/' + encodeURIComponent(currentApp) + '/query/stream', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text, history: queryHistory }),
+    });
+    if (!resp.ok) {
+      bodyEl.textContent = 'HTTP ' + resp.status + ': ' + await resp.text();
+      bodyEl.style.color = 'var(--red)'; return;
+    }
+
+    const reader = resp.body.getReader();
+    const dec    = new TextDecoder();
+    let buf = '', answer = '', started = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') break;
+        try {
+          const d = JSON.parse(payload);
+          if (d.token) {
+            if (!started) { bodyEl.textContent = ''; bodyEl.style.color = ''; started = true; }
+            answer += d.token;
+            bodyEl.textContent = answer;
+            c.scrollTop = c.scrollHeight;
+          } else if (d.result) {
+            if (!started) { bodyEl.textContent = ''; bodyEl.style.color = ''; started = true; }
+            if (d.result.passthrough && d.result.structured_records) {
+              answer = JSON.stringify(d.result.structured_records, null, 2);
+              bodyEl.textContent = answer;
+              bodyEl.style.fontFamily = 'monospace'; bodyEl.style.fontSize = '11px';
+            } else if (d.result.answer) {
+              answer = d.result.answer;
+              bodyEl.textContent = answer;
+            }
+            renderRefs(d.result.chunks, d.result.structured_records);
+          } else if (d.error) {
+            bodyEl.textContent = 'Error: ' + d.error;
+            bodyEl.style.color = 'var(--red)';
+          }
+        } catch (_) {}
+      }
+    }
+
+    queryHistory.push({ role: 'user',      content: text   });
+    queryHistory.push({ role: 'assistant', content: answer });
+
+    if (!started) { bodyEl.textContent = '(no response)'; bodyEl.style.color = 'var(--muted)'; }
+  } catch (e) {
+    bodyEl.textContent = 'Network error: ' + e.message;
+    bodyEl.style.color = 'var(--red)';
+  } finally {
+    querying = false;
+    refreshWarnings();
+  }
+}
+
+function renderRefs(chunks, records) {
+  const body  = document.getElementById('refsBody');
+  const count = document.getElementById('refsCount');
+  const totalChunks  = (chunks  || []).length;
+  const totalRecords = (records || []).length;
+  const total = totalChunks + totalRecords;
+
+  count.textContent = total ? `${total} ref${total !== 1 ? 's' : ''}` : '—';
+
+  if (!total) {
+    body.innerHTML = '<div style="padding:20px 10px;text-align:center;color:var(--muted);font-size:12px">No references returned.</div>';
+    return;
+  }
+
+  let html = '';
+
+  if (totalRecords) {
+    html += `<div class="ref-section-hd">Structured Records (${totalRecords})</div>`;
+    for (const rec of records) {
+      html += `<div class="ref-card"><pre class="ref-code">${esc(JSON.stringify(rec, null, 2))}</pre></div>`;
+    }
+  }
+
+  if (totalChunks) {
+    html += `<div class="ref-section-hd">Passages (${totalChunks})</div>`;
+    for (const ch of chunks) {
+      const score      = ch.metadata && ch.metadata.score != null ? Number(ch.metadata.score).toFixed(3) : null;
+      const collection = ch.metadata && ch.metadata.collection ? ch.metadata.collection : null;
+      const snippet    = ch.text.length > 240 ? ch.text.slice(0, 240) + '…' : ch.text;
+      html += `<div class="ref-card">
+        <div class="ref-meta">
+          <span class="ref-docid">${esc(ch.doc_id)}</span>
+          ${collection ? `<span class="ref-coll">${esc(collection)}</span>` : ''}
+          ${score !== null ? `<span class="ref-score">${score}</span>` : ''}
+        </div>
+        <div class="ref-text">${esc(snippet)}</div>
+      </div>`;
+    }
+  }
+
+  body.innerHTML = html;
+}
+
+function clearQueryHistory() {
+  queryHistory = [];
+  const c = document.getElementById('queryMsgs');
+  c.innerHTML = '';
+  sysMsg('queryMsgs', 'History cleared.' + (currentApp ? ' Connected to "' + currentApp + '".' : ''));
+}
+
+// ════════════════════════════════════════════════════════════
+// DATA TAB
+// ════════════════════════════════════════════════════════════
+let activeCollection = '';
+
+async function loadData() {
+  if (!currentApp) {
+    document.getElementById('collList').innerHTML =
+      '<div class="empty" style="padding:30px 10px"><p>Select an app first.</p></div>';
+    return;
+  }
+
+  const list = document.getElementById('collList');
+  list.innerHTML = '<div class="empty" style="padding:20px 10px"><p><span class="spinning">⟳</span></p></div>';
+
+  try {
+    const resp = await fetch(api() + '/applications/' + encodeURIComponent(currentApp) + '/collections');
+    if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText);
+    const { structured = [] } = await resp.json();
+
+    if (!structured.length) {
+      list.innerHTML = '<div class="empty" style="padding:30px 10px"><p>No structured collections.</p></div>';
+      return;
+    }
+
+    list.innerHTML = structured.map(name => `
+      <div class="coll-item${name === activeCollection ? ' active' : ''}"
+           onclick="selectCollection('${esc(name)}')">
+        <span class="coll-dot"></span>
+        ${esc(name)}
+      </div>`).join('');
+
+    // Auto-select first collection if nothing is selected or previous is gone
+    if (!activeCollection || !structured.includes(activeCollection)) {
+      selectCollection(structured[0]);
+    }
+  } catch (e) {
+    list.innerHTML = `<div class="empty" style="padding:20px 10px"><p style="color:var(--red)">${esc(e.message)}</p></div>`;
+  }
+}
+
+async function selectCollection(name) {
+  activeCollection = name;
+
+  // Highlight sidebar item
+  document.querySelectorAll('.coll-item').forEach(el => {
+    el.classList.toggle('active', el.textContent.trim() === name);
+  });
+
+  document.getElementById('dataCollName').textContent = name;
+  document.getElementById('dataCollName').style.color = '';
+  document.getElementById('dataRowCount').textContent = '';
+
+  const wrap = document.getElementById('dataTableWrap');
+  wrap.innerHTML = '<div class="empty"><p><span class="spinning">⟳</span> Loading records…</p></div>';
+
+  try {
+    const resp = await fetch(
+      api() + '/applications/' + encodeURIComponent(currentApp) + '/collections/' + encodeURIComponent(name) + '/query',
+      { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ filters: [], fields: null }) }
+    );
+    if (!resp.ok) throw new Error(resp.status + ': ' + await resp.text());
+    const { records = [] } = await resp.json();
+
+    document.getElementById('dataRowCount').textContent = records.length + ' row' + (records.length !== 1 ? 's' : '');
+
+    if (!records.length) {
+      wrap.innerHTML = '<div class="empty"><div class="ei">🗄️</div><p>No records yet — ingest some documents first.</p></div>';
+      return;
+    }
+
+    // Build column list from union of all record keys
+    const cols = [];
+    const seen = new Set();
+    for (const row of records) {
+      for (const k of Object.keys(row)) {
+        if (!seen.has(k)) { seen.add(k); cols.push(k); }
+      }
+    }
+
+    let html = '<table class="data-tbl"><thead><tr>';
+    for (const col of cols) html += `<th title="${esc(col)}">${esc(col)}</th>`;
+    html += '</tr></thead><tbody>';
+
+    for (const row of records) {
+      html += '<tr>';
+      for (const col of cols) {
+        const val = row[col];
+        if (val === null || val === undefined) {
+          html += '<td class="null-val">—</td>';
+        } else if (typeof val === 'object') {
+          const str = JSON.stringify(val);
+          html += `<td class="obj-val" title="${esc(str)}">${esc(str.length > 80 ? str.slice(0, 80) + '…' : str)}</td>`;
+        } else {
+          const str = String(val);
+          html += `<td title="${esc(str)}">${esc(str.length > 120 ? str.slice(0, 120) + '…' : str)}</td>`;
+        }
+      }
+      html += '</tr>';
+    }
+
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+  } catch (e) {
+    wrap.innerHTML = `<div class="empty"><p style="color:var(--red)">${esc(e.message)}</p></div>`;
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// Utilities
+// ════════════════════════════════════════════════════════════
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 110) + 'px';
+}
+
+// Boot
+refreshWarnings();
+</script>
+</body>
+</html>
