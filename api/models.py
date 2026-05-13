@@ -63,10 +63,19 @@ class QueryRequest(BaseModel):
     history: list[ChatMessage] = []
 
 
+class ChunkResponse(BaseModel):
+    chunk_id: str
+    doc_id: str
+    text: str
+    metadata: dict = {}
+    char_offset: int | None = None
+    char_length: int | None = None
+
+
 class QueryResponse(BaseModel):
     answer: str
-    passthrough: bool = False
     structured_records: list[dict] = []
+    chunks: list[ChunkResponse] = []
 
 
 # ---------------------------------------------------------------------------

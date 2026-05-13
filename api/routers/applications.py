@@ -24,6 +24,7 @@ from api.models import (
     AppSkillsResponse,
     ApplicationListResponse,
     ApplicationResponse,
+    ChunkResponse,
     CollectionsResponse,
     FilterRequest,
     IngestDocumentsRequest,
@@ -523,8 +524,8 @@ async def query_application(
         result = await _drain_query(app, body.text, history=history)
     return QueryResponse(
         answer=result.answer,
-        passthrough=result.passthrough,
         structured_records=result.structured_records,
+        chunks=[ChunkResponse(**c.model_dump(exclude={"embedding"})) for c in result.chunks],
     )
 
 
@@ -539,7 +540,7 @@ async def query_application_stream(
     """Stream a natural-language query response as Server-Sent Events.
 
     Token events: ``{"token": "<text>"}``
-    Final event:  ``{"result": {answer, passthrough, structured_records}}``
+    Final event:  ``{"result": {answer, structured_records, chunks}}``
     Sentinel:     ``data: [DONE]``
     """
     app = await _get_active_app(app_name, app_cache, system_store, system_resources)
@@ -554,8 +555,8 @@ async def query_application_stream(
                     payload = {
                         "result": {
                             "answer": item.answer,
-                            "passthrough": item.passthrough,
                             "structured_records": item.structured_records,
+                            "chunks": [c.model_dump(exclude={"embedding"}) for c in item.chunks],
                         }
                     }
                     yield f"data: {json.dumps(payload)}\n\n"

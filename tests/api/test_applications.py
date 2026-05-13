@@ -32,6 +32,7 @@ from api.app_cache import AppCache
 from api.routers.applications import _serialize_config
 from api.system_store import SystemStore
 from cogbase.config.config import AppConfig, RecordMode
+from cogbase.core.models import Chunk
 from cogbase.core.query_runner import QueryResult
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 
@@ -937,13 +938,13 @@ class TestUploadDocuments:
 
 def _make_query_result(
     answer: str = "The notice period is 60 days.",
-    passthrough: bool = False,
     structured_records: list[dict] | None = None,
+    chunks: list[Chunk] | None = None,
 ) -> QueryResult:
     return QueryResult(
         answer=answer,
-        passthrough=passthrough,
         structured_records=structured_records or [],
+        chunks=chunks or [],
     )
 
 
@@ -1001,23 +1002,10 @@ class TestQueryApplication:
         assert resp.json()["answer"] == result.answer
 
     @pytest.mark.asyncio
-    async def test_passthrough_false_by_default(self, client):
-        result = _make_query_result(passthrough=False)
-        await _create_app(client, _mock_query_app(result))
-
-        resp = await client.post(
-            "/applications/my-contract-analyzer/query",
-            json={"text": "q", "history": []},
-        )
-
-        assert resp.json()["passthrough"] is False
-
-    @pytest.mark.asyncio
-    async def test_passthrough_true_with_records(self, client):
+    async def test_includes_structured_records(self, client):
         records = [{"contract_type": "NDA", "doc_id": "c-001"}]
         result = _make_query_result(
             answer="Found 1 record(s): contract_type: NDA, doc_id: c-001",
-            passthrough=True,
             structured_records=records,
         )
         await _create_app(client, _mock_query_app(result))
@@ -1031,9 +1019,25 @@ class TestQueryApplication:
         )
 
         data = resp.json()
-        assert data["passthrough"] is True
         assert len(data["structured_records"]) == 1
         assert data["structured_records"][0]["contract_type"] == "NDA"
+
+    @pytest.mark.asyncio
+    async def test_includes_chunks(self, client):
+        chunk = Chunk(chunk_id="doc_0_0", doc_id="doc_0", text="Payment terms are net 30.")
+        result = _make_query_result(answer="Net 30 [doc_0_0].", chunks=[chunk])
+        await _create_app(client, _mock_query_app(result))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query",
+            json={"text": "payment terms?", "history": []},
+        )
+
+        data = resp.json()
+        assert len(data["chunks"]) == 1
+        assert data["chunks"][0]["chunk_id"] == "doc_0_0"
+        assert data["chunks"][0]["doc_id"] == "doc_0"
+        assert data["chunks"][0]["text"] == "Payment terms are net 30."
 
     @pytest.mark.asyncio
     async def test_404_when_app_not_found(self, client):
@@ -1123,8 +1127,9 @@ class TestQueryApplicationStream:
         assert assembled.strip() == result.answer
 
     @pytest.mark.asyncio
-    async def test_final_result_event_contains_answer_and_passthrough(self, client):
-        result = _make_query_result("The answer.", passthrough=False)
+    async def test_final_result_event_contains_answer_and_chunks(self, client):
+        chunk = Chunk(chunk_id="doc_0_0", doc_id="doc_0", text="relevant passage")
+        result = _make_query_result("The answer [doc_0_0].", chunks=[chunk])
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
@@ -1136,8 +1141,9 @@ class TestQueryApplicationStream:
         result_events = [json.loads(e) for e in events if e != "[DONE]" and "result" in json.loads(e)]
         assert len(result_events) == 1
         payload = result_events[0]["result"]
-        assert payload["answer"] == "The answer."
-        assert payload["passthrough"] is False
+        assert payload["answer"] == "The answer [doc_0_0]."
+        assert len(payload["chunks"]) == 1
+        assert payload["chunks"][0]["chunk_id"] == "doc_0_0"
 
     @pytest.mark.asyncio
     async def test_ends_with_done_sentinel(self, client):
@@ -1155,11 +1161,7 @@ class TestQueryApplicationStream:
     @pytest.mark.asyncio
     async def test_result_includes_structured_records(self, client):
         records = [{"contract_type": "NDA", "doc_id": "c-001"}]
-        result = _make_query_result(
-            answer="Found 1 record(s).",
-            passthrough=True,
-            structured_records=records,
-        )
+        result = _make_query_result(answer="Found 1 record(s).", structured_records=records)
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
@@ -1170,8 +1172,29 @@ class TestQueryApplicationStream:
         events = _parse_sse(resp.text)
         result_events = [json.loads(e) for e in events if e != "[DONE]" and "result" in json.loads(e)]
         payload = result_events[0]["result"]
-        assert payload["passthrough"] is True
         assert payload["structured_records"] == records
+
+    @pytest.mark.asyncio
+    async def test_result_includes_chunks(self, client):
+        chunk = Chunk(chunk_id="doc_1_0", doc_id="doc_1", text="termination clause text", char_offset=200, char_length=50)
+        result = _make_query_result(answer="See [doc_1_0] for details.", chunks=[chunk])
+        await _create_app(client, _mock_query_app(result))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query/stream",
+            json={"text": "termination clause?", "history": []},
+        )
+
+        events = _parse_sse(resp.text)
+        result_events = [json.loads(e) for e in events if e != "[DONE]" and "result" in json.loads(e)]
+        payload = result_events[0]["result"]
+        assert len(payload["chunks"]) == 1
+        c = payload["chunks"][0]
+        assert c["chunk_id"] == "doc_1_0"
+        assert c["doc_id"] == "doc_1"
+        assert c["text"] == "termination clause text"
+        assert c["char_offset"] == 200
+        assert c["char_length"] == 50
 
     @pytest.mark.asyncio
     async def test_404_when_app_not_found(self, client):

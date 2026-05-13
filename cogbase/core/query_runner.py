@@ -52,6 +52,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 from collections.abc import AsyncGenerator
@@ -240,6 +241,7 @@ Rules:
 - Call tools as needed to gather evidence before answering.
 - Do not invent facts not present in retrieved evidence.
 - When the evidence is sufficient, produce your final answer directly (no tool calls).
+- When your answer references a passage, cite its id in brackets, e.g. [contract_001_0].
 """
 
 _SCHEMA_HEADER = "\nAvailable structured collections (use these names and fields exactly):\n"
@@ -301,11 +303,24 @@ def _format_chunks(chunks: list[Chunk]) -> str:
         return "(no passages found)"
     lines = ["Passages:"]
     for i, chunk in enumerate(chunks, 1):
-        location = f"doc: {chunk.doc_id}"
+        location = f"id={chunk.chunk_id}, doc: {chunk.doc_id}"
         if chunk.char_offset is not None and chunk.char_length is not None:
             location += f", char_offset: {chunk.char_offset}, char_length: {chunk.char_length}"
         lines.append(f"  [{i}] ({location})\n  {chunk.text.strip()}")
     return "\n".join(lines)
+
+
+def _filter_cited_chunks(answer: str, all_chunks: list[Chunk]) -> list[Chunk]:
+    """Return only chunks whose chunk_id the LLM cited in *answer*.
+
+    Falls back to all chunks if the LLM cited none (e.g. it paraphrased without
+    explicit citations), so the caller always gets at least something useful.
+    """
+    chunk_map = {c.chunk_id: c for c in all_chunks}
+    cited_ids = {m for m in re.findall(r"\[([^\]]+)\]", answer) if m in chunk_map}
+    if not cited_ids:
+        return all_chunks
+    return [c for c in all_chunks if c.chunk_id in cited_ids]
 
 
 # ---------------------------------------------------------------------------
@@ -525,10 +540,11 @@ class QueryRunner:
 
             tool_calls = final_result.get("tool_calls") if final_result else None
             if not tool_calls:
+                answer = "".join(tokens)
                 yield QueryResult(
-                    answer="".join(tokens),
+                    answer=answer,
                     structured_records=all_records,
-                    chunks=all_chunks,
+                    chunks=_filter_cited_chunks(answer, all_chunks),
                 )
                 return
 

@@ -585,3 +585,171 @@ async def test_compact_messages_returns_two_messages():
     assert len(compacted) == 2
     assert compacted[0]["role"] == "system"
     assert "Summary" in compacted[1]["content"]
+
+
+# ---------------------------------------------------------------------------
+# _format_chunks() — chunk label includes chunk_id
+# ---------------------------------------------------------------------------
+
+def test_format_chunks_includes_chunk_id():
+    from cogbase.core.query_runner import _format_chunks
+    from cogbase.core.models import Chunk
+
+    chunk = Chunk(chunk_id="contract_001_0", doc_id="contract_001", text="Payment terms are net 30.")
+    output = _format_chunks([chunk])
+    assert "id=contract_001_0" in output
+    assert "doc: contract_001" in output
+    assert "Payment terms are net 30." in output
+
+
+def test_format_chunks_includes_char_offsets_when_present():
+    from cogbase.core.query_runner import _format_chunks
+    from cogbase.core.models import Chunk
+
+    chunk = Chunk(chunk_id="doc_0_0", doc_id="doc_0", text="text", char_offset=100, char_length=50)
+    output = _format_chunks([chunk])
+    assert "char_offset: 100" in output
+    assert "char_length: 50" in output
+
+
+def test_format_chunks_empty_returns_placeholder():
+    from cogbase.core.query_runner import _format_chunks
+
+    assert _format_chunks([]) == "(no passages found)"
+
+
+# ---------------------------------------------------------------------------
+# _filter_cited_chunks()
+# ---------------------------------------------------------------------------
+
+def test_filter_cited_chunks_returns_cited_subset():
+    from cogbase.core.query_runner import _filter_cited_chunks
+    from cogbase.core.models import Chunk
+
+    c1 = Chunk(chunk_id="doc_0_0", doc_id="doc_0", text="alpha")
+    c2 = Chunk(chunk_id="doc_0_1", doc_id="doc_0", text="beta")
+    c3 = Chunk(chunk_id="doc_1_0", doc_id="doc_1", text="gamma")
+
+    result = _filter_cited_chunks(
+        "Based on [doc_0_0] and [doc_1_0], the answer is clear.",
+        [c1, c2, c3],
+    )
+    assert result == [c1, c3]
+
+
+def test_filter_cited_chunks_fallback_when_no_citations():
+    from cogbase.core.query_runner import _filter_cited_chunks
+    from cogbase.core.models import Chunk
+
+    c1 = Chunk(chunk_id="doc_0_0", doc_id="doc_0", text="alpha")
+    c2 = Chunk(chunk_id="doc_0_1", doc_id="doc_0", text="beta")
+
+    result = _filter_cited_chunks("Based on the documents, here is the answer.", [c1, c2])
+    assert result == [c1, c2]
+
+
+def test_filter_cited_chunks_ignores_unknown_bracket_patterns():
+    from cogbase.core.query_runner import _filter_cited_chunks
+    from cogbase.core.models import Chunk
+
+    c1 = Chunk(chunk_id="doc_0_0", doc_id="doc_0", text="alpha")
+
+    # Numbered refs like [1], [2] are not valid chunk_ids — should trigger fallback.
+    result = _filter_cited_chunks("See [1] for details, also [2] is relevant.", [c1])
+    assert result == [c1]
+
+
+def test_filter_cited_chunks_empty_input_returns_empty():
+    from cogbase.core.query_runner import _filter_cited_chunks
+
+    assert _filter_cited_chunks("any answer with [doc_0_0]", []) == []
+
+
+def test_filter_cited_chunks_preserves_all_chunks_order():
+    from cogbase.core.query_runner import _filter_cited_chunks
+    from cogbase.core.models import Chunk
+
+    c1 = Chunk(chunk_id="doc_0_0", doc_id="doc_0", text="first")
+    c2 = Chunk(chunk_id="doc_0_1", doc_id="doc_0", text="second")
+    c3 = Chunk(chunk_id="doc_0_2", doc_id="doc_0", text="third")
+
+    # LLM cited in reverse order — result should follow all_chunks order.
+    result = _filter_cited_chunks("See [doc_0_2] and [doc_0_0].", [c1, c2, c3])
+    assert result == [c1, c3]
+
+
+# ---------------------------------------------------------------------------
+# run() — cited-chunk filtering integration
+# ---------------------------------------------------------------------------
+
+def _fake_vector_store_with_chunks(return_chunks):
+    from cogbase.stores import VectorStoreBase
+
+    class _Store(VectorStoreBase):
+        async def upsert(self, collection, chunks): pass
+        async def search(self, collection, query_text, embedding, top_k):
+            return return_chunks
+        async def delete(self, collection, doc_id): pass
+        async def delete_collection(self, collection): pass
+        async def create_collection(self, schema): pass
+
+    return _Store()
+
+
+def _fake_embedder():
+    from cogbase.embeddings.base import EmbeddingBase
+
+    class _Embedder(EmbeddingBase):
+        async def embed(self, texts):
+            return [[0.1] * 4 for _ in texts]
+
+    return _Embedder()
+
+
+@pytest.mark.asyncio
+async def test_run_vector_search_result_contains_only_cited_chunks():
+    """QueryResult.chunks is filtered to only chunks the LLM cited by chunk_id."""
+    from cogbase.core.models import Chunk as ModelChunk
+
+    store_chunks = [
+        ModelChunk(chunk_id="doc_0", doc_id="d1", text="passage A", embedding=[0.1] * 4),
+        ModelChunk(chunk_id="doc_1", doc_id="d1", text="passage B", embedding=[0.1] * 4),
+    ]
+    llm = _make_llm(
+        _tool_result("vector_search", {"query": "q", "collection": "docs"}),
+        _text_result("Based on [doc_0], the answer is passage A."),
+    )
+    runner = Runner(
+        llm,
+        vector_store=_fake_vector_store_with_chunks(store_chunks),
+        embedder=_fake_embedder(),
+    )
+    output = [c async for c in runner.run("find passage")]
+    result = output[-1]
+    assert isinstance(result, QueryResult)
+    assert len(result.chunks) == 1
+    assert result.chunks[0].chunk_id == "doc_0"
+
+
+@pytest.mark.asyncio
+async def test_run_vector_search_fallback_all_chunks_when_llm_cites_none():
+    """QueryResult.chunks falls back to all chunks when the LLM uses no [chunk_id] citations."""
+    from cogbase.core.models import Chunk as ModelChunk
+
+    store_chunks = [
+        ModelChunk(chunk_id="doc_0", doc_id="d1", text="passage A", embedding=[0.1] * 4),
+        ModelChunk(chunk_id="doc_1", doc_id="d1", text="passage B", embedding=[0.1] * 4),
+    ]
+    llm = _make_llm(
+        _tool_result("vector_search", {"query": "q", "collection": "docs"}),
+        _text_result("Based on the retrieved documents, passage A is relevant."),
+    )
+    runner = Runner(
+        llm,
+        vector_store=_fake_vector_store_with_chunks(store_chunks),
+        embedder=_fake_embedder(),
+    )
+    output = [c async for c in runner.run("find passage")]
+    result = output[-1]
+    assert isinstance(result, QueryResult)
+    assert len(result.chunks) == 2
