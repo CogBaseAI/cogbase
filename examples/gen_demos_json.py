@@ -129,6 +129,9 @@ def build_catalog() -> dict:
                 ],
                 "notes": "Ingests board updates, LP updates, and investment memos for the portfolio demo.",
             },
+        ]
+    }
+"""
             {
                 "key": "contract-compliance",
                 "name": "contract-compliance",
@@ -161,8 +164,7 @@ def build_catalog() -> dict:
                     }
                 ],
             },
-        ]
-    }
+"""
 
 
 if __name__ == "__main__":

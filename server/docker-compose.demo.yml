@@ -3,6 +3,7 @@ services:
     build:
       context: ..
       dockerfile: server/Dockerfile.demo
+    image: cogbase-demo:latest
     ports:
       - "8000:8000"
     environment:
