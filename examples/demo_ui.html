@@ -604,10 +604,13 @@ tr:hover td { background: var(--bg3); }
   padding: 1px 5px; border-radius: 4px;
 }
 .ref-score { font-size: 10px; color: var(--green); margin-left: auto; }
+.ref-card { cursor: pointer; }
 .ref-text {
   font-size: 11px; color: var(--text); line-height: 1.5;
   white-space: pre-wrap; word-break: break-word;
 }
+.ref-text.collapsed { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.ref-expand-hint { font-size: 10px; color: var(--accent); margin-top: 3px; user-select: none; }
 .ref-code {
   font-size: 10px; font-family: 'SF Mono', monospace;
   white-space: pre; overflow-x: auto;
@@ -1566,17 +1569,20 @@ function renderRefs(chunks, records) {
 
   if (totalChunks) {
     html += `<div class="ref-section-hd">Passages (${totalChunks})</div>`;
-    for (const ch of chunks) {
+    for (let i = 0; i < chunks.length; i++) {
+      const ch         = chunks[i];
       const score      = ch.metadata && ch.metadata.score != null ? Number(ch.metadata.score).toFixed(3) : null;
       const collection = ch.metadata && ch.metadata.collection ? ch.metadata.collection : null;
-      const snippet    = ch.text.length > 240 ? ch.text.slice(0, 240) + '…' : ch.text;
-      html += `<div class="ref-card">
+      const label      = ch.chunk_id || ch.doc_id;
+      const long       = ch.text.length > 300;
+      html += `<div class="ref-card" onclick="toggleRefChunk(this)">
         <div class="ref-meta">
-          <span class="ref-docid">${esc(ch.doc_id)}</span>
+          <span class="ref-docid">${esc(label)}</span>
           ${collection ? `<span class="ref-coll">${esc(collection)}</span>` : ''}
           ${score !== null ? `<span class="ref-score">${score}</span>` : ''}
         </div>
-        <div class="ref-text">${esc(snippet)}</div>
+        <div class="ref-text${long ? ' collapsed' : ''}">${esc(ch.text)}</div>
+        ${long ? '<div class="ref-expand-hint">▼ expand</div>' : ''}
       </div>`;
     }
   }
@@ -1584,11 +1590,22 @@ function renderRefs(chunks, records) {
   body.innerHTML = html;
 }
 
+function toggleRefChunk(card) {
+  const txt  = card.querySelector('.ref-text');
+  const hint = card.querySelector('.ref-expand-hint');
+  if (!txt) return;
+  const collapsed = txt.classList.toggle('collapsed');
+  if (hint) hint.textContent = collapsed ? '▼ expand' : '▲ collapse';
+}
+
 function clearQueryHistory() {
   queryHistory = [];
   const c = document.getElementById('queryMsgs');
   c.innerHTML = '';
   sysMsg('queryMsgs', 'History cleared.' + (currentApp ? ' Connected to "' + currentApp + '".' : ''));
+  document.getElementById('refsBody').innerHTML =
+    '<div style="padding:30px 10px;text-align:center;color:var(--muted);font-size:12px">References will appear here after a query.</div>';
+  document.getElementById('refsCount').textContent = '—';
 }
 
 // ════════════════════════════════════════════════════════════
