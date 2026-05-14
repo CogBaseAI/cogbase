@@ -80,6 +80,11 @@ def cls_generate_schema(cls: Type[BaseModel]) -> Dict[str, FieldSchema]:
 def type_to_str(t):
     origin = get_origin(t)
 
+    # Optional[X] / X | None — use __name__ for the inner type, not str()
+    inner = _unwrap_optional(t)
+    if inner is not t:
+        return f"{type_to_str(inner)} | None"
+
     if origin in (list, List):
         inner = get_args(t)[0]
         return f"List[{type_to_str(inner)}]"
@@ -96,21 +101,22 @@ def cls_json_schema_for_llm(cls: Type[BaseModel], indent: int = 2) -> str:
 
     for i, (field_name, field_info) in enumerate(cls.model_fields.items()):
         field_type = field_info.annotation
-        origin = get_origin(field_type)
+        unwrapped = _unwrap_optional(field_type)
+        origin = get_origin(unwrapped)
         desc = field_info.description or ""
         type_str = type_to_str(field_type)
 
         # List of BaseModel
         if origin in (list, List):
-            inner_type = get_args(field_type)[0]
+            inner_type = get_args(unwrapped)[0]
             if isinstance(inner_type, type) and issubclass(inner_type, BaseModel):
                 nested = cls_json_schema_for_llm(inner_type, indent + 2)
                 lines.append(f'{prefix}"{field_name}": [{nested}],')
             else:
                 lines.append(f'{prefix}"{field_name}": ["{desc}"],')
-        # Nested BaseModel
-        elif isinstance(field_type, type) and issubclass(field_type, BaseModel):
-            nested = cls_json_schema_for_llm(field_type, indent + 2)
+        # Nested BaseModel (including Optional[BaseModel])
+        elif isinstance(unwrapped, type) and issubclass(unwrapped, BaseModel):
+            nested = cls_json_schema_for_llm(unwrapped, indent + 2)
             lines.append(f'{prefix}"{field_name}": {nested},')
         # Primitive
         else:

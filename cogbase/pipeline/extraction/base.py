@@ -2,11 +2,13 @@
 
 import abc
 import asyncio
+import logging
 
 from pydantic import BaseModel
 
 from cogbase.core.models import Document
 
+logger = logging.getLogger(__name__)
 
 class ExtractorBase(abc.ABC):
     """Extract structured records from document text.
@@ -69,4 +71,5 @@ class ExtractorBase(abc.ABC):
             if result is not None:
                 return result
 
+        logger.error("failed to extract, doc_id=%s", doc.doc_id)
         return None

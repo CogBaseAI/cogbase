@@ -1,12 +1,14 @@
 """Tests for cogbase.core.basemodel_to_schema."""
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
 from cogbase.stores import FieldType
-from cogbase.core.basemodel_to_schema import cls_generate_schema, cls_json_schema_for_llm
+from cogbase.core.basemodel_to_schema import cls_generate_schema, cls_json_schema_for_llm, type_to_str
+from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
 
 
 # ---------------------------------------------------------------------------
@@ -223,3 +225,96 @@ def test_output_starts_and_ends_with_braces():
     out = cls_json_schema_for_llm(_Primitives).strip()
     assert out.startswith("{")
     assert out.endswith("}")
+
+
+# ---------------------------------------------------------------------------
+# cls_json_schema_for_llm — Optional[BaseModel] renders as nested object
+# (regression: previously emitted the full module-qualified type string)
+# ---------------------------------------------------------------------------
+
+class _Address(BaseModel):
+    city: str = Field(description="city name")
+    zip: str = Field(description="zip code")
+
+
+class _WithOptionalNested(BaseModel):
+    name: str
+    address: _Address | None = None
+
+
+class _WithTypingOptionalNested(BaseModel):
+    name: str
+    address: Optional[_Address] = None
+
+
+def test_optional_basemodel_renders_as_nested_object():
+    out = cls_json_schema_for_llm(_WithOptionalNested)
+    assert '"address": {' in out
+    assert '"city": "string, city name"' in out
+
+
+def test_typing_optional_basemodel_renders_as_nested_object():
+    out = cls_json_schema_for_llm(_WithTypingOptionalNested)
+    assert '"address": {' in out
+    assert '"city": "string, city name"' in out
+
+
+def test_optional_basemodel_does_not_emit_module_path():
+    out = cls_json_schema_for_llm(_WithOptionalNested)
+    assert "cogbase" not in out
+    assert "test_basemodel_to_schema" not in out
+
+
+# ---------------------------------------------------------------------------
+# type_to_str — Optional[BaseModel] uses __name__, not the full module path
+# ---------------------------------------------------------------------------
+
+def test_type_to_str_optional_basemodel_uses_class_name():
+    result = type_to_str(_Address | None)
+    assert result == "_Address | None"
+
+
+def test_type_to_str_typing_optional_basemodel_uses_class_name():
+    result = type_to_str(Optional[_Address])
+    assert result == "_Address | None"
+
+
+def test_type_to_str_no_module_path():
+    result = type_to_str(_Address | None)
+    assert "cogbase" not in result
+    assert "test_basemodel_to_schema" not in result
+
+
+# ---------------------------------------------------------------------------
+# Round-trip: build_model_from_json_schema → cls_json_schema_for_llm
+# Optional[BaseModel] fields must render as nested objects, not type strings
+# ---------------------------------------------------------------------------
+
+class _PaymentTerms(BaseModel):
+    schedule: str = Field(description="payment schedule")
+    amount: float | None = None
+
+
+class _ContractLike(BaseModel):
+    title: str = Field(description="contract title")
+    payment_terms: _PaymentTerms | None = Field(default=None, description="structured payment terms")
+    parties: list[str] = Field(default_factory=list, description="list of parties")
+
+
+def test_round_trip_optional_nested_renders_as_object():
+    """build_model_from_json_schema then cls_json_schema_for_llm must not leak module paths."""
+    schema_str = json.dumps(_ContractLike.model_json_schema(), indent=2)
+    rebuilt = build_model_from_json_schema(schema_str)
+    out = cls_json_schema_for_llm(rebuilt)
+
+    assert '"payment_terms": {' in out
+    assert '"schedule"' in out
+    assert "cogbase.core.json_schema_to_basemodel" not in out
+
+
+def test_round_trip_primitive_fields_unaffected():
+    schema_str = json.dumps(_ContractLike.model_json_schema(), indent=2)
+    rebuilt = build_model_from_json_schema(schema_str)
+    out = cls_json_schema_for_llm(rebuilt)
+
+    assert '"title": "string, contract title"' in out
