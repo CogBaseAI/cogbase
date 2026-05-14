@@ -159,21 +159,16 @@ name: vc-portfolio
 
 vector_collections:
   - name: portfolio_chunks
-    description: >
-      Full-text passage index across all portfolio documents. Use for detailed
-      questions about specific companies, deals, or periods.
+    description: Full-text passages from all portfolio documents.
   - name: portfolio_summaries
-    description: >
-      One-per-document summaries. Use for broad questions like "which companies
-      raised a Series B?" or "which board decks mention hiring risk?"
+    description: One-per-document summaries of portfolio documents.
 
 structured_collections:
   - name: portfolio_kpis
     description: >
-      Extracted KPIs from board decks and LP updates: company_name,
-      reporting_period, arr_usd, burn_rate_monthly_usd, runway_months,
-      headcount, ndr_pct, key_milestones, notable_risks. Use for exact
-      lookups and cross-company comparisons.
+      Financial and operational KPIs extracted from board decks and LP updates.
+      Use for exact lookups and cross-company comparisons.
+    schema: ...
     primary_fields: [doc_id]
 
 pipelines:
@@ -194,10 +189,17 @@ pipelines:
         extractor:
           type: llm
           extraction_schema: '{{"type":"object","properties":{{"company_name":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Portfolio company name"}},...}}}}'
-          prompt: >
-            You are a VC portfolio analyst. Extract structured KPIs from the
-            board deck or LP update. Use null for any field not present.
-            Return ONLY the JSON object.
+          prompt: |
+            You are a VC portfolio analyst. Extract structured financial and
+            operational KPIs from the board deck or LP update provided.
+
+            Rules:
+            - Use null for any field not present in the document. Never invent or estimate values.
+            - All monetary values must be plain numbers with no currency symbols or abbreviations (e.g. 2400000, not "$2.4M").
+            - All percentages must be plain numbers (e.g. 85.0, not "85%").
+            - reporting_period must be in "Q# YYYY" format (e.g. "Q3 2024"). If only a year is given, use "FY YYYY".
+            - key_milestones and notable_risks must be concise verbatim phrases from the document, not paraphrases.
+            - Return ONLY the JSON object — no explanation, no markdown fences.
 
       - tool: document-embed-upsert
         collection: portfolio_summaries
@@ -448,7 +450,7 @@ async def _chat_turn_events(
                     if schemas is not None:
                         extracted_schemas = schemas
                 elif tc["name"] == "propose_app_config":
-                    yield {"type": "token", "token": "Generating app config...\n"}
+                    yield {"type": "token", "token": "Generating app config. Note: workflow is not auto generated currently...\n"}
                     tool_output, config_yaml = await _run_propose_config(
                         llm, messages, extracted_schemas
                     )
