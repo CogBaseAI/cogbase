@@ -90,8 +90,8 @@ def _docs_from_mapping(items: dict[str, dict]) -> list[dict]:
 
 def build_catalog() -> dict:
     config_yaml_ca = _read_config("contract_analyst_demo", _file_refs_contract_analyst())
-    config_yaml_cc = _read_config("contract_compliance_demo", _file_refs_contract_compliance())
     config_yaml_vc = _read_config("vc_portfolio_demo", _file_refs_vc_portfolio())
+    config_yaml_cc = _read_config("contract_compliance_demo", _file_refs_contract_compliance())
 
     return {
         "demos": [
@@ -113,23 +113,6 @@ def build_catalog() -> dict:
                 "notes": "Deploys the contract-analyst app and ingests five built-in SaaS agreements.",
             },
             {
-                "key": "contract-compliance",
-                "name": "contract-compliance",
-                "title": "Contract Compliance",
-                "description": (
-                    "Compare incoming contracts against company policy documents and review "
-                    "clause-level compliance findings."
-                ),
-                "config_yaml": config_yaml_cc,
-                "docs": _docs_from_documents(COMPLIANCE_RULE_DOCS + COMPLIANCE_CONTRACT_DOCS),
-                "query_examples": [
-                    "Which clauses are non-compliant on liability?",
-                    "Show all findings for contract-002.",
-                    "What rules govern breach notification?",
-                ],
-                "notes": "Ingests five policy documents and three example vendor contracts.",
-            },
-            {
                 "key": "vc-portfolio",
                 "name": "vc-portfolio",
                 "title": "VC Portfolio Intelligence",
@@ -145,6 +128,38 @@ def build_catalog() -> dict:
                     "What are the key risks across the portfolio?",
                 ],
                 "notes": "Ingests board updates, LP updates, and investment memos for the portfolio demo.",
+            },
+            {
+                "key": "contract-compliance",
+                "name": "contract-compliance",
+                "title": "Contract Compliance - Workflow Demo",
+                "description": (
+                    "Compare incoming contracts against company policy documents and review "
+                    "clause-level compliance findings."
+                ),
+                "config_yaml": config_yaml_cc,
+                "docs": _docs_from_documents(COMPLIANCE_RULE_DOCS + COMPLIANCE_CONTRACT_DOCS),
+                "query_examples": [
+                    "Which clauses are non-compliant on liability?",
+                    "Show all findings for contract-002.",
+                    "What rules govern breach notification?",
+                ],
+                "notes": (
+                    "Ingests five policy documents and three example vendor contracts. "
+                    "Check compliance for every clause in each contract against policies."
+                ),
+                "workflow_actions": [
+                    {
+                        "name": "check-contract-compliance",
+                        "label": "Check Compliance",
+                        "param_key": "doc_id",
+                        "param_label": "Contract",
+                        "param_values": [
+                            doc.doc_id
+                            for doc in COMPLIANCE_CONTRACT_DOCS
+                        ],
+                    }
+                ],
             },
         ]
     }

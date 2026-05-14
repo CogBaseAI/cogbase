@@ -452,6 +452,31 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 }
 .config-modal-item-label { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin-bottom: 4px; }
 .config-modal-item-value { font-size: 12px; line-height: 1.45; color: var(--text); word-break: break-word; }
+.wf-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wf-row select {
+  flex: 1; min-width: 120px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-size: 13px; padding: 7px 10px;
+}
+.wf-output {
+  margin-top: 10px; display: none; flex-direction: column; gap: 4px;
+  max-height: 240px; overflow-y: auto;
+}
+.wf-finding {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 11px; line-height: 1.4;
+  padding: 5px 8px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--border);
+}
+.wf-status {
+  flex-shrink: 0; padding: 1px 6px; border-radius: 999px; font-size: 10px; font-weight: 600;
+}
+.wf-status.compliant     { background: rgba(16,185,129,.15); color: var(--green); }
+.wf-status.non-compliant { background: rgba(239,68,68,.15);  color: var(--red); }
+.wf-status.needs-review  { background: rgba(245,158,11,.15); color: var(--yellow); }
+.wf-clause { color: var(--muted); flex-shrink: 0; }
+.wf-summary { color: var(--text); }
+.wf-tally { font-size: 11px; color: var(--muted); padding: 4px 0; }
 .demo-pre {
   font-family: 'SF Mono', 'Cascadia Code', monospace;
   font-size: 11px;
@@ -1187,6 +1212,23 @@ function renderDemoCard(demo) {
   const examples = (demo.query_examples || []).map(q => `<span class="demo-badge">${esc(q)}</span>`).join('');
   const configPreview = previewText(demo.config_yaml || '', 18, 1600);
 
+  const workflowRows = (demo.workflow_actions || []).map((wf, i) => {
+    const selectId = `wf-sel-${esc(demo.key)}-${i}`;
+    const outputId = `wf-out-${esc(demo.key)}-${i}`;
+    const btnId    = `wf-btn-${esc(demo.key)}-${i}`;
+    const opts = (wf.param_values || []).map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+    return `
+        <div class="wf-row" style="margin-top:0">
+          <label style="font-size:12px;color:var(--muted);white-space:nowrap">${esc(wf.param_label)}:</label>
+          <select id="${selectId}">${opts}</select>
+          <button class="btn btn-primary" id="${btnId}"
+            onclick="runDemoWorkflow('${esc(demo.key)}','${esc(demo.name)}','${esc(wf.name)}','${esc(wf.param_key)}','${selectId}','${outputId}','${btnId}')">
+            ${esc(wf.label)}
+          </button>
+        </div>
+        <div class="wf-output" id="${outputId}"></div>`;
+  }).join('');
+
   return `
     <div class="demo-card" data-demo-key="${esc(demo.key)}">
       <div>
@@ -1199,9 +1241,12 @@ function renderDemoCard(demo) {
         <span class="demo-badge">App: ${esc(demo.name)}</span>
         <span class="demo-badge">${(demo.docs || []).length} docs</span>
       </div>
-      <div class="demo-actions">
-        <button class="btn btn-green" id="demoDeployBtn-${esc(demo.key)}" onclick="deployDemo('${esc(demo.key)}')">Deploy &amp; Ingest</button>
-        <button class="btn btn-ghost" onclick="openConfigModalByRef('${esc(demo.key)}')">View full config</button>
+      <div class="demo-actions" style="flex-direction:column;align-items:flex-start">
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <button class="btn btn-green" id="demoDeployBtn-${esc(demo.key)}" onclick="deployDemo('${esc(demo.key)}')">Deploy &amp; Ingest</button>
+          <button class="btn btn-ghost" onclick="openConfigModalByRef('${esc(demo.key)}')">View full config</button>
+        </div>
+        ${workflowRows}
       </div>
       <div class="demo-block">
         <h4>Query ideas</h4>
@@ -1216,6 +1261,81 @@ function renderDemoCard(demo) {
         <pre class="demo-pre">${esc(configPreview)}</pre>
       </div>
     </div>`;
+}
+
+async function runDemoWorkflow(demoKey, appName, workflowName, paramKey, selectId, outputId, btnId) {
+  const sel = document.getElementById(selectId);
+  const out = document.getElementById(outputId);
+  const btn = document.getElementById(btnId);
+  if (!sel || !out || !btn) return;
+  const paramValue = sel.value;
+  if (!paramValue) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  out.style.display = 'flex';
+  out.innerHTML = '<div class="wf-tally">Running workflow…</div>';
+
+  const findings = [];
+  try {
+    const resp = await fetch(
+      api() + '/applications/' + encodeURIComponent(appName) + '/workflows/' + encodeURIComponent(workflowName) + '/stream',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ params: { [paramKey]: paramValue } }),
+      }
+    );
+    if (!resp.ok) {
+      const err = await resp.text();
+      out.innerHTML = `<div class="wf-tally" style="color:var(--red)">Error ${resp.status}: ${esc(err)}</div>`;
+      return;
+    }
+    out.innerHTML = '';
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') break;
+        let data;
+        try { data = JSON.parse(payload); } catch { continue; }
+        if (data.error) {
+          out.insertAdjacentHTML('beforeend', `<div class="wf-tally" style="color:var(--red)">Error: ${esc(data.error)}</div>`);
+          continue;
+        }
+        const r = data.record || data;
+        findings.push(r);
+        const status = (r.status || 'unknown').replace(/_/g, '-');
+        const clauseId = r.clause_id || '';
+        const summary = r.summary || r.finding || JSON.stringify(r);
+        out.insertAdjacentHTML('beforeend', `
+          <div class="wf-finding">
+            <span class="wf-status ${esc(status)}">${esc(status)}</span>
+            ${clauseId ? `<span class="wf-clause">${esc(clauseId)}</span>` : ''}
+            <span class="wf-summary">${esc(summary)}</span>
+          </div>`);
+        out.scrollTop = out.scrollHeight;
+      }
+    }
+    const nc = findings.filter(f => f.status === 'non_compliant').length;
+    const nr = findings.filter(f => f.status === 'needs_review').length;
+    const ok = findings.length - nc - nr;
+    out.insertAdjacentHTML('beforeend',
+      `<div class="wf-tally">${findings.length} findings — non-compliant: ${nc} · needs-review: ${nr} · compliant: ${ok}</div>`);
+  } catch (e) {
+    out.innerHTML = `<div class="wf-tally" style="color:var(--red)">Error: ${esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Run';
+  }
 }
 
 function setDemoStatus(text, error = false) {
