@@ -21,7 +21,10 @@ Most RAG pipelines retrieve text and pass it to an LLM. That works for simple Q&
 - Automate multi-step workflows across a large document set
 - Maintain continuity across sessions and accumulate knowledge over time
 
-CogBase solves this with a structured extraction layer sitting between raw ingestion and the LLM — turning unstructured input into typed, queryable facts before any reasoning begins — and a query runner that lets the LLM decide how to use structured and vector retrieval tools to answer questions.
+CogBase addresses this at multiple levels:
+— A structured extraction layer (pipeline + workflow) turns raw input into typed, queryable facts before any reasoning begins.
+- LLM driven: LLM decide how to combine structured lookup, vector search, read document, and custom skills;  memory layer accumulates knowledge across sessions.
+- Self-evolution engine: multi-tier memory system and an adaptive evolution engine.
 
 ---
 
@@ -277,6 +280,8 @@ For working config examples, see:
 - [x] Skill registry + base skill interface
 - [x] REST API (create/update/delete apps, ingest, query, streaming)
 - [x] Declarative workflow engine (structured-query, vector-search, llm-structured, structured-save; foreach; after_ingest)
+- [x] Native document parsing (PDF, DOCX, HTML ingestion)
+- [x] App generator (conversational config generation from description + example questions, with iterative revision)
 - [x] Docker Compose quickstart (SQLite + FAISS, see `server/`)
 - [x] Contract analyst, contract compliance, and VC portfolio examples
 
@@ -284,14 +289,15 @@ For working config examples, see:
 
 These are known gaps in the first-pass implementations.
 
-- [ ] Native document parsing — pipeline currently requires plain text; add PDF, DOCX, and HTML ingestion, etc
+- [ ] App generator: support workflow generation, more complex schema inference, multi-pipeline apps, etc
 - [ ] Query runner: auto-compaction — `compact_messages` is implemented but not wired into the loop, etc
+- [ ] Skills: skill creator, pull from a registry, add a skill to an app, skill versioning, etc
+- [ ] Ingestion: long document handling (hierarchical chunking, map-reduce summarization), multi-modal inputs (image, audio, video), etc
 - [ ] Workflow step timeouts and partial-failure recovery — a failing step currently aborts the whole workflow, parallel steps, etc
 - [ ] API layer - authentication (API keys or token-based), etc
 - [ ] Broader integration test coverage — especially for query runner loops, workflows, and API end-to-end paths
 
 **Planned**
-- [ ] App generator (conversational config generation from description + example questions, with iterative revision)
 - [ ] Short-term memory (Redis + in-memory)
 - [ ] Episodic memory (conversation + agent history)
 - [ ] Long-term memory (cross-session knowledge store)
@@ -320,7 +326,6 @@ CogBase is in early development. The highest-impact contributions right now are 
 **Build planned features**
 - **Memory layer** — short-term (Redis), episodic (history), and long-term (cross-session facts) tiers
 - **Adaptive evolution** — gap detector, suggestion queue, and targeted re-ingest
-- **App generator** — conversational config generation from a plain-language description
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
 
