@@ -45,7 +45,7 @@ Every document is processed into structured records at ingestion time. Extractio
 
 ## Per-document summarization
 
-Alongside passage chunks, the pipeline supports a `document-embed-upsert` step that generates one vector such as LLM summary per document and stores its embedding as a single vector. This gives the query runner two levels of semantic retrieval:
+Alongside passage chunks, the pipeline supports a `document-embed-upsert` step that generates an LLM summary per document and stores its embedding as a single vector. This gives the query runner two levels of semantic retrieval:
 
 - **document_chunks** — precise, passage-level retrieval for detailed or specific questions
 - **document_summary** — topic-level retrieval for high-level questions about what documents cover
@@ -147,4 +147,4 @@ This makes the app generator not just a one-time tool but a continuous improveme
 
 ## Skills
 
-Skills are the unit of custom capability in CogBase — discrete, stateless, and composable. Each skill is a markdown file (describing what the LLM should do) alongside an optional Python implementation. Skills are loaded from a directory at server startup and can be assigned to applications via the REST API.
+Skills are the unit of custom capability in CogBase — discrete, stateless, and composable. Each skill is a Python class with a `name`, `description` (shown to the LLM when selecting tools), and a `run(input, session)` method. Skills are registered with an application via the REST API and appear as callable tools in the query runner's agent loop.

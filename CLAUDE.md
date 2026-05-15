@@ -8,7 +8,7 @@ CogBase is in active early development. The knowledge pipeline, workflow engine,
 
 ## Architecture
 
-CogBase is a framework for building AI applications from a plain-language description, with structured fact extraction, grounded LLM reasoning, and adaptive self-improvement from usage. It has five layers with clean boundaries:
+CogBase is a framework for building AI applications that need to understand, cross-reference, and reason over large volumes of documents. The five key components are: a knowledge pipeline (ingest + structured extraction), composable workflows, a skill registry, a multi-tier memory system, and an adaptive evolution engine. It has six layers with clean boundaries:
 
 **App Generator** (conversational, planned)
 - User describes document types, facts that matter, and example questions in natural language

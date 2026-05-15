@@ -4,27 +4,23 @@
 
 Build AI apps from a plain-language description. Ingest anything. Extract structured facts. Reason across all of it. Get smarter with every query.
 
-CogBase is an open-source framework for building AI applications that need to understand, cross-reference, and reason over large volumes of unstructured data — documents, emails, transcripts, chat logs, reports, and more.
+CogBase is an open-source framework for building AI applications that need to understand, cross-reference, and reason over large volumes of documents — contracts, emails, reports, transcripts, filings, and more.
 
-It provides the foundational layer that vertical AI products are built on: typed fact extraction, a pluggable hybrid store, an LLM agent query runner, composable workflows and skills, a multi-tier memory system, and an adaptive evolution engine — generated from a plain-language description, deployed through a REST API, and improved by every query.
+It provides the foundational layer that vertical AI products are built on: a knowledge pipeline, composable workflows, a skill registry, a multi-tier memory system, and an adaptive evolution engine — generated from a plain-language description, deployed through a REST API, and improved by every query.
 
 ---
 
 ## The problem
 
-Most RAG pipelines retrieve text and pass it to an LLM. That works for simple Q&A. It breaks down when you need to:
+Building a useful AI application is more than wiring an LLM to a document store. The hard problems are:
 
-- Spot contradictions between two sources ("the contract says 60 days; the email says 30")
-- Build a reliable timeline across dozens of documents
-- Answer questions that require reasoning over structured facts, not just semantic similarity
-- Ground generated output in citable, auditable sources
-- Automate multi-step workflows across a large document set
-- Maintain continuity across sessions and accumulate knowledge over time
+- **Documents are heterogeneous** — relevant knowledge is scattered across contracts, emails, reports, and filings in different formats and sources. An application needs to ingest and reason across all of them coherently.
+- **Reasoning requires structure** — spotting contradictions, building timelines, or answering "which vendors auto-renew?" requires typed, queryable facts, not raw text. That structure must be extracted and maintained at ingest time.
+- **Actions, not just answers** — a useful agent triggers workflows, calls external APIs, and writes derived facts back to a store. Skills bridge retrieval and action.
+- **Continuity across sessions** — without memory, every conversation starts from zero. A production application needs to accumulate confirmed facts, user preferences, and resolved contradictions over time.
+- **Static configs go stale** — usage reveals gaps the original design didn't anticipate. The application needs to surface those gaps and evolve its own configuration.
 
-CogBase addresses this at multiple levels:
-— A structured extraction layer (pipeline + workflow) turns raw input into typed, queryable facts before any reasoning begins.
-- LLM driven: LLM decide how to combine structured lookup, vector search, read document, and custom skills;  memory layer accumulates knowledge across sessions.
-- Self-evolution engine: multi-tier memory system and an adaptive evolution engine.
+CogBase addresses each layer: the pipeline turns raw documents into typed, queryable knowledge; workflows handle multi-step analytical tasks; skills extend what the agent can do; memory gives it continuity; and the adaptive evolution engine closes the feedback loop so the application improves with use.
 
 ---
 
@@ -303,9 +299,13 @@ These are known gaps in the first-pass implementations.
 - [ ] Long-term memory (cross-session knowledge store)
 - [ ] Adaptive evolution engine (gap detector: retrieval score analysis, null-answer mining, tool-chain clustering)
 - [ ] Suggestion surface API (GET /suggestions, accept/reject with targeted re-ingest)
+- [ ] Document source connectors (Google Drive, etc)
 - [ ] Insurance example
 - [ ] Medical records example
 - [ ] Managed cloud hosting (SOC 2)
+
+**Future**
+- [ ] Structured source connectors (CRM, database, API) — connect external systems without document intermediaries
 
 ---
 
