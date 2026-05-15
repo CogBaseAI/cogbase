@@ -12,12 +12,15 @@ from cogbase.llms.base import LLMBase
 
 def build_llm(cfg: LLMConfig) -> LLMBase:
     """Instantiate an LLM backend from config."""
-    if cfg.provider == "openai":
+    if cfg.provider in ("openai", "openai-compatible"):
         try:
             import openai
         except ImportError as exc:
             raise ImportError("openai package required: pip install openai") from exc
         from cogbase.llms.openai import OpenAILLM
-        client = openai.AsyncOpenAI(api_key=cfg.resolved_api_key())
+        client_kwargs: dict = {"api_key": cfg.resolved_api_key()}
+        if cfg.base_url:
+            client_kwargs["base_url"] = cfg.base_url
+        client = openai.AsyncOpenAI(**client_kwargs)
         return OpenAILLM(client, model=cfg.model, mini_model=cfg.mini_model)
     raise ValueError(f"Unknown LLM provider: {cfg.provider!r}")

@@ -45,10 +45,16 @@ document_store:
   # region: us-west-2           # optional
 
 llm:
-  provider: openai           # only "openai" supported today
+  provider: openai           # "openai" | "openai-compatible"
   model: gpt-5.5
   mini_model: gpt-5.4-mini
-  # api_key: sk-...          # omit to use OPENAI_API_KEY env var
+  # api_key: sk-...          # omit to use api_key_env or OPENAI_API_KEY
+
+  # OpenAI-compatible providers (vLLM, Alibaba DashScope, etc.):
+  # provider: openai-compatible
+  # base_url: http://localhost:8000/v1          # vLLM
+  # base_url: https://dashscope.aliyuncs.com/compatible-mode/v1  # Alibaba
+  # api_key_env: DASHSCOPE_API_KEY             # env var holding the key
 
 embedding:                   # shared across all vector and summarize collections
   provider: openai
