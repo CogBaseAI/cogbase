@@ -64,19 +64,54 @@ class LLMConfig(ConfigPromptMixin, BaseModel):
 
 
 class EmbeddingConfig(ConfigPromptMixin, BaseModel):
-    provider: Literal["openai", "sentence-transformers"] = Field(
+    provider: Literal["openai", "openai-compatible", "sentence-transformers"] = Field(
         default="openai",
-        description="Embedding provider to use."
+        description=(
+            "Embedding provider. 'openai' targets the official OpenAI API. "
+            "'openai-compatible' targets any OpenAI-compatible embedding server "
+            "(vLLM, Alibaba DashScope, etc.) — requires base_url. "
+            "'sentence-transformers' runs locally via HuggingFace."
+        ),
     )
     model: str = Field(
         default="text-embedding-3-small",
         description="Embedding model name."
     )
+    base_url: str | None = Field(
+        default=None,
+        description=(
+            "Base URL for the API endpoint. Required when provider is "
+            "'openai-compatible'. Examples: "
+            "'https://dashscope.aliyuncs.com/compatible-mode/v1' (Alibaba DashScope), "
+            "'http://localhost:8000/v1' (vLLM)."
+        ),
+    )
     api_key: str | None = Field(
         default=None,
-        description="Optional API key. Falls back to OPENAI_API_KEY when omitted.",
+        description="Explicit API key. Takes priority over api_key_env and the OPENAI_API_KEY fallback.",
+    )
+    api_key_env: str | None = Field(
+        default=None,
+        description=(
+            "Name of the environment variable holding the API key. "
+            "Checked when api_key is not set. "
+            "Example: 'DASHSCOPE_API_KEY' for Alibaba DashScope."
+        ),
     )
     dimensions: int | None = Field(
         default=None,
         description="Optional output vector dimension override.",
     )
+
+    @model_validator(mode="after")
+    def _check_base_url(self) -> "EmbeddingConfig":
+        if self.provider == "openai-compatible" and not self.base_url:
+            raise ValueError("base_url is required when provider is 'openai-compatible'")
+        return self
+
+    def resolved_api_key(self) -> str | None:
+        if self.api_key:
+            return self.api_key
+        if self.api_key_env:
+            return os.environ.get(self.api_key_env)
+        return os.environ.get("OPENAI_API_KEY")

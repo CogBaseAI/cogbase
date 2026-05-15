@@ -57,6 +57,14 @@ llm:
   # api_key_env: DASHSCOPE_API_KEY             # env var holding the key
 
 embedding:                   # shared across all vector and summarize collections
-  provider: openai
+  provider: openai           # "openai" | "openai-compatible" | "sentence-transformers"
   model: text-embedding-3-small
   # dimensions: 1536         # optional
+  # api_key_env: OPENAI_API_KEY  # env var holding the key (default)
+
+  # OpenAI-compatible embedding providers (vLLM, Alibaba DashScope, etc.):
+  # provider: openai-compatible
+  # base_url: http://localhost:8000/v1                              # vLLM
+  # base_url: https://dashscope.aliyuncs.com/compatible-mode/v1   # Alibaba
+  # model: text-embedding-v3
+  # api_key_env: DASHSCOPE_API_KEY
