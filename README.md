@@ -158,6 +158,14 @@ See [docs/concepts.md](docs/concepts.md) for details on each capability.
 
 ---
 
+## Why no knowledge graph?
+
+CogBase uses a vector store + structured store + LLM agent loop rather than an explicit knowledge graph. The LLM issues iterative retrieval calls — seeing entities in one result and issuing follow-up searches — which approximates graph traversal for 2–4 hops without the upfront engineering and model cost of building and maintaining a graph. The memory layer learns successful retrieval paths across sessions, and the adaptive evolution engine materializes frequently-traversed cross-references into the structured store; together they close most of the remaining gap. The cases where a KG remains the right tool — exhaustive completeness guarantees, 6+ hop traversal at scale, global graph algorithms — are real but narrow, and do not describe most enterprise document AI workloads.
+
+See [docs/knowledge-graph-decision.md](docs/knowledge-graph-decision.md) for the full analysis.
+
+---
+
 ## Quickstart
 
 The demo setup uses SQLite + FAISS — no external databases required. You need Docker and an OpenAI API key.
