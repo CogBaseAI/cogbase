@@ -9,22 +9,20 @@ from cogbase.stores.filters import Col
 from cogbase.workflows.context import render_value
 
 if TYPE_CHECKING:
-    from cogbase.config.config import WorkflowStepConfig
+    from cogbase.config.config import StructuredQueryStepConfig
 
 
 async def run(
-    step: "WorkflowStepConfig",
+    step: "StructuredQueryStepConfig",
     ctx: dict,
     structured_store: StructuredStoreBase | None,
 ) -> dict[str, Any]:
     if structured_store is None:
         raise RuntimeError("structured-query requires a structured store")
-    if not step.collection:
-        raise ValueError("structured-query step missing 'collection'")
 
     filters = [
         Col(field) == render_value(val_template, ctx)
-        for field, val_template in (step.filters or {}).items()
+        for field, val_template in step.filters.items()
     ]
     records = await structured_store.query(step.collection, filters or None)
     return {"records": records}

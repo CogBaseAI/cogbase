@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import BaseModel
 
+from pydantic import TypeAdapter
+
 from cogbase.config.config import WorkflowConfig, WorkflowStepConfig
 from cogbase.core.models import Chunk
 from cogbase.stores import CollectionSchema, VectorCollectionSchema
@@ -56,8 +58,11 @@ _FINDINGS_SCHEMA = CollectionSchema(
 )
 
 
+_STEP_ADAPTER: TypeAdapter[WorkflowStepConfig] = TypeAdapter(WorkflowStepConfig)
+
+
 def _make_step(**kwargs) -> WorkflowStepConfig:
-    return WorkflowStepConfig(id=kwargs.pop("id", "step"), **kwargs)
+    return _STEP_ADAPTER.validate_python({"id": kwargs.pop("id", "step"), **kwargs})
 
 
 def _make_workflow(steps: list[WorkflowStepConfig], name: str = "test-wf") -> WorkflowConfig:

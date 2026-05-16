@@ -367,8 +367,8 @@ class TestAppConfig:
         assert "LLM configuration." not in app_prompt
 
         llm_prompt = LLMConfig.config_format_prompt()
-        assert "LLM provider to use." in llm_prompt
-        assert "Optional API key. Falls back to OPENAI_API_KEY when omitted." in llm_prompt
+        assert "LLM provider." in llm_prompt
+        assert "Explicit API key." in llm_prompt
 
     def test_config_format_prompt_respects_prompt_skip_flag(self):
         from pydantic import BaseModel, Field

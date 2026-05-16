@@ -9,11 +9,11 @@ from cogbase.stores import VectorStoreBase
 from cogbase.workflows.context import render_value
 
 if TYPE_CHECKING:
-    from cogbase.config.config import WorkflowStepConfig
+    from cogbase.config.config import VectorSearchStepConfig
 
 
 async def run(
-    step: "WorkflowStepConfig",
+    step: "VectorSearchStepConfig",
     ctx: dict,
     vector_store: VectorStoreBase | None,
     embedder: EmbeddingBase | None,
@@ -22,10 +22,6 @@ async def run(
         raise RuntimeError("vector-search requires a vector store")
     if embedder is None:
         raise RuntimeError("vector-search requires an embedder")
-    if not step.collection:
-        raise ValueError("vector-search step missing 'collection'")
-    if not step.query:
-        raise ValueError("vector-search step missing 'query'")
 
     query_text = str(render_value(step.query, ctx))
     (embedding,) = await embedder.embed([query_text])

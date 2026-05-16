@@ -12,7 +12,7 @@ from cogbase.llms.base import LLMBase
 from cogbase.workflows.context import render_value
 
 if TYPE_CHECKING:
-    from cogbase.config.config import WorkflowStepConfig
+    from cogbase.config.config import LLMStructuredStepConfig
 
 logger = logging.getLogger(__name__)
 
@@ -24,21 +24,17 @@ def _json_default(obj: Any) -> Any:
 
 
 async def run(
-    step: "WorkflowStepConfig",
+    step: "LLMStructuredStepConfig",
     ctx: dict,
     llm: LLMBase | None,
 ) -> dict[str, Any]:
     if llm is None:
         raise RuntimeError("llm-structured requires an LLM")
-    if not step.prompt:
-        raise ValueError("llm-structured step missing 'prompt'")
-    if not step.output_schema:
-        raise ValueError("llm-structured step missing 'output_schema'")
 
     system_message = str(render_value(step.prompt, ctx))
 
     input_values: dict[str, Any] = {
-        k: render_value(v, ctx) for k, v in (step.input or {}).items()
+        k: render_value(v, ctx) for k, v in step.input.items()
     }
 
     schema_model = build_model_from_json_schema(step.output_schema)

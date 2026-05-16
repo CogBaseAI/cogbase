@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cogbase.config.config import WorkflowConfig, WorkflowStepConfig, WorkflowTriggerConfig, WhenCondition
+from cogbase.config.config import WorkflowConfig, WorkflowTriggerConfig, WhenCondition
 from cogbase.core.app import CogBaseApp
 from cogbase.core.models import Document
 from cogbase.core.query_runner import QueryRunner

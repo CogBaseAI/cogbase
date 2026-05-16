@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from pydantic import TypeAdapter, ValidationError
+
 from cogbase.config.config import WorkflowStepConfig
 from cogbase.core.models import Chunk
 from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -67,8 +69,11 @@ async def _make_vector_store(dim: int = 4) -> FAISSVectorStore:
     return vs
 
 
+_STEP_ADAPTER: TypeAdapter[WorkflowStepConfig] = TypeAdapter(WorkflowStepConfig)
+
+
 def _make_step(**kwargs) -> WorkflowStepConfig:
-    return WorkflowStepConfig(id="test-step", **kwargs)
+    return _STEP_ADAPTER.validate_python({"id": "test-step", **kwargs})
 
 
 def _make_llm(response: str) -> MagicMock:
@@ -133,11 +138,9 @@ class TestStructuredQueryTool:
         with pytest.raises(RuntimeError, match="structured store"):
             await sq_run(step, {}, None)
 
-    async def test_missing_collection_raises(self):
-        store = InMemoryStructuredStore()
-        step = _make_step(tool="structured-query")
-        with pytest.raises(ValueError, match="collection"):
-            await sq_run(step, {}, store)
+    def test_missing_collection_raises(self):
+        with pytest.raises(ValidationError):
+            _make_step(tool="structured-query")
 
 
 # ---------------------------------------------------------------------------
@@ -191,17 +194,13 @@ class TestVectorSearchTool:
         with pytest.raises(RuntimeError, match="embedder"):
             await vs_run(step, {}, vs, None)
 
-    async def test_missing_collection_raises(self):
-        vs = await _make_vector_store()
-        step = _make_step(tool="vector-search", query="q")
-        with pytest.raises(ValueError, match="collection"):
-            await vs_run(step, {}, vs, _make_embedder())
+    def test_missing_collection_raises(self):
+        with pytest.raises(ValidationError):
+            _make_step(tool="vector-search", query="q")
 
-    async def test_missing_query_raises(self):
-        vs = await _make_vector_store()
-        step = _make_step(tool="vector-search", collection="rules")
-        with pytest.raises(ValueError, match="query"):
-            await vs_run(step, {}, vs, _make_embedder())
+    def test_missing_query_raises(self):
+        with pytest.raises(ValidationError):
+            _make_step(tool="vector-search", collection="rules")
 
 
 # ---------------------------------------------------------------------------
@@ -279,15 +278,13 @@ class TestLLMStructuredTool:
         with pytest.raises(RuntimeError, match="LLM"):
             await ls_run(step, {}, None)
 
-    async def test_missing_prompt_raises(self):
-        step = _make_step(tool="llm-structured", output_schema=_FINDING_JSON_SCHEMA)
-        with pytest.raises(ValueError, match="prompt"):
-            await ls_run(step, {}, _make_llm("{}"))
+    def test_missing_prompt_raises(self):
+        with pytest.raises(ValidationError):
+            _make_step(tool="llm-structured", output_schema=_FINDING_JSON_SCHEMA)
 
-    async def test_missing_output_schema_raises(self):
-        step = _make_step(tool="llm-structured", prompt="x")
-        with pytest.raises(ValueError, match="output_schema"):
-            await ls_run(step, {}, _make_llm("{}"))
+    def test_missing_output_schema_raises(self):
+        with pytest.raises(ValidationError):
+            _make_step(tool="llm-structured", prompt="x")
 
     async def test_empty_llm_response_raises(self):
         step = _make_step(
@@ -367,7 +364,6 @@ class TestStructuredSaveTool:
         with pytest.raises(RuntimeError, match="structured store"):
             await ss_run(step, {}, None)
 
-    async def test_missing_collection_raises(self):
-        step = _make_step(tool="structured-save")
-        with pytest.raises(ValueError, match="collection"):
-            await ss_run(step, {}, InMemoryStructuredStore())
+    def test_missing_collection_raises(self):
+        with pytest.raises(ValidationError):
+            _make_step(tool="structured-save")

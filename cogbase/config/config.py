@@ -179,64 +179,122 @@ class WorkflowTriggerConfig(ConfigPromptMixin, BaseModel):
     )
 
 
-class WorkflowStepConfig(ConfigPromptMixin, BaseModel):
-    """One step in a workflow — either a leaf tool call or a foreach loop."""
-
-    id: str = Field(description="Step identifier.")
-    # Leaf step
-    tool: Literal["structured-query", "vector-search", "llm-structured", "structured-save"] | None = Field(
-        default=None,
-        description="Leaf workflow tool to run.",
-    )
-    # Foreach loop (mutually exclusive with tool)
-    foreach: str | None = Field(
-        default=None,
-        description="Collection or input path to iterate over for foreach loops.",
-    )
-    steps: list["WorkflowStepConfig"] | None = Field(
-        default=None,
-        description="Nested workflow steps for foreach loops.",
+class WorkflowStepBase(ConfigPromptMixin, BaseModel):
+    id: str = Field(
+        description="Unique step identifier. Other steps reference this step's output via {{ steps.<id> }}.",
     )
 
-    # structured-query / structured-save
-    collection: str | None = Field(
-        default=None,
-        description="Collection name for structured-query or structured-save steps.",
+
+class StructuredQueryStepConfig(WorkflowStepBase):
+    tool: Literal["structured-query"] = Field(
+        default="structured-query",
+        description="Query a structured collection with optional equality filters and return matching records.",
+    )
+    collection: str = Field(
+        description="Name of the structured collection to query.",
     )
     filters: dict[str, str] = Field(
         default_factory=dict,
-        description="Key/value filters for structured-query or structured-save steps.",
+        description=(
+            "Equality filters applied to the query. Keys are field names; values are "
+            "Jinja2 templates rendered against the step context "
+            "(e.g. '{{ input.doc_id }}', '{{ item.clause_type }}')."
+        ),
     )
 
-    # vector-search
-    query: str | None = Field(
-        default=None,
-        description="Search query for vector-search steps.",
-    )
-    top_k: int = Field(default=5, description="Maximum number of vector matches to return.")
 
-    # llm-structured
-    prompt: str | None = Field(
-        default=None,
-        description="Prompt for llm-structured steps.",
+class VectorSearchStepConfig(WorkflowStepBase):
+    tool: Literal["vector-search"] = Field(
+        default="vector-search",
+        description="Embed a query and return the closest passages from a vector collection.",
+    )
+    collection: str = Field(
+        description="Name of the vector collection to search.",
+    )
+    query: str = Field(
+        description=(
+            "Query text to embed and search with. Supports Jinja2 templates rendered "
+            "against the step context (e.g. '{{ item.clause_type }}\\n{{ item.text }}')."
+        ),
+    )
+    top_k: int = Field(
+        default=5,
+        description="Maximum number of vector matches to return.",
+    )
+
+
+class LLMStructuredStepConfig(WorkflowStepBase):
+    tool: Literal["llm-structured"] = Field(
+        default="llm-structured",
+        description=(
+            "Call an LLM with a system prompt and structured input values, "
+            "then parse its response against a JSON schema."
+        ),
+    )
+    prompt: str = Field(
+        description=(
+            "System prompt sent to the LLM. Supports Jinja2 templates rendered "
+            "against the step context."
+        ),
     )
     input: dict[str, Any] = Field(
         default_factory=dict,
-        description="Input mapping passed to llm-structured steps.",
+        description=(
+            "Named input values serialized as JSON and appended to the LLM user message. "
+            "Each value is a Jinja2 template rendered against the step context "
+            "(e.g. '{{ item }}', '{{ steps.load.records }}')."
+        ),
     )
-    output_schema: str | None = Field(
-        default=None,
-        description="Resolved JSON schema content for llm-structured output.",
+    output_schema: str = Field(
+        description=(
+            "JSON schema string the LLM response must conform to. "
+            "The parsed result is stored as {{ steps.<id>.output }}."
+        ),
     )
 
-    # structured-save
+
+class StructuredSaveStepConfig(WorkflowStepBase):
+    tool: Literal["structured-save"] = Field(
+        default="structured-save",
+        description="Render and upsert one or more records into a structured collection.",
+    )
+    collection: str = Field(
+        description="Name of the structured collection to save into.",
+    )
     records: list[Any] = Field(
         default_factory=list,
-        description="Records to save for structured-save steps.",
+        description=(
+            "List of records to save. Each entry is a Jinja2 template that resolves to "
+            "a Pydantic model or dict (e.g. '{{ steps.judge.output }}')."
+        ),
     )
 
 
-WorkflowStepConfig.model_rebuild()
+WorkflowLeafStepConfig = Annotated[
+    StructuredQueryStepConfig | VectorSearchStepConfig | LLMStructuredStepConfig | StructuredSaveStepConfig,
+    Field(discriminator="tool"),
+]
+
+
+class ForeachStepConfig(WorkflowStepBase):
+    foreach: str = Field(
+        description=(
+            "Jinja2 expression that resolves to a list to iterate over "
+            "(e.g. '{{ steps.load.records }}', '{{ input.items }}')."
+        ),
+    )
+    steps: list["WorkflowStepConfig"] = Field(
+        description=(
+            "Steps executed for every item in the foreach list. "
+            "Each iteration exposes the current item as {{ item }}. "
+            "Inner steps can also reference outer step outputs via {{ steps.<id> }}."
+        ),
+    )
+
+
+WorkflowStepConfig = WorkflowLeafStepConfig | ForeachStepConfig
+
+ForeachStepConfig.model_rebuild()
 
 
 class WorkflowConfig(ConfigPromptMixin, BaseModel):

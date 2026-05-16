@@ -8,20 +8,18 @@ from cogbase.stores import StructuredStoreBase
 from cogbase.workflows.context import render_value
 
 if TYPE_CHECKING:
-    from cogbase.config.config import WorkflowStepConfig
+    from cogbase.config.config import StructuredSaveStepConfig
 
 
 async def run(
-    step: "WorkflowStepConfig",
+    step: "StructuredSaveStepConfig",
     ctx: dict,
     structured_store: StructuredStoreBase | None,
 ) -> dict[str, Any]:
     if structured_store is None:
         raise RuntimeError("structured-save requires a structured store")
-    if not step.collection:
-        raise ValueError("structured-save step missing 'collection'")
 
-    records = [render_value(r, ctx) for r in (step.records or [])]
+    records = [render_value(r, ctx) for r in step.records]
     if records:
         await structured_store.save(step.collection, records)
     return {"records": records}

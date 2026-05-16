@@ -9,11 +9,11 @@ from cogbase.llms.base import LLMBase
 from cogbase.stores import StructuredStoreBase, VectorStoreBase
 
 if TYPE_CHECKING:
-    from cogbase.config.config import WorkflowStepConfig
+    from cogbase.config.config import WorkflowLeafStepConfig
 
 
 async def run_tool(
-    step: "WorkflowStepConfig",
+    step: "WorkflowLeafStepConfig",
     ctx: dict,
     structured_store: StructuredStoreBase | None,
     vector_store: VectorStoreBase | None,

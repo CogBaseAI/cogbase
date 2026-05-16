@@ -12,6 +12,8 @@ from cogbase.stores import StructuredStoreBase, VectorStoreBase
 from cogbase.workflows.context import render_value
 from cogbase.workflows.tools import run_tool
 
+from cogbase.config.config import ForeachStepConfig, StructuredSaveStepConfig
+
 if TYPE_CHECKING:
     from cogbase.config.config import WorkflowConfig, WorkflowStepConfig
 
@@ -60,7 +62,7 @@ class WorkflowRunner:
         ctx: dict[str, Any],
     ) -> AsyncGenerator[dict, None]:
         for step in steps:
-            if step.foreach is not None:
+            if isinstance(step, ForeachStepConfig):
                 items = render_value(step.foreach, ctx)
                 if not isinstance(items, list):
                     raise ValueError(
@@ -70,9 +72,9 @@ class WorkflowRunner:
                 for item in items:
                     # Fresh steps namespace per iteration so outputs don't cross-contaminate.
                     iter_ctx = {**ctx, "item": item, "steps": dict(ctx["steps"])}
-                    async for record in self._run_steps(step.steps or [], iter_ctx):
+                    async for record in self._run_steps(step.steps, iter_ctx):
                         yield record
-            elif step.tool is not None:
+            else:
                 logger.info(
                     "workflow.step.start workflow=%s step=%s tool=%s",
                     self.workflow.name, step.id, step.tool,
@@ -89,14 +91,9 @@ class WorkflowRunner:
                     "workflow.step.done workflow=%s step=%s tool=%s",
                     self.workflow.name, step.id, step.tool,
                 )
-                if step.tool == "structured-save":
+                if isinstance(step, StructuredSaveStepConfig):
                     for record in output.get("records", []):
                         if hasattr(record, "model_dump"):
                             yield record.model_dump()
                         elif isinstance(record, dict):
                             yield record
-            else:
-                logger.warning(
-                    "workflow.step.skipped workflow=%s step=%s (no tool, no foreach)",
-                    self.workflow.name, step.id,
-                )
