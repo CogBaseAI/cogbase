@@ -104,6 +104,10 @@ Schema rules:
 - List fields: type: array, items: {...}, default: []
 - Nested objects: type: object with inline properties
 - Add a description to every field
+- If the application has analytical workflows that call llm-structured and save results via \
+structured-save, design schemas for those output collections too. They serve as both the \
+llm-structured output_schema and the collection storage schema. Use an appropriate record \
+identifier field (e.g. clause_id, finding_id) rather than doc_id.
 
 Example output:
   contracts:
@@ -137,8 +141,10 @@ a complete, valid config.yaml.
 Output ONLY the raw YAML — no explanation, no markdown fences.
 
 Use the extraction_schema values from the "Validated extraction schemas" section verbatim — \
-do not rewrite or reformat them. The schema field in structured_collections is derived \
-automatically from the extraction_schema — you do not need to provide it.
+do not rewrite or reformat them. For pipeline collections (extract-structured targets), the \
+schema field in structured_collections is derived automatically — you do not need to provide it. \
+For workflow output collections (structured-save targets that are not extract-structured targets), \
+set schema inline using the exact value from "Validated extraction schemas".
 
 ## Rules
 1. name must be kebab-case (lowercase, alphanumeric, hyphens only)
@@ -148,12 +154,18 @@ automatically from the extraction_schema — you do not need to provide it.
 5. Pipeline step collections must exactly match declared vector/structured collection names
 6. Use snake_case for all collection names and field names
 7. Every pipeline must have a routing_description — a plain-language sentence describing which documents belong in that pipeline (used by LLM routing to classify documents)
+8. output_schema in llm-structured workflow steps must be an inline JSON string — use the \
+   exact value from "Validated extraction schemas". Never use a .json filename.
+9. prompt in llm-structured workflow steps must be inline text. Never use a .txt filename.
+10. Workflow output collections (structured-save targets not produced by extract-structured) \
+    must have schema set inline using the value from "Validated extraction schemas" — they \
+    are NOT auto-injected like pipeline collections.
 
 ## Config format
 
 {AppConfig.config_format_prompt()}
 
-## Example — two document types, shared vector collections, no workflows
+## Example — two document types, shared vector collections
 
 name: vc-portfolio
 
@@ -223,7 +235,55 @@ pipelines:
         collection: portfolio_summaries
         doc_prompt: >
           Summarize this investment memo or pitch deck. Include: company name,
-          stage, sector, investment thesis, key risks, and deal terms if present."""
+          stage, sector, investment thesis, key risks, and deal terms if present.
+
+## Example — workflow: fan-out LLM judgment over records in a collection
+
+structured_collections:
+  - name: clause_compliance_findings
+    description: >
+      Clause-level compliance findings. Each record captures whether a clause complies
+      with company policy, with severity and plain-language assessment.
+    schema: '{{"type":"object","properties":{{"clause_id":{{"type":"string","description":"Clause identifier"}},"compliant":{{"anyOf":[{{"type":"boolean"}},{{"type":"null"}}],"description":"Whether the clause complies"}},"severity":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Severity if non-compliant: critical/high/medium/low"}},"summary":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Plain-language compliance assessment"}}}}}}'
+    primary_fields: [clause_id]
+
+workflows:
+  - name: check-contract-compliance
+    trigger:
+      type: manual
+    input_schema:
+      doc_id: string
+    steps:
+      - id: load_clauses
+        tool: structured-query
+        collection: contract_clauses
+        filters:
+          doc_id: "{{{{ input.doc_id }}}}"
+
+      - id: review_each_clause
+        foreach: "{{{{ steps.load_clauses.records }}}}"
+        steps:
+          - id: retrieve_rules
+            tool: vector-search
+            collection: rule_chunks
+            query: "{{{{ item.clause_type }}}}\\n{{{{ item.text }}}}"
+            top_k: 5
+
+          - id: judge
+            tool: llm-structured
+            prompt: |
+              You are a compliance judge. Review the clause against the company policy rules
+              provided. Return JSON only — no explanation, no markdown fences.
+            input:
+              clause: "{{{{ item }}}}"
+              rules: "{{{{ steps.retrieve_rules.chunks }}}}"
+            output_schema: '{{"type":"object","properties":{{"clause_id":{{"type":"string","description":"Clause identifier"}},"compliant":{{"anyOf":[{{"type":"boolean"}},{{"type":"null"}}],"description":"Whether the clause complies"}},"severity":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Severity if non-compliant: critical/high/medium/low"}},"summary":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Plain-language compliance assessment"}}}}}}'
+
+          - id: save_finding
+            tool: structured-save
+            collection: clause_compliance_findings
+            records:
+              - "{{{{ steps.judge.output }}}}" """
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -292,12 +352,22 @@ without a workflow.
 
    Use domain knowledge to propose sensible fields — do not ask the user to enumerate them.
    Ask the user to confirm, add, remove, or rename fields. Revise conversationally until confirmed.
-   Once the user confirms the field list, call propose_extraction_schema to formalize the schemas.
+
+   If any queries require analytical fan-out (e.g. "check every clause for compliance",
+   "rank all companies by ARR"), also design the workflow before calling propose_extraction_schema:
+   - Sketch the step sequence: what records to load, what to iterate over, what LLM judgment
+     to apply, and where to save results.
+   - Identify the workflow output collection (e.g. "compliance_findings") and add its fields
+     to the proposed field list — its schema must be generated in the same call as the pipeline schemas.
+   - Confirm the workflow design with the user.
+
+   Once the field list (and any workflow design) is confirmed, call propose_extraction_schema.
    When it succeeds, immediately call propose_app_config — no additional confirmation needed.
 
 3. Once the schema is confirmed, call propose_app_config.
-   It generates and validates the config from the conversation — you do not write the YAML yourself.
-   When it succeeds, present the result to the user with a plain-language explanation of what was set up and why."""
+   It generates and validates the full config — pipelines and any confirmed workflows — from
+   the conversation. When it succeeds, present the result to the user with a plain-language
+   explanation of what was set up and why."""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -321,8 +391,24 @@ def _make_record_schema(extraction_schema: dict) -> dict:
     return record
 
 
-def _inject_record_schemas(config_dict: dict) -> None:
-    """Set schema = extraction_schema + doc_id for each extract-structured collection."""
+def _collect_save_targets(steps: list, targets: set[str]) -> None:
+    """Recursively collect structured-save collection names from workflow steps."""
+    for step in steps:
+        if step.get("tool") == "structured-save":
+            coll = step.get("collection")
+            if coll:
+                targets.add(coll)
+        inner = step.get("steps")
+        if inner:
+            _collect_save_targets(inner, targets)
+
+
+def _inject_record_schemas(config_dict: dict, extracted_schemas: dict[str, str] | None = None) -> None:
+    """Set schema for structured collections.
+
+    Pipeline extract-structured targets: schema = extraction_schema + doc_id.
+    Workflow structured-save targets: schema from extracted_schemas as-is (no doc_id injection).
+    """
     ext_schemas: dict[str, dict] = {}
     for pipeline in config_dict.get("pipelines", []):
         for step in pipeline.get("steps", []):
@@ -340,6 +426,19 @@ def _inject_record_schemas(config_dict: dict) -> None:
             sc["schema"] = json.dumps(
                 _make_record_schema(ext_schemas[name]), separators=(",", ":")
             )
+
+    if extracted_schemas:
+        save_targets: set[str] = set()
+        for workflow in config_dict.get("workflows", []):
+            _collect_save_targets(workflow.get("steps", []), save_targets)
+        for sc in config_dict.get("structured_collections", []):
+            name = sc.get("name")
+            if name in save_targets and "schema" not in sc and name in extracted_schemas:
+                try:
+                    schema_dict = json.loads(extracted_schemas[name])
+                    sc["schema"] = json.dumps(schema_dict, separators=(",", ":"))
+                except (json.JSONDecodeError, ValueError):
+                    pass
 
 
 def _validate_extraction_schema(schema_dict: dict, collection_name: str) -> list[str]:
@@ -450,7 +549,7 @@ async def _chat_turn_events(
                     if schemas is not None:
                         extracted_schemas = schemas
                 elif tc["name"] == "propose_app_config":
-                    yield {"type": "token", "token": "Generating app config. Note: workflow is not auto generated currently...\n"}
+                    yield {"type": "token", "token": "Generating app config...\n"}
                     tool_output, config_yaml = await _run_propose_config(
                         llm, messages, extracted_schemas
                     )
@@ -567,7 +666,7 @@ async def _run_propose_config(
             config_dict = yaml.safe_load(config_yaml)
             if not isinstance(config_dict, dict):
                 raise ValueError("YAML must be a mapping at the top level")
-            _inject_record_schemas(config_dict)
+            _inject_record_schemas(config_dict, extraction_schemas)
             config = AppConfig.model_validate(config_dict)
         except Exception as exc:
             errors = [str(exc)]

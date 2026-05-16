@@ -383,7 +383,6 @@ class AppConfig(ConfigPromptMixin, BaseModel):
     workflows: list[WorkflowConfig] = Field(
         default_factory=list,
         description="Configured workflows.",
-        json_schema_extra={"prompt_skip": True}, # skip for now, add back when needed
     )
 
     @model_validator(mode="after")
