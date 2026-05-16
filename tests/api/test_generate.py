@@ -5,18 +5,20 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 import yaml
 
 from api.routers.generate import (
     _chat_turn_events,
-    _inject_record_schemas,
+    _inject_pipeline_record_schemas,
+    _inject_workflow_output_schemas,
     _make_record_schema,
     _parse_and_validate_schemas,
     _run_propose_config,
-    _run_propose_schema,
+    _run_propose_extraction_schemas,
+    _run_propose_workflow_schemas,
     _serialize_config,
     _validate_extraction_schema,
+    _validate_workflow_output_schema,
     chat,
 )
 from api.models import GenerateChatRequest
@@ -70,6 +72,65 @@ pipelines:
           type: llm
           extraction_schema: '{"type":"object","properties":{"vendor":{"type":"string","description":"Vendor name"}}}'
           prompt: Extract contract data.
+"""
+
+_WORKFLOW_SCHEMA_YAML = """\
+clause_compliance_findings:
+  type: object
+  properties:
+    doc_id:
+      type: string
+      description: Source document id
+    clause_id:
+      type: string
+      description: Reviewed clause id
+    status:
+      type: string
+      description: Compliance status
+"""
+
+_CONFIG_YAML_WITH_WORKFLOW = """\
+name: test-app
+vector_collections:
+  - name: chunks
+    description: Semantic search chunks.
+structured_collections:
+  - name: contracts
+    description: Extracted contract facts.
+    primary_fields: [doc_id]
+  - name: clause_compliance_findings
+    description: Clause-level compliance findings.
+    primary_fields: [clause_id]
+pipelines:
+  - name: main
+    routing_description: Contract documents for chunked indexing and structured extraction.
+    steps:
+      - tool: chunk-embed-upsert
+        collection: chunks
+      - tool: extract-structured
+        collection: contracts
+        extractor:
+          type: llm
+          extraction_schema: '{"type":"object","properties":{"vendor":{"type":"string","description":"Vendor name"}}}'
+          prompt: Extract contract data.
+workflows:
+  - name: check-compliance
+    trigger:
+      type: manual
+    input_schema:
+      doc_id: string
+    steps:
+      - id: judge
+        tool: llm-structured
+        prompt: Judge compliance.
+        input:
+          doc_id: "{{ input.doc_id }}"
+        output_schema: '{"type":"object","properties":{"doc_id":{"type":"string","description":"Source document id"},"clause_id":{"type":"string","description":"Reviewed clause id"},"status":{"type":"string","description":"Compliance status"}}}'
+      - id: save
+        tool: structured-save
+        collection: clause_compliance_findings
+        records:
+          - "{{ steps.judge.output }}"
 """
 
 
@@ -183,11 +244,11 @@ def _make_config(extraction_schema: dict, collection: str = "contracts") -> dict
     }
 
 
-class TestInjectRecordSchemas:
+class TestInjectPipelineRecordSchemas:
     def test_injects_schema_with_doc_id(self):
         ext_schema = {"type": "object", "properties": {"vendor": {"type": "string"}}}
         cfg = _make_config(ext_schema)
-        _inject_record_schemas(cfg)
+        _inject_pipeline_record_schemas(cfg)
         sc = cfg["structured_collections"][0]
         assert "schema" in sc
         injected = json.loads(sc["schema"])
@@ -198,7 +259,7 @@ class TestInjectRecordSchemas:
     def test_schema_matches_make_record_schema(self):
         ext_schema = {"type": "object", "properties": {"amount": {"type": "number"}}}
         cfg = _make_config(ext_schema)
-        _inject_record_schemas(cfg)
+        _inject_pipeline_record_schemas(cfg)
         injected = json.loads(cfg["structured_collections"][0]["schema"])
         expected = _make_record_schema(ext_schema)
         assert injected == expected
@@ -207,7 +268,7 @@ class TestInjectRecordSchemas:
         ext_schema = {"type": "object", "properties": {"title": {"type": "string"}}}
         cfg = _make_config(ext_schema)
         cfg["structured_collections"][0]["schema"] = '{"stale": true}'
-        _inject_record_schemas(cfg)
+        _inject_pipeline_record_schemas(cfg)
         injected = json.loads(cfg["structured_collections"][0]["schema"])
         assert "doc_id" in injected["properties"]
         assert "title" in injected["properties"]
@@ -241,7 +302,7 @@ class TestInjectRecordSchemas:
                 {"name": "col_b", "description": "b"},
             ],
         }
-        _inject_record_schemas(cfg)
+        _inject_pipeline_record_schemas(cfg)
         schema_a = json.loads(cfg["structured_collections"][0]["schema"])
         schema_b = json.loads(cfg["structured_collections"][1]["schema"])
         assert "field_a" in schema_a["properties"]
@@ -267,7 +328,7 @@ class TestInjectRecordSchemas:
                 {"name": "col_b", "description": "no matching extractor"},
             ],
         }
-        _inject_record_schemas(cfg)
+        _inject_pipeline_record_schemas(cfg)
         assert "schema" not in cfg["structured_collections"][0]
 
     def test_no_extract_structured_steps(self):
@@ -275,7 +336,7 @@ class TestInjectRecordSchemas:
             "pipelines": [{"steps": [{"tool": "chunk-embed-upsert", "collection": "chunks"}]}],
             "structured_collections": [{"name": "contracts", "description": "test"}],
         }
-        _inject_record_schemas(cfg)
+        _inject_pipeline_record_schemas(cfg)
         assert "schema" not in cfg["structured_collections"][0]
 
     def test_invalid_json_extraction_schema_skipped(self):
@@ -293,13 +354,75 @@ class TestInjectRecordSchemas:
             ],
             "structured_collections": [{"name": "contracts", "description": "test"}],
         }
-        _inject_record_schemas(cfg)
+        _inject_pipeline_record_schemas(cfg)
         assert "schema" not in cfg["structured_collections"][0]
 
     def test_empty_config(self):
         cfg: dict = {}
-        _inject_record_schemas(cfg)  # must not raise
+        _inject_pipeline_record_schemas(cfg)  # must not raise
 
+
+class TestInjectWorkflowOutputSchemas:
+    def test_empty_config(self):
+        cfg: dict = {}
+        _inject_workflow_output_schemas(cfg, {})  # must not raise
+
+    def test_workflow_save_target_uses_workflow_schema_as_is(self):
+        workflow_schema = {
+            "type": "object",
+            "properties": {
+                "doc_id": {"type": "string", "description": "Source document id"},
+                "clause_id": {"type": "string", "description": "Reviewed clause id"},
+            },
+        }
+        cfg = {
+            "workflows": [
+                {
+                    "steps": [
+                        {
+                            "tool": "structured-save",
+                            "collection": "clause_compliance_findings",
+                        }
+                    ]
+                }
+            ],
+            "structured_collections": [
+                {
+                    "name": "clause_compliance_findings",
+                    "description": "findings",
+                    "schema": '{"stale": true}',
+                },
+            ],
+        }
+        _inject_workflow_output_schemas(
+            cfg,
+            {"clause_compliance_findings": json.dumps(workflow_schema)},
+        )
+        injected = json.loads(cfg["structured_collections"][0]["schema"])
+        assert injected == workflow_schema
+
+    def test_unmatched_workflow_schema_not_applied(self):
+        cfg = {
+            "workflows": [
+                {
+                    "steps": [
+                        {"tool": "structured-save", "collection": "other_findings"}
+                    ]
+                }
+            ],
+            "structured_collections": [
+                {"name": "clause_compliance_findings", "description": "findings"},
+            ],
+        }
+        _inject_workflow_output_schemas(
+            cfg,
+            {
+                "clause_compliance_findings": json.dumps(
+                    {"type": "object", "properties": {"status": {"type": "string"}}}
+                )
+            },
+        )
+        assert "schema" not in cfg["structured_collections"][0]
 
 # ---------------------------------------------------------------------------
 # _validate_extraction_schema
@@ -348,6 +471,28 @@ class TestValidateExtractionSchema:
     def test_error_message_includes_collection_name(self):
         errors = _validate_extraction_schema("bad", "my_collection")
         assert all("my_collection" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# _validate_workflow_output_schema
+# ---------------------------------------------------------------------------
+
+
+class TestValidateWorkflowOutputSchema:
+    def test_allows_doc_id_in_properties(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "doc_id": {"type": "string", "description": "Source doc"},
+                "finding_id": {"type": "string", "description": "Finding id"},
+            },
+        }
+        assert _validate_workflow_output_schema(schema, "findings") == []
+
+    def test_empty_properties_returns_error(self):
+        schema = {"type": "object", "properties": {}}
+        errors = _validate_workflow_output_schema(schema, "findings")
+        assert any("at least one field" in e for e in errors)
 
 
 # ---------------------------------------------------------------------------
@@ -428,33 +573,33 @@ class TestSerializeConfig:
 
 
 # ---------------------------------------------------------------------------
-# _run_propose_schema
+# _run_propose_extraction_schemas
 # ---------------------------------------------------------------------------
 
 
 class TestRunProposeSchema:
     async def test_success_on_first_attempt(self):
         llm = _make_llm(_MINIMAL_SCHEMA_YAML)
-        message, schemas = await _run_propose_schema(llm, _CONVERSATION)
+        message, schemas = await _run_propose_extraction_schemas(llm, _CONVERSATION)
         assert message.startswith("Schemas validated.")
         assert schemas is not None
         assert "contracts" in schemas
 
     async def test_output_has_no_schema_record_line(self):
         llm = _make_llm(_MINIMAL_SCHEMA_YAML)
-        message, schemas = await _run_propose_schema(llm, _CONVERSATION)
+        message, schemas = await _run_propose_extraction_schemas(llm, _CONVERSATION)
         assert "  schema: '" not in message
 
     async def test_retry_then_success(self):
         llm = _make_llm("not: valid: yaml: [[[", _MINIMAL_SCHEMA_YAML)
-        message, schemas = await _run_propose_schema(llm, _CONVERSATION)
+        message, schemas = await _run_propose_extraction_schemas(llm, _CONVERSATION)
         assert message.startswith("Schemas validated.")
         assert schemas is not None
         assert llm.complete.call_count == 2
 
     async def test_exhausted_retries_returns_failure_message(self):
         llm = _make_llm("bad", "bad", "bad")
-        message, schemas = await _run_propose_schema(llm, _CONVERSATION)
+        message, schemas = await _run_propose_extraction_schemas(llm, _CONVERSATION)
         assert "failed after" in message
         assert schemas is None
         assert llm.complete.call_count == 3
@@ -462,11 +607,11 @@ class TestRunProposeSchema:
     async def test_tool_call_messages_excluded_from_sub_messages(self):
         messages_with_tool_calls = [
             {"role": "user", "content": "build app"},
-            {"role": "assistant", "content": None, "tool_calls": [{"id": "1", "name": "propose_extraction_schema", "arguments": "{}"}]},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "1", "name": "propose_extraction_schemas", "arguments": "{}"}]},
             {"role": "tool", "tool_call_id": "1", "content": "Schemas validated."},
         ]
         llm = _make_llm(_MINIMAL_SCHEMA_YAML)
-        await _run_propose_schema(llm, messages_with_tool_calls)
+        await _run_propose_extraction_schemas(llm, messages_with_tool_calls)
         sent_messages = llm.complete.call_args[0][0]
         roles = [m["role"] for m in sent_messages]
         assert "tool" not in roles
@@ -485,9 +630,42 @@ class TestRunProposeSchema:
             "    text: {type: string, description: Clause text}\n"
         )
         llm = _make_llm(two_collection_yaml)
-        message, schemas = await _run_propose_schema(llm, _CONVERSATION)
+        message, schemas = await _run_propose_extraction_schemas(llm, _CONVERSATION)
         assert schemas is not None
         assert set(schemas.keys()) == {"contracts", "clauses"}
+
+# ---------------------------------------------------------------------------
+# _run_propose_workflow_schemas
+# ---------------------------------------------------------------------------
+
+
+class TestRunProposeWorkflowSchemas:
+    async def test_success_allows_doc_id(self):
+        extraction_schemas = {"contract_clauses": json.dumps({"type": "object", "properties": {"text": {"type": "string"}}})}
+        llm = _make_llm(_WORKFLOW_SCHEMA_YAML)
+        message, schemas = await _run_propose_workflow_schemas(
+            llm,
+            _CONVERSATION,
+            extraction_schemas,
+        )
+        assert message.startswith("Workflow schemas validated.")
+        assert schemas is not None
+        parsed = json.loads(schemas["clause_compliance_findings"])
+        assert "doc_id" in parsed["properties"]
+
+    async def test_includes_extraction_schemas_in_system_prompt(self):
+        extraction_schemas = {"contract_clauses": json.dumps({"type": "object", "properties": {"text": {"type": "string"}}})}
+        llm = _make_llm(_WORKFLOW_SCHEMA_YAML)
+        await _run_propose_workflow_schemas(llm, _CONVERSATION, extraction_schemas)
+        sent_messages = llm.complete.call_args[0][0]
+        assert "Validated pipeline extraction schemas" in sent_messages[0]["content"]
+        assert "contract_clauses" in sent_messages[0]["content"]
+
+    async def test_empty_mapping_is_valid(self):
+        llm = _make_llm("{}")
+        message, schemas = await _run_propose_workflow_schemas(llm, _CONVERSATION, {})
+        assert message.startswith("Workflow schemas validated.")
+        assert schemas == {}
 
 
 # ---------------------------------------------------------------------------
@@ -536,6 +714,43 @@ class TestRunProposeConfig:
         assert message == "Config validated."
         data = yaml.safe_load(stored_yaml)
         assert data.get("structured_collections", []) == []
+
+    async def test_injects_workflow_schema_as_is_for_save_target(self):
+        workflow_schema = json.dumps({
+            "type": "object",
+            "properties": {
+                "doc_id": {"type": "string", "description": "Source document id"},
+                "clause_id": {"type": "string", "description": "Reviewed clause id"},
+                "status": {"type": "string", "description": "Compliance status"},
+            },
+        })
+        llm = _make_llm(_CONFIG_YAML_WITH_WORKFLOW)
+        message, stored_yaml = await _run_propose_config(
+            llm,
+            _CONVERSATION,
+            {},
+            {"clause_compliance_findings": workflow_schema},
+        )
+        assert message == "Config validated."
+        data = yaml.safe_load(stored_yaml)
+        findings = next(
+            sc for sc in data["structured_collections"]
+            if sc["name"] == "clause_compliance_findings"
+        )
+        assert json.loads(findings["schema"]) == json.loads(workflow_schema)
+
+    async def test_config_prompt_includes_both_schema_sections(self):
+        llm = _make_llm(_MINIMAL_CONFIG_YAML)
+        await _run_propose_config(
+            llm,
+            _CONVERSATION,
+            {"contracts": '{"type":"object","properties":{"vendor":{"type":"string"}}}'},
+            {"findings": '{"type":"object","properties":{"finding_id":{"type":"string"}}}'},
+        )
+        sent_messages = llm.complete.call_args[0][0]
+        system_prompt = sent_messages[0]["content"]
+        assert "Validated pipeline extraction schemas" in system_prompt
+        assert "Validated workflow output schemas" in system_prompt
 
 
 # ---------------------------------------------------------------------------

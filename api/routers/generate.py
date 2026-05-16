@@ -1,9 +1,9 @@
 """App generator endpoints — agentic, conversational config.yaml creation.
 
-The LLM drives the conversation via two tools: propose_extraction_schema and
-propose_app_config. Both validate server-side and return errors for the LLM
-to fix. The client owns the full message history (role: user/assistant only);
-tool call/result messages live only within a single server turn.
+The LLM drives the conversation via schema/config tools. Schemas and configs
+validate server-side and return errors for the LLM to fix. The client owns the
+full message history (role: user/assistant only); tool call/result messages live
+only within a single server turn.
 
 Endpoints
 ---------
@@ -44,13 +44,28 @@ _MAX_AGENT_CALLS = 10
 # Tool definitions
 # ---------------------------------------------------------------------------
 
-_PROPOSE_SCHEMA_TOOL: ToolDefinition = {
-    "name": "propose_extraction_schema",
+_PROPOSE_EXTRACTION_SCHEMAS_TOOL: ToolDefinition = {
+    "name": "propose_extraction_schemas",
     "description": (
-        "Formalize the user-confirmed field list into validated JSON Schemas for all "
-        "structured collections. Call this only after the user has confirmed the field "
-        "list in the conversation — the schemas are derived from those confirmed fields. "
+        "Formalize the user-confirmed ingestion field list into validated JSON Schemas "
+        "for structured collections produced by pipeline extract-structured steps only. "
+        "Call this only after the user has confirmed the ingestion fields. "
         "Returns a brief validation summary on success, or a validation error message."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    },
+}
+
+_PROPOSE_WORKFLOW_SCHEMAS_TOOL: ToolDefinition = {
+    "name": "propose_workflow_schemas",
+    "description": (
+        "Generate and validate JSON Schemas for workflow output collections used as "
+        "llm-structured output_schema and structured-save storage schema. Call only if "
+        "the confirmed design includes workflows that save structured records, and only "
+        "after propose_extraction_schemas has succeeded."
     ),
     "parameters": {
         "type": "object",
@@ -63,7 +78,8 @@ _PROPOSE_CONFIG_TOOL: ToolDefinition = {
     "name": "propose_app_config",
     "description": (
         "Generate and validate a complete CogBase app config YAML. "
-        "Call this after propose_extraction_schema has succeeded. "
+        "Call this after propose_extraction_schemas has succeeded, and after "
+        "propose_workflow_schemas too when the app has workflow output collections. "
         "The config is generated from the conversation and validated server-side. "
         "Returns 'Config validated.' on success, or a validation error message."
     ),
@@ -74,13 +90,18 @@ _PROPOSE_CONFIG_TOOL: ToolDefinition = {
     },
 }
 
-_GENERATOR_TOOLS: list[ToolDefinition] = [_PROPOSE_SCHEMA_TOOL, _PROPOSE_CONFIG_TOOL]
+_GENERATOR_TOOLS: list[ToolDefinition] = [
+    _PROPOSE_EXTRACTION_SCHEMAS_TOOL,
+    _PROPOSE_WORKFLOW_SCHEMAS_TOOL,
+    _PROPOSE_CONFIG_TOOL,
+]
 
-_SCHEMA_AGENT_SYSTEM_PROMPT = """\
-You are a CogBase schema designer. Given a conversation about building a CogBase \
-application, produce JSON Schema definitions for every structured collection \
-the application needs. Generate schemas that match exactly the fields the user \
-has already confirmed in the conversation — do not add, remove, or rename fields.
+_EXTRACTION_SCHEMA_AGENT_SYSTEM_PROMPT = """\
+You are a CogBase extraction schema designer. Given a conversation about building \
+a CogBase application, produce JSON Schema definitions only for structured \
+collections produced by pipeline extract-structured steps. Generate schemas that \
+match exactly the ingestion fields the user has already confirmed in the \
+conversation — do not add, remove, or rename fields.
 
 CogBase has three store types — design schemas only for structured collections:
 - Structured collections: discrete extractable facts for filtered/exact lookup (what you design here)
@@ -88,6 +109,10 @@ CogBase has three store types — design schemas only for structured collections
 - Document collections: LLM summaries for high-level queries (handled automatically by document-embed-upsert)
 Do NOT include fields like document_text, full_text, body, or summary — those are covered \
 by the other two collections automatically.
+
+Do NOT design workflow output collections here. Collections written by \
+structured-save or used as llm-structured output_schema are handled by a separate \
+workflow schema step.
 
 Use domain knowledge to propose sensible fields — do not wait for the user to enumerate \
 them. For example, if the application is a contract analyst, include fields like \
@@ -104,10 +129,6 @@ Schema rules:
 - List fields: type: array, items: {...}, default: []
 - Nested objects: type: object with inline properties
 - Add a description to every field
-- If the application has analytical workflows that call llm-structured and save results via \
-structured-save, design schemas for those output collections too. They serve as both the \
-llm-structured output_schema and the collection storage schema. Use an appropriate record \
-identifier field (e.g. clause_id, finding_id) rather than doc_id.
 
 Example output:
   contracts:
@@ -130,21 +151,76 @@ Example output:
         default: []\
 """
 
+_WORKFLOW_SCHEMA_AGENT_SYSTEM_PROMPT = """\
+You are a CogBase workflow schema designer. Given a conversation about building \
+a CogBase application and the validated pipeline extraction schemas below, produce \
+JSON Schema definitions only for workflow output collections written by \
+structured-save and used as llm-structured output_schema.
+
+Generate schemas that match exactly the workflow output fields the user has \
+already confirmed in the conversation — do not add, remove, or rename fields.
+
+Workflow output schemas are not extraction schemas. They describe records created \
+by workflow logic, so they may include stable identifiers and provenance fields \
+such as doc_id, clause_id, finding_id, source record ids, status fields, evidence \
+references, and LLM judgment fields.
+
+Use the validated pipeline extraction schemas to preserve upstream identifiers and \
+concepts. Pipeline storage records include the extracted fields plus injected doc_id. \
+If a workflow iterates over an extracted collection, include the fields needed to \
+trace each output record back to its source record or source document.
+
+Output ONLY a YAML mapping of workflow_output_collection_name → JSON Schema object. \
+If the confirmed design has no workflow output collections, output an empty YAML \
+mapping: {}
+
+Schema rules:
+- Top-level keys are workflow output collection names (snake_case)
+- Each non-empty collection must be type: object with a non-empty properties block
+- doc_id is allowed when it is useful provenance
+- Include a stable identifier field when the workflow creates independently saved records \
+  (for example clause_id, finding_id, company_id, review_id)
+- Optional/nullable scalars: anyOf: [{type: <T>}, {type: "null"}]
+- List fields: type: array, items: {...}, default: []
+- Nested objects: type: object with inline properties
+- Add a description to every field
+
+Example output:
+  clause_compliance_findings:
+    type: object
+    properties:
+      clause_id:
+        type: string
+        description: Identifier of the reviewed clause from contract_clauses
+      doc_id:
+        type: string
+        description: Source contract document identifier
+      status:
+        type: string
+        description: Compliance status
+      severity:
+        anyOf: [{type: string}, {type: "null"}]
+        description: Severity when non-compliant
+      summary:
+        type: string
+        description: Short compliance finding summary\
+"""
+
 _MAX_SCHEMA_RETRIES = 3
 _MAX_CONFIG_RETRIES = 3
 
 _CONFIG_AGENT_SYSTEM_PROMPT = f"""\
 You are a CogBase configuration generator. Given a conversation about building a CogBase \
-application — including the validated extraction schemas injected below — produce \
-a complete, valid config.yaml.
+application — including the validated pipeline extraction schemas and workflow output \
+schemas injected below — produce a complete, valid config.yaml.
 
 Output ONLY the raw YAML — no explanation, no markdown fences.
 
-Use the extraction_schema values from the "Validated extraction schemas" section verbatim — \
+Use the extraction_schema values from the "Validated pipeline extraction schemas" section verbatim — \
 do not rewrite or reformat them. For pipeline collections (extract-structured targets), the \
 schema field in structured_collections is derived automatically — you do not need to provide it. \
-For workflow output collections (structured-save targets that are not extract-structured targets), \
-set schema inline using the exact value from "Validated extraction schemas".
+For workflow output collections (structured-save targets), set schema inline using the exact value \
+from "Validated workflow output schemas".
 
 ## Rules
 1. name must be kebab-case (lowercase, alphanumeric, hyphens only)
@@ -155,10 +231,10 @@ set schema inline using the exact value from "Validated extraction schemas".
 6. Use snake_case for all collection names and field names
 7. Every pipeline must have a routing_description — a plain-language sentence describing which documents belong in that pipeline (used by LLM routing to classify documents)
 8. output_schema in llm-structured workflow steps must be an inline JSON string — use the \
-   exact value from "Validated extraction schemas". Never use a .json filename.
+   exact value from "Validated workflow output schemas". Never use a .json filename.
 9. prompt in llm-structured workflow steps must be inline text. Never use a .txt filename.
 10. Workflow output collections (structured-save targets not produced by extract-structured) \
-    must have schema set inline using the value from "Validated extraction schemas" — they \
+    must have schema set inline using the value from "Validated workflow output schemas" — they \
     are NOT auto-injected like pipeline collections.
 
 ## Config format
@@ -289,7 +365,7 @@ workflows:
 # System prompt
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT = f"""\
+_SYSTEM_PROMPT = """\
 You are an agentic CogBase application generator. Help the user build a complete, \
 correct CogBase app configuration through natural conversation. You drive the process.
 
@@ -354,15 +430,16 @@ without a workflow.
    Ask the user to confirm, add, remove, or rename fields. Revise conversationally until confirmed.
 
    If any queries require analytical fan-out (e.g. "check every clause for compliance",
-   "rank all companies by ARR"), also design the workflow before calling propose_extraction_schema:
+   "rank all companies by ARR"), also design the workflow before calling propose_extraction_schemas:
    - Sketch the step sequence: what records to load, what to iterate over, what LLM judgment
      to apply, and where to save results.
    - Identify the workflow output collection (e.g. "compliance_findings") and add its fields
-     to the proposed field list — its schema must be generated in the same call as the pipeline schemas.
+     to the proposed field list — its schema will be generated after the pipeline extraction schemas.
    - Confirm the workflow design with the user.
 
-   Once the field list (and any workflow design) is confirmed, call propose_extraction_schema.
-   When it succeeds, immediately call propose_app_config — no additional confirmation needed.
+   Once the field list (and any workflow design) is confirmed, call propose_extraction_schemas.
+   If the confirmed design includes workflow output collections, then call propose_workflow_schemas.
+   When the needed schema tools succeed, immediately call propose_app_config — no additional confirmation needed.
 
 3. Once the schema is confirmed, call propose_app_config.
    It generates and validates the full config — pipelines and any confirmed workflows — from
@@ -403,11 +480,11 @@ def _collect_save_targets(steps: list, targets: set[str]) -> None:
             _collect_save_targets(inner, targets)
 
 
-def _inject_record_schemas(config_dict: dict, extracted_schemas: dict[str, str] | None = None) -> None:
-    """Set schema for structured collections.
+def _inject_pipeline_record_schemas(config_dict: dict) -> None:
+    """Set pipeline structured collection schemas from inline extraction schemas.
 
-    Pipeline extract-structured targets: schema = extraction_schema + doc_id.
-    Workflow structured-save targets: schema from extracted_schemas as-is (no doc_id injection).
+    Pipeline extract-structured targets store records, not raw extraction objects,
+    so their collection schema is extraction_schema + injected doc_id.
     """
     ext_schemas: dict[str, dict] = {}
     for pipeline in config_dict.get("pipelines", []):
@@ -427,15 +504,21 @@ def _inject_record_schemas(config_dict: dict, extracted_schemas: dict[str, str] 
                 _make_record_schema(ext_schemas[name]), separators=(",", ":")
             )
 
-    if extracted_schemas:
+
+def _inject_workflow_output_schemas(
+    config_dict: dict,
+    workflow_schemas: dict[str, str] | None = None,
+) -> None:
+    """Set workflow structured-save target schemas from validated workflow schemas."""
+    if workflow_schemas:
         save_targets: set[str] = set()
         for workflow in config_dict.get("workflows", []):
             _collect_save_targets(workflow.get("steps", []), save_targets)
         for sc in config_dict.get("structured_collections", []):
             name = sc.get("name")
-            if name in save_targets and "schema" not in sc and name in extracted_schemas:
+            if name in save_targets and name in workflow_schemas:
                 try:
-                    schema_dict = json.loads(extracted_schemas[name])
+                    schema_dict = json.loads(workflow_schemas[name])
                     sc["schema"] = json.dumps(schema_dict, separators=(",", ":"))
                 except (json.JSONDecodeError, ValueError):
                     pass
@@ -462,7 +545,27 @@ def _validate_extraction_schema(schema_dict: dict, collection_name: str) -> list
     return errors
 
 
-def _parse_and_validate_schemas(raw: str) -> tuple[dict | None, list[str]]:
+def _validate_workflow_output_schema(schema_dict: dict, collection_name: str) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(schema_dict, dict):
+        return [f"[{collection_name}] must be a JSON Schema object (mapping)"]
+    props = schema_dict.get("properties", {})
+    if not props:
+        errors.append(f"[{collection_name}] schema must have at least one field in 'properties'")
+    if errors:
+        return errors
+    try:
+        build_model_from_json_schema(schema_dict, model_name=collection_name)
+    except Exception as exc:
+        errors.append(f"[{collection_name}] invalid JSON Schema: {exc}")
+    return errors
+
+
+def _parse_and_validate_schemas(
+    raw: str,
+    *,
+    validator=_validate_extraction_schema,
+) -> tuple[dict | None, list[str]]:
     try:
         parsed = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
@@ -471,7 +574,7 @@ def _parse_and_validate_schemas(raw: str) -> tuple[dict | None, list[str]]:
         return None, ["schemas_yaml must be a mapping of collection_name → JSON Schema object"]
     errors: list[str] = []
     for collection_name, schema_dict in parsed.items():
-        errors.extend(_validate_extraction_schema(schema_dict, collection_name))
+        errors.extend(validator(schema_dict, collection_name))
     return parsed, errors
 
 
@@ -505,7 +608,8 @@ async def _chat_turn_events(
     )
 
     validated_config_yaml: str | None = None
-    extracted_schemas: dict[str, str] = {}
+    extraction_schemas: dict[str, str] = {}
+    workflow_schemas: dict[str, str] = {}
     final_content: str = ""
     result = None
 
@@ -543,15 +647,27 @@ async def _chat_turn_events(
             logger.info("%s call=%d tools=%s", log_prefix, call_num + 1, tool_names)
 
             for tc in tool_calls:
-                if tc["name"] == "propose_extraction_schema":
-                    yield {"type": "token", "token": "Generating extraction schema...\n"}
-                    tool_output, schemas = await _run_propose_schema(llm, messages)
+                if tc["name"] == "propose_extraction_schemas":
+                    yield {"type": "token", "token": "Generating extraction schemas...\n"}
+                    tool_output, schemas = await _run_propose_extraction_schemas(llm, messages)
                     if schemas is not None:
-                        extracted_schemas = schemas
+                        extraction_schemas = schemas
+                elif tc["name"] == "propose_workflow_schemas":
+                    yield {"type": "token", "token": "Generating workflow schemas...\n"}
+                    tool_output, schemas = await _run_propose_workflow_schemas(
+                        llm,
+                        messages,
+                        extraction_schemas,
+                    )
+                    if schemas is not None:
+                        workflow_schemas = schemas
                 elif tc["name"] == "propose_app_config":
                     yield {"type": "token", "token": "Generating app config...\n"}
                     tool_output, config_yaml = await _run_propose_config(
-                        llm, messages, extracted_schemas
+                        llm,
+                        messages,
+                        extraction_schemas,
+                        workflow_schemas,
                     )
                     if config_yaml is not None:
                         validated_config_yaml = config_yaml
@@ -592,10 +708,20 @@ async def _chat_turn_events(
 # ---------------------------------------------------------------------------
 
 
-async def _run_propose_schema(
+def _schemas_context(title: str, schemas: dict[str, str]) -> str:
+    lines = [f"\n\n## {title}\n"]
+    if not schemas:
+        lines.append("{}")
+        return "\n".join(lines)
+    for coll_name, schema_json in schemas.items():
+        lines.append(f"  {coll_name}: '{schema_json}'")
+    return "\n".join(lines)
+
+
+async def _run_propose_extraction_schemas(
     llm: LLMBase, conversation_messages: list
 ) -> tuple[str, dict[str, str] | None]:
-    sub_messages = [{"role": "system", "content": _SCHEMA_AGENT_SYSTEM_PROMPT}] + [
+    sub_messages = [{"role": "system", "content": _EXTRACTION_SCHEMA_AGENT_SYSTEM_PROMPT}] + [
         {"role": m["role"], "content": m.get("content") or ""}
         for m in conversation_messages
         if m.get("role") in ("user", "assistant") and not m.get("tool_calls")
@@ -609,7 +735,7 @@ async def _run_propose_schema(
 
         if not errors:
             logger.info(
-                "generate/propose_schema validated schemas=%s attempt=%d",
+                "generate/propose_extraction_schemas validated schemas=%s attempt=%d",
                 list(schemas),
                 attempt + 1,
             )
@@ -624,7 +750,7 @@ async def _run_propose_schema(
             return f"Schemas validated.\n{field_summary}", schemas_as_json
 
         logger.warning(
-            "generate/propose_schema attempt=%d errors=%s", attempt + 1, errors
+            "generate/propose_extraction_schemas attempt=%d errors=%s", attempt + 1, errors
         )
         error_text = "\n".join(f"- {e}" for e in errors)
         sub_messages += [
@@ -636,7 +762,68 @@ async def _run_propose_schema(
         ]
 
     return (
-        f"Schema generation failed after {_MAX_SCHEMA_RETRIES} attempts. Last errors:\n"
+        f"Extraction schema generation failed after {_MAX_SCHEMA_RETRIES} attempts. Last errors:\n"
+        + "\n".join(f"- {e}" for e in errors),
+        None,
+    )
+
+
+async def _run_propose_workflow_schemas(
+    llm: LLMBase,
+    conversation_messages: list,
+    extraction_schemas: dict[str, str],
+) -> tuple[str, dict[str, str] | None]:
+    system_prompt = (
+        _WORKFLOW_SCHEMA_AGENT_SYSTEM_PROMPT
+        + _schemas_context("Validated pipeline extraction schemas", extraction_schemas)
+    )
+    sub_messages = [{"role": "system", "content": system_prompt}] + [
+        {"role": m["role"], "content": m.get("content") or ""}
+        for m in conversation_messages
+        if m.get("role") in ("user", "assistant") and not m.get("tool_calls")
+    ]
+
+    errors: list[str] = []
+    for attempt in range(_MAX_SCHEMA_RETRIES):
+        result = await llm.complete(sub_messages, temperature=0.2)
+        schemas_yaml = (result.get("content") or "").strip()
+        schemas, errors = _parse_and_validate_schemas(
+            schemas_yaml,
+            validator=_validate_workflow_output_schema,
+        )
+
+        if not errors:
+            logger.info(
+                "generate/propose_workflow_schemas validated schemas=%s attempt=%d",
+                list(schemas),
+                attempt + 1,
+            )
+            schemas_as_json = {
+                name: json.dumps(schema_dict, separators=(",", ":"))
+                for name, schema_dict in schemas.items()
+            }
+            if not schemas_as_json:
+                return "Workflow schemas validated.\n  none", schemas_as_json
+            field_summary = "\n".join(
+                f"  {name}: {', '.join(schema_dict.get('properties', {}).keys())}"
+                for name, schema_dict in schemas.items()
+            )
+            return f"Workflow schemas validated.\n{field_summary}", schemas_as_json
+
+        logger.warning(
+            "generate/propose_workflow_schemas attempt=%d errors=%s", attempt + 1, errors
+        )
+        error_text = "\n".join(f"- {e}" for e in errors)
+        sub_messages += [
+            {"role": "assistant", "content": schemas_yaml},
+            {
+                "role": "user",
+                "content": f"Validation errors — fix and output the corrected YAML only:\n{error_text}",
+            },
+        ]
+
+    return (
+        f"Workflow schema generation failed after {_MAX_SCHEMA_RETRIES} attempts. Last errors:\n"
         + "\n".join(f"- {e}" for e in errors),
         None,
     )
@@ -646,11 +833,17 @@ async def _run_propose_config(
     llm: LLMBase,
     conversation_messages: list,
     extraction_schemas: dict[str, str],
+    workflow_schemas: dict[str, str] | None = None,
 ) -> tuple[str, str | None]:
-    schema_lines = ["\n\n## Validated extraction schemas\n\nUse these extraction_schema values verbatim:"]
-    for coll_name, schema_json in extraction_schemas.items():
-        schema_lines.append(f"  {coll_name}: '{schema_json}'")
-    system_prompt = _CONFIG_AGENT_SYSTEM_PROMPT + "\n".join(schema_lines)
+    workflow_schemas = workflow_schemas or {}
+    schema_context = (
+        "\n\nUse these pipeline extraction_schema values verbatim:"
+        + _schemas_context("Validated pipeline extraction schemas", extraction_schemas)
+        + "\n\nUse these workflow output schema values verbatim for llm-structured output_schema "
+        "and structured-save target collection schema:"
+        + _schemas_context("Validated workflow output schemas", workflow_schemas)
+    )
+    system_prompt = _CONFIG_AGENT_SYSTEM_PROMPT + schema_context
 
     sub_messages = [{"role": "system", "content": system_prompt}] + [
         {"role": m["role"], "content": m.get("content") or ""}
@@ -666,7 +859,8 @@ async def _run_propose_config(
             config_dict = yaml.safe_load(config_yaml)
             if not isinstance(config_dict, dict):
                 raise ValueError("YAML must be a mapping at the top level")
-            _inject_record_schemas(config_dict, extraction_schemas)
+            _inject_pipeline_record_schemas(config_dict)
+            _inject_workflow_output_schemas(config_dict, workflow_schemas)
             config = AppConfig.model_validate(config_dict)
         except Exception as exc:
             errors = [str(exc)]
