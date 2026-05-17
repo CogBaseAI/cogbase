@@ -509,7 +509,12 @@ def _inject_workflow_output_schemas(
     config_dict: dict,
     workflow_schemas: dict[str, str] | None = None,
 ) -> None:
-    """Set workflow structured-save target schemas from validated workflow schemas."""
+    """Set workflow structured-save target schemas from validated workflow schemas.
+
+    Always overwrite any inline `schema` on a save-target collection: the config
+    LLM is instructed not to author one, and `workflow_schemas` has been validated
+    by `_validate_workflow_output_schema` whereas an inline schema has not.
+    """
     if workflow_schemas:
         save_targets: set[str] = set()
         for workflow in config_dict.get("workflows", []):
@@ -546,6 +551,10 @@ def _validate_extraction_schema(schema_dict: dict, collection_name: str) -> list
 
 
 def _validate_workflow_output_schema(schema_dict: dict, collection_name: str) -> list[str]:
+    # Stable-identifier presence is not enforced here: the validator runs before
+    # config generation, so we cannot yet tell which collections are
+    # structured-save targets. Identifier guidance lives in the workflow schema
+    # prompt and is reinforced by AppConfig.primary_fields validation downstream.
     errors: list[str] = []
     if not isinstance(schema_dict, dict):
         return [f"[{collection_name}] must be a JSON Schema object (mapping)"]
@@ -564,7 +573,7 @@ def _validate_workflow_output_schema(schema_dict: dict, collection_name: str) ->
 def _parse_and_validate_schemas(
     raw: str,
     *,
-    validator=_validate_extraction_schema,
+    validator,
 ) -> tuple[dict | None, list[str]]:
     try:
         parsed = yaml.safe_load(raw)
@@ -708,8 +717,15 @@ async def _chat_turn_events(
 # ---------------------------------------------------------------------------
 
 
-def _schemas_context(title: str, schemas: dict[str, str]) -> str:
+def _schemas_context(
+    title: str,
+    schemas: dict[str, str],
+    *,
+    intro: str | None = None,
+) -> str:
     lines = [f"\n\n## {title}\n"]
+    if intro:
+        lines.append(intro)
     if not schemas:
         lines.append("{}")
         return "\n".join(lines)
@@ -731,7 +747,10 @@ async def _run_propose_extraction_schemas(
     for attempt in range(_MAX_SCHEMA_RETRIES):
         result = await llm.complete(sub_messages, temperature=0.2)
         schemas_yaml = (result.get("content") or "").strip()
-        schemas, errors = _parse_and_validate_schemas(schemas_yaml)
+        schemas, errors = _parse_and_validate_schemas(
+            schemas_yaml,
+            validator=_validate_extraction_schema,
+        )
 
         if not errors:
             logger.info(
@@ -773,6 +792,10 @@ async def _run_propose_workflow_schemas(
     conversation_messages: list,
     extraction_schemas: dict[str, str],
 ) -> tuple[str, dict[str, str] | None]:
+    # The tool description tells the model to call this only when the design has
+    # workflow output collections, but we also accept an empty `{}` result as a
+    # safety net so a misjudged call returns a clear instruction instead of an
+    # error — the LLM is told to proceed to propose_app_config in that case.
     system_prompt = (
         _WORKFLOW_SCHEMA_AGENT_SYSTEM_PROMPT
         + _schemas_context("Validated pipeline extraction schemas", extraction_schemas)
@@ -803,7 +826,15 @@ async def _run_propose_workflow_schemas(
                 for name, schema_dict in schemas.items()
             }
             if not schemas_as_json:
-                return "Workflow schemas validated.\n  none", schemas_as_json
+                logger.info(
+                    "generate/propose_workflow_schemas no workflow output collections attempt=%d",
+                    attempt + 1,
+                )
+                return (
+                    "No workflow output collections in this design. "
+                    "Proceed to propose_app_config.",
+                    schemas_as_json,
+                )
             field_summary = "\n".join(
                 f"  {name}: {', '.join(schema_dict.get('properties', {}).keys())}"
                 for name, schema_dict in schemas.items()
@@ -836,12 +867,17 @@ async def _run_propose_config(
     workflow_schemas: dict[str, str] | None = None,
 ) -> tuple[str, str | None]:
     workflow_schemas = workflow_schemas or {}
-    schema_context = (
-        "\n\nUse these pipeline extraction_schema values verbatim:"
-        + _schemas_context("Validated pipeline extraction schemas", extraction_schemas)
-        + "\n\nUse these workflow output schema values verbatim for llm-structured output_schema "
-        "and structured-save target collection schema:"
-        + _schemas_context("Validated workflow output schemas", workflow_schemas)
+    schema_context = _schemas_context(
+        "Validated pipeline extraction schemas",
+        extraction_schemas,
+        intro="Use these extraction_schema values verbatim for extract-structured steps:",
+    ) + _schemas_context(
+        "Validated workflow output schemas",
+        workflow_schemas,
+        intro=(
+            "Use these values verbatim for llm-structured output_schema and "
+            "structured-save target collection schema:"
+        ),
     )
     system_prompt = _CONFIG_AGENT_SYSTEM_PROMPT + schema_context
 

@@ -502,24 +502,32 @@ class TestValidateWorkflowOutputSchema:
 
 class TestParseAndValidateSchemas:
     def test_valid_yaml_returns_parsed_dict_and_no_errors(self):
-        parsed, errors = _parse_and_validate_schemas(_MINIMAL_SCHEMA_YAML)
+        parsed, errors = _parse_and_validate_schemas(
+            _MINIMAL_SCHEMA_YAML, validator=_validate_extraction_schema
+        )
         assert errors == []
         assert isinstance(parsed, dict)
         assert "contracts" in parsed
 
     def test_invalid_yaml_returns_none_and_error(self):
-        parsed, errors = _parse_and_validate_schemas("key: [unclosed")
+        parsed, errors = _parse_and_validate_schemas(
+            "key: [unclosed", validator=_validate_extraction_schema
+        )
         assert parsed is None
         assert any("not valid" in e for e in errors)
 
     def test_non_mapping_yaml_returns_none_and_error(self):
-        parsed, errors = _parse_and_validate_schemas("- item1\n- item2\n")
+        parsed, errors = _parse_and_validate_schemas(
+            "- item1\n- item2\n", validator=_validate_extraction_schema
+        )
         assert parsed is None
         assert errors
 
     def test_doc_id_in_collection_returns_parsed_and_errors(self):
         raw = "col:\n  properties:\n    doc_id: {type: string}\n    name: {type: string}\n"
-        parsed, errors = _parse_and_validate_schemas(raw)
+        parsed, errors = _parse_and_validate_schemas(
+            raw, validator=_validate_extraction_schema
+        )
         assert parsed is not None  # still returns the parsed dict
         assert any("doc_id" in e for e in errors)
 
@@ -534,14 +542,26 @@ class TestParseAndValidateSchemas:
             "    doc_id: {type: string}\n"
             "    x: {type: string}\n"
         )
-        _, errors = _parse_and_validate_schemas(raw)
+        _, errors = _parse_and_validate_schemas(
+            raw, validator=_validate_extraction_schema
+        )
         assert any("bad_col" in e for e in errors)
         assert not any("valid_col" in e for e in errors)
 
     def test_empty_string_yaml_returns_none_and_error(self):
-        parsed, errors = _parse_and_validate_schemas("")
+        parsed, errors = _parse_and_validate_schemas(
+            "", validator=_validate_extraction_schema
+        )
         assert parsed is None
         assert errors
+
+    def test_workflow_validator_allows_doc_id(self):
+        raw = "findings:\n  type: object\n  properties:\n    doc_id: {type: string, description: source doc}\n    summary: {type: string, description: summary}\n"
+        parsed, errors = _parse_and_validate_schemas(
+            raw, validator=_validate_workflow_output_schema
+        )
+        assert parsed is not None
+        assert errors == []
 
 
 # ---------------------------------------------------------------------------
@@ -664,7 +684,8 @@ class TestRunProposeWorkflowSchemas:
     async def test_empty_mapping_is_valid(self):
         llm = _make_llm("{}")
         message, schemas = await _run_propose_workflow_schemas(llm, _CONVERSATION, {})
-        assert message.startswith("Workflow schemas validated.")
+        assert "No workflow output collections" in message
+        assert "propose_app_config" in message
         assert schemas == {}
 
 
