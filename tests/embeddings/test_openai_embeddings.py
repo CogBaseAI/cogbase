@@ -20,13 +20,15 @@ except ImportError:
 openai = pytest.importorskip("openai", reason="openai package not installed")
 
 _openai_api_key = os.environ.get("OPENAI_API_KEY", "")
-pytestmark_openai = pytest.mark.skipif(
-    not _openai_api_key,
-    reason="OPENAI_API_KEY not set in .env",
-)
+pytestmark = [
+    pytest.mark.live,
+    pytest.mark.skipif(
+        not _openai_api_key,
+        reason="OPENAI_API_KEY not set in .env",
+    ),
+]
 
 
-@pytestmark_openai
 class TestOpenAIEmbedding:
     @pytest.fixture(scope="class")
     def embedder(self):
