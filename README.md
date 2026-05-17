@@ -8,19 +8,23 @@ CogBase is an open-source framework for building AI applications that need to un
 
 It provides the foundational layer that vertical AI products are built on: a knowledge pipeline, composable workflows, a skill registry, a multi-tier memory system, and an adaptive evolution engine — generated from a plain-language description, deployed through a REST API, and improved by every query.
 
+**[▶ Watch the demo - App Auto Creation](https://youtu.be/OMRFF5oauEk)**
+**[▶ Watch the demo - Get Trusted Answer Fast over your documents](https://youtu.be/N5Vip3jwiEk)**
+
 ---
 
 ## The problem
 
-Building a useful AI application is more than wiring an LLM to a document store. The hard problems are:
+**Your AI says "I don't know" — or worse, gives a partial answer — when the full answer is in the documents.**
 
-- **Documents are heterogeneous** — relevant knowledge is scattered across contracts, emails, reports, and filings in different formats and sources. An application needs to ingest and reason across all of them coherently.
-- **Reasoning requires structure** — spotting contradictions, building timelines, or answering "which vendors auto-renew?" requires typed, queryable facts, not raw text. That structure must be extracted and maintained at ingest time.
-- **Actions, not just answers** — a useful agent triggers workflows, calls external APIs, and writes derived facts back to a store. Skills bridge retrieval and action.
-- **Continuity across sessions** — without memory, every conversation starts from zero. A production application needs to accumulate confirmed facts, user preferences, and resolved contradictions over time.
-- **Static configs go stale** — usage reveals gaps the original design didn't anticipate. The application needs to surface those gaps and evolve its own configuration.
+With a well-designed AI system, the model correctly says "I don't know" rather than hallucinating. That's progress. But IDK is still the wrong answer when the information is sitting right there in your files — and a confident-sounding partial answer (the 3 contracts that happened to retrieve, not the 12 that match) is more dangerous, because the user has no way to tell what got missed. The problem isn't the LLM — it's the retrieval architecture underneath it.
 
-CogBase addresses each layer: the pipeline turns raw documents into typed, queryable knowledge; workflows handle multi-step analytical tasks; skills extend what the agent can do; memory gives it continuity; and the adaptive evolution engine closes the feedback loop so the application improves with use.
+- **Structured facts are buried in prose.** Timelines, numerical thresholds, dates, parties, obligations — they're all in the documents, readable by any human who opens the file. But vector search retrieves semantically similar chunks, not typed facts. You ask "which contracts auto-renew before Q3?" and get IDK — or a partial list of whichever contracts happened to surface in the top-k — not because the data doesn't exist, but because renewal dates were never extracted as structured fields. The AI can't reconstruct a timeline or compare figures across 40 documents by searching for similar text.
+- **Cross-document reasoning is invisible to retrieval.** "Does this email contradict the contract?" Both documents are indexed. Neither chunk retrieves the other as context. The contradiction is derivable — but only if you hold both in scope simultaneously. Vector search doesn't do that. The model answers from whichever side it saw and never flags the conflict.
+- **The data is there — the retrieval architecture can't reach it.** Knowledge graphs are one attempt to solve this. But timelines are a genuine KG weakness — time is awkward to model as nodes and edges. And KGs require significant engineering to construct: define the ontology, disambiguate entities, maintain edges as documents evolve. They don't build themselves, and they don't stay current.
+- **Failures are silent and permanent.** When the same question fails 50 times — same IDK, same partial answer, same miss — nothing changes. There's no mechanism that notices "renewal date questions always fail" and surfaces "extract renewal dates as a structured field." Every gap stays invisible. Every failure repeats forever.
+
+CogBase addresses each layer: the pipeline extracts typed facts alongside passage chunks and per-document summaries so structured queries and cross-document reasoning are first-class; workflows fan retrieval out across many documents at ingest time so contradictions and comparisons are pre-computed; skills extend what the agent can do beyond answering; memory gives it continuity across sessions; and the adaptive evolution engine mines failed queries to surface the missing fields, collections, and steps — so the same gap doesn't fail silently forever.
 
 ---
 
@@ -90,6 +94,7 @@ CogBase is organized into six layers with clean boundaries between them.
 ║  LLM agent loop                                           ║
 ║    ├── structured_lookup tool  (exact records)            ║
 ║    ├── vector_search tool      (passages or summaries)    ║
+║    ├── read_document tool      (slice text by char offset)║
 ║    └── skill tools             (custom capabilities)      ║
 ║          ↓                                                ║
 ║  Grounded, cited response                                 ║
@@ -149,7 +154,7 @@ cogbase/
 - **App generator** — describe your documents and questions in plain language; the system generates the full `config.yaml`
 - **Knowledge pipeline** — chunk-embed, extract structured facts, and summarize at ingest time; pluggable store backends
 - **Workflows** — YAML-declared analytical pipelines with `foreach` loops and `after_ingest` triggers
-- **Query runner** — LLM agent loop with `structured_lookup`, `vector_search`, and skill tools; no fixed routing pattern
+- **Query runner** — LLM agent loop with `structured_lookup`, `vector_search`, `read_document` (broader context around a hit), and skill tools; no fixed routing pattern
 - **Memory** — short-term (session), episodic (history), and long-term (cross-session) tiers
 - **Adaptive evolution** — gap detector mines usage logs to surface concrete config improvement suggestions
 - **Skills** — discrete, stateless custom capabilities registered per application
@@ -168,80 +173,37 @@ See [docs/knowledge-graph-decision.md](docs/knowledge-graph-decision.md) for the
 
 ## Quickstart
 
-The demo setup uses SQLite + FAISS — no external databases required. You need Docker and an OpenAI API key.
+Uses SQLite + FAISS — no external databases required. You need Docker and an OpenAI API key.
 
 ```bash
-git clone https://github.com/cogbase/cogbase
-cd cogbase/server
 export OPENAI_API_KEY=sk-...
-docker compose -f docker-compose.demo.yml up --build
+docker run -p 8000:8000 -e OPENAI_API_KEY junius/cogbase-demo:latest
 ```
 
-The API is available at `http://localhost:8000`. API docs are at `http://localhost:8000/docs`.
+Open `http://localhost:8000` to access the demo UI.
 
-See [`server/README.md`](server/README.md) for data persistence details and how to reset to a clean state.
+![CogBase demo UI](docs/demo_ui.png)
 
-### Create an application
+See [`server/README.md`](server/README.md) for persistence details and how to reset to a clean state.
 
-```bash
-# Build the bundle
-zip my_app.zip config.yaml extraction_schema.json extraction_prompt.txt
+### Option A: Try a built-in demo app
 
-# Create the application
-curl -X POST http://localhost:8000/applications \
-  -F bundle=@my_app.zip
-```
+Open the **Demos** tab, select an example, and click **Deploy & Ingest** to deploy the app and load sample documents. Three domains are included:
 
-### Ingest documents
+- [`examples/contract_analyst_demo/`](examples/contract_analyst_demo/) — Legal contract extraction + Q&A
+- [`examples/contract_compliance_demo/`](examples/contract_compliance_demo/) — Compliance-rule checking across contracts
+- [`examples/vc_portfolio_demo/`](examples/vc_portfolio_demo/) — VC portfolio company analysis
 
-```bash
-curl -X POST http://localhost:8000/applications/my-contract-analyzer/ingest_documents \
-  -H "Content-Type: application/json" \
-  -d '{
-    "documents": [
-      {"doc_id": "vendor-001", "text": "..."},
-      {"doc_id": "nda-002",    "text": "..."}
-    ],
-    "concurrency": 5
-  }'
-```
+Each is a starting point — copy, adapt, and redeploy via the REST API.
 
-### Query
+### Option B: Create your own application
 
-```bash
-curl -X POST http://localhost:8000/applications/my-contract-analyzer/query \
-  -H "Content-Type: application/json" \
-  -d '{"text": "which contracts expire before 2026?"}'
-```
+Open the **App Generator** tab, describe your documents and the questions you want to answer, and CogBase generates and deploys the config. Then upload documents and start querying.
 
-Or stream the response:
 
-```bash
-curl -N http://localhost:8000/applications/my-contract-analyzer/query/stream \
-  -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"text": "summarise all termination rights across the vendor portfolio"}'
-# data: {"token": "Here"}
-# data: {"token": " are"}
-# ...
-# data: {"result": {"answer": "...", "passthrough": false, "structured_records": [...]}}
-# data: [DONE]
-```
+## REST API
 
----
-
-## Examples
-
-Domain-specific applications are provided as examples showing how to combine pipeline steps, schemas, and extractors for a particular vertical. They are intended as starting points — copy, adapt, and deploy via the REST API.
-
-```
-examples/
-└── contract_analyst_demo/      # Legal contract extraction + Q&A
-    ├── schema.py               # ContractRecord schema definition
-    ├── saas_contracts.py       # SaaS contract demo data
-    ├── demo.py                 # End-to-end ingestion and query demo
-    └── README.md               # Extracted fields, query patterns, customisation
-```
+See [docs/api.md](docs/api.md) for the full REST API endpoint reference.
 
 ---
 
@@ -260,16 +222,6 @@ CogBase is not limited to legal. The core architecture maps to any domain where 
 
 About 90% of the codebase — the ingestion pipeline, workflow engine, query runner, skill registry, memory layer, and store interfaces — is identical across all verticals. You write the config and schema once. The store adapters handle the rest.
 
----
-
-## REST API
-
-See [docs/api.md](docs/api.md) for the full endpoint reference.
-
-For working config examples, see:
-- [`examples/contract_analyst_demo/config.yaml`](../examples/contract_analyst_demo/config.yaml)
-- [`examples/contract_compliance_demo/config.yaml`](../examples/contract_compliance_demo/config.yaml)
-- [`examples/vc_portfolio_demo/config.yaml`](../examples/vc_portfolio_demo/config.yaml)
 ---
 
 ## Roadmap
