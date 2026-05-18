@@ -10,7 +10,7 @@ Install the extra dependency before use::
 Example::
 
     from langchain_text_splitters import RecursiveCharacterTextSplitter
-    from cogbase.pipeline.ingestion.langchain import LangChainChunker
+    from cogbase.pipeline.chunking.langchain import LangChainChunker
 
     chunker = LangChainChunker(
         RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
@@ -20,7 +20,7 @@ Example::
 from langchain_text_splitters import TextSplitter
 
 from cogbase.core.models import Chunk, Document
-from cogbase.pipeline.ingestion.base import ChunkerBase
+from cogbase.pipeline.chunking.base import ChunkerBase
 
 
 class LangChainChunker(ChunkerBase):

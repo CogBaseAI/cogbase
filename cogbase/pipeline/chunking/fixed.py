@@ -1,7 +1,7 @@
 """Fixed-size sliding-window chunker."""
 
 from cogbase.core.models import Chunk, Document
-from cogbase.pipeline.ingestion.base import ChunkerBase
+from cogbase.pipeline.chunking.base import ChunkerBase
 
 
 class FixedSizeChunker(ChunkerBase):

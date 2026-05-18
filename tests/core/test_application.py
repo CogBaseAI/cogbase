@@ -7,9 +7,9 @@ from pydantic import BaseModel
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult, StructuredCollection, VectorCollection, PipelineStep
 from cogbase.core.models import Document
 from cogbase.pipeline.extraction.base import ExtractorBase
-from cogbase.pipeline.ingestion.base import ChunkerBase
+from cogbase.pipeline.chunking.base import ChunkerBase
 from cogbase.embeddings import EmbeddingBase
-from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
+from cogbase.pipeline.chunking.fixed import FixedSizeChunker
 from cogbase.stores import CollectionSchema, FieldSchema, FieldType, Filter, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore

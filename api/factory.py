@@ -49,7 +49,7 @@ DEFAULT_DOC_PROMPT = (
 
 def _build_chunker(cfg: ChunkerConfig) -> Any:
     if cfg.type == "fixed":
-        from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
+        from cogbase.pipeline.chunking.fixed import FixedSizeChunker
         return FixedSizeChunker(chunk_size=cfg.chunk_size, overlap=cfg.overlap)
     if cfg.type == "langchain":
         try:
@@ -58,7 +58,7 @@ def _build_chunker(cfg: ChunkerConfig) -> Any:
             raise ImportError(
                 "langchain-text-splitters required: pip install langchain-text-splitters"
             ) from exc
-        from cogbase.pipeline.ingestion.langchain import LangChainChunker
+        from cogbase.pipeline.chunking.langchain import LangChainChunker
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=cfg.chunk_size, chunk_overlap=cfg.overlap
         )

@@ -25,7 +25,7 @@ from cogbase.llms.base import LLMBase
 from cogbase.core.basemodel_to_schema import cls_generate_schema
 from cogbase.pipeline.extraction.llm import LLMExtractor, _build_record_model
 from cogbase.stores import CollectionSchema
-from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
+from cogbase.pipeline.chunking.fixed import FixedSizeChunker
 from cogbase.stores import VectorCollectionSchema
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore

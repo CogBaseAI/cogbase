@@ -22,7 +22,7 @@ from cogbase.core.models import Chunk, Document
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
-from cogbase.pipeline.ingestion.base import ChunkerBase
+from cogbase.pipeline.chunking.base import ChunkerBase
 from cogbase.stores import CollectionSchema, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 
 logger = logging.getLogger(__name__)

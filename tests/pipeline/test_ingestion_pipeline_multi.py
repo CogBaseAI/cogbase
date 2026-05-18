@@ -14,7 +14,7 @@ from cogbase.core.query_runner import QueryRunner
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
-from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
+from cogbase.pipeline.chunking.fixed import FixedSizeChunker
 from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
     StructuredCollection,

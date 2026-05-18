@@ -3,8 +3,8 @@
 import pytest
 
 from cogbase.core.models import Chunk, Document
-from cogbase.pipeline.ingestion.base import ChunkerBase
-from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
+from cogbase.pipeline.chunking.base import ChunkerBase
+from cogbase.pipeline.chunking.fixed import FixedSizeChunker
 
 
 # ---------------------------------------------------------------------------

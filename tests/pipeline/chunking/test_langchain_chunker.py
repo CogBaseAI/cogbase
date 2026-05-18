@@ -4,9 +4,9 @@ import pytest
 from langchain_text_splitters import CharacterTextSplitter, RecursiveCharacterTextSplitter
 
 from cogbase.core.models import Document
-from cogbase.pipeline.ingestion.base import ChunkerBase
-from cogbase.pipeline.ingestion.langchain import LangChainChunker
-from tests.pipeline.ingestion.test_chunkers import assert_chunker_contract
+from cogbase.pipeline.chunking.base import ChunkerBase
+from cogbase.pipeline.chunking.langchain import LangChainChunker
+from tests.pipeline.chunking.test_chunkers import assert_chunker_contract
 
 
 class TestLangChainChunkerContract:
