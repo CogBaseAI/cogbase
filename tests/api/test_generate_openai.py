@@ -20,6 +20,7 @@ import yaml
 
 from api.models import ChatMessage, GenerateChatRequest
 from api.routers.generate import (
+    _collect_save_targets,
     _run_propose_config,
     _run_propose_extraction_schemas,
     _run_propose_workflow_schemas,
@@ -364,3 +365,432 @@ class TestChatEndpointLive:
         config = AppConfig.from_yaml(response.config_yaml)
         assert config.name
         assert config.pipelines
+
+    async def test_full_conversation_contract_app_from_scratch(self, llm):
+        """Two-turn conversation starting from no history.
+
+        Turn 1 asks the model to propose fields for a contract app; turn 2
+        confirms and triggers schema + config generation. Verifies the final
+        config is structurally valid with doc_id injected.
+        """
+        turn1_text = (
+            "I want to build a contract analysis app. "
+            "Users upload PDF contracts and ask about vendor names, payment terms, "
+            "and expiry dates. What structured fields should I extract?"
+        )
+        body1 = GenerateChatRequest(text=turn1_text, history=[])
+        response1 = await chat(body1, MagicMock(llm=llm))
+        assert response1.content, "expected a text proposal in turn 1"
+
+        # Model may generate a config immediately if it's confident — accept it.
+        if response1.config_yaml:
+            config = AppConfig.from_yaml(response1.config_yaml)
+            assert config.name
+            assert config.pipelines
+            return
+
+        # Turn 2: confirm the proposal and explicitly request generation.
+        history = [
+            ChatMessage(role="user", content=turn1_text),
+            ChatMessage(role="assistant", content=response1.content),
+        ]
+        body2 = GenerateChatRequest(
+            text=(
+                "Those fields look exactly right. "
+                "Please generate the extraction schema and the full app config now."
+            ),
+            history=history,
+        )
+        response2 = await chat(body2, MagicMock(llm=llm))
+
+        assert response2.config_yaml, (
+            "expected config_yaml after confirming fields.\n"
+            f"turn 1 response: {response1.content!r}\n"
+            f"turn 2 response: {response2.content!r}"
+        )
+        config = AppConfig.from_yaml(response2.config_yaml)
+        assert config.name
+        assert config.pipelines
+
+        first_step = config.pipelines[0].steps[0]
+        assert getattr(first_step, "tool", None) == "chunk-embed-upsert", (
+            f"first pipeline step must be chunk-embed-upsert, "
+            f"got {getattr(first_step, 'tool', None)!r}"
+        )
+
+        # Verify doc_id was injected into every extract-structured target schema.
+        data = yaml.safe_load(response2.config_yaml)
+        extract_targets = {
+            step.get("collection")
+            for p in data.get("pipelines", [])
+            for step in p.get("steps", [])
+            if step.get("tool") == "extract-structured"
+        }
+        assert extract_targets, "expected at least one extract-structured step"
+
+        for sc in data.get("structured_collections", []):
+            if sc["name"] not in extract_targets:
+                continue
+            schema_str = sc.get("schema")
+            assert schema_str, f"collection {sc['name']!r} is missing its schema"
+            record_schema = json.loads(schema_str)
+            props = record_schema.get("properties", {})
+            assert "doc_id" in props, f"doc_id not injected in {sc['name']!r}"
+            user_fields = [k for k in props if k != "doc_id"]
+            assert user_fields, f"no user-defined fields found in {sc['name']!r}"
+
+    async def test_full_conversation_workflow_app_from_scratch(self, llm):
+        """Two-turn conversation for an app that requires a workflow.
+
+        Turn 1 describes a clause-level compliance app with an explicit workflow
+        requirement. Turn 2 confirms the design and triggers full generation.
+        Verifies the final config contains at least one workflow and that all
+        structured-save target collections have schemas set.
+        """
+        turn1_text = (
+            "Build a contract compliance app. "
+            "The pipeline should extract each clause from uploaded contracts into a "
+            "'contract_clauses' collection with fields clause_id, clause_type, and text. "
+            "I also need a workflow that iterates over contract_clauses, runs LLM "
+            "judgment on each clause, and saves a compliance finding per clause — "
+            "with fields clause_id, status (compliant/non_compliant/unclear), and "
+            "summary — into a 'compliance_findings' collection."
+        )
+        body1 = GenerateChatRequest(text=turn1_text, history=[])
+        response1 = await chat(body1, MagicMock(llm=llm))
+        assert response1.content, "expected a text proposal in turn 1"
+
+        final_response = response1
+        history = [
+            ChatMessage(role="user", content=turn1_text),
+            ChatMessage(role="assistant", content=response1.content),
+        ]
+
+        if not response1.config_yaml:
+            body2 = GenerateChatRequest(
+                text=(
+                    "Yes, that design is confirmed — all fields and the workflow look right. "
+                    "Generate the extraction schemas, workflow schemas, and full config now."
+                ),
+                history=history,
+            )
+            final_response = await chat(body2, MagicMock(llm=llm))
+
+        assert final_response.config_yaml, (
+            "expected config_yaml for the compliance workflow app.\n"
+            f"turn 1: {response1.content!r}\n"
+            + (
+                f"turn 2: {final_response.content!r}"
+                if final_response is not response1
+                else ""
+            )
+        )
+        config = AppConfig.from_yaml(final_response.config_yaml)
+        assert config.name
+        assert config.pipelines
+        assert config.workflows, "expected at least one workflow in the config"
+
+        # Every structured-save target must exist in structured_collections with a schema.
+        data = yaml.safe_load(final_response.config_yaml)
+        sc_by_name = {sc["name"]: sc for sc in data.get("structured_collections", [])}
+
+        save_targets: set[str] = set()
+        for wf in data.get("workflows", []):
+            _collect_save_targets(wf.get("steps", []), save_targets)
+
+        assert save_targets, "expected at least one structured-save step in the workflow"
+        for target in save_targets:
+            sc = sc_by_name.get(target)
+            assert sc, (
+                f"workflow save target '{target}' not declared in structured_collections"
+            )
+            schema_str = sc.get("schema")
+            assert schema_str, f"save target '{target}' is missing its schema"
+            record_schema = json.loads(schema_str)
+            assert record_schema.get("properties"), (
+                f"save target '{target}' schema has no properties"
+            )
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: chat → config → ingest → workflow/query.
+# Each class covers one demo scenario; assertions are meaning-based so they
+# hold regardless of what collection/field names the LLM chose.
+# ---------------------------------------------------------------------------
+
+
+class TestContractComplianceEndToEndLive:
+    """Contract compliance demo: two-pipeline app + compliance workflow.
+
+    Chat generates the config (rules pipeline for policy docs, contracts
+    pipeline for clause extraction, compliance workflow that fans out over
+    clauses and saves findings). The test ingests the demo data, runs the
+    workflow for contract-001, and verifies queries against live findings.
+    """
+
+    async def test_ingest_workflow_and_query(self, llm):
+        from api.factory import build_app
+        from api.system_resources import SystemResources
+        from cogbase.core.query_runner import QueryResult
+        from cogbase.stores.structured.memory import InMemoryStructuredStore
+        from cogbase.stores.vector.faiss_store import FAISSVectorStore
+        from examples.contract_compliance_demo.contracts_data import CONTRACTS_DOCUMENTS
+        from examples.contract_compliance_demo.rules_data import RULES_DOCUMENTS
+
+        # ---- Step 1: chat to generate the app config ------------------------
+        turn1_text = (
+            "Build a contract compliance app with two document types:\n"
+            "- Policy rule documents (metadata: doc_type='rules'): chunk and embed "
+            "into a vector collection so their text is retrievable by semantic search.\n"
+            "- Vendor contracts (metadata: doc_type='contract'): chunk and embed, "
+            "and extract each clause into a structured collection with fields "
+            "clause_id, clause_type, and text.\n\n"
+            "I also need a compliance workflow that, for a given contract (doc_id):\n"
+            "1. Loads all extracted clauses for that contract\n"
+            "2. For each clause, retrieves relevant policy rules via vector search\n"
+            "3. Saves a compliance finding per clause with fields: "
+            "clause_id, doc_id, status (compliant/non_compliant/unclear), and summary"
+        )
+        body1 = GenerateChatRequest(text=turn1_text, history=[])
+        response1 = await chat(body1, MagicMock(llm=llm))
+        assert response1.content, "expected a proposal in turn 1"
+
+        final_response = response1
+        history = [
+            ChatMessage(role="user", content=turn1_text),
+            ChatMessage(role="assistant", content=response1.content),
+        ]
+        if not response1.config_yaml:
+            body2 = GenerateChatRequest(
+                text=(
+                    "Yes, that design is confirmed. "
+                    "Generate the extraction schemas, workflow schemas, and full config now."
+                ),
+                history=history,
+            )
+            final_response = await chat(body2, MagicMock(llm=llm))
+
+        assert final_response.config_yaml, (
+            "expected config_yaml from the chat agent.\n"
+            f"turn 1: {response1.content!r}\n"
+            + (f"turn 2: {final_response.content!r}" if final_response is not response1 else "")
+        )
+
+        # ---- Step 2: parse config, discover workflow details ----------------
+        config = AppConfig.from_yaml(final_response.config_yaml)
+        assert config.workflows, "generated config must have at least one workflow"
+
+        # Discover the structured-save target collection(s) from the workflow steps.
+        data = yaml.safe_load(final_response.config_yaml)
+        save_targets: set[str] = set()
+        for wf in data.get("workflows", []):
+            _collect_save_targets(wf.get("steps", []), save_targets)
+        assert save_targets, "workflow must contain at least one structured-save step"
+
+        # The first workflow is the compliance workflow; discover its name and
+        # the input key the LLM chose (should be doc_id, but inspect to be safe).
+        workflow_cfg = config.workflows[0]
+        workflow_input_key = next(
+            (k for k in (workflow_cfg.input_schema or {}) if "doc" in k.lower()),
+            "doc_id",
+        )
+
+        # ---- Step 3: build the app in-process with in-memory stores ---------
+        system = SystemResources(
+            structured_store=InMemoryStructuredStore(),
+            vector_store=FAISSVectorStore(),
+        )
+        app = await build_app(config, system=system, app_status="new")
+
+        # ---- Step 4: ingest all demo documents ------------------------------
+        results = await app.ingest_documents(
+            RULES_DOCUMENTS + CONTRACTS_DOCUMENTS, concurrency=3
+        )
+        failed = [r for r in results if not r.success]
+        assert not failed, (
+            f"{len(failed)} document(s) failed ingestion: "
+            + ", ".join(f"{r.doc_id}: {r.error}" for r in failed)
+        )
+        contract_results = [r for r in results if r.doc_id.startswith("contract-")]
+        assert all(r.records_extracted > 0 for r in contract_results), (
+            "expected each contract to produce at least one extracted record — "
+            "check that the contracts pipeline includes an extract-structured step"
+        )
+
+        # ---- Step 5: run the compliance workflow for contract-001 -----------
+        findings: list[dict] = []
+        workflow = app.get_workflow(workflow_cfg.name)
+        async for record in workflow.run({workflow_input_key: "contract-001"}):
+            findings.append(record)
+
+        assert findings, (
+            f"workflow '{workflow_cfg.name}' produced no findings for contract-001 — "
+            "check that the clause extraction step ran and the workflow filters match"
+        )
+
+        # contract-001 has known non-compliant clauses (liability cap 3 months,
+        # one-sided consequential exclusion, 48-hour breach notification).
+        non_compliant = [
+            f for f in findings
+            if "non" in str(f.get("status", "")).lower()
+            or "non_compliant" in str(f.get("status", "")).lower()
+        ]
+        assert non_compliant, (
+            "expected at least one non-compliant finding for contract-001 — "
+            "the liability cap (3 months) should violate the 12-month policy rule"
+        )
+
+        # contract-001 also has compliant clauses (payment net-30, mutual indemnification).
+        compliant = [
+            f for f in findings
+            if f.get("status") in ("compliant", "not_applicable")
+            or str(f.get("status", "")).lower() == "compliant"
+        ]
+        assert compliant, "expected at least one compliant or not_applicable finding"
+
+        # ---- Step 6: natural-language queries over the live data -------------
+        async def _query(text: str) -> str:
+            result = None
+            async for chunk in app.query_stream(text):
+                if isinstance(chunk, QueryResult):
+                    result = chunk
+            assert result is not None, f"query_stream produced no QueryResult for: {text!r}"
+            return result.answer
+
+        # Non-compliant findings query — must surface at least one violation.
+        answer1 = (await _query(
+            "what are the non-compliant clauses in contract-001?"
+        )).lower()
+        assert any(
+            kw in answer1
+            for kw in ("non-compliant", "non_compliant", "violat", "liability", "breach", "finding")
+        ), f"expected a non-compliance reference in the answer:\n{answer1}"
+
+        # Governing-law query — contract-001 is governed by New York law.
+        answer2 = (await _query(
+            "what is the governing law for contract-001?"
+        )).lower()
+        assert "new york" in answer2, (
+            f"expected 'New York' governing law for contract-001:\n{answer2}"
+        )
+
+class TestContractAnalystEndToEndLive:
+    """Contract analyst demo: single-pipeline app, no workflow.
+
+    Chat generates the config (one pipeline that chunks, embeds, and extracts
+    key contract facts). The test ingests the 5 SaaS contracts and verifies
+    queries that exercise cross-contract comparison and structured lookup.
+    """
+
+    async def test_ingest_and_query(self, llm):
+        from api.factory import build_app
+        from api.system_resources import SystemResources
+        from cogbase.core.models import Document
+        from cogbase.core.query_runner import QueryResult
+        from cogbase.stores.structured.memory import InMemoryStructuredStore
+        from cogbase.stores.vector.faiss_store import FAISSVectorStore
+        from examples.contract_analyst_demo.saas_contracts import CONTRACTS
+
+        # ---- Step 1: chat to generate the app config ------------------------
+        turn1_text = (
+            "I need a contract analysis app for SaaS vendor agreements. "
+            "Users upload contracts and want to ask about vendors, expiry dates, "
+            "liability caps, payment terms, and governing law. "
+            "Extract the following fields from each contract: vendor name, "
+            "customer name, governing law jurisdiction, effective date, expiry date, "
+            "total contract value, liability cap amount, and termination notice "
+            "period in days."
+        )
+        body1 = GenerateChatRequest(text=turn1_text, history=[])
+        response1 = await chat(body1, MagicMock(llm=llm))
+        assert response1.content, "expected a field proposal in turn 1"
+
+        final_response = response1
+        history = [
+            ChatMessage(role="user", content=turn1_text),
+            ChatMessage(role="assistant", content=response1.content),
+        ]
+        if not response1.config_yaml:
+            body2 = GenerateChatRequest(
+                text=(
+                    "Those fields look right. "
+                    "Generate the extraction schema and full config now."
+                ),
+                history=history,
+            )
+            final_response = await chat(body2, MagicMock(llm=llm))
+
+        assert final_response.config_yaml, (
+            "expected config_yaml from the chat agent.\n"
+            f"turn 1: {response1.content!r}\n"
+            + (f"turn 2: {final_response.content!r}" if final_response is not response1 else "")
+        )
+
+        # ---- Step 2: parse config -------------------------------------------
+        config = AppConfig.from_yaml(final_response.config_yaml)
+        assert config.pipelines, "generated config must have at least one pipeline"
+
+        # ---- Step 3: build the app in-process with in-memory stores ---------
+        system = SystemResources(
+            structured_store=InMemoryStructuredStore(),
+            vector_store=FAISSVectorStore(),
+        )
+        app = await build_app(config, system=system, app_status="new")
+
+        # ---- Step 4: ingest all 5 SaaS contracts ----------------------------
+        documents = [
+            Document(doc_id=doc_id, text=text) for doc_id, text in CONTRACTS.items()
+        ]
+        results = await app.ingest_documents(documents, concurrency=3)
+        failed = [r for r in results if not r.success]
+        assert not failed, (
+            f"{len(failed)} document(s) failed ingestion: "
+            + ", ".join(f"{r.doc_id}: {r.error}" for r in failed)
+        )
+        assert all(r.records_extracted > 0 for r in results), (
+            "expected each contract to produce at least one extracted record"
+        )
+
+        # ---- Step 5: queries over extracted records and full text -----------
+        async def _query(text: str) -> str:
+            result = None
+            async for chunk in app.query_stream(text):
+                if isinstance(chunk, QueryResult):
+                    result = chunk
+            assert result is not None, f"query_stream produced no QueryResult for: {text!r}"
+            return result.answer
+
+        # Three contracts expire before 2026-01-01:
+        #   saas-001 (Acme / CloudStore Pro, Jun 2025)
+        #   saas-003 (Nexus / SecureVault, Dec 2025)
+        #   saas-005 (Apex / WorkflowManager, Sep 2025)
+        answer1 = (await _query("which contracts expire before 2026-01-01?")).lower()
+        expiring_hits = sum(
+            any(kw in answer1 for kw in ids)
+            for ids in [
+                ("saas-001", "cloudstore", "acme"),
+                ("saas-003", "securevault", "nexus"),
+                ("saas-005", "workflowmanager", "apex"),
+            ]
+        )
+        assert expiring_hits >= 2, (
+            f"expected ≥2 of the 3 contracts expiring before 2026 to be named:\n{answer1}"
+        )
+
+        # Only saas-003 has a liability cap above $1M (USD 2,000,000, Nexus Security).
+        answer2 = (await _query(
+            "which contracts have a liability cap above 1 million dollars?"
+        )).lower()
+        assert any(
+            kw in answer2
+            for kw in ("saas-003", "securevault", "nexus", "2,000,000", "2000000", "2 million")
+        ), f"expected saas-003 / Nexus / $2M cap in answer:\n{answer2}"
+
+        # saas-005 (Apex / WorkflowManager) has an unusually long 180-day notice period.
+        answer3 = (await _query(
+            "which contract has the longest termination notice period?"
+        )).lower()
+        assert any(
+            kw in answer3
+            for kw in ("180", "saas-005", "workflowmanager", "apex")
+        ), f"expected 180-day notice / saas-005 / Apex in answer:\n{answer3}"
