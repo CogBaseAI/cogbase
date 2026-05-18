@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cogbase.core.query_runner import QueryResult, QueryRunner as Runner
+from cogbase.core.query_runner import DocumentSlice, QueryResult, QueryRunner as Runner
 from cogbase.llms.base import ChatMessage, CompletionResult, SystemTool
 from cogbase.skills.skill import Skill
 
@@ -518,8 +518,10 @@ async def test_run_read_document_slice_content_correct():
         [c async for c in runner.run("read doc")]
 
     assert len(captured_tool_outputs) == 1
-    assert "hello hello " in captured_tool_outputs[0]
-    assert "chars 0–12 of 300" in captured_tool_outputs[0]
+    doc_slice, tool_text = captured_tool_outputs[0]
+    assert isinstance(doc_slice, DocumentSlice)
+    assert "hello hello " in tool_text
+    assert "chars 0–12 of 300" in tool_text
 
 
 @pytest.mark.asyncio
@@ -557,16 +559,55 @@ async def test_run_read_document_length_capped_at_10000():
         [c async for c in runner.run("read big")]
 
     assert len(captured) == 1
-    # slice should be exactly 10000 chars
-    assert "chars 0–10000 of 20000" in captured[0]
+    doc_slice, tool_text = captured[0]
+    assert isinstance(doc_slice, DocumentSlice)
+    assert "chars 0–10000 of 20000" in tool_text
 
 
 @pytest.mark.asyncio
 async def test_run_read_document_unavailable_without_store():
-    """read_document called without a configured store returns an error string."""
+    """read_document called without a configured store returns (None, error_string)."""
     runner = Runner(MagicMock())
-    output = await runner._run_read_document({"doc_id": "doc-1"})
+    doc_slice, output = await runner._run_read_document({"doc_id": "doc-1"})
+    assert doc_slice is None
     assert "unavailable" in output
+
+
+@pytest.mark.asyncio
+async def test_run_read_document_populates_document_slices():
+    """Successful read_document calls are accumulated in QueryResult.document_slices."""
+    text = "X" * 500
+    store = _make_document_store({"doc-1": text})
+    llm = _make_llm(
+        _tool_result("read_document", {"doc_id": "doc-1", "offset": 10, "length": 50}),
+        _text_result("Done."),
+    )
+    runner = Runner(llm, document_store=store, app_name="myapp")
+    chunks = [c async for c in runner.run("read doc-1")]
+    result = chunks[-1]
+    assert isinstance(result, QueryResult)
+    assert len(result.document_slices) == 1
+    s = result.document_slices[0]
+    assert isinstance(s, DocumentSlice)
+    assert s.doc_id == "doc-1"
+    assert s.offset == 10
+    assert s.length == 50
+    assert s.text == "X" * 50
+
+
+@pytest.mark.asyncio
+async def test_run_read_document_missing_doc_has_empty_document_slices():
+    """A failed read_document (doc not found) does not populate document_slices."""
+    store = _make_document_store({})
+    llm = _make_llm(
+        _tool_result("read_document", {"doc_id": "missing"}),
+        _text_result("Could not find it."),
+    )
+    runner = Runner(llm, document_store=store, app_name="myapp")
+    chunks = [c async for c in runner.run("read missing")]
+    result = chunks[-1]
+    assert isinstance(result, QueryResult)
+    assert result.document_slices == []
 
 
 # ---------------------------------------------------------------------------

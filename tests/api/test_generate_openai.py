@@ -58,6 +58,14 @@ def llm():
     return OpenAILLM(client, model=_MODEL)
 
 
+@pytest.fixture(scope="module")
+def embedder():
+    from cogbase.embeddings.openai import OpenAIEmbedding
+
+    client = openai.AsyncOpenAI(api_key=_openai_api_key)
+    return OpenAIEmbedding(client)
+
+
 # Conversations are kept compact so the model has a clear, confirmed brief
 # before any tool call — this keeps the agent loop short and deterministic.
 _CONTRACT_CONVERSATION: list[dict] = [
@@ -528,7 +536,7 @@ class TestContractComplianceEndToEndLive:
     workflow for contract-001, and verifies queries against live findings.
     """
 
-    async def test_ingest_workflow_and_query(self, llm):
+    async def test_ingest_workflow_and_query(self, llm, embedder):
         from api.factory import build_app
         from api.system_resources import SystemResources
         from cogbase.core.query_runner import QueryResult
@@ -599,6 +607,8 @@ class TestContractComplianceEndToEndLive:
         system = SystemResources(
             structured_store=InMemoryStructuredStore(),
             vector_store=FAISSVectorStore(),
+            llm=llm,
+            embedder=embedder,
         )
         app = await build_app(config, system=system, app_status="new")
 
@@ -682,7 +692,7 @@ class TestContractAnalystEndToEndLive:
     queries that exercise cross-contract comparison and structured lookup.
     """
 
-    async def test_ingest_and_query(self, llm):
+    async def test_ingest_and_query(self, llm, embedder):
         from api.factory import build_app
         from api.system_resources import SystemResources
         from cogbase.core.models import Document
@@ -734,6 +744,8 @@ class TestContractAnalystEndToEndLive:
         system = SystemResources(
             structured_store=InMemoryStructuredStore(),
             vector_store=FAISSVectorStore(),
+            llm=llm,
+            embedder=embedder,
         )
         app = await build_app(config, system=system, app_status="new")
 

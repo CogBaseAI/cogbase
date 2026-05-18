@@ -74,6 +74,15 @@ _TOOL_TIMEOUT = 30  # seconds
 # ---------------------------------------------------------------------------
 
 
+class DocumentSlice(BaseModel):
+    """A slice of document text fetched by a read_document tool call."""
+
+    doc_id: str
+    offset: int
+    length: int
+    text: str
+
+
 class QueryResult(BaseModel):
     """Final result of a QueryRunner invocation.
 
@@ -81,6 +90,7 @@ class QueryResult(BaseModel):
         answer:              Full response text.
         structured_records:  All records returned by structured_lookup calls.
         chunks:              All chunks returned by vector_search calls.
+        document_slices:     Document text slices fetched by read_document calls.
         passthrough:         True when records were returned directly without
                              LLM synthesis (token threshold exceeded).
     """
@@ -88,6 +98,7 @@ class QueryResult(BaseModel):
     answer: str
     structured_records: list[dict] = []
     chunks: list[Chunk] = []
+    document_slices: list[DocumentSlice] = []
     passthrough: bool = False
 
     model_config = {"arbitrary_types_allowed": True}
@@ -515,6 +526,7 @@ class QueryRunner:
 
         all_records: list[dict] = []
         all_chunks: list[Chunk] = []
+        all_slices: list[DocumentSlice] = []
 
         # Select skill once before the loop. Support switching skill in the for loop when needed.
         current_skill = None
@@ -545,6 +557,7 @@ class QueryRunner:
                     answer=answer,
                     structured_records=all_records,
                     chunks=_filter_cited_chunks(answer, all_chunks),
+                    document_slices=all_slices,
                 )
                 return
 
@@ -585,6 +598,7 @@ class QueryRunner:
                             answer=tool_output,
                             structured_records=all_records,
                             chunks=all_chunks,
+                            document_slices=all_slices,
                             passthrough=True,
                         )
                         return
@@ -592,7 +606,9 @@ class QueryRunner:
                     chunks, tool_output = await self._run_vector_search(inputs)
                     all_chunks.extend(chunks)
                 elif name == "read_document":
-                    tool_output = await self._run_read_document(inputs)
+                    doc_slice, tool_output = await self._run_read_document(inputs)
+                    if doc_slice is not None:
+                        all_slices.append(doc_slice)
                 else:
                     tool_output = await self._execute_tool(name, inputs, current_skill)
                     logger.info("[runner] execute_tool done: %s", tool_output[:300])
@@ -612,6 +628,7 @@ class QueryRunner:
             answer=answer,
             structured_records=all_records,
             chunks=all_chunks,
+            document_slices=all_slices,
         )
 
     # ------------------------------------------------------------------
@@ -708,13 +725,13 @@ class QueryRunner:
         logger.info("[runner] vector_search.result collection=%s chunks=%d", collection, len(chunks))
         return chunks, _format_chunks(chunks)
 
-    async def _run_read_document(self, inputs: dict) -> str:
+    async def _run_read_document(self, inputs: dict) -> tuple[DocumentSlice | None, str]:
         if self._document_store is None or self._app_name is None:
-            return "read_document is unavailable (no document store configured)"
+            return None, "read_document is unavailable (no document store configured)"
 
         doc_id = str(inputs.get("doc_id", ""))
         if not doc_id:
-            return "read_document error: doc_id is required"
+            return None, "read_document error: doc_id is required"
 
         offset = max(0, int(inputs.get("offset") or 0))
         length = min(int(inputs.get("length") or 2000), 10000)
@@ -722,15 +739,16 @@ class QueryRunner:
         try:
             text = await self._document_store.load(self._app_name, doc_id)
         except KeyError:
-            return f"read_document error: document '{doc_id}' not found"
+            return None, f"read_document error: document '{doc_id}' not found"
         except Exception as exc:
             logger.exception("[runner] read_document.error doc_id=%s", doc_id)
-            return f"read_document error: {exc}"
+            return None, f"read_document error: {exc}"
 
         slice_text = text[offset : offset + length]
         total = len(text)
         logger.info("[runner] read_document doc_id=%s offset=%d length=%d total=%d", doc_id, offset, length, total)
-        return f"Document '{doc_id}' (chars {offset}–{offset + len(slice_text)} of {total}):\n\n{slice_text}"
+        doc_slice = DocumentSlice(doc_id=doc_id, offset=offset, length=len(slice_text), text=slice_text)
+        return doc_slice, f"Document '{doc_id}' (chars {offset}–{offset + len(slice_text)} of {total}):\n\n{slice_text}"
 
     async def _run_python(self, code: str, env: dict) -> str:
         try:
