@@ -100,7 +100,11 @@ class CogBaseApp:
             if matched is not None:
                 return matched
             logger.info("app.routing.metadata_miss doc_id=%s falling_back_to=llm", doc.doc_id)
-            return await self._find_pipeline_by_llm(doc)
+            matched = await self._find_pipeline_by_llm(doc)
+            if matched is not None and matched.match:
+                for k, v in matched.match.items():
+                    doc.metadata.setdefault(k, v)
+            return matched
         return self._find_pipeline_by_metadata(doc)
 
     async def ingest_documents(

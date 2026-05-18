@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from cogbase.config.config import RoutingStrategy
 from cogbase.core.app import CogBaseApp
 from cogbase.core.query_runner import QueryResult, QueryRunner
 from cogbase.stores.document.base import DocumentStoreBase
@@ -682,3 +683,83 @@ class TestIngestMany:
         await app.ingest_documents(documents, concurrency=3)
 
         assert peak <= 3
+
+
+# ---------------------------------------------------------------------------
+# RoutingStrategy.AUTO — metadata back-fill after LLM fallback
+# ---------------------------------------------------------------------------
+
+class TestRoutingStrategyAuto:
+    """RoutingStrategy.AUTO: metadata match skips LLM; LLM fallback back-fills doc.metadata."""
+
+    @staticmethod
+    def _pipeline_stub(name: str, match: dict[str, str] | None) -> MagicMock:
+        p = MagicMock(spec=IngestionPipeline)
+        p.name = name
+        p.match = match
+        p.description = name
+
+        async def _ingest(docs, *, concurrency=5):
+            return [IngestResult(doc_id=d.doc_id, success=True) for d in docs]
+
+        p.ingest_documents = AsyncMock(side_effect=_ingest)
+        return p
+
+    @staticmethod
+    def _make_app(llm_response: str, *pipelines: MagicMock) -> CogBaseApp:
+        llm = MagicMock(spec=LLMBase)
+        llm.complete = AsyncMock(return_value={"content": llm_response})
+        return CogBaseApp(
+            "test",
+            list(pipelines),
+            MagicMock(spec=QueryRunner),
+            llm=llm,
+            routing_strategy=RoutingStrategy.AUTO,
+        )
+
+    @pytest.mark.asyncio
+    async def test_metadata_match_routes_without_llm(self):
+        legal = self._pipeline_stub("legal", {"doc_type": "legal"})
+        finance = self._pipeline_stub("finance", {"doc_type": "finance"})
+        app = self._make_app("finance", legal, finance)
+
+        doc = Document(doc_id="d-001", text="text", metadata={"doc_type": "legal"})
+        await app.ingest_documents([doc])
+
+        app._llm.complete.assert_not_called()
+        legal.ingest_documents.assert_called_once()
+        finance.ingest_documents.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_llm_fallback_called_when_metadata_misses(self):
+        legal = self._pipeline_stub("legal", {"doc_type": "legal"})
+        finance = self._pipeline_stub("finance", {"doc_type": "finance"})
+        app = self._make_app("finance", legal, finance)
+
+        doc = Document(doc_id="d-001", text="quarterly earnings report")
+        await app.ingest_documents([doc])
+
+        app._llm.complete.assert_called_once()
+        finance.ingest_documents.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_llm_backfills_match_conditions_into_metadata(self):
+        legal = self._pipeline_stub("legal", {"doc_type": "legal"})
+        finance = self._pipeline_stub("finance", {"doc_type": "finance"})
+        app = self._make_app("finance", legal, finance)
+
+        doc = Document(doc_id="d-001", text="quarterly earnings report")
+        await app.ingest_documents([doc])
+
+        assert doc.metadata.get("doc_type") == "finance"
+
+    @pytest.mark.asyncio
+    async def test_backfill_does_not_overwrite_existing_metadata(self):
+        legal = self._pipeline_stub("legal", {"doc_type": "legal"})
+        finance = self._pipeline_stub("finance", {"doc_type": "finance"})
+        app = self._make_app("finance", legal, finance)
+
+        doc = Document(doc_id="d-001", text="text", metadata={"doc_type": "custom"})
+        await app.ingest_documents([doc])
+
+        assert doc.metadata["doc_type"] == "custom"
