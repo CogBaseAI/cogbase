@@ -140,13 +140,12 @@ class TestFixedSizeChunkerChunk:
         for chunk in chunks:
             assert text[chunk.char_offset : chunk.char_offset + chunk.char_length] == chunk.text
 
-    def test_doc_metadata_inherited(self):
+    def test_chunk_metadata_starts_empty(self):
         chunker = FixedSizeChunker(chunk_size=5, overlap=0)
         doc = Document(doc_id="doc-1", text="abcdeabcde", metadata={"source": "test", "author": "alice"})
         chunks = chunker.chunk(doc)
         for chunk in chunks:
-            assert chunk.metadata["source"] == "test"
-            assert chunk.metadata["author"] == "alice"
+            assert chunk.metadata == {}
 
 
 class TestFixedSizeChunkerIsChunkerBase:

@@ -104,6 +104,17 @@ async def build_app(
     )
 
     # --- Vector collections ---
+    # Collect routing match keys per collection so they're always stored on chunks,
+    # regardless of whether the config author remembered to list them in metadata_fields.
+    match_keys_by_collection: dict[str, set[str]] = {}
+    for p_cfg in config.pipelines:
+        if p_cfg.match:
+            for step in p_cfg.steps:
+                if step.tool in ("chunk-embed-upsert", "document-embed-upsert"):
+                    match_keys_by_collection.setdefault(step.collection, set()).update(
+                        p_cfg.match.metadata.keys()
+                    )
+
     vector_collections: list[VectorCollection] = []
     for vc_cfg in config.vector_collections:
         if vector_store is None:
@@ -115,12 +126,14 @@ async def build_app(
             raise ValueError(
                 f"vector collection {vc_cfg.name!r} requires an embedding config"
             )
+        extra = match_keys_by_collection.get(vc_cfg.name, set())
+        metadata_fields = list(dict.fromkeys(vc_cfg.metadata_fields + list(extra)))
         vector_collections.append(VectorCollection(
             schema=VectorCollectionSchema(
                 name=vc_cfg.name,
                 dimensions=vc_cfg.dimensions,
                 description=vc_cfg.description,
-                metadata_fields=vc_cfg.metadata_fields,
+                metadata_fields=metadata_fields,
             ),
             store=vector_store,
             embedder=embedder,

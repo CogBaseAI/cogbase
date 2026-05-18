@@ -148,6 +148,51 @@ class TestMultiCollectionPipelineConstruction:
 
 
 # ---------------------------------------------------------------------------
+# chunk-embed-upsert ingestion
+# ---------------------------------------------------------------------------
+
+class TestChunkEmbedUpsert:
+    _CHUNKS_SCHEMA = VectorCollectionSchema(name="chunks", dimensions=4, description="Test chunks")
+
+    @pytest.mark.asyncio
+    async def test_metadata_fields_projected_into_chunks(self, make_vector_store):
+        vector_store = make_vector_store()
+        schema = self._CHUNKS_SCHEMA.model_copy(update={"metadata_fields": ["doc_type", "customer_id"]})
+        await vector_store.create_collection(schema)
+        vc = VectorCollection(schema=schema, store=vector_store, embedder=StubEmbedding(dim=4))
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="chunks", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
+            vector_collections=[vc],
+        )
+        await pipeline._ingest(Document(
+            doc_id="d-001",
+            text="word " * 5,
+            metadata={"doc_type": "contract", "customer_id": "acme", "internal": "skip"},
+        ))
+        chunks = await vector_store.search("chunks", "", [0.1] * 4, top_k=10)
+        assert all(c.metadata == {"doc_type": "contract", "customer_id": "acme"} for c in chunks)
+
+    @pytest.mark.asyncio
+    async def test_no_metadata_fields_means_empty_chunk_metadata(self, make_vector_store):
+        vector_store = make_vector_store()
+        await vector_store.create_collection(self._CHUNKS_SCHEMA)
+        vc = VectorCollection(schema=self._CHUNKS_SCHEMA, store=vector_store, embedder=StubEmbedding(dim=4))
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[PipelineStep(tool="chunk-embed-upsert", collection="chunks", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
+            vector_collections=[vc],
+        )
+        await pipeline._ingest(Document(
+            doc_id="d-001",
+            text="word " * 5,
+            metadata={"doc_type": "contract", "customer_id": "acme"},
+        ))
+        chunks = await vector_store.search("chunks", "", [0.1] * 4, top_k=10)
+        assert all(c.metadata == {} for c in chunks)
+
+
+# ---------------------------------------------------------------------------
 # document-embed-upsert ingestion
 # ---------------------------------------------------------------------------
 

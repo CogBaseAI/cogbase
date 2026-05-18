@@ -43,11 +43,12 @@ class ChunkerBase(abc.ABC):
         char_offset: int,
         char_length: int,
     ) -> Chunk:
+        # pipeline will generate embedding, set chunk.embedding, and copy over doc.metadata to each chunk
         return Chunk(
             chunk_id=f"{doc.doc_id}_{index}",
             doc_id=doc.doc_id,
             text=text,
-            metadata={**doc.metadata},
+            metadata={},
             char_offset=char_offset,
             char_length=char_length,
         )

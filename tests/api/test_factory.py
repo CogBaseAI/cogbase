@@ -686,3 +686,96 @@ document_store:
 
         assert isinstance(app.document_store, LocalFSDocumentStore)
         assert app.document_store._root.name == "app-docs"  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# build_app — routing match keys auto-injected into metadata_fields
+# ---------------------------------------------------------------------------
+
+_TWO_PIPELINE_CONFIG_YAML = """\
+name: test_app
+llm:
+  provider: openai
+  model: gpt-4o-mini
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+vector_collections:
+  - name: contract_chunks
+    description: Contract text chunks.
+  - name: rule_chunks
+    description: Rule text chunks.
+pipelines:
+  - name: contracts
+    routing_description: Vendor contracts to review for compliance.
+    match:
+      metadata:
+        doc_type: contract
+    steps:
+      - tool: chunk-embed-upsert
+        collection: contract_chunks
+        chunker:
+          type: fixed
+          chunk_size: 512
+          overlap: 64
+  - name: rules
+    routing_description: Company policy and standards documents.
+    match:
+      metadata:
+        doc_type: rules
+    steps:
+      - tool: chunk-embed-upsert
+        collection: rule_chunks
+        chunker:
+          type: fixed
+          chunk_size: 512
+          overlap: 64
+"""
+
+
+class TestBuildAppMatchMetadataFields:
+    @patch("api.factory._build_llm")
+    @patch("api.factory._build_embedder")
+    async def test_match_key_added_to_metadata_fields(self, mock_build_embedder, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        mock_build_embedder.return_value = MagicMock()
+        cfg = AppConfig.from_yaml(_TWO_PIPELINE_CONFIG_YAML)
+        sys_vs = FAISSVectorStore()
+        app = await build_app(cfg, system=SystemResources(vector_store=sys_vs), app_status="initializing")
+        # Both pipelines match on doc_type — both collections should include it in metadata_fields
+        contract_vc = app._pipelines[0]._vector_by_name["contract_chunks"]
+        rule_vc = app._pipelines[0]._vector_by_name["rule_chunks"]
+        assert "doc_type" in contract_vc.schema.metadata_fields
+        assert "doc_type" in rule_vc.schema.metadata_fields
+
+    @patch("api.factory._build_llm")
+    @patch("api.factory._build_embedder")
+    async def test_explicit_metadata_fields_preserved_alongside_match_key(self, mock_build_embedder, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        mock_build_embedder.return_value = MagicMock()
+        yaml_with_explicit = _TWO_PIPELINE_CONFIG_YAML.replace(
+            "  - name: contract_chunks\n    description: Contract text chunks.",
+            "  - name: contract_chunks\n    description: Contract text chunks.\n    metadata_fields: [vendor]",
+        )
+        cfg = AppConfig.from_yaml(yaml_with_explicit)
+        sys_vs = FAISSVectorStore()
+        app = await build_app(cfg, system=SystemResources(vector_store=sys_vs), app_status="initializing")
+        contract_vc = app._pipelines[0]._vector_by_name["contract_chunks"]
+        assert "vendor" in contract_vc.schema.metadata_fields
+        assert "doc_type" in contract_vc.schema.metadata_fields
+
+    @patch("api.factory._build_llm")
+    @patch("api.factory._build_embedder")
+    async def test_no_match_block_leaves_metadata_fields_unchanged(self, mock_build_embedder, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        mock_build_embedder.return_value = MagicMock()
+        cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
+        sys_vs = FAISSVectorStore()
+        system_store = InMemoryStructuredStore()
+        app = await build_app(
+            cfg,
+            system=SystemResources(structured_store=system_store, vector_store=sys_vs),
+            app_status="initializing",
+        )
+        vc = app._pipelines[0]._vector_by_name["document_chunks"]
+        assert vc.schema.metadata_fields == []
