@@ -1,6 +1,8 @@
 # Contract Analyst Demo
 
-A CogBase demo that ingests and queries legal contracts through the REST API. Each document is processed by an LLM that extracts a structured record covering contract basics, common clause text, and flexible fields for terms that vary by contract type.
+Ask natural-language questions across a portfolio of legal contracts: find which agreements expire before a given date, compare termination rights across vendors, surface contracts with unusual liability caps, or retrieve the verbatim clause text for any obligation. Structured lookups (e.g. "list all contracts governed by New York law") return exact records; open-ended questions stream a synthesized answer with citations.
+
+The demo ships with five SaaS contract fixtures and accepts any plain-text contract you provide. Each ingested document produces one structured record (parties, dates, clause text, payment terms) plus a searchable vector index of its full text.
 
 ## Quick start
 

@@ -1,9 +1,8 @@
 # Contract Compliance Demo
 
-A CogBase demo that checks incoming contracts against a company's internal
-rules and standards. The demo uses one application with separate collections
-for company rules, contract text, extracted clauses, contract metadata, and
-clause-level compliance findings.
+Upload a set of company rules and incoming contracts, then let the system review every clause automatically: each clause is checked against your policy library, rated by severity, and stored with the exact rule passages that justify the finding. A non-compliant clause also gets a suggested redline. Results appear as they stream in — no waiting for the full document to finish.
+
+After a review is complete you can query across findings: list all high-severity issues, ask which contracts violate a specific rule, or pull the full compliance report for any contract. The demo ships with built-in rule fixtures and sample contracts so you can run the full workflow end-to-end without any external documents.
 
 ## Quick start
 
@@ -294,7 +293,6 @@ config without the overhead of an agentic loop.
 
 ## Known limitations
 
-- Clause extraction quality depends on contract formatting and OCR quality.
 - Semantic search may retrieve incomplete policy context for broad or ambiguous clauses.
 - The LLM judge is policy-assistive and should not be treated as legal advice.
 - Rule versioning is not considered in the demo.
