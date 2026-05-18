@@ -18,7 +18,7 @@ class ChunkerBase(abc.ABC):
             def chunk(self, doc: Document) -> list[Chunk]:
                 ...
 
-    ``metadata`` may carry chunker-specific fields (e.g. ``{"chunk_index": "0"}``).
+    ``metadata`` may carry chunker-specific fields.
     Embeddings are ``None`` on output — the pipeline fills them in separately.
     """
 
@@ -34,3 +34,20 @@ class ChunkerBase(abc.ABC):
             Ordered list of ``Chunk`` objects.  ``embedding`` is always ``None``
             — the pipeline attaches embeddings in a later step.
         """
+
+    def _make_chunk(
+        self,
+        doc: Document,
+        index: int,
+        text: str,
+        char_offset: int | None = None,
+        char_length: int | None = None,
+    ) -> Chunk:
+        return Chunk(
+            chunk_id=f"{doc.doc_id}_{index}",
+            doc_id=doc.doc_id,
+            text=text,
+            metadata={**doc.metadata},
+            char_offset=char_offset,
+            char_length=char_length,
+        )

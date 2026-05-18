@@ -88,11 +88,6 @@ class TestFixedSizeChunkerChunk:
         # chunk[1] starts at index 3: "defgh"
         assert chunks[0].text[-2:] == chunks[1].text[:2]
 
-    def test_chunk_index_metadata(self):
-        chunker = FixedSizeChunker(chunk_size=5, overlap=0)
-        chunks = chunker.chunk(Document(doc_id="doc-1", text="abcdeabcde"))
-        assert [c.metadata["chunk_index"] for c in chunks] == ["0", "1"]
-
     def test_chunk_id_uses_doc_id_and_index(self):
         chunker = FixedSizeChunker(chunk_size=5, overlap=0)
         chunks = chunker.chunk(Document(doc_id="doc-1", text="abcdeabcde"))
@@ -145,6 +140,14 @@ class TestFixedSizeChunkerChunk:
         for chunk in chunks:
             assert text[chunk.char_offset : chunk.char_offset + chunk.char_length] == chunk.text
 
+    def test_doc_metadata_inherited(self):
+        chunker = FixedSizeChunker(chunk_size=5, overlap=0)
+        doc = Document(doc_id="doc-1", text="abcdeabcde", metadata={"source": "test", "author": "alice"})
+        chunks = chunker.chunk(doc)
+        for chunk in chunks:
+            assert chunk.metadata["source"] == "test"
+            assert chunk.metadata["author"] == "alice"
+
 
 class TestFixedSizeChunkerIsChunkerBase:
     def test_is_subclass(self):
@@ -160,7 +163,6 @@ class TestFixedSizeChunkerIsChunkerBase:
                         chunk_id=f"{doc.doc_id}_{i}",
                         doc_id=doc.doc_id,
                         text=word,
-                        metadata={"chunk_index": str(i)},
                     )
                     for i, word in enumerate(doc.text.split())
                     if word

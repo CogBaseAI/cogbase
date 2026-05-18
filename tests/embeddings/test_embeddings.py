@@ -12,7 +12,7 @@ from cogbase.embeddings import EmbeddingBase
 
 def make_chunks(texts: list[str], doc_id: str = "doc-1") -> list[Chunk]:
     return [
-        Chunk(chunk_id=f"{doc_id}_{i}", doc_id=doc_id, text=t, metadata={"chunk_index": str(i)})
+        Chunk(chunk_id=f"{doc_id}_{i}", doc_id=doc_id, text=t)
         for i, t in enumerate(texts)
     ]
 

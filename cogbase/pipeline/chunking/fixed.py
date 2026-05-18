@@ -1,6 +1,6 @@
 """Fixed-size sliding-window chunker."""
 
-from cogbase.core.models import Chunk, Document
+from cogbase.core.models import Document
 from cogbase.pipeline.chunking.base import ChunkerBase
 
 
@@ -12,8 +12,6 @@ class FixedSizeChunker(ChunkerBase):
         overlap:    Number of characters from the end of one chunk that are
                     repeated at the start of the next.  Must be less than
                     ``chunk_size``.
-
-    Each chunk carries ``{"chunk_index": str(n)}`` in its metadata.
     """
 
     def __init__(self, chunk_size: int = 1000, overlap: int = 200) -> None:
@@ -28,27 +26,18 @@ class FixedSizeChunker(ChunkerBase):
         self.chunk_size = chunk_size
         self.overlap = overlap
 
-    def chunk(self, doc: Document) -> list[Chunk]:
+    def chunk(self, doc: Document) -> list:
         if not doc.text:
             return []
 
         stride = self.chunk_size - self.overlap
-        chunks: list[Chunk] = []
+        chunks = []
         index = 0
         start = 0
 
         while start < len(doc.text):
             end = min(start + self.chunk_size, len(doc.text))
-            chunks.append(
-                Chunk(
-                    chunk_id=f"{doc.doc_id}_{index}",
-                    doc_id=doc.doc_id,
-                    text=doc.text[start:end],
-                    metadata={"chunk_index": str(index)},
-                    char_offset=start,
-                    char_length=end - start,
-                )
-            )
+            chunks.append(self._make_chunk(doc, index, doc.text[start:end], start, end - start))
             index += 1
             start += stride
 

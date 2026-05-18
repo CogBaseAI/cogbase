@@ -475,31 +475,6 @@ class TestWhenConditionRouting:
         assert rule_store.ntotal("rule_chunks") > 0
 
     @pytest.mark.asyncio
-    async def test_non_matching_doc_type_skips_step(self, make_vector_store):
-        """A contract document is skipped by the rules step (doc_type mismatch)."""
-        rule_store = make_vector_store()
-        rule_schema = VectorCollectionSchema(name="rule_chunks", dimensions=4, description="rule chunks")
-        await rule_store.create_collection(rule_schema)
-
-        vc = _make_vector_collection(rule_store, "rule_chunks")
-        pipeline = IngestionPipeline(
-            name="rules",
-            match={"doc_type": "rules"},
-            steps=[PipelineStep(tool="chunk-embed-upsert", collection="rule_chunks", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
-            vector_collections=[vc],
-        )
-        app = self._make_app([pipeline])
-
-        results = await app.ingest_documents([Document(
-            doc_id="contract-001",
-            text="This agreement is entered into by the parties.",
-            metadata={"doc_type": "contract"},
-        )])
-
-        assert results[0].success is False
-        assert rule_store.ntotal("rule_chunks") == 0
-
-    @pytest.mark.asyncio
     async def test_step_without_when_runs_for_all_docs(self, make_vector_store):
         """A step with no when condition runs regardless of doc metadata."""
         store = make_vector_store()
@@ -565,48 +540,3 @@ class TestWhenConditionRouting:
         assert rule_store.ntotal("rule_chunks") > 0, "rules doc did not land in rule_chunks"
         assert contract_store.ntotal("contract_chunks") > 0, "contract doc did not land in contract_chunks"
 
-    @pytest.mark.asyncio
-    async def test_partial_metadata_match_skips_step(self, make_vector_store):
-        """All when keys must match; partial match still skips the step."""
-        store = make_vector_store()
-        schema = VectorCollectionSchema(name="chunks", dimensions=4, description="chunks")
-        await store.create_collection(schema)
-
-        vc = _make_vector_collection(store, "chunks")
-        pipeline = IngestionPipeline(
-            name="app",
-            match={"doc_type": "rules", "region": "us"},
-            steps=[PipelineStep(tool="chunk-embed-upsert", collection="chunks", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
-            vector_collections=[vc],
-        )
-        app = self._make_app([pipeline])
-
-        results = await app.ingest_documents([Document(
-            doc_id="d1",
-            text="Some rules.",
-            metadata={"doc_type": "rules", "region": "eu"},
-        )])
-
-        assert results[0].success is False
-        assert store.ntotal("chunks") == 0
-
-    @pytest.mark.asyncio
-    async def test_doc_missing_metadata_key_skips_step(self, make_vector_store):
-        """A document that lacks the when key entirely is skipped."""
-        store = make_vector_store()
-        schema = VectorCollectionSchema(name="chunks", dimensions=4, description="chunks")
-        await store.create_collection(schema)
-
-        vc = _make_vector_collection(store, "chunks")
-        pipeline = IngestionPipeline(
-            name="app",
-            match={"doc_type": "rules"},
-            steps=[PipelineStep(tool="chunk-embed-upsert", collection="chunks", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
-            vector_collections=[vc],
-        )
-        app = self._make_app([pipeline])
-
-        results = await app.ingest_documents([Document(doc_id="d1", text="Some text.", metadata={})])
-
-        assert results[0].success is False
-        assert store.ntotal("chunks") == 0

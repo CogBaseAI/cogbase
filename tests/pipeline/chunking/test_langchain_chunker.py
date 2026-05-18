@@ -33,13 +33,6 @@ class TestLangChainChunkerBehavior:
         chunks = LangChainChunker(splitter).chunk(Document(doc_id="my-doc", text="hello world " * 20))
         assert all(c.doc_id == "my-doc" for c in chunks)
 
-    def test_chunk_index_metadata(self):
-        splitter = CharacterTextSplitter(chunk_size=5, chunk_overlap=0, separator=" ")
-        chunks = LangChainChunker(splitter).chunk(Document(doc_id="doc-1", text="hello world"))
-        assert [c.metadata["chunk_index"] for c in chunks] == [
-            str(i) for i in range(len(chunks))
-        ]
-
     def test_chunk_id_uses_doc_id_and_index(self):
         splitter = CharacterTextSplitter(chunk_size=5, chunk_overlap=0, separator=" ")
         chunks = LangChainChunker(splitter).chunk(Document(doc_id="doc-1", text="hello world"))
@@ -73,3 +66,12 @@ class TestLangChainChunkerBehavior:
         for chunk in chunks:
             if chunk.char_offset is not None:
                 assert text[chunk.char_offset : chunk.char_offset + chunk.char_length] == chunk.text
+
+    def test_doc_metadata_inherited(self):
+        splitter = CharacterTextSplitter(chunk_size=5, chunk_overlap=0, separator=" ")
+        doc = Document(doc_id="doc-1", text="hello world", metadata={"source": "test", "author": "alice"})
+        chunks = LangChainChunker(splitter).chunk(doc)
+        for chunk in chunks:
+            assert chunk.metadata["source"] == "test"
+            assert chunk.metadata["author"] == "alice"
+
