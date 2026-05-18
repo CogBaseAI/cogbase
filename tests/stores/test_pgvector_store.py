@@ -475,3 +475,20 @@ async def test_search_filters_and_fields_combined(store):
     assert results[0].chunk_id == a.chunk_id
     assert results[0].embedding is None
     assert results[0].metadata == {"section": "intro"}
+
+
+# ---------------------------------------------------------------------------
+# Cross-store contract: non-core Chunk field round-trip
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_non_core_chunk_fields_roundtrip(store):
+    from tests.stores.vector_store_contract import assert_non_core_fields_roundtrip
+    await assert_non_core_fields_roundtrip(store, COLLECTION, dim=DIM)
+
+
+@pytest.mark.asyncio
+async def test_non_core_chunk_fields_none_roundtrip(store):
+    from tests.stores.vector_store_contract import assert_non_core_fields_none_roundtrip
+    await assert_non_core_fields_none_roundtrip(store, COLLECTION, dim=DIM)
+

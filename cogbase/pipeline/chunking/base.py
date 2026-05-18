@@ -40,8 +40,8 @@ class ChunkerBase(abc.ABC):
         doc: Document,
         index: int,
         text: str,
-        char_offset: int | None = None,
-        char_length: int | None = None,
+        char_offset: int,
+        char_length: int,
     ) -> Chunk:
         return Chunk(
             chunk_id=f"{doc.doc_id}_{index}",

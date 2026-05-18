@@ -34,6 +34,7 @@ from typing import Any
 
 from cogbase.core.models import Chunk
 from cogbase.stores.vector.base import VectorCollectionSchema, VectorStoreBase
+from cogbase.stores.vector.chunk_codec import FILTERABLE_COLUMNS, from_store_record, to_store_record
 from cogbase.stores.filters import Filter, Op
 
 logger = logging.getLogger(__name__)
@@ -259,13 +260,8 @@ def _to_row(chunk: Chunk) -> tuple[Any, ...]:
     import json
     import numpy as np
 
-    return (
-        chunk.chunk_id,
-        chunk.doc_id,
-        chunk.text,
-        np.array(chunk.embedding, dtype=np.float32),
-        json.dumps(chunk.metadata),
-    )
+    chunk_id, doc_id, text, embedding, metadata = to_store_record(chunk)
+    return (chunk_id, doc_id, text, np.array(embedding, dtype=np.float32), json.dumps(metadata))
 
 
 def _from_row(row: Any, include_embedding: bool = True, include_metadata: bool = True) -> Chunk:
@@ -279,17 +275,7 @@ def _from_row(row: Any, include_embedding: bool = True, include_metadata: bool =
     else:
         metadata = {}
 
-    return Chunk(
-        chunk_id=row["chunk_id"],
-        doc_id=row["doc_id"],
-        text=row["text"],
-        embedding=embedding,
-        metadata=metadata,
-    )
-
-
-# Top-level Chunk columns that can be filtered directly in SQL.
-_DIRECT_COLS = {"chunk_id", "doc_id", "text"}
+    return from_store_record(row["chunk_id"], row["doc_id"], row["text"], embedding, metadata)
 
 
 def _build_pg_where(filters: list[Filter], param_offset: int) -> tuple[str, list[Any]]:
@@ -317,7 +303,7 @@ def _build_pg_where(filters: list[Filter], param_offset: int) -> tuple[str, list
             key = f.field.split(".", 1)[1]
             text_expr = f"metadata->>'{key}'"
             num_expr = f"(metadata->>'{key}')::numeric"
-        elif f.field in _DIRECT_COLS:
+        elif f.field in FILTERABLE_COLUMNS:
             text_expr = f'"{f.field}"'
             num_expr = f'"{f.field}"'
         else:

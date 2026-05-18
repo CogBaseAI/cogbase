@@ -23,6 +23,7 @@ import numpy as np
 
 from cogbase.core.models import Chunk
 from cogbase.stores.vector.base import VectorCollectionSchema, VectorStoreBase
+from cogbase.stores.vector.chunk_codec import project_chunk
 from cogbase.stores.filters import Filter, matches
 
 logger = logging.getLogger(__name__)
@@ -154,7 +155,7 @@ class FAISSMemoryVectorStore(VectorStoreBase):
             chunk = state.chunks[chunk_id]
             if active_filters and not matches(chunk.model_dump(), active_filters):
                 continue
-            results.append(_project_chunk(chunk, fields))
+            results.append(project_chunk(chunk, fields))
             if len(results) == top_k:
                 break
         return results
@@ -363,14 +364,3 @@ def _make_index(dim: int) -> faiss.Index:
     return faiss.IndexIDMap(faiss.IndexFlatIP(dim))
 
 
-def _project_chunk(chunk: Chunk, fields: list[str] | None) -> Chunk:
-    if not fields:
-        return chunk
-    field_set = set(fields)
-    return Chunk(
-        chunk_id=chunk.chunk_id,
-        doc_id=chunk.doc_id,
-        text=chunk.text,
-        embedding=chunk.embedding if "embedding" in field_set else None,
-        metadata=chunk.metadata if "metadata" in field_set else {},
-    )

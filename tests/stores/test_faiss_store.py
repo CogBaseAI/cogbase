@@ -625,3 +625,21 @@ async def test_file_store_persists_deleting_last_collection(tmp_path):
 
     loaded = FAISSVectorStore(path=path)
     assert not (path / f"{COLLECTION}.faiss").exists()
+
+
+# ------------------------------------------------------------------
+# Cross-store contract: non-core Chunk field round-trip
+# ------------------------------------------------------------------
+
+async def test_non_core_chunk_fields_roundtrip():
+    from tests.stores.vector_store_contract import assert_non_core_fields_roundtrip
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(COLLECTION, dim=2))
+    await assert_non_core_fields_roundtrip(store, COLLECTION, dim=2)
+
+
+async def test_non_core_chunk_fields_none_roundtrip():
+    from tests.stores.vector_store_contract import assert_non_core_fields_none_roundtrip
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(COLLECTION, dim=2))
+    await assert_non_core_fields_none_roundtrip(store, COLLECTION, dim=2)

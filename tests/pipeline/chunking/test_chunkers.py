@@ -158,14 +158,14 @@ class TestFixedSizeChunkerIsChunkerBase:
 
         class WordChunker(ChunkerBase):
             def chunk(self, doc: Document) -> list[Chunk]:
-                return [
-                    Chunk(
-                        chunk_id=f"{doc.doc_id}_{i}",
-                        doc_id=doc.doc_id,
-                        text=word,
-                    )
-                    for i, word in enumerate(doc.text.split())
-                    if word
-                ]
+                chunks = []
+                search_from = 0
+                for i, word in enumerate(doc.text.split()):
+                    if not word:
+                        continue
+                    offset = doc.text.find(word, search_from)
+                    chunks.append(self._make_chunk(doc, i, word, offset, len(word)))
+                    search_from = offset + 1
+                return chunks
 
         assert_chunker_contract(WordChunker(), "hello world foo", "doc-x")
