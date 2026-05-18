@@ -9,6 +9,7 @@ CogBase is an open-source framework for building AI applications that need to un
 It provides the foundational layer that vertical AI products are built on: a knowledge pipeline, composable workflows, a skill registry, a multi-tier memory system, and an adaptive evolution engine — generated from a plain-language description, deployed through a REST API, and improved by every query.
 
 **[▶ Watch the demo - App Auto Creation](https://youtu.be/OMRFF5oauEk)**
+
 **[▶ Watch the demo - Get Trusted Answer Fast over your documents](https://youtu.be/N5Vip3jwiEk)**
 
 ---
@@ -23,8 +24,9 @@ With a well-designed AI system, the model correctly says "I don't know" rather t
 - **Cross-document reasoning is invisible to retrieval.** "Does this email contradict the contract?" Both documents are indexed. Neither chunk retrieves the other as context. The contradiction is derivable — but only if you hold both in scope simultaneously. Vector search doesn't do that. The model answers from whichever side it saw and never flags the conflict.
 - **The data is there — the retrieval architecture can't reach it.** Knowledge graphs are one attempt to solve this. But timelines are a genuine KG weakness — time is awkward to model as nodes and edges. And KGs require significant engineering to construct: define the ontology, disambiguate entities, maintain edges as documents evolve. They don't build themselves, and they don't stay current.
 - **Failures are silent and permanent.** When the same question fails 50 times — same IDK, same partial answer, same miss — nothing changes. There's no mechanism that notices "renewal date questions always fail" and surfaces "extract renewal dates as a structured field." Every gap stays invisible. Every failure repeats forever.
+- **Query-time token cost scales with raw document volume.** When retrieval surfaces large prose chunks, the LLM processes all of it on every request — token by token, query after query. Multiply by query volume and the cost compounds fast. The real work — extraction, summarization, cross-document reasoning — doesn't need to happen at query time at all. It already happened when the document was ingested.
 
-CogBase addresses each layer: the pipeline extracts typed facts alongside passage chunks and per-document summaries so structured queries and cross-document reasoning are first-class; workflows fan retrieval out across many documents at ingest time so contradictions and comparisons are pre-computed; skills extend what the agent can do beyond answering; memory gives it continuity across sessions; and the adaptive evolution engine mines failed queries to surface the missing fields, collections, and steps — so the same gap doesn't fail silently forever.
+CogBase addresses each layer: the pipeline extracts typed facts alongside passage chunks and per-document summaries so structured queries and cross-document reasoning are first-class; workflows fan retrieval out across many documents at ingest time so contradictions and comparisons are pre-computed; at query time the LLM sees compact structured records and pre-computed workflow results rather than raw prose — cutting the context window and keeping token spend predictable; skills extend what the agent can do beyond answering; memory gives it continuity across sessions; and the adaptive evolution engine mines failed queries to surface the missing fields, collections, and steps — so the same gap doesn't fail silently forever.
 
 ---
 
