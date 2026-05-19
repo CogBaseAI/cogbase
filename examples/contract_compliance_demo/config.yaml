@@ -97,6 +97,12 @@ workflows:
   - name: check-contract-compliance
     trigger:
       type: manual
+    params_from_collection:
+      collection: contract_metadata
+      filters:
+        doc_id: "{{ doc.doc_id }}"
+      params:
+        doc_id: "{{ record.doc_id }}"
     input_schema:
       doc_id: string
     steps:

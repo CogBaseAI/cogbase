@@ -743,8 +743,10 @@ async def run_workflow(
 
     records: list[dict] = []
     try:
-        async for record in wf_runner.run(body.params):
-            records.append(record)
+        params_list = await app.resolve_workflow_params(wf_runner, body.doc_id)
+        for params in params_list:
+            async for record in wf_runner.run(params):
+                records.append(record)
     except Exception as exc:
         logger.exception("run_workflow failed app=%s workflow=%s", app_name, workflow_name)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -772,10 +774,13 @@ async def stream_workflow(
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
+    params_list = await app.resolve_workflow_params(wf_runner, body.doc_id)
+
     async def event_stream():
         try:
-            async for record in wf_runner.run(body.params):
-                yield f"data: {json.dumps({'record': record})}\n\n"
+            for params in params_list:
+                async for record in wf_runner.run(params):
+                    yield f"data: {json.dumps({'record': record})}\n\n"
         except Exception:
             logger.exception("stream_workflow failed app=%s workflow=%s", app_name, workflow_name)
             yield f"data: {json.dumps({'error': 'workflow stream failed'})}\n\n"

@@ -85,15 +85,17 @@ trigger:
 ```yaml
 trigger:
   type: after_ingest
-  params_from_collection:
-    collection: facts
-    filters:
-      doc_id: "{{ doc.doc_id }}"
-    params:
-      issue: "{{ record.issue }}"
+params_from_collection:
+  collection: facts
+  filters:
+    doc_id: "{{ doc.doc_id }}"
+  params:
+    issue: "{{ record.issue }}"
 ```
 
-This queries `facts` after the document is ingested and starts one workflow per distinct rendered param set.
+`params_from_collection` queries `facts` filtered by `doc_id` and starts one workflow run per distinct rendered param set. It is declared at the workflow level (not under `trigger`) so the same config also drives manual `/run` and `/stream` calls — the caller passes `doc_id` and the engine derives params automatically.
+
+> **Scope note:** workflows are currently doc-scoped — every invocation (automatic or manual) starts from a `doc_id`. `WorkflowRunRequest` can be extended with additional fields (e.g. a collection filter or a free-form params map) if collection-wide or non-doc workflows are needed in the future; the runner and step machinery require no changes.
 
 ### Output collections
 

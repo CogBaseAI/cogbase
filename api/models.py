@@ -142,7 +142,7 @@ class WorkflowListResponse(BaseModel):
 
 
 class WorkflowRunRequest(BaseModel):
-    params: dict[str, Any] = {}
+    doc_id: str
 
 
 class WorkflowRunResponse(BaseModel):

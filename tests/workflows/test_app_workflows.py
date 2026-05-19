@@ -10,7 +10,7 @@ import pytest
 from cogbase.config.config import (
     WorkflowConfig,
     WorkflowTriggerConfig,
-    WorkflowTriggerParamsFromCollectionConfig,
+    WorkflowParamsFromCollectionConfig,
     WhenCondition,
 )
 from cogbase.core.app import CogBaseApp
@@ -41,23 +41,34 @@ def _minimal_app(workflow_runners: dict | None = None) -> CogBaseApp:
     )
 
 
+_DEFAULT_PARAMS_FROM_COLLECTION = WorkflowParamsFromCollectionConfig(
+    collection="docs",
+    filters={"doc_id": "{{ doc.doc_id }}"},
+    params={"doc_id": "{{ record.doc_id }}"},
+)
+
+
 def _make_wf_runner(
     name: str = "my-wf",
     trigger_type: str = "manual",
     when_metadata: dict | None = None,
-    params_from_collection: WorkflowTriggerParamsFromCollectionConfig | None = None,
+    params_from_collection: WorkflowParamsFromCollectionConfig | None = None,
 ) -> WorkflowRunner:
     trigger = WorkflowTriggerConfig(
         type=trigger_type,
         when=WhenCondition(metadata=when_metadata or {}) if when_metadata else None,
-        params_from_collection=params_from_collection,
     )
-    wf = WorkflowConfig(name=name, trigger=trigger, steps=[])
+    wf = WorkflowConfig(
+        name=name,
+        trigger=trigger,
+        params_from_collection=params_from_collection or _DEFAULT_PARAMS_FROM_COLLECTION,
+        steps=[],
+    )
     return WorkflowRunner(wf)
 
 
-def _after_ingest_source() -> WorkflowTriggerParamsFromCollectionConfig:
-    return WorkflowTriggerParamsFromCollectionConfig(
+def _after_ingest_source() -> WorkflowParamsFromCollectionConfig:
+    return WorkflowParamsFromCollectionConfig(
         collection="facts",
         filters={"doc_id": "{{ doc.doc_id }}"},
         params={"issue": "{{ record.issue }}"},
@@ -186,12 +197,12 @@ class TestAfterIngestTrigger:
             await app.ingest_documents([Document(doc_id="d-fail", text="text")])
             mock_ct.assert_not_called()
 
-    def test_after_ingest_requires_params_from_collection(self):
+    def test_workflow_requires_params_from_collection(self):
         with pytest.raises(ValueError, match="params_from_collection"):
-            _make_wf_runner("check", trigger_type="after_ingest")
+            WorkflowConfig(name="check", trigger=WorkflowTriggerConfig(), steps=[])
 
     async def test_after_ingest_can_build_params_from_structured_records(self):
-        source = WorkflowTriggerParamsFromCollectionConfig(
+        source = WorkflowParamsFromCollectionConfig(
             collection="facts",
             filters={"doc_id": "{{ doc.doc_id }}"},
             params={"issue": "{{ record.issue }}"},

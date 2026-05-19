@@ -193,7 +193,7 @@ class CogBaseApp:
                     continue
                 # TODO the workflow task may fail, for example, node crashes, need to ensure the state is tracked
                 try:
-                    workflow_params = await self._after_ingest_workflow_params(wf_runner, doc)
+                    workflow_params = await self.resolve_workflow_params(wf_runner, doc.doc_id)
                 except Exception:
                     logger.exception(
                         "app.after_ingest_workflow.params_failed workflow=%s doc_id=%s",
@@ -206,25 +206,17 @@ class CogBaseApp:
 
         return results
 
-    async def _after_ingest_workflow_params(
+    async def resolve_workflow_params(
         self,
         wf_runner: "WorkflowRunner",
-        doc: Document,
+        doc_id: str,
     ) -> list[dict[str, Any]]:
-        trigger = wf_runner.workflow.trigger
-        if trigger.params_from_collection is None:
-            raise ValueError(
-                f"after_ingest workflow {wf_runner.workflow.name!r} must define "
-                "params_from_collection"
-            )
-        ctx = {"doc": doc}
-
-        source = trigger.params_from_collection
+        source = wf_runner.workflow.params_from_collection
         if self._structured_store is None:
             raise ValueError(
-                f"after_ingest workflow {wf_runner.workflow.name!r} requires a "
-                "structured store"
+                f"workflow {wf_runner.workflow.name!r} requires a structured store"
             )
+        ctx = {"doc": {"doc_id": doc_id}}
         filter_values = render_value(source.filters, ctx)
         filters = [Col(field) == value for field, value in filter_values.items()]
         records = await self._structured_store.query(source.collection, filters)
@@ -235,7 +227,7 @@ class CogBaseApp:
             params = render_value(source.params, {**ctx, "record": record})
             if not isinstance(params, dict):
                 raise ValueError(
-                    f"after_ingest params_from_collection for workflow "
+                    f"params_from_collection for workflow "
                     f"{wf_runner.workflow.name!r} resolved to "
                     f"{type(params).__name__}, expected dict"
                 )

@@ -168,14 +168,14 @@ class PipelineConfig(ConfigPromptMixin, BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class WorkflowTriggerParamsFromCollectionConfig(ConfigPromptMixin, BaseModel):
+class WorkflowParamsFromCollectionConfig(ConfigPromptMixin, BaseModel):
     collection: str = Field(
-        description="Structured collection to query after a successful ingest.",
+        description="Structured collection to query for deriving workflow params.",
     )
     filters: dict[str, Any] = Field(
         default_factory=dict,
         description=(
-            "Equality filters rendered against the ingested document context. "
+            "Equality filters rendered against the document context. "
             "Use templates such as '{{ doc.doc_id }}'."
         ),
     )
@@ -201,21 +201,6 @@ class WorkflowTriggerConfig(ConfigPromptMixin, BaseModel):
         default=None,
         description="Optional condition that must match before triggering.",
     )
-    params_from_collection: WorkflowTriggerParamsFromCollectionConfig | None = Field(
-        default=None,
-        description=(
-            "Optional structured collection query used to create one after_ingest "
-            "workflow invocation per matching record."
-        ),
-    )
-
-    @model_validator(mode="after")
-    def _validate_after_ingest(self) -> "WorkflowTriggerConfig":
-        if self.type == "after_ingest" and self.params_from_collection is None:
-            raise ValueError(
-                "after_ingest workflows must define params_from_collection"
-            )
-        return self
 
 
 class WorkflowStepBase(ConfigPromptMixin, BaseModel):
@@ -341,6 +326,14 @@ class WorkflowConfig(ConfigPromptMixin, BaseModel):
     trigger: WorkflowTriggerConfig = Field(
         default_factory=WorkflowTriggerConfig,
         description="Workflow trigger configuration.",
+    )
+    params_from_collection: WorkflowParamsFromCollectionConfig = Field(
+        description=(
+            "How to derive workflow params from a document. "
+            "Queries a structured collection by doc_id and fans out one run per "
+            "distinct rendered param set. Drives both after_ingest triggers and "
+            "manual /run and /stream calls (caller passes doc_id)."
+        ),
     )
     input_schema: dict[str, str] = Field(
         default_factory=dict,
