@@ -16,7 +16,9 @@ from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
 from cogbase.core.models import Document
 from cogbase.core.query_runner import QueryResult, QueryRunner
 from cogbase.llms.base import ChatMessage, LLMBase
-from cogbase.stores import DocumentStoreBase
+from cogbase.stores import DocumentStoreBase, StructuredStoreBase
+from cogbase.stores.filters import Col
+from cogbase.workflows.context import render_value
 
 if TYPE_CHECKING:
     from cogbase.workflows.runner import WorkflowRunner
@@ -51,6 +53,7 @@ class CogBaseApp:
         runner: QueryRunner,
         *,
         document_store: DocumentStoreBase | None = None,
+        structured_store: StructuredStoreBase | None = None,
         workflow_runners: dict[str, "WorkflowRunner"] | None = None,
         llm: LLMBase | None = None,
         routing_strategy: RoutingStrategy = RoutingStrategy.AUTO,
@@ -59,6 +62,7 @@ class CogBaseApp:
         self._pipelines = pipelines
         self._runner = runner
         self._document_store = document_store
+        self._structured_store = structured_store
         self._workflows: dict[str, "WorkflowRunner"] = workflow_runners or {}
         self._llm = llm
         self._routing_strategy = routing_strategy
@@ -188,23 +192,74 @@ class CogBaseApp:
                 if not all(doc.metadata.get(k) == v for k, v in when_meta.items()):
                     continue
                 # TODO the workflow task may fail, for example, node crashes, need to ensure the state is tracked
-                asyncio.create_task(self._run_workflow_bg(wf_runner, {"doc_id": doc.doc_id}))
+                try:
+                    workflow_params = await self._after_ingest_workflow_params(wf_runner, doc)
+                except Exception:
+                    logger.exception(
+                        "app.after_ingest_workflow.params_failed workflow=%s doc_id=%s",
+                        wf_runner.workflow.name,
+                        doc.doc_id,
+                    )
+                    continue
+                for params in workflow_params:
+                    asyncio.create_task(self._run_workflow_bg(wf_runner, params))
 
         return results
+
+    async def _after_ingest_workflow_params(
+        self,
+        wf_runner: "WorkflowRunner",
+        doc: Document,
+    ) -> list[dict[str, Any]]:
+        trigger = wf_runner.workflow.trigger
+        if trigger.params_from_collection is None:
+            raise ValueError(
+                f"after_ingest workflow {wf_runner.workflow.name!r} must define "
+                "params_from_collection"
+            )
+        ctx = {"doc": doc}
+
+        source = trigger.params_from_collection
+        if self._structured_store is None:
+            raise ValueError(
+                f"after_ingest workflow {wf_runner.workflow.name!r} requires a "
+                "structured store"
+            )
+        filter_values = render_value(source.filters, ctx)
+        filters = [Col(field) == value for field, value in filter_values.items()]
+        records = await self._structured_store.query(source.collection, filters)
+
+        params_list: list[dict[str, Any]] = []
+        seen: set[tuple[tuple[str, str], ...]] = set()
+        for record in records:
+            params = render_value(source.params, {**ctx, "record": record})
+            if not isinstance(params, dict):
+                raise ValueError(
+                    f"after_ingest params_from_collection for workflow "
+                    f"{wf_runner.workflow.name!r} resolved to "
+                    f"{type(params).__name__}, expected dict"
+                )
+            if source.distinct:
+                key = tuple(sorted((str(k), repr(v)) for k, v in params.items()))
+                if key in seen:
+                    continue
+                seen.add(key)
+            params_list.append(params)
+        return params_list
 
     async def _run_workflow_bg(self, wf_runner: "WorkflowRunner", params: dict[str, Any]) -> None:
         try:
             async for _ in wf_runner.run(params):
                 pass
             logger.info(
-                "app.after_ingest_workflow.done workflow=%s doc_id=%s",
-                wf_runner.workflow.name, params.get("doc_id"),
+                "app.after_ingest_workflow.done workflow=%s params=%s",
+                wf_runner.workflow.name, params,
             )
         except Exception:
             # TODO update task state
             logger.exception(
-                "app.after_ingest_workflow.failed workflow=%s doc_id=%s",
-                wf_runner.workflow.name, params.get("doc_id"),
+                "app.after_ingest_workflow.failed workflow=%s params=%s",
+                wf_runner.workflow.name, params,
             )
 
     async def query_stream(self, text: str, history: list[dict] | None = None):

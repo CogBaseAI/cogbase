@@ -80,7 +80,20 @@ trigger:
       doc_type: contract  # only fires for documents with this metadata
 ```
 
-`after_ingest` workflows run as a background task after each successful ingest. They automatically receive `{"doc_id": "<ingested doc id>"}` as their input params. Failures are logged and do not affect the ingest response.
+`after_ingest` workflows run as a background task after each successful ingest. They must derive their input params from structured records produced by ingestion. Failures are logged and do not affect the ingest response.
+
+```yaml
+trigger:
+  type: after_ingest
+  params_from_collection:
+    collection: facts
+    filters:
+      doc_id: "{{ doc.doc_id }}"
+    params:
+      issue: "{{ record.issue }}"
+```
+
+This queries `facts` after the document is ingested and starts one workflow per distinct rendered param set.
 
 ### Output collections
 

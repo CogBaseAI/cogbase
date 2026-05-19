@@ -234,6 +234,7 @@ async def list_applications(system_store: SystemStoreDep) -> ApplicationListResp
     """Return all registered applications."""
     records = await system_store.list_apps()
     items = [_to_response(r) for r in records]
+    logger.info("list apps=%d", len(items))
     return ApplicationListResponse(applications=items, total=len(items))
 
 

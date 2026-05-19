@@ -247,6 +247,7 @@ async def build_app(
         pipelines,
         qrunner,
         document_store=document_store,
+        structured_store=structured_store,
         workflow_runners=workflow_runners,
         llm=llm,
         routing_strategy=config.pipeline_routing.strategy,

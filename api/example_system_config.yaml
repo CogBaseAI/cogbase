@@ -46,7 +46,7 @@ document_store:
 
 llm:
   provider: openai           # "openai" | "openai-compatible"
-  model: gpt-5.5
+  model: gpt-5.4-mini
   mini_model: gpt-5.4-mini
   # api_key: sk-...          # omit to use api_key_env or OPENAI_API_KEY
 

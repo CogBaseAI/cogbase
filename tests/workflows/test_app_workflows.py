@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cogbase.config.config import WorkflowConfig, WorkflowTriggerConfig, WhenCondition
+from cogbase.config.config import (
+    WorkflowConfig,
+    WorkflowTriggerConfig,
+    WorkflowTriggerParamsFromCollectionConfig,
+    WhenCondition,
+)
 from cogbase.core.app import CogBaseApp
 from cogbase.core.models import Document
 from cogbase.core.query_runner import QueryRunner
@@ -27,20 +32,36 @@ def _minimal_app(workflow_runners: dict | None = None) -> CogBaseApp:
     llm = MagicMock()
     llm.complete = AsyncMock(return_value={"content": "ok", "tool_calls": None})
     runner = QueryRunner(llm=llm, structured_store=store)
-    return CogBaseApp("test-app", [pipeline], runner, workflow_runners=workflow_runners)
+    return CogBaseApp(
+        "test-app",
+        [pipeline],
+        runner,
+        structured_store=store,
+        workflow_runners=workflow_runners,
+    )
 
 
 def _make_wf_runner(
     name: str = "my-wf",
     trigger_type: str = "manual",
     when_metadata: dict | None = None,
+    params_from_collection: WorkflowTriggerParamsFromCollectionConfig | None = None,
 ) -> WorkflowRunner:
     trigger = WorkflowTriggerConfig(
         type=trigger_type,
         when=WhenCondition(metadata=when_metadata or {}) if when_metadata else None,
+        params_from_collection=params_from_collection,
     )
     wf = WorkflowConfig(name=name, trigger=trigger, steps=[])
     return WorkflowRunner(wf)
+
+
+def _after_ingest_source() -> WorkflowTriggerParamsFromCollectionConfig:
+    return WorkflowTriggerParamsFromCollectionConfig(
+        collection="facts",
+        filters={"doc_id": "{{ doc.doc_id }}"},
+        params={"issue": "{{ record.issue }}"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -89,8 +110,13 @@ class TestAfterIngestTrigger:
         return MagicMock()
 
     async def test_after_ingest_fires_for_matching_doc(self):
-        runner = _make_wf_runner("check", trigger_type="after_ingest")
+        runner = _make_wf_runner(
+            "check",
+            trigger_type="after_ingest",
+            params_from_collection=_after_ingest_source(),
+        )
         app = _minimal_app(workflow_runners={"check": runner})
+        app._structured_store.query = AsyncMock(return_value=[{"doc_id": "d-001", "issue": "late_delivery"}])
 
         with patch(self._PATCH, side_effect=self._discard_task) as mock_ct:
             await app.ingest_documents([Document(doc_id="d-001", text="some text")])
@@ -109,8 +135,10 @@ class TestAfterIngestTrigger:
             "check",
             trigger_type="after_ingest",
             when_metadata={"doc_type": "contract"},
+            params_from_collection=_after_ingest_source(),
         )
         app = _minimal_app(workflow_runners={"check": runner})
+        app._structured_store.query = AsyncMock(return_value=[{"doc_id": "d-001", "issue": "late_delivery"}])
 
         with patch(self._PATCH, side_effect=self._discard_task) as mock_ct:
             await app.ingest_documents([
@@ -123,8 +151,10 @@ class TestAfterIngestTrigger:
             "check",
             trigger_type="after_ingest",
             when_metadata={"doc_type": "contract"},
+            params_from_collection=_after_ingest_source(),
         )
         app = _minimal_app(workflow_runners={"check": runner})
+        app._structured_store.query = AsyncMock(return_value=[{"doc_id": "d-001", "issue": "late_delivery"}])
 
         with patch(self._PATCH, side_effect=self._discard_task) as mock_ct:
             await app.ingest_documents([
@@ -145,16 +175,38 @@ class TestAfterIngestTrigger:
         llm.complete = AsyncMock(return_value={"content": "ok", "tool_calls": None})
         qrunner = QueryRunner(llm=llm, structured_store=store)
 
-        runner = _make_wf_runner("check", trigger_type="after_ingest")
+        runner = _make_wf_runner(
+            "check",
+            trigger_type="after_ingest",
+            params_from_collection=_after_ingest_source(),
+        )
         app = CogBaseApp("test-app", [pipeline], qrunner, workflow_runners={"check": runner})
 
         with patch(self._PATCH, side_effect=self._discard_task) as mock_ct:
             await app.ingest_documents([Document(doc_id="d-fail", text="text")])
             mock_ct.assert_not_called()
 
-    async def test_after_ingest_passes_doc_id_as_param(self):
-        runner = _make_wf_runner("check", trigger_type="after_ingest")
-        app = _minimal_app(workflow_runners={"check": runner})
+    def test_after_ingest_requires_params_from_collection(self):
+        with pytest.raises(ValueError, match="params_from_collection"):
+            _make_wf_runner("check", trigger_type="after_ingest")
+
+    async def test_after_ingest_can_build_params_from_structured_records(self):
+        source = WorkflowTriggerParamsFromCollectionConfig(
+            collection="facts",
+            filters={"doc_id": "{{ doc.doc_id }}"},
+            params={"issue": "{{ record.issue }}"},
+        )
+        runner = _make_wf_runner(
+            "detect-contradictions",
+            trigger_type="after_ingest",
+            params_from_collection=source,
+        )
+        app = _minimal_app(workflow_runners={"detect-contradictions": runner})
+        app._structured_store.query = AsyncMock(return_value=[
+            {"doc_id": "d-001", "issue": "late_delivery"},
+            {"doc_id": "d-001", "issue": "late_delivery"},
+            {"doc_id": "d-001", "issue": "payment"},
+        ])
 
         passed_params: list[dict] = []
         futures: list = []
@@ -175,14 +227,15 @@ class TestAfterIngestTrigger:
         if futures:
             await asyncio.gather(*futures, return_exceptions=True)
 
-        assert passed_params == [{"doc_id": "d-001"}]
+        assert passed_params == [{"issue": "late_delivery"}, {"issue": "payment"}]
 
     async def test_multiple_after_ingest_workflows_all_fire(self):
         runners = {
-            "wf-a": _make_wf_runner("wf-a", trigger_type="after_ingest"),
-            "wf-b": _make_wf_runner("wf-b", trigger_type="after_ingest"),
+            "wf-a": _make_wf_runner("wf-a", trigger_type="after_ingest", params_from_collection=_after_ingest_source()),
+            "wf-b": _make_wf_runner("wf-b", trigger_type="after_ingest", params_from_collection=_after_ingest_source()),
         }
         app = _minimal_app(workflow_runners=runners)
+        app._structured_store.query = AsyncMock(return_value=[{"doc_id": "d-001", "issue": "late_delivery"}])
 
         with patch(self._PATCH, side_effect=self._discard_task) as mock_ct:
             await app.ingest_documents([Document(doc_id="d-001", text="text")])

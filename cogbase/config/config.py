@@ -168,6 +168,30 @@ class PipelineConfig(ConfigPromptMixin, BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class WorkflowTriggerParamsFromCollectionConfig(ConfigPromptMixin, BaseModel):
+    collection: str = Field(
+        description="Structured collection to query after a successful ingest.",
+    )
+    filters: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Equality filters rendered against the ingested document context. "
+            "Use templates such as '{{ doc.doc_id }}'."
+        ),
+    )
+    params: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Workflow params rendered for each matching record. "
+            "Templates can reference '{{ doc }}' and '{{ record }}'."
+        ),
+    )
+    distinct: bool = Field(
+        default=True,
+        description="Whether duplicate rendered param sets should be collapsed.",
+    )
+
+
 class WorkflowTriggerConfig(ConfigPromptMixin, BaseModel):
     type: Literal["manual", "after_ingest"] = Field(
         default="manual",
@@ -177,6 +201,21 @@ class WorkflowTriggerConfig(ConfigPromptMixin, BaseModel):
         default=None,
         description="Optional condition that must match before triggering.",
     )
+    params_from_collection: WorkflowTriggerParamsFromCollectionConfig | None = Field(
+        default=None,
+        description=(
+            "Optional structured collection query used to create one after_ingest "
+            "workflow invocation per matching record."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_after_ingest(self) -> "WorkflowTriggerConfig":
+        if self.type == "after_ingest" and self.params_from_collection is None:
+            raise ValueError(
+                "after_ingest workflows must define params_from_collection"
+            )
+        return self
 
 
 class WorkflowStepBase(ConfigPromptMixin, BaseModel):
