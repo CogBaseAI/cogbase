@@ -84,17 +84,23 @@ trigger:
 
 ### Output collections
 
-Structured collections written to by `structured-save` steps must be declared under `output_collections` so the factory can create them at startup:
+Structured collections written to by `structured-save` steps are declared at the **app level** under `structured_collections` in `config.yaml`, not inside individual workflow blocks. The factory creates all collections at startup (idempotent):
 
 ```yaml
-output_collections:
+structured_collections:
   - name: clause_compliance_findings
     schema: clause_compliance_findings_schema.json   # JSON Schema file in ZIP bundle
     primary_fields: [finding_id]
     description: "Clause-level compliance findings"
-```
 
-The factory builds the collection schema from the JSON Schema file and calls `create_collection` (idempotent) before any workflow runs.
+workflows:
+  - name: check-contract-compliance
+    steps:
+      - id: save_finding
+        tool: structured-save
+        collection: clause_compliance_findings   # references the collection above
+        ...
+```
 
 ---
 
@@ -175,11 +181,6 @@ workflows:
       type: manual
     input_schema:
       doc_id: string
-    output_collections:
-      - name: clause_compliance_findings
-        schema: clause_compliance_findings_schema.json
-        primary_fields: [finding_id]
-        description: "Clause-level compliance findings"
     steps:
       - id: load_clauses
         tool: structured-query
@@ -247,4 +248,4 @@ cogbase/workflows/
     └── structured_save.py
 ```
 
-Config models live in `cogbase/config/config.py`: `WorkflowConfig`, `WorkflowStepConfig`, `WorkflowTriggerConfig`, `WorkflowOutputCollectionConfig`. The factory in `api/factory.py` creates output collections and builds `WorkflowRunner` instances. `CogBaseApp` holds the runners and fires `after_ingest` triggers.
+Config models live in `cogbase/config/config.py`: `WorkflowConfig`, `WorkflowTriggerConfig`, `WorkflowStepBase`, and the four typed leaf step configs (`StructuredQueryStepConfig`, `VectorSearchStepConfig`, `LLMStructuredStepConfig`, `StructuredSaveStepConfig`) plus `ForeachStepConfig`. `WorkflowLeafStepConfig` is a discriminated union over the four leaf types. `WorkflowStepConfig = WorkflowLeafStepConfig | ForeachStepConfig`. The factory in `api/factory.py` creates all structured collections (including workflow outputs) and builds `WorkflowRunner` instances. `CogBaseApp` holds the runners and fires `after_ingest` triggers.

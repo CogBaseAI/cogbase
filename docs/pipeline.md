@@ -7,11 +7,12 @@ The pipeline module handles ingest-time processing: chunking documents into vect
 ```
 pipeline/
 ├── ingestion_pipeline.py   # orchestration — IngestionPipeline, PipelineStep, VectorCollection, StructuredCollection
+├── document_parser.py      # parse_to_markdown — convert uploaded files to markdown text via markitdown
 ├── extraction/
 │   ├── base.py             # ExtractorBase abstract class
 │   └── llm.py              # LLMExtractor — LLM-backed structured extraction
-└── ingestion/
-    ├── base.py             # ChunkerBase abstract class
+└── chunking/
+    ├── base.py             # ChunkerBase abstract class + _make_chunk helper
     ├── fixed.py            # FixedSizeChunker — sliding-window character splitter
     └── langchain.py        # LangChainChunker — adapter for any LangChain TextSplitter
 ```
@@ -39,6 +40,16 @@ Two collection wrapper types carry the stores and components each step needs:
 
 `PipelineStep` binds a tool to one of those collections and supplies any tool-specific component needed at runtime, such as a chunker, extractor, or document-summary prompt.
 
+Only doc metadata keys listed in `VectorCollectionSchema.metadata_fields` are copied onto chunks and document-level vectors — all other metadata keys are dropped at ingest time.
+
+### Pipeline routing
+
+`IngestionPipeline` accepts a `match: dict[str, str] | None` parameter. When set, the pipeline only processes documents whose metadata contains every key/value pair in `match`. This is the mechanism for routing documents to the right pipeline in a multi-pipeline app (e.g. `match={"doc_type": "contract"}`). `None` (the default) matches all documents.
+
+### Parallel steps
+
+By default steps run sequentially. Set `parallel=True` on the pipeline to run all steps for each document concurrently via `asyncio.gather`. Use this when steps are independent and latency matters more than throughput fairness.
+
 ### Extraction modes
 
 `LLMExtractor` supports two modes:
@@ -56,7 +67,7 @@ Both modes auto-derive the `CollectionSchema` from the Pydantic model's field ty
 from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline, PipelineStep, StructuredCollection, VectorCollection,
 )
-from cogbase.pipeline.ingestion.fixed import FixedSizeChunker
+from cogbase.pipeline.chunking.fixed import FixedSizeChunker
 
 pipeline = IngestionPipeline(
     name="legal",
@@ -79,9 +90,15 @@ results = await pipeline.ingest_documents(documents, concurrency=5)
 
 `ingest_documents` processes documents in parallel (bounded by `concurrency`), returns `IngestResult` objects in input order, and does not abort remaining documents on a single failure.
 
+## Document parsing
+
+`document_parser.parse_to_markdown(content: bytes, filename: str) -> str` converts uploaded file bytes to a markdown string using `markitdown`. Supported formats: PDF, DOCX, PPTX, XLSX, XLS, HTML, XML, JSON, CSV, plain text, Outlook MSG, and audio transcription. The extension is inferred from `filename`. Requires `pip install 'markitdown[all]'`.
+
+Call this at the API boundary to turn raw uploads into `Document.text` before passing documents to the pipeline.
+
 ## Extension points
 
-**Custom chunker** — subclass `ChunkerBase` and implement `chunk(doc) -> list[Chunk]`.
+**Custom chunker** — subclass `ChunkerBase` and implement `chunk(doc) -> list[Chunk]`. Use the provided `_make_chunk(doc, index, text, char_offset, char_length)` helper to construct each `Chunk` — it generates the `chunk_id` (`"{doc_id}_{index}"`) and leaves `metadata={}` for the pipeline to populate from `doc.metadata`.
 
 **LangChain splitter** — wrap any `TextSplitter` with `LangChainChunker` (requires `pip install "cogbase[langchain]"`).
 
