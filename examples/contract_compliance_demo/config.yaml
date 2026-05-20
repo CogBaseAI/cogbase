@@ -103,8 +103,6 @@ workflows:
         doc_id: "{{ doc.doc_id }}"
       params:
         doc_id: "{{ record.doc_id }}"
-    input_schema:
-      doc_id: string
     steps:
       - id: load_clauses
         tool: structured-query

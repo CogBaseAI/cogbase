@@ -117,8 +117,12 @@ workflows:
   - name: check-compliance
     trigger:
       type: manual
-    input_schema:
-      doc_id: string
+    params_from_collection:
+      collection: contracts
+      filters:
+        doc_id: "{{ doc.doc_id }}"
+      params:
+        doc_id: "{{ record.doc_id }}"
     steps:
       - id: judge
         tool: llm-structured

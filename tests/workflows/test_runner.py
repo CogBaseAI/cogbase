@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from pydantic import TypeAdapter
 
-from cogbase.config.config import WorkflowConfig, WorkflowStepConfig
+from cogbase.config.config import WorkflowConfig, WorkflowParamsFromCollectionConfig, WorkflowStepConfig
 from cogbase.core.models import Chunk
 from cogbase.stores import CollectionSchema, VectorCollectionSchema
 from cogbase.stores.schema import FieldSchema, FieldType
@@ -65,8 +65,11 @@ def _make_step(**kwargs) -> WorkflowStepConfig:
     return _STEP_ADAPTER.validate_python({"id": kwargs.pop("id", "step"), **kwargs})
 
 
+_DEFAULT_PARAMS_FROM_COLLECTION = WorkflowParamsFromCollectionConfig(collection="clauses")
+
+
 def _make_workflow(steps: list[WorkflowStepConfig], name: str = "test-wf") -> WorkflowConfig:
-    return WorkflowConfig(name=name, steps=steps)
+    return WorkflowConfig(name=name, steps=steps, params_from_collection=_DEFAULT_PARAMS_FROM_COLLECTION)
 
 
 def _make_llm(response: str, *, call_count_ref: list | None = None) -> MagicMock:

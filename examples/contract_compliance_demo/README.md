@@ -197,8 +197,12 @@ passages.
 ```yaml
 workflows:
   - name: check-contract-compliance
-    input_schema:
-      doc_id: string
+    params_from_collection:
+      collection: contract_metadata
+      filters:
+        doc_id: "{{ doc.doc_id }}"
+      params:
+        doc_id: "{{ record.doc_id }}"
     steps:
       - id: load_clauses
         tool: structured-query

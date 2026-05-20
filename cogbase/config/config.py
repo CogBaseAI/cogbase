@@ -335,10 +335,6 @@ class WorkflowConfig(ConfigPromptMixin, BaseModel):
             "manual /run and /stream calls (caller passes doc_id)."
         ),
     )
-    input_schema: dict[str, str] = Field(
-        default_factory=dict,
-        description="Input schema mapping used by the workflow.",
-    )
     steps: list[WorkflowStepConfig] = Field(
         default_factory=list,
         description="Ordered list of workflow steps.",

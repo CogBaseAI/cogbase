@@ -236,6 +236,9 @@ from "Validated workflow output schemas".
 10. Workflow output collections (structured-save targets not produced by extract-structured) \
     must have schema set inline using the value from "Validated workflow output schemas" — they \
     are NOT auto-injected like pipeline collections.
+11. Every workflow must have a params_from_collection block that derives input params from a \
+    structured collection. Use filters to select by doc_id and params to expose the values \
+    the workflow steps reference via {{{{ input.* }}}}.
 
 ## Config format
 
@@ -327,8 +330,12 @@ workflows:
   - name: check-contract-compliance
     trigger:
       type: manual
-    input_schema:
-      doc_id: string
+    params_from_collection:
+      collection: contract_clauses
+      filters:
+        doc_id: "{{{{ doc.doc_id }}}}"
+      params:
+        doc_id: "{{{{ record.doc_id }}}}"
     steps:
       - id: load_clauses
         tool: structured-query
@@ -769,7 +776,10 @@ async def _run_propose_extraction_schemas(
             return f"Schemas validated.\n{field_summary}", schemas_as_json
 
         logger.warning(
-            "generate/propose_extraction_schemas attempt=%d errors=%s", attempt + 1, errors
+            "generate/propose_extraction_schemas attempt=%d errors=%s, schemas_yaml=%s",
+            attempt + 1,
+            errors,
+            schemas_yaml,
         )
         error_text = "\n".join(f"- {e}" for e in errors)
         sub_messages += [

@@ -10,6 +10,7 @@ may run the full agent loop with multiple tool calls.
 
 from __future__ import annotations
 
+import logging
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,8 @@ from api.routers.generate import (
     chat,
 )
 from cogbase.config.config import AppConfig
+
+logger = logging.getLogger(__name__)
 
 try:
     from dotenv import load_dotenv
@@ -457,16 +460,16 @@ class TestChatEndpointLive:
         """
         turn1_text = (
             "Build a contract compliance app. "
-            "The pipeline should extract each clause from uploaded contracts into a "
-            "'contract_clauses' collection with fields clause_id, clause_type, and text. "
-            "I also need a workflow that iterates over contract_clauses, runs LLM "
-            "judgment on each clause, and saves a compliance finding per clause — "
-            "with fields clause_id, status (compliant/non_compliant/unclear), and "
-            "summary — into a 'compliance_findings' collection."
+            "The pipeline should extract each clause from uploaded contracts. "
+            "Also iterates over contract_clauses, runs LLM judgment on each clause, "
+            "and saves a compliance finding per clause."
         )
         body1 = GenerateChatRequest(text=turn1_text, history=[])
         response1 = await chat(body1, MagicMock(llm=llm))
         assert response1.content, "expected a text proposal in turn 1"
+
+        logger.info("response1 content=%s", response1.content)
+        logger.info("response1 config_yaml=%s", response1.config_yaml)
 
         final_response = response1
         history = [
@@ -483,6 +486,8 @@ class TestChatEndpointLive:
                 history=history,
             )
             final_response = await chat(body2, MagicMock(llm=llm))
+            logger.info("final_response content=%s", final_response.content)
+            logger.info("final_response config_yaml=%s", final_response.config_yaml)
 
         assert final_response.config_yaml, (
             "expected config_yaml for the compliance workflow app.\n"
@@ -547,21 +552,16 @@ class TestContractComplianceEndToEndLive:
 
         # ---- Step 1: chat to generate the app config ------------------------
         turn1_text = (
-            "Build a contract compliance app with two document types:\n"
-            "- Policy rule documents (metadata: doc_type='rules'): chunk and embed "
-            "into a vector collection so their text is retrievable by semantic search.\n"
-            "- Vendor contracts (metadata: doc_type='contract'): chunk and embed, "
-            "and extract each clause into a structured collection with fields "
-            "clause_id, clause_type, and text.\n\n"
-            "I also need a compliance workflow that, for a given contract (doc_id):\n"
-            "1. Loads all extracted clauses for that contract\n"
-            "2. For each clause, retrieves relevant policy rules via vector search\n"
-            "3. Saves a compliance finding per clause with fields: "
-            "clause_id, doc_id, status (compliant/non_compliant/unclear), and summary"
+            "Build a contract compliance app with two document types: "
+            "Policy rule documents and Vendor contracts. Check whether "
+            "the clauses in a contract is compliant with policy."
         )
         body1 = GenerateChatRequest(text=turn1_text, history=[])
         response1 = await chat(body1, MagicMock(llm=llm))
         assert response1.content, "expected a proposal in turn 1"
+
+        logger.info("response1 content=%s", response1.content)
+        logger.info("response1 config_yaml=%s", response1.config_yaml)
 
         final_response = response1
         history = [
@@ -577,6 +577,8 @@ class TestContractComplianceEndToEndLive:
                 history=history,
             )
             final_response = await chat(body2, MagicMock(llm=llm))
+            logger.info("final_response content=%s", final_response.content)
+            logger.info("final_response config_yaml=%s", final_response.config_yaml)
 
         assert final_response.config_yaml, (
             "expected config_yaml from the chat agent.\n"
@@ -598,10 +600,7 @@ class TestContractComplianceEndToEndLive:
         # The first workflow is the compliance workflow; discover its name and
         # the input key the LLM chose (should be doc_id, but inspect to be safe).
         workflow_cfg = config.workflows[0]
-        workflow_input_key = next(
-            (k for k in (workflow_cfg.input_schema or {}) if "doc" in k.lower()),
-            "doc_id",
-        )
+        workflow_input_key = "doc_id"
 
         # ---- Step 3: build the app in-process with in-memory stores ---------
         system = SystemResources(
@@ -636,6 +635,7 @@ class TestContractComplianceEndToEndLive:
         assert findings, (
             f"workflow '{workflow_cfg.name}' produced no findings for contract-001 — "
             "check that the clause extraction step ran and the workflow filters match"
+            f"findings: {findings}"
         )
 
         # contract-001 has known non-compliant clauses (liability cap 3 months,
@@ -645,9 +645,12 @@ class TestContractComplianceEndToEndLive:
             if "non" in str(f.get("status", "")).lower()
             or "non_compliant" in str(f.get("status", "")).lower()
         ]
+        if non_compliant:
+            logger.error("findings=%s", findings)
         assert non_compliant, (
             "expected at least one non-compliant finding for contract-001 — "
-            "the liability cap (3 months) should violate the 12-month policy rule"
+            "the liability cap (3 months) should violate the 12-month policy rule. "
+            f"findings: {findings}"
         )
 
         # contract-001 also has compliant clauses (payment net-30, mutual indemnification).

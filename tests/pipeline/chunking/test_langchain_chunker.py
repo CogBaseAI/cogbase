@@ -67,11 +67,11 @@ class TestLangChainChunkerBehavior:
             if chunk.char_offset is not None:
                 assert text[chunk.char_offset : chunk.char_offset + chunk.char_length] == chunk.text
 
-    def test_doc_metadata_inherited(self):
+    def test_doc_metadata_not_copied_by_chunker(self):
+        # Chunker emits metadata={} — the pipeline copies filtered doc.metadata onto chunks later.
         splitter = CharacterTextSplitter(chunk_size=5, chunk_overlap=0, separator=" ")
         doc = Document(doc_id="doc-1", text="hello world", metadata={"source": "test", "author": "alice"})
         chunks = LangChainChunker(splitter).chunk(doc)
         for chunk in chunks:
-            assert chunk.metadata["source"] == "test"
-            assert chunk.metadata["author"] == "alice"
+            assert chunk.metadata == {}
 
