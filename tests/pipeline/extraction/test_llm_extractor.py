@@ -392,6 +392,7 @@ def _make_list_extractor(
             record_mode="many",
             response_field=response_field,
             id_field=item_id_field,
+            id_template="{doc_id}__{index:04d}",
         ),
         record_model=_build_list_record_model(_Clause, item_id_field),
     )
@@ -408,6 +409,7 @@ async def test_config_driven_list_extractor_builds_prompt_and_injected_fields():
         record_mode="many",
         response_field="clauses",
         id_field="clause_id",
+        id_template="{doc_id}__{index:04d}",
         prompt="Extract all clauses.\n\n",
     )
     extractor = LLMExtractor(
@@ -446,7 +448,9 @@ def test_config_driven_extractor_rejects_missing_doc_id_in_record_schema():
         extraction_schema='{"type":"object","properties":{"text":{"type":"string"}}}',
         prompt="Extract.",
         record_mode="many",
+        response_field="clauses",
         id_field="clause_id",
+        id_template="{doc_id}__{index:04d}",
     )
     extraction_model = create_model("_GoodExtraction", text=(str | None, None))
     record_model = create_model("_BadRecord", clause_id=(str, ...))
@@ -590,6 +594,7 @@ async def test_list_extract_retry_on_bad_json(monkeypatch):
             record_mode="many",
             response_field="clauses",
             id_field="item_id",
+            id_template="{doc_id}__{index:04d}",
         ),
         record_model=_build_list_record_model(_Clause, "item_id"),
         max_retries=1,

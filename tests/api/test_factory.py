@@ -489,6 +489,7 @@ pipelines:
           record_mode: many
           response_field: clauses
           id_field: clause_id
+          id_template: "{{doc_id}}__{{index:04d}}"
 """
 
 _LIST_EXTRACTOR_WITH_PROMPT_CONFIG_YAML = f"""\
@@ -513,6 +514,7 @@ pipelines:
           record_mode: many
           response_field: clauses
           id_field: clause_id
+          id_template: "{{doc_id}}__{{index:04d}}"
           prompt: "Extract all clauses.\\n\\n"
 """
 

@@ -740,9 +740,40 @@ class TestExtractorConfig:
         assert cfg.id_field is None
         assert cfg.id_template is None
 
-    def test_custom_id_field(self):
-        cfg = ExtractorConfig(extraction_schema=self._EXTRACTION_SCHEMA, prompt="", id_field="clause_id")
-        assert cfg.id_field == "clause_id"
+    def test_one_with_id_field_raises(self):
+        with pytest.raises(Exception, match="id_field must not be set for record_mode=one"):
+            ExtractorConfig(extraction_schema=self._EXTRACTION_SCHEMA, prompt="", id_field="clause_id")
+
+    def test_many_missing_response_field_raises(self):
+        with pytest.raises(Exception, match="record_mode=many requires"):
+            ExtractorConfig(
+                extraction_schema=self._EXTRACTION_SCHEMA,
+                prompt="",
+                record_mode="many",
+                response_field=None,
+                id_field="clause_id",
+                id_template="{doc_id}__{index:04d}",
+            )
+
+    def test_many_missing_id_field_raises(self):
+        with pytest.raises(Exception, match="record_mode=many requires"):
+            ExtractorConfig(
+                extraction_schema=self._EXTRACTION_SCHEMA,
+                prompt="",
+                record_mode="many",
+                response_field="items",
+                id_template="{doc_id}__{index:04d}",
+            )
+
+    def test_many_missing_id_template_raises(self):
+        with pytest.raises(Exception, match="record_mode=many requires"):
+            ExtractorConfig(
+                extraction_schema=self._EXTRACTION_SCHEMA,
+                prompt="",
+                record_mode="many",
+                response_field="items",
+                id_field="clause_id",
+            )
 
     def test_record_mode_many(self):
         cfg = ExtractorConfig(
@@ -865,3 +896,188 @@ class TestVectorCollectionConfig:
             metadata_fields=["customer_id", "deal_stage"],
         )
         assert cfg.metadata_fields == ["customer_id", "deal_stage"]
+
+
+# ---------------------------------------------------------------------------
+# AppConfig._validate — workflow collection reference checks
+# ---------------------------------------------------------------------------
+
+_SCHEMA = '{"type":"object","properties":{"doc_id":{"type":"string"}}}'
+
+
+def _ref_yaml(*, steps_yaml: str, pfc_collection: str = "records") -> str:
+    """Full AppConfig YAML with one workflow. Callers supply the workflow steps block."""
+    return textwrap.dedent(f"""\
+        name: ref-test
+        llm:
+          model: gpt-4o-mini
+        vector_collections:
+          - name: chunks
+            description: Passage chunks.
+        structured_collections:
+          - name: records
+            description: Extracted records.
+            schema: '{_SCHEMA}'
+            primary_fields: [doc_id]
+        workflows:
+          - name: wf
+            params_from_collection:
+              collection: {pfc_collection}
+              filters:
+                doc_id: "{{{{ doc.doc_id }}}}"
+              params:
+                doc_id: "{{{{ record.doc_id }}}}"
+            steps:
+    """) + steps_yaml
+
+
+class TestWorkflowCollectionReferenceValidation:
+    # Steps YAML must be pre-indented to align with `steps:` (6-space list items).
+    _LOAD_RECORDS = "      - id: load\n        tool: structured-query\n        collection: records\n"
+
+    def test_valid_structured_query_step_passes(self):
+        cfg = AppConfig.from_yaml(_ref_yaml(steps_yaml=self._LOAD_RECORDS))
+        assert cfg.workflows[0].name == "wf"
+
+    def test_unknown_structured_query_collection_raises(self):
+        steps = "      - id: load\n        tool: structured-query\n        collection: does_not_exist\n"
+        with pytest.raises(Exception, match=r"unknown structured collection.*'does_not_exist'"):
+            AppConfig.from_yaml(_ref_yaml(steps_yaml=steps))
+
+    def test_valid_vector_search_step_passes(self):
+        steps = '      - id: s\n        tool: vector-search\n        collection: chunks\n        query: "q"\n'
+        cfg = AppConfig.from_yaml(_ref_yaml(steps_yaml=steps))
+        assert cfg.workflows[0].name == "wf"
+
+    def test_unknown_vector_search_collection_raises(self):
+        steps = '      - id: s\n        tool: vector-search\n        collection: missing_vectors\n        query: "q"\n'
+        with pytest.raises(Exception, match=r"unknown vector collection.*'missing_vectors'"):
+            AppConfig.from_yaml(_ref_yaml(steps_yaml=steps))
+
+    def test_valid_structured_save_step_passes(self):
+        steps = (
+            f"      - id: judge\n        tool: llm-structured\n        prompt: p\n"
+            f"        output_schema: '{_SCHEMA}'\n"
+            f"      - id: save\n        tool: structured-save\n        collection: records\n"
+            f"        primary_fields: [doc_id]\n"
+            f"        records:\n          - \"{{{{ steps.judge.output }}}}\"\n"
+        )
+        cfg = AppConfig.from_yaml(_ref_yaml(steps_yaml=steps))
+        assert cfg.workflows[0].name == "wf"
+
+    def test_unknown_structured_save_collection_raises(self):
+        steps = (
+            f"      - id: judge\n        tool: llm-structured\n        prompt: p\n"
+            f"        output_schema: '{_SCHEMA}'\n"
+            f"      - id: save\n        tool: structured-save\n        collection: ghost_collection\n"
+            f"        primary_fields: [doc_id]\n"
+            f"        records:\n          - \"{{{{ steps.judge.output }}}}\"\n"
+        )
+        with pytest.raises(Exception, match=r"unknown structured collection.*'ghost_collection'"):
+            AppConfig.from_yaml(_ref_yaml(steps_yaml=steps))
+
+    def test_unknown_params_from_collection_raises(self):
+        with pytest.raises(Exception, match=r"params_from_collection.*unknown.*'no_such_collection'"):
+            AppConfig.from_yaml(_ref_yaml(
+                pfc_collection="no_such_collection",
+                steps_yaml=self._LOAD_RECORDS,
+            ))
+
+    def test_nested_foreach_collection_reference_validated(self):
+        steps = (
+            "      - id: load\n        tool: structured-query\n        collection: records\n"
+            "      - id: each\n        foreach: \"{{ steps.load.records }}\"\n        steps:\n"
+            "          - id: search\n            tool: vector-search\n"
+            "            collection: no_such_vec\n            query: \"{{ item }}\"\n"
+        )
+        with pytest.raises(Exception, match=r"unknown vector collection.*'no_such_vec'"):
+            AppConfig.from_yaml(_ref_yaml(steps_yaml=steps))
+
+
+# ---------------------------------------------------------------------------
+# AppConfig._validate — multi-extractor conflict detection
+# ---------------------------------------------------------------------------
+
+
+_SCHEMA_A = '{"type":"object","properties":{"a":{"type":"string"}}}'
+_SCHEMA_B = '{"type":"object","properties":{"b":{"type":"string"}}}'
+
+
+def _multi_extractor_yaml(*, schema2: str, prompt2: str) -> str:
+    """Two pipelines each with an extract-structured step targeting the same collection."""
+    return textwrap.dedent(f"""\
+        name: conflict-test
+        llm:
+          model: gpt-4o-mini
+        structured_collections:
+          - name: shared
+            description: Shared structured collection.
+            schema: '{_SCHEMA_A}'
+            primary_fields: [a]
+        pipelines:
+          - name: pipeline-a
+            routing_description: Doc type A.
+            steps:
+              - tool: extract-structured
+                collection: shared
+                extractor:
+                  extraction_schema: '{_SCHEMA_A}'
+                  prompt: "extract A"
+          - name: pipeline-b
+            routing_description: Doc type B.
+            steps:
+              - tool: extract-structured
+                collection: shared
+                extractor:
+                  extraction_schema: '{schema2}'
+                  prompt: "{prompt2}"
+    """)
+
+
+class TestMultiExtractorConflictValidation:
+    def test_two_pipelines_identical_extractor_passes(self):
+        # Same schema and prompt — no conflict.
+        yaml_text = _multi_extractor_yaml(schema2=_SCHEMA_A, prompt2="extract A")
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert len(cfg.pipelines) == 2
+
+    def test_different_schema_raises(self):
+        yaml_text = _multi_extractor_yaml(schema2=_SCHEMA_B, prompt2="extract A")
+        with pytest.raises(Exception, match=r"'shared'.*different schemas or prompts"):
+            AppConfig.from_yaml(yaml_text)
+
+    def test_different_prompt_raises(self):
+        yaml_text = _multi_extractor_yaml(schema2=_SCHEMA_A, prompt2="extract B differently")
+        with pytest.raises(Exception, match=r"'shared'.*different schemas or prompts"):
+            AppConfig.from_yaml(yaml_text)
+
+    def test_error_names_both_conflicting_pipelines(self):
+        yaml_text = _multi_extractor_yaml(schema2=_SCHEMA_B, prompt2="extract B")
+        with pytest.raises(Exception) as exc_info:
+            AppConfig.from_yaml(yaml_text)
+        msg = str(exc_info.value)
+        assert "'pipeline-a'" in msg
+        assert "'pipeline-b'" in msg
+
+    def test_single_pipeline_no_conflict(self):
+        yaml_text = textwrap.dedent(f"""\
+            name: single-pipe
+            llm:
+              model: gpt-4o-mini
+            structured_collections:
+              - name: records
+                description: Records.
+                schema: '{_SCHEMA_A}'
+                primary_fields: [a]
+            pipelines:
+              - name: only
+                routing_description: All docs.
+                steps:
+                  - tool: extract-structured
+                    collection: records
+                    extractor:
+                      extraction_schema: '{_SCHEMA_A}'
+                      prompt: "extract"
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert len(cfg.pipelines) == 1

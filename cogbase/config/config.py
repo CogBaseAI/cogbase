@@ -78,6 +78,26 @@ class ExtractorConfig(ConfigPromptMixin, BaseModel):
         description="Optional template for generated record ids. Required for RecordMode.MANY.",
     )
 
+    @model_validator(mode="after")
+    def _validate_record_mode_contract(self) -> "ExtractorConfig":
+        if self.record_mode == RecordMode.MANY:
+            missing = [
+                f for f, v in [
+                    ("response_field", self.response_field),
+                    ("id_field", self.id_field),
+                    ("id_template", self.id_template),
+                ]
+                if not v
+            ]
+            if missing:
+                raise ValueError(
+                    f"record_mode=many requires: {', '.join(missing)}"
+                )
+        elif self.record_mode == RecordMode.ONE:
+            if self.id_field is not None:
+                raise ValueError("id_field must not be set for record_mode=one")
+        return self
+
 
 class StructuredCollectionConfig(ConfigPromptMixin, BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -356,6 +376,17 @@ def _iter_save_steps(steps: list) -> "list[StructuredSaveStepConfig]":
     return out
 
 
+def _iter_all_leaf_steps(steps: list) -> "list[WorkflowLeafStepConfig]":
+    """Depth-first collect every non-foreach workflow step."""
+    out = []
+    for step in steps:
+        if isinstance(step, ForeachStepConfig):
+            out.extend(_iter_all_leaf_steps(step.steps))
+        else:
+            out.append(step)
+    return out
+
+
 _STEP_OUTPUT_RE = re.compile(r"\{\{\s*steps\.([A-Za-z_][A-Za-z0-9_]*)\.output\s*\}\}")
 
 
@@ -509,17 +540,63 @@ class AppConfig(ConfigPromptMixin, BaseModel):
     def _validate(self) -> "AppConfig":
         vc_names = {vc.name for vc in self.vector_collections}
         sc_by_name = {sc.name: sc for sc in self.structured_collections}
+
+        # Validate pipeline collection references.
         for pipeline in self.pipelines:
             for step in pipeline.steps:
                 if isinstance(step, (ChunkEmbedUpsertStepConfig, DocumentEmbedUpsertStepConfig)) and step.collection not in vc_names:
                     raise ValueError(
-                        f"Pipeline step references unknown vector collection: {step.collection!r}"
+                        f"Pipeline {pipeline.name!r} step references unknown vector collection: {step.collection!r}"
                     )
                 if isinstance(step, ExtractStructuredStepConfig) and step.collection not in sc_by_name:
                     raise ValueError(
-                        f"Pipeline step references unknown structured collection: {step.collection!r}"
+                        f"Pipeline {pipeline.name!r} step references unknown structured collection: {step.collection!r}"
                     )
+
+        # Reject ambiguous multi-extractor writes to the same structured collection.
+        # Two extract-structured steps may share a collection only if their schema and
+        # prompt are identical (same extractor, different routing condition).
+        extractor_by_collection: dict[str, tuple[str, ExtractStructuredStepConfig]] = {}
+        for pipeline in self.pipelines:
+            for step in pipeline.steps:
+                if not isinstance(step, ExtractStructuredStepConfig):
+                    continue
+                if step.collection not in extractor_by_collection:
+                    extractor_by_collection[step.collection] = (pipeline.name, step)
+                else:
+                    first_pipeline, first_step = extractor_by_collection[step.collection]
+                    if (
+                        step.extractor.extraction_schema != first_step.extractor.extraction_schema
+                        or step.extractor.prompt != first_step.extractor.prompt
+                    ):
+                        raise ValueError(
+                            f"Structured collection {step.collection!r} is written by "
+                            f"extract-structured steps with different schemas or prompts: "
+                            f"pipeline {first_pipeline!r} and pipeline {pipeline.name!r}. "
+                            "Each structured collection must have a single consistent extractor."
+                        )
+
+        # Validate workflow collection references and save-step primary_fields.
         for workflow in self.workflows:
+            pfc_col = workflow.params_from_collection.collection
+            if pfc_col not in sc_by_name:
+                raise ValueError(
+                    f"Workflow {workflow.name!r} params_from_collection references unknown "
+                    f"structured collection: {pfc_col!r}"
+                )
+            for step in _iter_all_leaf_steps(workflow.steps):
+                if isinstance(step, (StructuredQueryStepConfig, StructuredSaveStepConfig)):
+                    if step.collection not in sc_by_name:
+                        raise ValueError(
+                            f"Workflow {workflow.name!r} step {step.id!r} references unknown "
+                            f"structured collection: {step.collection!r}"
+                        )
+                elif isinstance(step, VectorSearchStepConfig):
+                    if step.collection not in vc_names:
+                        raise ValueError(
+                            f"Workflow {workflow.name!r} step {step.id!r} references unknown "
+                            f"vector collection: {step.collection!r}"
+                        )
             _validate_save_primary_fields(workflow)
             for save_step in _iter_save_steps(workflow.steps):
                 if not save_step.primary_fields:

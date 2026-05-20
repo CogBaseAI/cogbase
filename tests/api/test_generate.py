@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 import yaml
 
 from api.routers.generate import (
@@ -358,7 +360,7 @@ class TestInjectPipelineRecordSchemas:
         _inject_pipeline_record_schemas(cfg)
         assert "schema" not in cfg["structured_collections"][0]
 
-    def test_invalid_json_extraction_schema_skipped(self):
+    def test_invalid_json_extraction_schema_raises(self):
         cfg = {
             "pipelines": [
                 {
@@ -373,8 +375,8 @@ class TestInjectPipelineRecordSchemas:
             ],
             "structured_collections": [{"name": "contracts", "description": "test"}],
         }
-        _inject_pipeline_record_schemas(cfg)
-        assert "schema" not in cfg["structured_collections"][0]
+        with pytest.raises(ValueError, match="extraction_schema is not valid JSON"):
+            _inject_pipeline_record_schemas(cfg)
 
     def test_empty_config(self):
         cfg: dict = {}
@@ -454,6 +456,14 @@ class TestInjectWorkflowOutputSchemas:
         )
         injected = json.loads(cfg["structured_collections"][0]["schema"])
         assert injected == workflow_schema
+
+    def test_invalid_json_workflow_schema_raises(self):
+        cfg = {
+            "workflows": [{"steps": [{"tool": "structured-save", "collection": "findings"}]}],
+            "structured_collections": [{"name": "findings", "description": "test"}],
+        }
+        with pytest.raises(ValueError, match="workflow schema for collection 'findings' is not valid JSON"):
+            _inject_workflow_output_schemas(cfg, {"findings": "not valid json {{{"})
 
     def test_unmatched_workflow_schema_not_applied(self):
         cfg = {

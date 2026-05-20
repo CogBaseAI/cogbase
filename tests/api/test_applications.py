@@ -134,6 +134,8 @@ class TestSerializeConfig:
                       extraction_schema: '{}'
                       prompt: Extract facts.
                       record_mode: many
+                      id_field: fact_id
+                      id_template: "{doc_id}__{index:04d}"
         """)
         cfg = AppConfig.model_validate(yaml.safe_load(config_yaml))
         serialized = _serialize_config(cfg)

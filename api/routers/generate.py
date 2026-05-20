@@ -660,12 +660,15 @@ def _inject_pipeline_record_schemas(config_dict: dict) -> None:
                 continue
             try:
                 ext_schema = json.loads(ext_schema_str)
-            except (json.JSONDecodeError, ValueError):
-                continue
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise ValueError(
+                    f"pipeline collection '{collection}': extraction_schema is not valid JSON: {exc}"
+                ) from exc
             record_id_field = (
                 extractor.get("id_field") if extractor.get("record_mode") == "many" else None
             )
             ext_info[collection] = (ext_schema, record_id_field)
+
     for sc in config_dict.get("structured_collections", []):
         name = sc.get("name")
         if name not in ext_info:
@@ -688,18 +691,22 @@ def _inject_workflow_output_schemas(
     LLM is instructed not to author one, and `workflow_schemas` has been validated
     by `_validate_workflow_output_schema` whereas an inline schema has not.
     """
-    if workflow_schemas:
-        save_targets: set[str] = set()
-        for workflow in config_dict.get("workflows", []):
-            _collect_save_targets(workflow.get("steps", []), save_targets)
-        for sc in config_dict.get("structured_collections", []):
-            name = sc.get("name")
-            if name in save_targets and name in workflow_schemas:
-                try:
-                    schema_dict = json.loads(workflow_schemas[name])
-                    sc["schema"] = json.dumps(schema_dict, separators=(",", ":"))
-                except (json.JSONDecodeError, ValueError):
-                    pass
+    if not workflow_schemas:
+        return
+
+    save_targets: set[str] = set()
+    for workflow in config_dict.get("workflows", []):
+        _collect_save_targets(workflow.get("steps", []), save_targets)
+    for sc in config_dict.get("structured_collections", []):
+        name = sc.get("name")
+        if name in save_targets and name in workflow_schemas:
+            try:
+                schema_dict = json.loads(workflow_schemas[name])
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise ValueError(
+                    f"workflow schema for collection '{name}' is not valid JSON: {exc}"
+                ) from exc
+            sc["schema"] = json.dumps(schema_dict, separators=(",", ":"))
 
 
 def _validate_extraction_schema(schema_dict: dict, collection_name: str) -> list[str]:
@@ -769,6 +776,17 @@ def _serialize_config(config: AppConfig) -> str:
     )
 
 
+def _categorize_error(exc: Exception, phase: str) -> str:
+    exc_module = type(exc).__module__ or ""
+    if exc_module.startswith("openai") or exc_module.startswith("httpx"):
+        return "LLM unavailable"
+    if phase == "schema":
+        return "schema generation failed"
+    if phase == "config":
+        return "config validation failed"
+    return "stream failed"
+
+
 async def _chat_turn_events(
     body: GenerateChatRequest,
     system_resources: SystemResourcesDep,
@@ -794,6 +812,7 @@ async def _chat_turn_events(
     workflow_schemas: dict[str, str] = {}
     final_content: str = ""
     result = None
+    _phase = "streaming"
 
     try:
         for call_num in range(_MAX_AGENT_CALLS):
@@ -831,26 +850,32 @@ async def _chat_turn_events(
             for tc in tool_calls:
                 if tc["name"] == "propose_extraction_schemas":
                     yield {"type": "token", "token": "Generating extraction schemas...\n"}
+                    _phase = "schema"
                     tool_output, schemas = await _run_propose_extraction_schemas(llm, messages)
+                    _phase = "streaming"
                     if schemas is not None:
                         extraction_schemas = schemas
                 elif tc["name"] == "propose_workflow_schemas":
                     yield {"type": "token", "token": "Generating workflow schemas...\n"}
+                    _phase = "schema"
                     tool_output, schemas = await _run_propose_workflow_schemas(
                         llm,
                         messages,
                         extraction_schemas,
                     )
+                    _phase = "streaming"
                     if schemas is not None:
                         workflow_schemas = schemas
                 elif tc["name"] == "propose_app_config":
                     yield {"type": "token", "token": "Generating app config...\n"}
+                    _phase = "config"
                     tool_output, config_yaml = await _run_propose_config(
                         llm,
                         messages,
                         extraction_schemas,
                         workflow_schemas,
                     )
+                    _phase = "streaming"
                     if config_yaml is not None:
                         validated_config_yaml = config_yaml
                 else:
@@ -880,9 +905,9 @@ async def _chat_turn_events(
             "type": "result",
             "result": {"content": final_content, "config_yaml": validated_config_yaml},
         }
-    except Exception:
+    except Exception as exc:
         logger.exception("%s failed", log_prefix)
-        yield {"type": "error", "error": "stream failed"}
+        yield {"type": "error", "error": _categorize_error(exc, _phase)}
 
 
 # ---------------------------------------------------------------------------

@@ -131,7 +131,7 @@ class LLMExtractor(ExtractorBase):
             raise ValueError(
                 "extraction_schema must not include 'doc_id' (it is injected by the pipeline)"
             )
-        if config.record_mode == RecordMode.MANY and config.id_field and config.id_field in extraction_fields:
+        if config.record_mode == RecordMode.MANY and config.id_field in extraction_fields:
             raise ValueError(
                 f"extraction_schema must not include '{config.id_field}' (it is injected by the pipeline)"
             )
@@ -139,7 +139,7 @@ class LLMExtractor(ExtractorBase):
         record_fields = set(self._record_model.model_fields)
         if "doc_id" not in record_fields:
             raise ValueError("record schema must include 'doc_id'")
-        if config.record_mode == RecordMode.MANY and config.id_field and config.id_field not in record_fields:
+        if config.record_mode == RecordMode.MANY and config.id_field not in record_fields:
             raise ValueError(
                 f"record schema must include '{config.id_field}' (id_field) for record_mode=many"
             )
@@ -149,7 +149,7 @@ class LLMExtractor(ExtractorBase):
         injected_fields: dict[str, Callable] = {
             "doc_id": lambda doc, item, index: doc.doc_id,
         }
-        if config.record_mode == RecordMode.MANY and config.id_field:
+        if config.record_mode == RecordMode.MANY:
             if config.id_template:
                 template = config.id_template
                 injected_fields[config.id_field] = (
