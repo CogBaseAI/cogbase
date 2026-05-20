@@ -632,11 +632,39 @@ class TestContractComplianceEndToEndLive:
         async for record in workflow.run({workflow_input_key: "contract-001"}):
             findings.append(record)
 
-        assert findings, (
-            f"workflow '{workflow_cfg.name}' produced no findings for contract-001 — "
-            "check that the clause extraction step ran and the workflow filters match"
-            f"findings: {findings}"
-        )
+        if not findings:
+            # Dump structured store contents and config to aid debugging.
+            diag_parts = [
+                f"workflow '{workflow_cfg.name}' produced no findings for contract-001.\n",
+                "--- generated config YAML ---\n",
+                final_response.config_yaml or "(none)",
+                "\n--- ingest results ---",
+            ]
+            for r in results:
+                diag_parts.append(
+                    f"  {r.doc_id}: success={r.success} records_extracted={r.records_extracted}"
+                )
+            diag_parts.append("\n--- structured store contents ---")
+            for coll_name in system.structured_store._schemas:
+                try:
+                    all_records = await system.structured_store.query(coll_name)
+                    contract_records = [
+                        rec for rec in all_records if rec.get("doc_id") == "contract-001"
+                    ]
+                    diag_parts.append(
+                        f"  {coll_name}: {len(all_records)} total record(s), "
+                        f"{len(contract_records)} for contract-001"
+                    )
+                    if contract_records:
+                        diag_parts.append(
+                            f"    sample: {json.dumps(contract_records[:2], default=str)}"
+                        )
+                except Exception as exc:
+                    diag_parts.append(f"  {coll_name}: query failed — {exc}")
+            diag_parts.append(
+                f"\n--- workflow steps ---\n{yaml.dump(workflow_cfg.model_dump(mode='json', exclude_none=True))}"
+            )
+            assert False, "\n".join(diag_parts)
 
         # contract-001 has known non-compliant clauses (liability cap 3 months,
         # one-sided consequential exclusion, 48-hour breach notification).
@@ -645,8 +673,6 @@ class TestContractComplianceEndToEndLive:
             if "non" in str(f.get("status", "")).lower()
             or "non_compliant" in str(f.get("status", "")).lower()
         ]
-        if non_compliant:
-            logger.error("findings=%s", findings)
         assert non_compliant, (
             "expected at least one non-compliant finding for contract-001 — "
             "the liability cap (3 months) should violate the 12-month policy rule. "

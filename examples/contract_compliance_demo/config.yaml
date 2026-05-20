@@ -43,14 +43,14 @@ structured_collections:
       its type and verbatim text. Filter by doc_id to retrieve all clauses for a
       contract, or filter by clause_type to find clauses of a specific category.
     schema: contract_clause_record_schema.json
-    primary_fields: [clause_id]
+    primary_fields: [doc_id, clause_id]
 
   - name: clause_compliance_findings
     description: >-
       Clause-level compliance findings. Each record captures whether a contract
       clause complies with company policy, with severity, summary, and redline.
     schema: clause_compliance_findings_schema.json
-    primary_fields: [clause_id]
+    primary_fields: [doc_id, clause_id]
 
 pipelines:
   - name: rules

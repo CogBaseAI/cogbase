@@ -226,20 +226,38 @@ set schema inline using the exact value from "Validated workflow output schemas"
 1. name must be kebab-case (lowercase, alphanumeric, hyphens only)
 2. chunk-embed-upsert is always the first pipeline step
 3. Do NOT include doc_id in extraction schemas — it is injected automatically
-4. All content is INLINE — do not use .json or .txt filenames as values anywhere
-5. Pipeline step collections must exactly match declared vector/structured collection names
-6. Use snake_case for all collection names and field names
-7. Every pipeline must have a routing_description — a plain-language sentence describing which documents belong in that pipeline (used by LLM routing to classify documents)
-8. output_schema in llm-structured workflow steps must be an inline JSON string — use the \
+4. For every extract-structured step, choose record_mode based on how many records the LLM \
+   should return per document:
+   - record_mode: one (default) — the LLM returns ONE record for the whole document. \
+     Use when the document yields exactly one entity of this type. Examples: contract-level \
+     metadata (one set of facts per contract), board update KPIs (one snapshot per deck), \
+     deal memo summary (one memo per document).
+   - record_mode: many — the LLM returns MULTIPLE records as a list. Use when the document \
+     contains a list of distinct entities of this type. Examples: clauses in a contract, \
+     rules/prohibitions/requirements in a policy document, line items in an invoice, \
+     findings in an audit report, employees in a roster, transactions in a statement. \
+     When record_mode is many, ALSO set: response_field (the array key in the extractor \
+     output, e.g. clauses, rules, items), id_field (the per-record identifier, e.g. \
+     clause_id, rule_id, item_id), and id_template (e.g. "{{doc_id}}__{{index:04d}}").
+   Heuristic: if a natural plural ("the clauses", "the rules", "the line items") describes \
+   what the schema captures, choose record_mode: many. If the schema is a flat set of \
+   header-level facts about the document itself, choose record_mode: one. Getting this wrong \
+   collapses many entities into a single record (loses data) or wraps a singleton in a list \
+   for no reason.
+5. All content is INLINE — do not use .json or .txt filenames as values anywhere
+6. Pipeline step collections must exactly match declared vector/structured collection names
+7. Use snake_case for all collection names and field names
+8. Every pipeline must have a routing_description — a plain-language sentence describing which documents belong in that pipeline (used by LLM routing to classify documents)
+9. output_schema in llm-structured workflow steps must be an inline JSON string — use the \
    exact value from "Validated workflow output schemas". Never use a .json filename.
-9. prompt in llm-structured workflow steps must be inline text. Never use a .txt filename.
-10. Workflow output collections (structured-save targets not produced by extract-structured) \
+10. prompt in llm-structured workflow steps must be inline text. Never use a .txt filename.
+11. Workflow output collections (structured-save targets not produced by extract-structured) \
     must have schema set inline using the value from "Validated workflow output schemas" — they \
     are NOT auto-injected like pipeline collections.
-11. Every workflow must have a params_from_collection block that derives input params from a \
+12. Every workflow must have a params_from_collection block that derives input params from a \
     structured collection. Use filters to select by doc_id and params to expose the values \
     the workflow steps reference via {{{{ input.* }}}}.
-12. Avoid bulk context in judgment workflows:
+13. Avoid bulk context in judgment workflows:
     - Never use structured-query with empty filters to load an entire collection and
       pass all records to an llm-structured step. This floods the model context and
       can cause empty or low-quality output.
@@ -281,8 +299,6 @@ pipelines:
     steps:
       - tool: chunk-embed-upsert
         collection: portfolio_chunks
-        chunker:
-          type: langchain
 
       - tool: extract-structured
         collection: portfolio_kpis
@@ -316,8 +332,6 @@ pipelines:
     steps:
       - tool: chunk-embed-upsert
         collection: portfolio_chunks
-        chunker:
-          type: langchain
 
       - tool: document-embed-upsert
         collection: portfolio_summaries
@@ -325,20 +339,106 @@ pipelines:
           Summarize this investment memo or pitch deck. Include: company name,
           stage, sector, investment thesis, key risks, and deal terms if present.
 
-## Example — workflow: fan-out LLM judgment over records in a collection
+## Example — workflow: two pipelines, mixed record_mode, fan-out LLM judgment
+
+# Demonstrates: two pipelines routed by metadata; one extract-structured step with
+# record_mode: one (document-level metadata, one record per contract) alongside another
+# with record_mode: many (clauses, many records per contract); a workflow that fans out
+# over the many-records collection and saves judgments to a workflow output collection.
+
+name: contract-compliance
+
+vector_collections:
+  - name: rule_chunks
+    description: >
+      Company policy passages and standards used as evidence for compliance judgments.
+  - name: contract_chunks
+    description: >
+      Contract text passages for detailed questions about specific contract terms or clauses.
 
 structured_collections:
+  - name: contract_metadata
+    description: >
+      Key facts per contract: parties, dates, value, governing law, termination
+      notice period. ONE record per contract document.
+  - name: contract_clauses
+    description: >
+      Individual clauses extracted from contracts. MANY records per contract — each
+      record is one clause with its type and verbatim text. Filter by doc_id to
+      retrieve all clauses for a contract, or by clause_type for a specific category.
   - name: clause_compliance_findings
     description: >
-      Clause-level compliance findings. Each record captures whether a clause complies
-      with company policy, with severity and plain-language assessment.
+      Clause-level compliance findings produced by the compliance workflow. Each record
+      captures whether a clause complies with company policy, with severity and reasoning.
+
+pipelines:
+  # rules pipeline: company policy documents — index only, no structured extraction needed
+  - name: rules
+    routing_description: Company policy documents, internal standards, compliance guidelines, and fallback positions that define rules contracts must be checked against.
+    match:
+      metadata:
+        doc_type: rules
+    steps:
+      - tool: chunk-embed-upsert
+        collection: rule_chunks
+
+  # contracts pipeline: chunk + extract document-level metadata + extract clauses
+  - name: contracts
+    routing_description: Vendor contracts, commercial agreements, and service agreements to be reviewed for compliance against company policy.
+    match:
+      metadata:
+        doc_type: contract
+    steps:
+      - tool: chunk-embed-upsert
+        collection: contract_chunks
+
+      # ONE-PER-DOCUMENT extraction — record_mode: one (default, omitted). The contract has
+      # exactly one set of header-level facts, so the LLM returns a single JSON object.
+      - tool: extract-structured
+        collection: contract_metadata
+        extractor:
+          type: llm
+          extraction_schema: '{{"type":"object","properties":{{"contract_type":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Contract category"}},"parties":{{"type":"array","items":{{"type":"object","properties":{{"name":{{"type":"string"}},"role":{{"type":"string"}}}}}},"description":"Named parties and their roles"}},"effective_date":...,"expiry_date":...,"contract_value":...,"governing_law":...,"termination_notice_days":...}}}}'
+          prompt: |
+            You are a legal contract analyst. Extract key contract-level facts from the
+            contract provided.
+
+            Rules:
+            - Use null for any field not present in the document. Do not invent.
+            - Format dates as YYYY-MM-DD.
+            - For parties, return an array of {{name, role}} objects.
+            - Return ONLY the JSON object — no explanation, no markdown fences.
+
+      # MANY-PER-DOCUMENT extraction — record_mode: many. A contract contains a list of
+      # distinct clauses, so the LLM returns an array under response_field, and each
+      # element becomes one record keyed by id_field.
+      - tool: extract-structured
+        collection: contract_clauses
+        extractor:
+          type: llm
+          extraction_schema: '{{"type":"object","properties":{{"clause_type":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Clause category: liability, indemnification, termination, payment, privacy, confidentiality, ip, governing_law, other"}},"text":{{"type":"string","description":"Verbatim clause text"}}}}}}'
+          record_mode: many
+          response_field: clauses
+          id_field: clause_id
+          id_template: "{{doc_id}}__{{index:04d}}"
+          prompt: |
+            You are a legal contract analyst. Extract every distinct clause from the
+            contract provided.
+
+            Rules:
+            - Copy all clause text verbatim — do not paraphrase.
+            - Assign clause_type from: liability, indemnification, termination, payment,
+              privacy, confidentiality, ip, governing_law, other. Use null when unclear.
+            - Return ONLY the JSON object — no explanation, no markdown fences.
 
 workflows:
   - name: check-contract-compliance
     trigger:
       type: manual
+    # Derives doc_id from contract_metadata (the one-per-document collection) so the
+    # workflow runs once per contract, even though it then fans out over many clauses.
     params_from_collection:
-      collection: contract_clauses
+      collection: contract_metadata
       filters:
         doc_id: "{{{{ doc.doc_id }}}}"
       params:
@@ -353,6 +453,8 @@ workflows:
       - id: review_each_clause
         foreach: "{{{{ steps.load_clauses.records }}}}"
         steps:
+          # Retrieve only the rules relevant to this clause — avoids loading the entire
+          # rules collection (see rule 13).
           - id: retrieve_rules
             tool: vector-search
             collection: rule_chunks
@@ -362,12 +464,17 @@ workflows:
           - id: judge
             tool: llm-structured
             prompt: |
-              You are a compliance judge. Review the clause against the company policy rules
-              provided. Return JSON only — no explanation, no markdown fences.
+              You are a contract compliance reviewer. Judge whether the clause complies
+              with company policy using ONLY the policy excerpts provided.
+
+              Rules:
+              - Ground every finding exclusively in the provided excerpts.
+              - If excerpts are insufficient, set status=needs_review.
+              - Return ONLY valid JSON — no markdown fences, no explanation.
             input:
               clause: "{{{{ item }}}}"
               rules: "{{{{ steps.retrieve_rules.chunks }}}}"
-            output_schema: '{{"type":"object","properties":{{"clause_id":{{"type":"string","description":"Clause identifier"}},"compliant":{{"anyOf":[{{"type":"boolean"}},{{"type":"null"}}],"description":"Whether the clause complies"}},"severity":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Severity if non-compliant: critical/high/medium/low"}},"summary":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Plain-language compliance assessment"}}}}}}'
+            output_schema: '{{"type":"object","properties":{{"clause_id":{{"type":"string"}},"doc_id":{{"type":"string"}},"status":{{"type":"string","enum":["compliant","non_compliant","needs_review","not_applicable"]}},"severity":{{"type":"string","enum":["low","medium","high","critical"]}},"summary":{{"type":"string"}},"reasoning":{{"type":"string"}}}}}}'
 
           - id: save_finding
             tool: structured-save

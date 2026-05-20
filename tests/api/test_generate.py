@@ -227,6 +227,21 @@ class TestMakeRecordSchema:
         assert schema["required"] == original_required
         assert schema["properties"] == original_props
 
+    def test_injects_id_field_for_many_mode(self):
+        schema = {"type": "object", "properties": {"text": {"type": "string"}}}
+        result = _make_record_schema(schema, id_field="clause_id")
+        assert result["properties"]["doc_id"] == {
+            "type": "string",
+            "description": "document identifier",
+        }
+        assert result["properties"]["clause_id"] == {
+            "type": "string",
+            "description": "record identifier",
+        }
+        # doc_id leads required, id_field also required
+        assert result["required"][0] == "doc_id"
+        assert "clause_id" in result["required"]
+
 
 def _make_config(extraction_schema: dict, collection: str = "contracts") -> dict:
     """Minimal config dict with one extract-structured step and one structured collection."""
@@ -364,6 +379,41 @@ class TestInjectPipelineRecordSchemas:
     def test_empty_config(self):
         cfg: dict = {}
         _inject_pipeline_record_schemas(cfg)  # must not raise
+
+    def test_one_mode_sets_primary_fields_to_doc_id(self):
+        ext_schema = {"type": "object", "properties": {"vendor": {"type": "string"}}}
+        cfg = _make_config(ext_schema)
+        _inject_pipeline_record_schemas(cfg)
+        sc = cfg["structured_collections"][0]
+        assert sc["primary_fields"] == ["doc_id"]
+
+    def test_many_mode_sets_primary_fields_to_doc_id_and_id_field(self):
+        ext_schema = {"type": "object", "properties": {"text": {"type": "string"}}}
+        cfg = _make_config(ext_schema, collection="contract_clauses")
+        cfg["pipelines"][0]["steps"][0]["extractor"].update(
+            {"record_mode": "many", "id_field": "clause_id"}
+        )
+        _inject_pipeline_record_schemas(cfg)
+        sc = cfg["structured_collections"][0]
+        assert sc["primary_fields"] == ["doc_id", "clause_id"]
+        injected = json.loads(sc["schema"])
+        assert "clause_id" in injected["properties"]
+        assert "doc_id" in injected["properties"]
+
+    def test_many_mode_without_id_field_omits_it(self):
+        ext_schema = {"type": "object", "properties": {"text": {"type": "string"}}}
+        cfg = _make_config(ext_schema)
+        cfg["pipelines"][0]["steps"][0]["extractor"]["record_mode"] = "many"
+        _inject_pipeline_record_schemas(cfg)
+        sc = cfg["structured_collections"][0]
+        assert sc["primary_fields"] == ["doc_id"]
+
+    def test_overwrites_existing_primary_fields(self):
+        ext_schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+        cfg = _make_config(ext_schema)
+        cfg["structured_collections"][0]["primary_fields"] = ["stale"]
+        _inject_pipeline_record_schemas(cfg)
+        assert cfg["structured_collections"][0]["primary_fields"] == ["doc_id"]
 
 
 class TestInjectWorkflowOutputSchemas:
@@ -719,6 +769,38 @@ class TestRunProposeConfig:
         record_schema = json.loads(sc["schema"])
         assert "doc_id" in record_schema["properties"]
         assert record_schema["required"][0] == "doc_id"
+
+    async def test_validates_when_llm_omits_schema_and_primary_fields(self):
+        # LLM is instructed not to author schema/primary_fields for pipeline
+        # collections — injection must populate them before Pydantic validation.
+        yaml_without_schema = """\
+name: test-app
+vector_collections:
+  - name: chunks
+    description: Semantic search chunks.
+structured_collections:
+  - name: contracts
+    description: Extracted contract facts.
+pipelines:
+  - name: main
+    routing_description: Contract documents.
+    steps:
+      - tool: chunk-embed-upsert
+        collection: chunks
+      - tool: extract-structured
+        collection: contracts
+        extractor:
+          type: llm
+          extraction_schema: '{"type":"object","properties":{"vendor":{"type":"string","description":"Vendor name"}}}'
+          prompt: Extract contract data.
+"""
+        llm = _make_llm(yaml_without_schema)
+        message, stored_yaml = await _run_propose_config(llm, _CONVERSATION, {})
+        assert message == "Config validated."
+        data = yaml.safe_load(stored_yaml)
+        sc = data["structured_collections"][0]
+        assert "doc_id" in json.loads(sc["schema"])["properties"]
+        assert sc["primary_fields"] == ["doc_id"]
 
     async def test_retry_then_success(self):
         llm = _make_llm("not: valid: yaml: [[[", _MINIMAL_CONFIG_YAML)
