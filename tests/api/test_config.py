@@ -526,6 +526,204 @@ class TestStructuredSavePrimaryFieldsPropagation:
 
 
 # ---------------------------------------------------------------------------
+# StructuredSaveStepConfig — primary_fields must be in upstream
+# LLMStructuredStepConfig.output_schema when records sources the LLM output.
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredSavePrimaryFieldsAgainstUpstreamSchema:
+    _COLLECTION_SCHEMA = (
+        '{"type":"object","properties":'
+        '{"doc_id":{"type":"string"},"clause_id":{"type":"string"},'
+        '"status":{"type":"string"}}}'
+    )
+    _OUTPUT_SCHEMA_FULL = (
+        '{"type":"object","properties":'
+        '{"doc_id":{"type":"string"},"clause_id":{"type":"string"},'
+        '"status":{"type":"string"}}}'
+    )
+    _OUTPUT_SCHEMA_MISSING_CLAUSE_ID = (
+        '{"type":"object","properties":'
+        '{"doc_id":{"type":"string"},"status":{"type":"string"}}}'
+    )
+    _OUTPUT_SCHEMA_ONLY_STATUS = (
+        '{"type":"object","properties":{"status":{"type":"string"}}}'
+    )
+
+    @staticmethod
+    def _workflow_yaml(output_schema: str, primary_fields: str = "[doc_id, clause_id]") -> str:
+        # Mirrors the contract_compliance demo: a judge llm-structured step
+        # feeds its output into a save_finding structured-save step.
+        return textwrap.dedent(f"""\
+            name: save-validation
+            llm:
+              model: gpt-4o-mini
+            structured_collections:
+              - name: findings
+                description: Workflow output collection.
+                schema: '{TestStructuredSavePrimaryFieldsAgainstUpstreamSchema._COLLECTION_SCHEMA}'
+            workflows:
+              - name: judge-and-save
+                params_from_collection:
+                  collection: findings
+                  filters:
+                    doc_id: "{{{{ doc.doc_id }}}}"
+                  params:
+                    doc_id: "{{{{ record.doc_id }}}}"
+                steps:
+                  - id: judge
+                    tool: llm-structured
+                    prompt: Judge it.
+                    input:
+                      clause: "{{{{ item }}}}"
+                    output_schema: '{output_schema}'
+                  - id: save_finding
+                    tool: structured-save
+                    collection: findings
+                    primary_fields: {primary_fields}
+                    records:
+                      - "{{{{ steps.judge.output }}}}"
+        """)
+
+    def test_primary_fields_subset_of_output_schema_validates(self):
+        yaml_text = self._workflow_yaml(self._OUTPUT_SCHEMA_FULL)
+        cfg = AppConfig.from_yaml(yaml_text)
+        sc = next(s for s in cfg.structured_collections if s.name == "findings")
+        assert sc.primary_fields == ["doc_id", "clause_id"]
+
+    def test_primary_field_missing_from_output_schema_raises(self):
+        yaml_text = self._workflow_yaml(self._OUTPUT_SCHEMA_MISSING_CLAUSE_ID)
+        with pytest.raises(Exception, match=r"primary_fields \['clause_id'\] missing"):
+            AppConfig.from_yaml(yaml_text)
+
+    def test_error_names_workflow_save_step_and_upstream_step(self):
+        yaml_text = self._workflow_yaml(self._OUTPUT_SCHEMA_MISSING_CLAUSE_ID)
+        with pytest.raises(Exception) as exc_info:
+            AppConfig.from_yaml(yaml_text)
+        msg = str(exc_info.value)
+        assert "'judge-and-save'" in msg
+        assert "'save_finding'" in msg
+        assert "'judge'" in msg
+
+    def test_multiple_missing_primary_fields_all_listed(self):
+        yaml_text = self._workflow_yaml(self._OUTPUT_SCHEMA_ONLY_STATUS)
+        with pytest.raises(Exception) as exc_info:
+            AppConfig.from_yaml(yaml_text)
+        msg = str(exc_info.value)
+        assert "'doc_id'" in msg
+        assert "'clause_id'" in msg
+
+    def test_records_not_referencing_llm_structured_step_skipped(self):
+        # records sources from the foreach item rather than an llm-structured step output.
+        # The constraint does not apply — primary_fields can name fields the validator
+        # cannot see, and validation must not block this case.
+        yaml_text = textwrap.dedent(f"""\
+            name: passthrough-save
+            llm:
+              model: gpt-4o-mini
+            structured_collections:
+              - name: items
+                description: Source items.
+                schema: '{self._COLLECTION_SCHEMA}'
+                primary_fields: [doc_id]
+              - name: findings
+                description: Workflow output collection.
+                schema: '{self._COLLECTION_SCHEMA}'
+            workflows:
+              - name: passthrough
+                params_from_collection:
+                  collection: items
+                  filters:
+                    doc_id: "{{{{ doc.doc_id }}}}"
+                  params:
+                    doc_id: "{{{{ record.doc_id }}}}"
+                steps:
+                  - id: load
+                    tool: structured-query
+                    collection: items
+                    filters:
+                      doc_id: "{{{{ input.doc_id }}}}"
+                  - id: each
+                    foreach: "{{{{ steps.load.records }}}}"
+                    steps:
+                      - id: save
+                        tool: structured-save
+                        collection: findings
+                        primary_fields: [doc_id, clause_id]
+                        records:
+                          - "{{{{ item }}}}"
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        sc = next(s for s in cfg.structured_collections if s.name == "findings")
+        assert sc.primary_fields == ["doc_id", "clause_id"]
+
+    def test_nested_foreach_validates_against_upstream_schema(self):
+        # Mirrors the contract_compliance demo: judge + save_finding both inside foreach.
+        yaml_text = textwrap.dedent(f"""\
+            name: nested-validation
+            llm:
+              model: gpt-4o-mini
+            structured_collections:
+              - name: clauses
+                description: Source clauses.
+                schema: '{self._COLLECTION_SCHEMA}'
+                primary_fields: [doc_id, clause_id]
+              - name: findings
+                description: Workflow output collection.
+                schema: '{self._COLLECTION_SCHEMA}'
+            workflows:
+              - name: review-each-clause
+                params_from_collection:
+                  collection: clauses
+                  filters:
+                    doc_id: "{{{{ doc.doc_id }}}}"
+                  params:
+                    doc_id: "{{{{ record.doc_id }}}}"
+                steps:
+                  - id: load
+                    tool: structured-query
+                    collection: clauses
+                    filters:
+                      doc_id: "{{{{ input.doc_id }}}}"
+                  - id: each
+                    foreach: "{{{{ steps.load.records }}}}"
+                    steps:
+                      - id: judge
+                        tool: llm-structured
+                        prompt: Judge the clause.
+                        input:
+                          clause: "{{{{ item }}}}"
+                        output_schema: '{self._OUTPUT_SCHEMA_MISSING_CLAUSE_ID}'
+                      - id: save_finding
+                        tool: structured-save
+                        collection: findings
+                        primary_fields: [doc_id, clause_id]
+                        records:
+                          - "{{{{ steps.judge.output }}}}"
+        """)
+        with pytest.raises(Exception, match=r"primary_fields \['clause_id'\] missing"):
+            AppConfig.from_yaml(yaml_text)
+
+    def test_invalid_output_schema_json_raises_clear_error(self):
+        # Bad JSON in upstream output_schema → clear validation error, not a silent skip.
+        yaml_text = self._workflow_yaml("not-valid-json")
+        with pytest.raises(Exception, match="output_schema is not valid JSON"):
+            AppConfig.from_yaml(yaml_text)
+
+    def test_empty_save_primary_fields_skips_check(self):
+        # No primary_fields → nothing to validate, no error even if output_schema is empty.
+        yaml_text = self._workflow_yaml(
+            '{"type":"object","properties":{}}',
+            primary_fields="[]",
+        )
+        cfg = AppConfig.from_yaml(yaml_text)
+        sc = next(s for s in cfg.structured_collections if s.name == "findings")
+        # Empty save primary_fields means the propagation pass leaves the collection
+        # value untouched — here it was unset on the collection, so it stays empty.
+        assert sc.primary_fields == []
+
+
+# ---------------------------------------------------------------------------
 # ExtractorConfig
 # ---------------------------------------------------------------------------
 

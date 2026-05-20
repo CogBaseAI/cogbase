@@ -259,10 +259,27 @@ set schema inline using the exact value from "Validated workflow output schemas"
 11. Workflow output collections (structured-save targets not produced by extract-structured) \
     must have schema set inline using the value from "Validated workflow output schemas" — they \
     are NOT auto-injected like pipeline collections.
-12. Every workflow must have a params_from_collection block that derives input params from a \
+12. structured-save depends on the upstream llm-structured step that produces its records. \
+    Every field listed in a structured-save `primary_fields` MUST also be declared as a \
+    property in that upstream llm-structured `output_schema` (the step whose \
+    `{{{{ steps.<id>.output }}}}` is referenced in `records`). structured-save persists \
+    exactly what the LLM produced — a primary field absent from `output_schema` will be \
+    missing on every saved record and the workflow will fail validation. Concretely, when \
+    `primary_fields` is `[doc_id, clause_id]` (or similar provenance identifiers like \
+    `finding_id`, `company_id`): \
+    (a) the upstream llm-structured `output_schema.properties` MUST include each of those \
+        fields, \
+    (b) the llm-structured `input` block MUST expose the source values (e.g. pass the whole \
+        `item` so `item.doc_id` / `item.clause_id` are visible to the LLM), and \
+    (c) the llm-structured `prompt` MUST instruct the LLM to copy those identifier fields \
+        verbatim from the input into its output. \
+    The same rule applies to the workflow output collection's primary_fields — they are \
+    derived from these structured-save primary_fields at validation time, so the workflow \
+    output schema must also include them.
+13. Every workflow must have a params_from_collection block that derives input params from a \
     structured collection. Use filters to select by doc_id and params to expose the values \
     the workflow steps reference via {{{{ input.* }}}}.
-13. Avoid bulk context in judgment workflows:
+14. Avoid bulk context in judgment workflows:
     - Never use structured-query with empty filters to load an entire collection and
       pass all records to an llm-structured step. This floods the model context and
       can cause empty or low-quality output.

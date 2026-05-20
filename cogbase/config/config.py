@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from enum import Enum
 from typing import Any, Annotated, Literal
 
@@ -296,6 +298,8 @@ class StructuredSaveStepConfig(WorkflowStepBase):
     collection: str = Field(
         description="Name of the structured collection to save into.",
     )
+    # note: structured-save is to save the output of llm-structured, primary_fields MUST be in
+    # LLMStructuredStepConfig.output_schema
     primary_fields: list[str] = Field(
         default_factory=list,
         description=(
@@ -350,6 +354,61 @@ def _iter_save_steps(steps: list) -> "list[StructuredSaveStepConfig]":
         elif isinstance(step, ForeachStepConfig):
             out.extend(_iter_save_steps(step.steps))
     return out
+
+
+_STEP_OUTPUT_RE = re.compile(r"\{\{\s*steps\.([A-Za-z_][A-Za-z0-9_]*)\.output\s*\}\}")
+
+
+def _index_llm_structured_steps(steps: list) -> "dict[str, LLMStructuredStepConfig]":
+    """Map step id -> LLMStructuredStepConfig for every llm-structured step in the tree."""
+    out: dict[str, LLMStructuredStepConfig] = {}
+    for step in steps:
+        if isinstance(step, LLMStructuredStepConfig):
+            out[step.id] = step
+        elif isinstance(step, ForeachStepConfig):
+            out.update(_index_llm_structured_steps(step.steps))
+    return out
+
+
+def _validate_save_primary_fields(workflow: "WorkflowConfig") -> None:
+    """structured-save primary_fields must be declared in the upstream llm-structured output_schema.
+
+    For each structured-save step, find the llm-structured step whose
+    ``{{ steps.<id>.output }}`` feeds ``records``, then assert every field in
+    ``primary_fields`` appears as a property in that step's ``output_schema``.
+    Records that don't reference an llm-structured step output are skipped.
+    """
+    llm_steps = _index_llm_structured_steps(workflow.steps)
+    for save_step in _iter_save_steps(workflow.steps):
+        if not save_step.primary_fields:
+            continue
+        for record in save_step.records:
+            if not isinstance(record, str):
+                continue
+            match = _STEP_OUTPUT_RE.search(record)
+            if not match:
+                continue
+            upstream = llm_steps.get(match.group(1))
+            if upstream is None:
+                continue
+            try:
+                schema = json.loads(upstream.output_schema)
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise ValueError(
+                    f"Workflow {workflow.name!r} step {upstream.id!r}: "
+                    f"output_schema is not valid JSON: {exc}"
+                ) from exc
+            properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+            missing = [f for f in save_step.primary_fields if f not in properties]
+            if missing:
+                raise ValueError(
+                    f"Workflow {workflow.name!r} structured-save step {save_step.id!r}: "
+                    f"primary_fields {missing} missing from upstream llm-structured step "
+                    f"{upstream.id!r}.output_schema.properties "
+                    f"(available: {sorted(properties.keys())}). "
+                    "Add these fields to the llm-structured output_schema and instruct the "
+                    "LLM prompt to copy them verbatim from its input."
+                )
 
 
 class WorkflowConfig(ConfigPromptMixin, BaseModel):
@@ -461,6 +520,7 @@ class AppConfig(ConfigPromptMixin, BaseModel):
                         f"Pipeline step references unknown structured collection: {step.collection!r}"
                     )
         for workflow in self.workflows:
+            _validate_save_primary_fields(workflow)
             for save_step in _iter_save_steps(workflow.steps):
                 if not save_step.primary_fields:
                     continue
