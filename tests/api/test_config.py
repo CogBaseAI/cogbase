@@ -388,7 +388,7 @@ class TestAppConfig:
 
         collection_prompt = VectorCollectionConfig.config_format_prompt()
         assert "Collection description, shown to the LLM as context for a query." in collection_prompt
-        assert "Metadata keys copied onto each stored vector." in collection_prompt
+        assert "Metadata keys copied onto each stored vector." not in collection_prompt
 
     def test_structured_collection_description_is_required(self):
         _SCHEMA = '{"type":"object","properties":{"value":{"type":"string"}}}'

@@ -219,10 +219,8 @@ schemas injected below — produce a complete, valid config.yaml.
 Output ONLY the raw YAML — no explanation, no markdown fences.
 
 Use the extraction_schema values from the "Validated pipeline extraction schemas" section verbatim — \
-do not rewrite or reformat them. For pipeline collections (extract-structured targets), the \
-schema field in structured_collections is derived automatically — you do not need to provide it. \
-For workflow output collections (structured-save targets), set schema inline using the exact value \
-from "Validated workflow output schemas".
+do not rewrite or reformat them. For workflow output collections (structured-save targets), \
+set schema inline using the exact value from "Validated workflow output schemas".
 
 ## Rules
 1. name must be kebab-case (lowercase, alphanumeric, hyphens only)
@@ -272,8 +270,6 @@ structured_collections:
     description: >
       Financial and operational KPIs extracted from board decks and LP updates.
       Use for exact lookups and cross-company comparisons.
-    schema: ...
-    primary_fields: [doc_id]
 
 pipelines:
   # board-update pipeline: chunk + extract KPIs + summarize
@@ -336,8 +332,6 @@ structured_collections:
     description: >
       Clause-level compliance findings. Each record captures whether a clause complies
       with company policy, with severity and plain-language assessment.
-    schema: '{{"type":"object","properties":{{"clause_id":{{"type":"string","description":"Clause identifier"}},"compliant":{{"anyOf":[{{"type":"boolean"}},{{"type":"null"}}],"description":"Whether the clause complies"}},"severity":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Severity if non-compliant: critical/high/medium/low"}},"summary":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Plain-language compliance assessment"}}}}}}'
-    primary_fields: [clause_id]
 
 workflows:
   - name: check-contract-compliance
@@ -484,14 +478,21 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _make_record_schema(extraction_schema: dict) -> dict:
-    """Add a required doc_id string field to produce the record schema."""
+def _make_record_schema(extraction_schema: dict, id_field: str | None = None) -> dict:
+    """Add required doc_id (and optional id_field) to produce the record schema.
+
+    Mirrors the field injection done by ``LLMExtractor`` at extraction time:
+    RecordMode.ONE collections get ``doc_id``; RecordMode.MANY collections get
+    ``doc_id`` + ``id_field``.
+    """
     record = copy.deepcopy(extraction_schema)
-    record.setdefault("properties", {})["doc_id"] = {
-        "type": "string",
-        "description": "document identifier",
-    }
+    props = record.setdefault("properties", {})
     required = record.setdefault("required", [])
+    if id_field:
+        props[id_field] = {"type": "string", "description": "record identifier"}
+        if id_field not in required:
+            required.insert(0, id_field)
+    props["doc_id"] = {"type": "string", "description": "document identifier"}
     if "doc_id" not in required:
         required.insert(0, "doc_id")
     return record
@@ -510,28 +511,41 @@ def _collect_save_targets(steps: list, targets: set[str]) -> None:
 
 
 def _inject_pipeline_record_schemas(config_dict: dict) -> None:
-    """Set pipeline structured collection schemas from inline extraction schemas.
+    """Set pipeline structured collection schema and primary_fields from extractor config.
 
     Pipeline extract-structured targets store records, not raw extraction objects,
-    so their collection schema is extraction_schema + injected doc_id.
+    so their collection schema is extraction_schema + injected doc_id (+ id_field
+    for record_mode=many). primary_fields is derived to match: ``[doc_id]`` for
+    RecordMode.ONE, ``[doc_id, id_field]`` for RecordMode.MANY.
     """
-    ext_schemas: dict[str, dict] = {}
+    ext_info: dict[str, tuple[dict, str | None]] = {}
     for pipeline in config_dict.get("pipelines", []):
         for step in pipeline.get("steps", []):
-            if step.get("tool") == "extract-structured":
-                collection = step.get("collection")
-                ext_schema_str = (step.get("extractor") or {}).get("extraction_schema", "")
-                if collection and ext_schema_str:
-                    try:
-                        ext_schemas[collection] = json.loads(ext_schema_str)
-                    except (json.JSONDecodeError, ValueError):
-                        pass
+            if step.get("tool") != "extract-structured":
+                continue
+            collection = step.get("collection")
+            extractor = step.get("extractor") or {}
+            ext_schema_str = extractor.get("extraction_schema", "")
+            if not (collection and ext_schema_str):
+                continue
+            try:
+                ext_schema = json.loads(ext_schema_str)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            record_id_field = (
+                extractor.get("id_field") if extractor.get("record_mode") == "many" else None
+            )
+            ext_info[collection] = (ext_schema, record_id_field)
     for sc in config_dict.get("structured_collections", []):
         name = sc.get("name")
-        if name in ext_schemas:
-            sc["schema"] = json.dumps(
-                _make_record_schema(ext_schemas[name]), separators=(",", ":")
-            )
+        if name not in ext_info:
+            continue
+        ext_schema, record_id_field = ext_info[name]
+        sc["schema"] = json.dumps(
+            _make_record_schema(ext_schema, id_field=record_id_field),
+            separators=(",", ":"),
+        )
+        sc["primary_fields"] = ["doc_id"] + ([record_id_field] if record_id_field else [])
 
 
 def _inject_workflow_output_schemas(

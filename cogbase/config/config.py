@@ -61,7 +61,7 @@ class ExtractorConfig(ConfigPromptMixin, BaseModel):
     )
     record_mode: RecordMode = Field(
         default=RecordMode.ONE,
-        description="Whether the extractor returns one record or many.",
+        description="Whether the extractor returns one record or many records for one document.",
     )
     response_field: str | None = Field(
         default="items",
@@ -81,13 +81,19 @@ class StructuredCollectionConfig(ConfigPromptMixin, BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str = Field(description="Collection name.")
-    schema_: str = Field(alias="schema", description="Resolved JSON schema for the collection.")
+    description: str = Field(
+        description="Collection description, shown to the LLM as context for a query.",
+    )
+    # skip both schema_ and primary_fields in app generator system prompt, they will be explicitly injected
+    schema_: str = Field(
+        alias="schema",
+        description="Resolved JSON schema for the collection.",
+        json_schema_extra={"prompt_skip": True},
+    )
     primary_fields: list[str] = Field(
         default_factory=list,
         description="Primary lookup fields for the collection.",
-    )
-    description: str = Field(
-        description="Collection description, shown to the LLM as context for a query.",
+        json_schema_extra={"prompt_skip": True},
     )
 
     @model_validator(mode="after")
