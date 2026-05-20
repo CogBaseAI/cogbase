@@ -225,7 +225,10 @@ set schema inline using the exact value from "Validated workflow output schemas"
 ## Rules
 1. name must be kebab-case (lowercase, alphanumeric, hyphens only)
 2. chunk-embed-upsert is always the first pipeline step
-3. Do NOT include doc_id in extraction schemas — it is injected automatically
+3. Do NOT include doc_id in any extraction_schema — it is injected automatically by the \
+   pipeline. For record_mode: many, also do NOT include the id_field (e.g. clause_id, rule_id, \
+   item_id) in the extraction_schema — it is injected automatically too. Including either field \
+   will fail server-side schema validation.
 4. For every extract-structured step, choose record_mode based on how many records the LLM \
    should return per document:
    - record_mode: one (default) — the LLM returns ONE record for the whole document. \
@@ -238,7 +241,9 @@ set schema inline using the exact value from "Validated workflow output schemas"
      findings in an audit report, employees in a roster, transactions in a statement. \
      When record_mode is many, ALSO set: response_field (the array key in the extractor \
      output, e.g. clauses, rules, items), id_field (the per-record identifier, e.g. \
-     clause_id, rule_id, item_id), and id_template (e.g. "{{doc_id}}__{{index:04d}}").
+     clause_id, rule_id, item_id), and id_template (e.g. "{{doc_id}}__{{index:04d}}"). \
+     The id_field is injected by the pipeline using id_template — it must NOT appear in \
+     extraction_schema.properties.
    Heuristic: if a natural plural ("the clauses", "the rules", "the line items") describes \
    what the schema captures, choose record_mode: many. If the schema is a flat set of \
    header-level facts about the document itself, choose record_mode: one. Getting this wrong \
@@ -479,6 +484,7 @@ workflows:
           - id: save_finding
             tool: structured-save
             collection: clause_compliance_findings
+            primary_fields: [doc_id, clause_id]
             records:
               - "{{{{ steps.judge.output }}}}" """
 

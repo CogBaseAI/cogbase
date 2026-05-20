@@ -666,13 +666,27 @@ class TestContractComplianceEndToEndLive:
             )
             assert False, "\n".join(diag_parts)
 
+        # The LLM-generated schema may name the status field anything from
+        # "status" to "compliance_status" to "compliance" — locate it by name
+        # pattern, skipping prose fields whose values may also contain
+        # "compliant"/"non-compliant" in free text.
+        def _status_value(finding: dict) -> str:
+            for k, v in finding.items():
+                if not isinstance(v, str):
+                    continue
+                kl = k.lower()
+                if any(h in kl for h in (
+                    "summary", "reason", "explanation",
+                    "rationale", "description", "note",
+                )):
+                    continue
+                if any(h in kl for h in ("status", "compliance", "compliant", "verdict")):
+                    return v.lower()
+            return ""
+
         # contract-001 has known non-compliant clauses (liability cap 3 months,
         # one-sided consequential exclusion, 48-hour breach notification).
-        non_compliant = [
-            f for f in findings
-            if "non" in str(f.get("status", "")).lower()
-            or "non_compliant" in str(f.get("status", "")).lower()
-        ]
+        non_compliant = [f for f in findings if "non" in _status_value(f)]
         assert non_compliant, (
             "expected at least one non-compliant finding for contract-001 — "
             "the liability cap (3 months) should violate the 12-month policy rule. "
@@ -682,10 +696,9 @@ class TestContractComplianceEndToEndLive:
         # contract-001 also has compliant clauses (payment net-30, mutual indemnification).
         compliant = [
             f for f in findings
-            if f.get("status") in ("compliant", "not_applicable")
-            or str(f.get("status", "")).lower() == "compliant"
+            if (val := _status_value(f)) and "compliant" in val and "non" not in val
         ]
-        assert compliant, "expected at least one compliant or not_applicable finding"
+        assert compliant, f"expected at least one compliant finding. findings: {findings}"
 
         # ---- Step 6: natural-language queries over the live data -------------
         async def _query(text: str) -> str:

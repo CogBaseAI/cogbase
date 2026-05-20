@@ -84,9 +84,12 @@ def _resolve_base_model_variants(annotation: Any, model_cls: type[BaseModel]) ->
     for variant in _union_variants(annotation):
         if variant is type(None):
             continue
-        variant = _resolve_model_type(variant, model_cls)
-        if isinstance(variant, type) and issubclass(variant, BaseModel):
-            variants.append(variant)
+        resolved = _resolve_model_type(variant, model_cls)
+        if isinstance(resolved, type) and issubclass(resolved, BaseModel):
+            variants.append(resolved)
+        elif _union_variants(variant):
+            # Nested union, e.g. Annotated[A | B, Field(discriminator=...)] — flatten.
+            variants.extend(_resolve_base_model_variants(variant, model_cls))
     return variants
 
 

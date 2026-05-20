@@ -349,6 +349,16 @@ class TestAppConfig:
         for tool in tools:
             assert tool in result, f"tool {tool!r} missing from config_format_prompt output"
 
+    def test_config_format_prompt_contains_all_workflow_tools(self):
+        # The workflow step union nests an Annotated discriminated union inside another
+        # union — the renderer must recurse into nested unions so every leaf step type
+        # (and its field descriptions) is documented for the LLM.
+        result = AppConfig.config_format_prompt()
+        tools = ["structured-query", "vector-search", "llm-structured", "structured-save"]
+        for tool in tools:
+            assert tool in result, f"workflow tool {tool!r} missing from config_format_prompt output"
+        assert "primary_fields" in result, "structured-save primary_fields description missing"
+
     def test_config_format_prompt_contains_top_level_sections(self):
         result = AppConfig.config_format_prompt()
         for section in ("name:", "vector_collections:", "structured_collections:", "pipelines:"):
@@ -402,6 +412,117 @@ class TestAppConfig:
         """)
         with pytest.raises(Exception, match="description"):
             AppConfig.from_yaml(yaml_text)
+
+
+# ---------------------------------------------------------------------------
+# StructuredSaveStepConfig — primary_fields propagation
+# ---------------------------------------------------------------------------
+
+
+_SAVE_PROPAGATION_YAML = """\
+name: save-prop
+llm:
+  model: gpt-4o-mini
+structured_collections:
+  - name: findings
+    description: Workflow output collection populated by structured-save.
+    schema: '{schema}'
+workflows:
+  - name: produce-findings
+    params_from_collection:
+      collection: findings
+      filters:
+        doc_id: "{{{{ doc.doc_id }}}}"
+      params:
+        doc_id: "{{{{ record.doc_id }}}}"
+    steps:
+      - id: judge
+        tool: llm-structured
+        prompt: Judge it.
+        output_schema: '{schema}'
+      - id: save
+        tool: structured-save
+        collection: findings
+        primary_fields: [doc_id, finding_id]
+        records:
+          - "{{{{ steps.judge.output }}}}"
+"""
+
+
+class TestStructuredSavePrimaryFieldsPropagation:
+    _SCHEMA = '{"type":"object","properties":{"doc_id":{"type":"string"},"finding_id":{"type":"string"}}}'
+
+    def test_save_step_primary_fields_propagate_to_target_collection(self):
+        yaml_text = _SAVE_PROPAGATION_YAML.format(schema=self._SCHEMA)
+        cfg = AppConfig.from_yaml(yaml_text)
+        sc = next(s for s in cfg.structured_collections if s.name == "findings")
+        assert sc.primary_fields == ["doc_id", "finding_id"]
+
+    def test_save_step_primary_fields_overrides_collection_value(self):
+        # Collection has stale primary_fields; save step's value wins.
+        yaml_text = _SAVE_PROPAGATION_YAML.format(schema=self._SCHEMA).replace(
+            "schema: '" + self._SCHEMA + "'",
+            "schema: '" + self._SCHEMA + "'\n    primary_fields: [stale]",
+            1,
+        )
+        cfg = AppConfig.from_yaml(yaml_text)
+        sc = next(s for s in cfg.structured_collections if s.name == "findings")
+        assert sc.primary_fields == ["doc_id", "finding_id"]
+
+    def test_empty_save_step_primary_fields_leaves_collection_value(self):
+        # When the save step omits primary_fields, the collection's value is preserved.
+        yaml_text = _SAVE_PROPAGATION_YAML.format(schema=self._SCHEMA)
+        yaml_text = yaml_text.replace(
+            "        primary_fields: [doc_id, finding_id]\n", ""
+        ).replace(
+            "    schema: '" + self._SCHEMA + "'",
+            "    schema: '" + self._SCHEMA + "'\n    primary_fields: [doc_id]",
+        )
+        cfg = AppConfig.from_yaml(yaml_text)
+        sc = next(s for s in cfg.structured_collections if s.name == "findings")
+        assert sc.primary_fields == ["doc_id"]
+
+    def test_nested_foreach_save_step_propagates(self):
+        # The save step lives inside a foreach block — propagation must recurse.
+        yaml_text = textwrap.dedent(f"""\
+            name: nested-save
+            llm:
+              model: gpt-4o-mini
+            structured_collections:
+              - name: items
+                description: Source items.
+                schema: '{self._SCHEMA}'
+                primary_fields: [doc_id]
+              - name: findings
+                description: Workflow output collection.
+                schema: '{self._SCHEMA}'
+            workflows:
+              - name: review-each
+                params_from_collection:
+                  collection: items
+                  filters:
+                    doc_id: "{{{{ doc.doc_id }}}}"
+                  params:
+                    doc_id: "{{{{ record.doc_id }}}}"
+                steps:
+                  - id: load
+                    tool: structured-query
+                    collection: items
+                    filters:
+                      doc_id: "{{{{ input.doc_id }}}}"
+                  - id: each
+                    foreach: "{{{{ steps.load.records }}}}"
+                    steps:
+                      - id: save
+                        tool: structured-save
+                        collection: findings
+                        primary_fields: [finding_id]
+                        records:
+                          - "{{{{ item }}}}"
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        sc = next(s for s in cfg.structured_collections if s.name == "findings")
+        assert sc.primary_fields == ["finding_id"]
 
 
 # ---------------------------------------------------------------------------

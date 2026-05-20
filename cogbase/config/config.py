@@ -296,6 +296,15 @@ class StructuredSaveStepConfig(WorkflowStepBase):
     collection: str = Field(
         description="Name of the structured collection to save into.",
     )
+    primary_fields: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Primary lookup fields for the target structured collection — the "
+            "stable identifier fields that uniquely key each saved record "
+            "(e.g. [doc_id, clause_id] or [finding_id]). Copied onto the target "
+            "collection's primary_fields at validation time."
+        ),
+    )
     records: list[Any] = Field(
         default_factory=list,
         description=(
@@ -330,6 +339,17 @@ class ForeachStepConfig(WorkflowStepBase):
 WorkflowStepConfig = WorkflowLeafStepConfig | ForeachStepConfig
 
 ForeachStepConfig.model_rebuild()
+
+
+def _iter_save_steps(steps: list) -> "list[StructuredSaveStepConfig]":
+    """Depth-first collect every structured-save step, descending into foreach blocks."""
+    out: list[StructuredSaveStepConfig] = []
+    for step in steps:
+        if isinstance(step, StructuredSaveStepConfig):
+            out.append(step)
+        elif isinstance(step, ForeachStepConfig):
+            out.extend(_iter_save_steps(step.steps))
+    return out
 
 
 class WorkflowConfig(ConfigPromptMixin, BaseModel):
@@ -429,17 +449,24 @@ class AppConfig(ConfigPromptMixin, BaseModel):
     @model_validator(mode="after")
     def _validate(self) -> "AppConfig":
         vc_names = {vc.name for vc in self.vector_collections}
-        sc_names = {sc.name for sc in self.structured_collections}
+        sc_by_name = {sc.name: sc for sc in self.structured_collections}
         for pipeline in self.pipelines:
             for step in pipeline.steps:
                 if isinstance(step, (ChunkEmbedUpsertStepConfig, DocumentEmbedUpsertStepConfig)) and step.collection not in vc_names:
                     raise ValueError(
                         f"Pipeline step references unknown vector collection: {step.collection!r}"
                     )
-                if isinstance(step, ExtractStructuredStepConfig) and step.collection not in sc_names:
+                if isinstance(step, ExtractStructuredStepConfig) and step.collection not in sc_by_name:
                     raise ValueError(
                         f"Pipeline step references unknown structured collection: {step.collection!r}"
                     )
+        for workflow in self.workflows:
+            for save_step in _iter_save_steps(workflow.steps):
+                if not save_step.primary_fields:
+                    continue
+                target = sc_by_name.get(save_step.collection)
+                if target is not None:
+                    target.primary_fields = list(save_step.primary_fields)
         return self
 
     @classmethod

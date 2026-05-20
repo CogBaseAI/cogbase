@@ -130,5 +130,6 @@ workflows:
           - id: save_finding
             tool: structured-save
             collection: clause_compliance_findings
+            primary_fields: [doc_id, clause_id]
             records:
               - "{{ steps.judge.output }}"
