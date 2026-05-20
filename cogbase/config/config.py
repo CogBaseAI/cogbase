@@ -38,9 +38,12 @@ class VectorCollectionConfig(ConfigPromptMixin, BaseModel):
     description: str = Field(
         description="Collection description, shown to the LLM as context for a query.",
     )
+    # skip metadata_fields for app generator, most end users will not have additional
+    # metadata for the documents. This is only used by developers.
     metadata_fields: list[str] = Field(
         default_factory=list,
         description="Metadata keys copied onto each stored vector.",
+        json_schema_extra={"prompt_skip": True},
     )
 
     @model_validator(mode="after")
@@ -160,7 +163,9 @@ class PipelineConfig(ConfigPromptMixin, BaseModel):
         default=False,
         description="Whether pipeline steps may run in parallel.",
     )
-    steps: list[PipelineStepConfig] = Field(description="List of supported pipeline steps. Add the steps required for the application.")
+    steps: list[PipelineStepConfig] = Field(
+        description="List of supported pipeline steps. Add the steps required for the application.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +365,9 @@ class PipelineRoutingConfig(BaseModel):
 
 
 class AppConfig(ConfigPromptMixin, BaseModel):
-    name: str = Field(description="Application name, kebab-case (lowercase, alphanumeric, hyphens only).")
+    name: str = Field(
+        description="Application name, kebab-case (lowercase, alphanumeric, hyphens only).",
+    )
     pipeline_routing: PipelineRoutingConfig = Field(
         default_factory=PipelineRoutingConfig,
         description="Pipeline routing configuration.",

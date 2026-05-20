@@ -96,6 +96,8 @@ _GENERATOR_TOOLS: list[ToolDefinition] = [
     _PROPOSE_CONFIG_TOOL,
 ]
 
+# generate the extraction schema that llm will use to extract data from a document,
+# e.g. ExtractorConfig.extraction_schema, no other data in AppConfig.
 _EXTRACTION_SCHEMA_AGENT_SYSTEM_PROMPT = """\
 You are a CogBase extraction schema designer. Given a conversation about building \
 a CogBase application, produce JSON Schema definitions only for structured \
@@ -239,6 +241,17 @@ from "Validated workflow output schemas".
 11. Every workflow must have a params_from_collection block that derives input params from a \
     structured collection. Use filters to select by doc_id and params to expose the values \
     the workflow steps reference via {{{{ input.* }}}}.
+12. Avoid bulk context in judgment workflows:
+    - Never use structured-query with empty filters to load an entire collection and
+      pass all records to an llm-structured step. This floods the model context and
+      can cause empty or low-quality output.
+    - When judging a record against unstructured reference material, such as policy,
+      rules, guidelines, or source-document text, retrieve targeted context inside
+      the foreach loop using vector-search and pass only top-k chunks.
+    - When judging relationships among structured records, such as contradictions,
+      duplicate facts, evidence gaps, reconciliations, or cross-record consistency,
+      use structured-query with selective filters such as issue, entity, date range,
+      doc_id, account_id, or contract_id to load only the relevant peer records.
 
 ## Config format
 
@@ -440,6 +453,15 @@ without a workflow.
    "rank all companies by ARR"), also design the workflow before calling propose_extraction_schemas:
    - Sketch the step sequence: what records to load, what to iterate over, what LLM judgment
      to apply, and where to save results.
+   - For judgment workflows, choose retrieval based on the comparison target:
+     * If judging each record against unstructured reference material such as policy,
+       rule, or source-document text, retrieve targeted context inside the foreach loop
+       using vector-search.
+     * If judging relationships among structured records, such as contradictions
+       between facts, use structured-query with selective filters such as issue,
+       entity, date range, or doc_id to load only the relevant peer records.
+     * Never load an entire collection via structured-query with empty filters and
+       dump all records into one LLM step.
    - Identify the workflow output collection (e.g. "compliance_findings") and add its fields
      to the proposed field list — its schema will be generated after the pipeline extraction schemas.
    - Confirm the workflow design with the user.
