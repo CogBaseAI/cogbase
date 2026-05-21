@@ -22,8 +22,10 @@ import yaml
 from api.models import ChatMessage, GenerateChatRequest
 from api.routers.generate import (
     _collect_save_targets,
-    _run_propose_config,
+    _make_record_schema,
     _run_propose_extraction_schemas,
+    _run_propose_pipeline_config,
+    _run_propose_workflow_config,
     _run_propose_workflow_schemas,
     chat,
 )
@@ -166,29 +168,28 @@ class TestProposeExtractionSchemasLive:
 
 class TestProposeWorkflowSchemasLive:
     async def test_returns_validated_workflow_schemas(self, llm):
-        extraction_schemas = {
+        # Full record schemas (extraction fields + injected doc_id + id_field for
+        # RecordMode.MANY) — this is what _run_propose_pipeline_config produces.
+        clause_extraction_schema = {
+            "type": "object",
+            "properties": {
+                "clause_type": {
+                    "type": "string",
+                    "description": "e.g. indemnity, termination, payment",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "verbatim clause text",
+                },
+            },
+        }
+        record_schemas = {
             "contract_clauses": json.dumps(
-                {
-                    "type": "object",
-                    "properties": {
-                        "clause_id": {
-                            "type": "string",
-                            "description": "stable id for the clause",
-                        },
-                        "clause_type": {
-                            "type": "string",
-                            "description": "e.g. indemnity, termination, payment",
-                        },
-                        "text": {
-                            "type": "string",
-                            "description": "verbatim clause text",
-                        },
-                    },
-                }
+                _make_record_schema(clause_extraction_schema, id_field="clause_id")
             )
         }
         message, schemas = await _run_propose_workflow_schemas(
-            llm, _CONTRACT_COMPLIANCE_CONVERSATION, extraction_schemas
+            llm, _CONTRACT_COMPLIANCE_CONVERSATION, record_schemas
         )
         assert schemas is not None, message
         assert "Workflow schemas validated." in message
@@ -207,8 +208,8 @@ class TestProposeWorkflowSchemasLive:
 # ---------------------------------------------------------------------------
 
 
-class TestProposeAppConfigLive:
-    async def test_generates_valid_app_config_for_contract_app(self, llm):
+class TestProposePipelineConfigLive:
+    async def test_generates_valid_pipeline_config_for_contract_app(self, llm):
         extraction_schemas = {
             "contracts": json.dumps(
                 {
@@ -238,56 +239,70 @@ class TestProposeAppConfigLive:
                 }
             )
         }
-        message, stored_yaml = await _run_propose_config(
+        message, config_dict, record_schemas, stored_yaml = await _run_propose_pipeline_config(
             llm, _CONTRACT_CONVERSATION, extraction_schemas
         )
-        assert stored_yaml is not None, message
-        assert message == "Config validated."
+        assert config_dict is not None, message
+        assert message.startswith("Pipeline config validated.")
 
+        # No workflows in a contract analysis app — final config is returned directly.
+        assert stored_yaml is not None, "expected final config_yaml for a no-workflow app"
         config = AppConfig.from_yaml(stored_yaml)
-        assert config.name  # kebab-case name picked by the model
+        assert config.name
         assert config.pipelines, "expected at least one pipeline"
 
-        # The pipeline must include a chunk-embed-upsert step first.
-        first_pipeline = config.pipelines[0]
-        first_step = first_pipeline.steps[0]
+        first_step = config.pipelines[0].steps[0]
         assert getattr(first_step, "tool", None) == "chunk-embed-upsert"
 
-        # The structured 'contracts' collection schema is injected with doc_id
-        # (the model author's extraction_schema goes verbatim into the step).
-        data = yaml.safe_load(stored_yaml)
-        contracts_sc = next(
-            sc
-            for sc in data.get("structured_collections", [])
-            if sc["name"] == "contracts"
-        )
-        record_schema = json.loads(contracts_sc["schema"])
-        assert "doc_id" in record_schema["properties"]
-        assert record_schema["required"][0] == "doc_id"
-        assert "vendor_name" in record_schema["properties"]
-
-    async def test_generates_config_with_workflow(self, llm):
-        extraction_schemas = {
-            "contract_clauses": json.dumps(
-                {
-                    "type": "object",
-                    "properties": {
-                        "clause_id": {
-                            "type": "string",
-                            "description": "stable id for the clause",
-                        },
-                        "clause_type": {
-                            "type": "string",
-                            "description": "e.g. indemnity, termination, payment",
-                        },
-                        "text": {
-                            "type": "string",
-                            "description": "verbatim clause text",
-                        },
-                    },
-                }
+        # record_schemas contains the full stored schemas (doc_id injected).
+        assert "contracts" in record_schemas or any("contract" in k for k in record_schemas)
+        for coll_name, schema_json in record_schemas.items():
+            schema = json.loads(schema_json)
+            assert "doc_id" in schema.get("properties", {}), (
+                f"record_schemas[{coll_name!r}] must include injected doc_id"
             )
+
+        # Serialized config also has doc_id in the structured collection schema.
+        data = yaml.safe_load(stored_yaml)
+        for sc in data.get("structured_collections", []):
+            record_schema = json.loads(sc["schema"])
+            assert "doc_id" in record_schema["properties"]
+            assert record_schema["required"][0] == "doc_id"
+
+
+class TestProposeWorkflowConfigLive:
+    async def test_generates_valid_workflow_config(self, llm):
+        # Step 1: pipeline config (extraction schemas → pipeline config dict + record schemas).
+        clause_extraction_schema = {
+            "type": "object",
+            "properties": {
+                "clause_type": {
+                    "type": "string",
+                    "description": "e.g. indemnity, termination, payment",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "verbatim clause text",
+                },
+            },
         }
+        extraction_schemas = {
+            "contract_clauses": json.dumps(clause_extraction_schema)
+        }
+        p_message, pipeline_config_dict, record_schemas, _ = await _run_propose_pipeline_config(
+            llm, _CONTRACT_COMPLIANCE_CONVERSATION, extraction_schemas
+        )
+        assert pipeline_config_dict is not None, p_message
+
+        # record_schemas must include clause_id for the RecordMode.MANY collection.
+        assert record_schemas, "expected at least one record schema from the pipeline step"
+        for coll_name, schema_json in record_schemas.items():
+            schema = json.loads(schema_json)
+            assert "doc_id" in schema.get("properties", {}), (
+                f"record_schemas[{coll_name!r}] must include doc_id"
+            )
+
+        # Step 2: workflow schemas (record schemas → workflow output schemas).
         workflow_schemas = {
             "clause_compliance_findings": json.dumps(
                 {
@@ -317,10 +332,14 @@ class TestProposeAppConfigLive:
                 }
             )
         }
-        message, stored_yaml = await _run_propose_config(
+
+        # Step 3: workflow config (pipeline config dict + record schemas + workflow schemas →
+        # final validated config).
+        message, stored_yaml = await _run_propose_workflow_config(
             llm,
             _CONTRACT_COMPLIANCE_CONVERSATION,
-            extraction_schemas,
+            pipeline_config_dict,
+            record_schemas,
             workflow_schemas,
         )
         assert stored_yaml is not None, message
@@ -331,12 +350,11 @@ class TestProposeAppConfigLive:
 
         data = yaml.safe_load(stored_yaml)
         findings_sc = next(
-            sc
-            for sc in data.get("structured_collections", [])
-            if sc["name"] == "clause_compliance_findings"
+            (sc for sc in data.get("structured_collections", [])
+             if sc["name"] == "clause_compliance_findings"),
+            None,
         )
-        # The workflow output collection schema is injected verbatim — doc_id
-        # is part of the workflow schema (provenance), not auto-added.
+        assert findings_sc is not None, "clause_compliance_findings must be in structured_collections"
         injected = json.loads(findings_sc["schema"])
         expected = json.loads(workflow_schemas["clause_compliance_findings"])
         assert injected == expected

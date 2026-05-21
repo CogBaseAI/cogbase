@@ -59,13 +59,14 @@ _PROPOSE_EXTRACTION_SCHEMAS_TOOL: ToolDefinition = {
     },
 }
 
-_PROPOSE_WORKFLOW_SCHEMAS_TOOL: ToolDefinition = {
-    "name": "propose_workflow_schemas",
+_PROPOSE_PIPELINE_CONFIG_TOOL: ToolDefinition = {
+    "name": "propose_pipeline_config",
     "description": (
-        "Generate and validate JSON Schemas for workflow output collections used as "
-        "llm-structured output_schema and structured-save storage schema. Call only if "
-        "the confirmed design includes workflows that save structured records, and only "
-        "after propose_extraction_schemas has succeeded."
+        "Generate and validate the pipeline section of a CogBase app config: "
+        "name, vector_collections, structured_collections (pipeline-backed only), and pipelines. "
+        "Call this after propose_extraction_schemas has succeeded. "
+        "For apps without workflows this produces the final validated config. "
+        "Returns 'Pipeline config validated.' on success, or a validation error message."
     ),
     "parameters": {
         "type": "object",
@@ -74,13 +75,28 @@ _PROPOSE_WORKFLOW_SCHEMAS_TOOL: ToolDefinition = {
     },
 }
 
-_PROPOSE_CONFIG_TOOL: ToolDefinition = {
-    "name": "propose_app_config",
+_PROPOSE_WORKFLOW_SCHEMAS_TOOL: ToolDefinition = {
+    "name": "propose_workflow_schemas",
     "description": (
-        "Generate and validate a complete CogBase app config YAML. "
-        "Call this after propose_extraction_schemas has succeeded, and after "
-        "propose_workflow_schemas too when the app has workflow output collections. "
-        "The config is generated from the conversation and validated server-side. "
+        "Generate and validate JSON Schemas for workflow output collections used as "
+        "llm-structured output_schema and structured-save storage schema. Call only if "
+        "the confirmed design includes workflows that save structured records, and only "
+        "after propose_pipeline_config has succeeded."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    },
+}
+
+_PROPOSE_WORKFLOW_CONFIG_TOOL: ToolDefinition = {
+    "name": "propose_workflow_config",
+    "description": (
+        "Generate and validate the workflow section of a CogBase app config. "
+        "Call this after propose_workflow_schemas has succeeded. "
+        "Generates the workflow output structured_collections and workflows, "
+        "merges them with the validated pipeline config, and validates the full app config. "
         "Returns 'Config validated.' on success, or a validation error message."
     ),
     "parameters": {
@@ -92,8 +108,9 @@ _PROPOSE_CONFIG_TOOL: ToolDefinition = {
 
 _GENERATOR_TOOLS: list[ToolDefinition] = [
     _PROPOSE_EXTRACTION_SCHEMAS_TOOL,
+    _PROPOSE_PIPELINE_CONFIG_TOOL,
     _PROPOSE_WORKFLOW_SCHEMAS_TOOL,
-    _PROPOSE_CONFIG_TOOL,
+    _PROPOSE_WORKFLOW_CONFIG_TOOL,
 ]
 
 # generate the extraction schema that llm will use to extract data from a document,
@@ -155,7 +172,7 @@ Example output:
 
 _WORKFLOW_SCHEMA_AGENT_SYSTEM_PROMPT = """\
 You are a CogBase workflow schema designer. Given a conversation about building \
-a CogBase application and the validated pipeline extraction schemas below, produce \
+a CogBase application and the validated pipeline record schemas below, produce \
 JSON Schema definitions only for workflow output collections written by \
 structured-save and used as llm-structured output_schema.
 
@@ -167,10 +184,12 @@ by workflow logic, so they may include stable identifiers and provenance fields 
 such as doc_id, clause_id, finding_id, source record ids, status fields, evidence \
 references, and LLM judgment fields.
 
-Use the validated pipeline extraction schemas to preserve upstream identifiers and \
-concepts. Pipeline storage records include the extracted fields plus injected doc_id. \
-If a workflow iterates over an extracted collection, include the fields needed to \
-trace each output record back to its source record or source document.
+Use the validated pipeline record schemas to preserve upstream identifiers and \
+concepts. These schemas are the full stored record schemas — they already include \
+doc_id (always present) and, for RecordMode.MANY collections, the per-record id_field \
+(e.g. clause_id, rule_id, item_id). If a workflow iterates over an extracted collection, \
+include the fields needed to trace each output record back to its source record or \
+source document, including the id_field when present.
 
 Output ONLY a YAML mapping of workflow_output_collection_name → JSON Schema object. \
 If the confirmed design has no workflow output collections, output an empty YAML \
@@ -211,16 +230,19 @@ Example output:
 _MAX_SCHEMA_RETRIES = 3
 _MAX_CONFIG_RETRIES = 3
 
-_CONFIG_AGENT_SYSTEM_PROMPT = f"""\
-You are a CogBase configuration generator. Given a conversation about building a CogBase \
-application — including the validated pipeline extraction schemas and workflow output \
-schemas injected below — produce a complete, valid config.yaml.
+_PIPELINE_CONFIG_AGENT_SYSTEM_PROMPT = f"""\
+You are a CogBase pipeline config generator. Given a conversation about building a CogBase \
+application and the validated pipeline extraction schemas injected below, produce the data-model \
+section of a valid config.yaml: name, vector_collections, structured_collections \
+(pipeline-backed collections only), and pipelines.
 
 Output ONLY the raw YAML — no explanation, no markdown fences.
 
 Use the extraction_schema values from the "Validated pipeline extraction schemas" section verbatim — \
-do not rewrite or reformat them. For workflow output collections (structured-save targets), \
-set schema inline using the exact value from "Validated workflow output schemas".
+do not rewrite or reformat them.
+
+Do NOT include workflow output collections (structured-save targets) or workflows — those are \
+generated in a separate step.
 
 ## Rules
 1. name must be kebab-case (lowercase, alphanumeric, hyphens only)
@@ -256,44 +278,8 @@ set schema inline using the exact value from "Validated workflow output schemas"
 5. All content is INLINE — do not use .json or .txt filenames as values anywhere
 6. Pipeline step collections must exactly match declared vector/structured collection names
 7. Use snake_case for all collection names and field names
-8. Every pipeline must have a routing_description — a plain-language sentence describing which documents belong in that pipeline (used by LLM routing to classify documents)
-9. output_schema in llm-structured workflow steps must be an inline JSON string — use the \
-   exact value from "Validated workflow output schemas". Never use a .json filename.
-10. prompt in llm-structured workflow steps must be inline text. Never use a .txt filename.
-11. Workflow output collections (structured-save targets not produced by extract-structured) \
-    must have schema set inline using the value from "Validated workflow output schemas" — they \
-    are NOT auto-injected like pipeline collections.
-12. structured-save depends on the upstream llm-structured step that produces its records. \
-    Every field listed in a structured-save `primary_fields` MUST also be declared as a \
-    property in that upstream llm-structured `output_schema` (the step whose \
-    `{{{{ steps.<id>.output }}}}` is referenced in `records`). structured-save persists \
-    exactly what the LLM produced — a primary field absent from `output_schema` will be \
-    missing on every saved record and the workflow will fail validation. Concretely, when \
-    `primary_fields` is `[doc_id, clause_id]` (or similar provenance identifiers like \
-    `finding_id`, `company_id`): \
-    (a) the upstream llm-structured `output_schema.properties` MUST include each of those \
-        fields, \
-    (b) the llm-structured `input` block MUST expose the source values (e.g. pass the whole \
-        `item` so `item.doc_id` / `item.clause_id` are visible to the LLM), and \
-    (c) the llm-structured `prompt` MUST instruct the LLM to copy those identifier fields \
-        verbatim from the input into its output. \
-    The same rule applies to the workflow output collection's primary_fields — they are \
-    derived from these structured-save primary_fields at validation time, so the workflow \
-    output schema must also include them.
-13. Every workflow must have a params_from_collection block that derives input params from a \
-    structured collection. Use filters to select by doc_id and params to expose the values \
-    the workflow steps reference via {{{{ input.* }}}}.
-14. Avoid bulk context in judgment workflows:
-    - Never use structured-query with empty filters to load an entire collection and
-      pass all records to an llm-structured step. This floods the model context and
-      can cause empty or low-quality output.
-    - When judging a record against unstructured reference material, such as policy,
-      rules, guidelines, or source-document text, retrieve targeted context inside
-      the foreach loop using vector-search and pass only top-k chunks.
-    - When judging relationships among structured records, such as contradictions,
-      duplicate facts, evidence gaps, reconciliations, or cross-record consistency,
-      use structured-query with selective filters such as issue, entity, date range,
-      doc_id, account_id, or contract_id to load only the relevant peer records.
+8. Every pipeline must have a routing_description — a plain-language sentence describing \
+   which documents belong in that pipeline (used by LLM routing to classify documents)
 
 ## Config format
 
@@ -365,12 +351,10 @@ pipelines:
           Summarize this investment memo or pitch deck. Include: company name,
           stage, sector, investment thesis, key risks, and deal terms if present.
 
-## Example — workflow: two pipelines, mixed record_mode, fan-out LLM judgment
+## Example — pipeline section of a workflow app (workflow output collection excluded)
 
-# Demonstrates: two pipelines routed by metadata; one extract-structured step with
-# record_mode: one (document-level metadata, one record per contract) alongside another
-# with record_mode: many (clauses, many records per contract); a workflow that fans out
-# over the many-records collection and saves judgments to a workflow output collection.
+# For apps with workflows, generate only the pipeline-backed structured_collections.
+# The workflow output collection (clause_compliance_findings) is added in the next step.
 
 name: contract-compliance
 
@@ -392,13 +376,8 @@ structured_collections:
       Individual clauses extracted from contracts. MANY records per contract — each
       record is one clause with its type and verbatim text. Filter by doc_id to
       retrieve all clauses for a contract, or by clause_type for a specific category.
-  - name: clause_compliance_findings
-    description: >
-      Clause-level compliance findings produced by the compliance workflow. Each record
-      captures whether a clause complies with company policy, with severity and reasoning.
 
 pipelines:
-  # rules pipeline: company policy documents — index only, no structured extraction needed
   - name: rules
     routing_description: Company policy documents, internal standards, compliance guidelines, and fallback positions that define rules contracts must be checked against.
     match:
@@ -408,7 +387,6 @@ pipelines:
       - tool: chunk-embed-upsert
         collection: rule_chunks
 
-  # contracts pipeline: chunk + extract document-level metadata + extract clauses
   - name: contracts
     routing_description: Vendor contracts, commercial agreements, and service agreements to be reviewed for compliance against company policy.
     match:
@@ -418,73 +396,118 @@ pipelines:
       - tool: chunk-embed-upsert
         collection: contract_chunks
 
-      # ONE-PER-DOCUMENT extraction — record_mode: one (default, omitted). The contract has
-      # exactly one set of header-level facts, so the LLM returns a single JSON object.
       - tool: extract-structured
         collection: contract_metadata
         extractor:
           type: llm
-          extraction_schema: '{{"type":"object","properties":{{"contract_type":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Contract category"}},"parties":{{"type":"array","items":{{"type":"object","properties":{{"name":{{"type":"string"}},"role":{{"type":"string"}}}}}},"description":"Named parties and their roles"}},"effective_date":...,"expiry_date":...,"contract_value":...,"governing_law":...,"termination_notice_days":...}}}}'
+          extraction_schema: '{{"type":"object","properties":{{"contract_type":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Contract category"}},...}}}}'
           prompt: |
-            You are a legal contract analyst. Extract key contract-level facts from the
-            contract provided.
+            You are a legal contract analyst. Extract key contract-level facts.
+            Return ONLY the JSON object — no explanation, no markdown fences.
 
-            Rules:
-            - Use null for any field not present in the document. Do not invent.
-            - Format dates as YYYY-MM-DD.
-            - For parties, return an array of {{name, role}} objects.
-            - Return ONLY the JSON object — no explanation, no markdown fences.
-
-      # MANY-PER-DOCUMENT extraction — record_mode: many. A contract contains a list of
-      # distinct clauses, so the LLM returns an array under response_field, and each
-      # element becomes one record keyed by id_field.
       - tool: extract-structured
         collection: contract_clauses
         extractor:
           type: llm
-          extraction_schema: '{{"type":"object","properties":{{"clause_type":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Clause category: liability, indemnification, termination, payment, privacy, confidentiality, ip, governing_law, other"}},"text":{{"type":"string","description":"Verbatim clause text"}}}}}}'
+          extraction_schema: '{{"type":"object","properties":{{"clause_type":{{"anyOf":[{{"type":"string"}},{{"type":"null"}}],"description":"Clause category"}},"text":{{"type":"string","description":"Verbatim clause text"}}}}}}'
           record_mode: many
           response_field: clauses
           id_field: clause_id
           id_template: "{{doc_id}}__{{index:04d}}"
           prompt: |
-            You are a legal contract analyst. Extract every distinct clause from the
-            contract provided.
+            You are a legal contract analyst. Extract every distinct clause.
+            Return ONLY the JSON object — no explanation, no markdown fences.\
+"""
 
-            Rules:
-            - Copy all clause text verbatim — do not paraphrase.
-            - Assign clause_type from: liability, indemnification, termination, payment,
-              privacy, confidentiality, ip, governing_law, other. Use null when unclear.
-            - Return ONLY the JSON object — no explanation, no markdown fences.
+_WORKFLOW_CONFIG_AGENT_SYSTEM_PROMPT = """\
+You are a CogBase workflow config generator. Given a validated pipeline config, \
+full pipeline record schemas, and validated workflow output schemas — all injected \
+below — produce the workflow additions to the config.
+
+Output ONLY the raw YAML for two sections: structured_collections (workflow output \
+collections only) and workflows. Do NOT output name, vector_collections, pipelines, \
+or pipeline-backed structured_collections — those are already validated and locked.
+
+Use the output_schema values from "Validated workflow output schemas" verbatim in \
+llm-structured steps. Use these same values as the schema for workflow output \
+structured_collections.
+
+The "Validated pipeline record schemas" section shows the full stored record schema \
+for each pipeline-backed structured collection — extraction fields plus injected \
+doc_id and, for RecordMode.MANY collections, the per-record id_field (e.g. clause_id). \
+Use these to correctly set primary_fields and to pass the right identifiers through \
+the workflow steps.
+
+## Rules
+1. output_schema in llm-structured workflow steps must be an inline JSON string — use \
+   the exact value from "Validated workflow output schemas". Never use a .json filename.
+2. prompt in llm-structured workflow steps must be inline text. Never use a .txt filename.
+3. Workflow output collections must have schema set inline using the value from \
+   "Validated workflow output schemas" — they are NOT auto-injected like pipeline collections.
+4. structured-save depends on the upstream llm-structured step that produces its records. \
+   Every field listed in a structured-save `primary_fields` MUST also be declared as a \
+   property in that upstream llm-structured `output_schema`. structured-save persists \
+   exactly what the LLM produced — a primary field absent from `output_schema` will be \
+   missing on every saved record and the workflow will fail validation. Concretely, when \
+   `primary_fields` is `[doc_id, clause_id]` (or similar provenance identifiers like \
+   `finding_id`, `company_id`): \
+   (a) the upstream llm-structured `output_schema.properties` MUST include each of those \
+       fields, \
+   (b) the llm-structured `input` block MUST expose the source values (e.g. pass the whole \
+       `item` so `item.doc_id` / `item.clause_id` are visible to the LLM), and \
+   (c) the llm-structured `prompt` MUST instruct the LLM to copy those identifier fields \
+       verbatim from the input into its output. \
+   The same rule applies to the workflow output collection's primary_fields — they are \
+   derived from these structured-save primary_fields at validation time, so the workflow \
+   output schema must also include them.
+5. Every workflow must have a params_from_collection block that derives input params from a \
+   structured collection. Use filters to select by doc_id and params to expose the values \
+   the workflow steps reference via {{ input.* }}.
+6. Avoid bulk context in judgment workflows:
+   - Never use structured-query with empty filters to load an entire collection and
+     pass all records to an llm-structured step. This floods the model context and
+     can cause empty or low-quality output.
+   - When judging a record against unstructured reference material, such as policy,
+     rules, guidelines, or source-document text, retrieve targeted context inside
+     the foreach loop using vector-search and pass only top-k chunks.
+   - When judging relationships among structured records, such as contradictions,
+     duplicate facts, evidence gaps, reconciliations, or cross-record consistency,
+     use structured-query with selective filters such as issue, entity, date range,
+     doc_id, account_id, or contract_id to load only the relevant peer records.
+
+## Example output
+
+# Only these two sections — nothing else
+structured_collections:
+  - name: clause_compliance_findings
+    description: >
+      Clause-level compliance findings produced by the compliance workflow. Each record
+      captures whether a clause complies with company policy, with severity and reasoning.
 
 workflows:
   - name: check-contract-compliance
     trigger:
       type: manual
-    # Derives doc_id from contract_metadata (the one-per-document collection) so the
-    # workflow runs once per contract, even though it then fans out over many clauses.
     params_from_collection:
       collection: contract_metadata
       filters:
-        doc_id: "{{{{ doc.doc_id }}}}"
+        doc_id: "{{ doc.doc_id }}"
       params:
-        doc_id: "{{{{ record.doc_id }}}}"
+        doc_id: "{{ record.doc_id }}"
     steps:
       - id: load_clauses
         tool: structured-query
         collection: contract_clauses
         filters:
-          doc_id: "{{{{ input.doc_id }}}}"
+          doc_id: "{{ input.doc_id }}"
 
       - id: review_each_clause
-        foreach: "{{{{ steps.load_clauses.records }}}}"
+        foreach: "{{ steps.load_clauses.records }}"
         steps:
-          # Retrieve only the rules relevant to this clause — avoids loading the entire
-          # rules collection (see rule 13).
           - id: retrieve_rules
             tool: vector-search
             collection: rule_chunks
-            query: "{{{{ item.clause_type }}}}\\n{{{{ item.text }}}}"
+            query: "{{ item.clause_type }}\\n{{ item.text }}"
             top_k: 5
 
           - id: judge
@@ -492,22 +515,22 @@ workflows:
             prompt: |
               You are a contract compliance reviewer. Judge whether the clause complies
               with company policy using ONLY the policy excerpts provided.
-
               Rules:
               - Ground every finding exclusively in the provided excerpts.
               - If excerpts are insufficient, set status=needs_review.
               - Return ONLY valid JSON — no markdown fences, no explanation.
             input:
-              clause: "{{{{ item }}}}"
-              rules: "{{{{ steps.retrieve_rules.chunks }}}}"
-            output_schema: '{{"type":"object","properties":{{"clause_id":{{"type":"string"}},"doc_id":{{"type":"string"}},"status":{{"type":"string","enum":["compliant","non_compliant","needs_review","not_applicable"]}},"severity":{{"type":"string","enum":["low","medium","high","critical"]}},"summary":{{"type":"string"}},"reasoning":{{"type":"string"}}}}}}'
+              clause: "{{ item }}"
+              rules: "{{ steps.retrieve_rules.chunks }}"
+            output_schema: '<verbatim value from Validated workflow output schemas>'
 
           - id: save_finding
             tool: structured-save
             collection: clause_compliance_findings
             primary_fields: [doc_id, clause_id]
             records:
-              - "{{{{ steps.judge.output }}}}" """
+              - "{{ steps.judge.output }}"\
+"""
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -611,13 +634,17 @@ without a workflow.
    - Confirm the workflow design with the user.
 
    Once the field list (and any workflow design) is confirmed, call propose_extraction_schemas.
-   If the confirmed design includes workflow output collections, then call propose_workflow_schemas.
-   When the needed schema tools succeed, immediately call propose_app_config — no additional confirmation needed.
+   When extraction schemas succeed, immediately call propose_pipeline_config — no additional
+   confirmation needed. propose_pipeline_config generates the data model: vector collections,
+   structured collections (pipeline-backed only), and pipelines. For apps without workflows,
+   this produces the final validated config.
 
-3. Once the schema is confirmed, call propose_app_config.
-   It generates and validates the full config — pipelines and any confirmed workflows — from
-   the conversation. When it succeeds, present the result to the user with a plain-language
-   explanation of what was set up and why."""
+3. If the design includes workflows, after propose_pipeline_config succeeds call
+   propose_workflow_schemas, then immediately call propose_workflow_config — no additional
+   confirmation needed. propose_workflow_config generates the workflow output structured
+   collections and workflows, merges them with the validated pipeline config, and produces
+   the final validated config. When it succeeds, present the result to the user with a
+   plain-language explanation of what was set up and why."""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -846,6 +873,8 @@ async def _chat_turn_events(
 
     validated_config_yaml: str | None = None
     extraction_schemas: dict[str, str] = {}
+    pipeline_config_dict: dict | None = None
+    record_schemas: dict[str, str] = {}
     workflow_schemas: dict[str, str] = {}
     final_content: str = ""
     result = None
@@ -892,24 +921,37 @@ async def _chat_turn_events(
                     _phase = "streaming"
                     if schemas is not None:
                         extraction_schemas = schemas
+                elif tc["name"] == "propose_pipeline_config":
+                    yield {"type": "token", "token": "Generating pipeline config...\n"}
+                    _phase = "config"
+                    tool_output, p_config_dict, r_schemas, config_yaml = (
+                        await _run_propose_pipeline_config(llm, messages, extraction_schemas)
+                    )
+                    _phase = "streaming"
+                    if p_config_dict is not None:
+                        pipeline_config_dict = p_config_dict
+                        record_schemas = r_schemas or {}
+                    if config_yaml is not None:
+                        validated_config_yaml = config_yaml
                 elif tc["name"] == "propose_workflow_schemas":
                     yield {"type": "token", "token": "Generating workflow schemas...\n"}
                     _phase = "schema"
                     tool_output, schemas = await _run_propose_workflow_schemas(
                         llm,
                         messages,
-                        extraction_schemas,
+                        record_schemas,
                     )
                     _phase = "streaming"
                     if schemas is not None:
                         workflow_schemas = schemas
-                elif tc["name"] == "propose_app_config":
-                    yield {"type": "token", "token": "Generating app config...\n"}
+                elif tc["name"] == "propose_workflow_config":
+                    yield {"type": "token", "token": "Generating workflow config...\n"}
                     _phase = "config"
-                    tool_output, config_yaml = await _run_propose_config(
+                    tool_output, config_yaml = await _run_propose_workflow_config(
                         llm,
                         messages,
-                        extraction_schemas,
+                        pipeline_config_dict,
+                        record_schemas,
                         workflow_schemas,
                     )
                     _phase = "streaming"
@@ -967,6 +1009,28 @@ def _schemas_context(
     for coll_name, schema_json in schemas.items():
         lines.append(f"  {coll_name}: '{schema_json}'")
     return "\n".join(lines)
+
+
+def _pipeline_config_context(pipeline_config_dict: dict) -> str:
+    config_yaml = yaml.dump(
+        pipeline_config_dict,
+        allow_unicode=True,
+        default_flow_style=False,
+        sort_keys=False,
+    )
+    return f"\n\n## Validated pipeline config\n\n{config_yaml}"
+
+
+def _extract_record_schemas(pipeline_config_dict: dict) -> dict[str, str]:
+    """Return full record schemas (extraction fields + doc_id [+ id_field]) keyed by collection name.
+
+    Populated by _inject_pipeline_record_schemas after pipeline config validation.
+    """
+    return {
+        sc["name"]: sc["schema"]
+        for sc in pipeline_config_dict.get("structured_collections", [])
+        if sc.get("name") and sc.get("schema")
+    }
 
 
 async def _run_propose_extraction_schemas(
@@ -1028,15 +1092,23 @@ async def _run_propose_extraction_schemas(
 async def _run_propose_workflow_schemas(
     llm: LLMBase,
     conversation_messages: list,
-    extraction_schemas: dict[str, str],
+    record_schemas: dict[str, str],
 ) -> tuple[str, dict[str, str] | None]:
     # The tool description tells the model to call this only when the design has
     # workflow output collections, but we also accept an empty `{}` result as a
     # safety net so a misjudged call returns a clear instruction instead of an
-    # error — the LLM is told to proceed to propose_app_config in that case.
+    # error — the LLM is told to proceed to propose_workflow_config in that case.
     system_prompt = (
         _WORKFLOW_SCHEMA_AGENT_SYSTEM_PROMPT
-        + _schemas_context("Validated pipeline extraction schemas", extraction_schemas)
+        + _schemas_context(
+            "Validated pipeline record schemas",
+            record_schemas,
+            intro=(
+                "Full stored record schemas for pipeline-backed structured collections "
+                "(extraction fields + injected doc_id; RecordMode.MANY collections also "
+                "include the per-record id_field, e.g. clause_id):"
+            ),
+        )
     )
     sub_messages = [{"role": "system", "content": system_prompt}] + [
         {"role": m["role"], "content": m.get("content") or ""}
@@ -1070,7 +1142,7 @@ async def _run_propose_workflow_schemas(
                 )
                 return (
                     "No workflow output collections in this design. "
-                    "Proceed to propose_app_config.",
+                    "Proceed to propose_workflow_config.",
                     schemas_as_json,
                 )
             field_summary = "\n".join(
@@ -1098,27 +1170,23 @@ async def _run_propose_workflow_schemas(
     )
 
 
-async def _run_propose_config(
+async def _run_propose_pipeline_config(
     llm: LLMBase,
     conversation_messages: list,
     extraction_schemas: dict[str, str],
-    workflow_schemas: dict[str, str] | None = None,
-) -> tuple[str, str | None]:
-    workflow_schemas = workflow_schemas or {}
-    schema_context = _schemas_context(
+) -> tuple[str, dict | None, dict[str, str] | None, str | None]:
+    """Generate and validate the pipeline section of the app config.
+
+    Returns (tool_output, pipeline_config_dict, record_schemas, config_yaml).
+    config_yaml is set when the app has no workflows (pipeline config IS the final config).
+    record_schemas contains the full stored record schemas (extraction fields + doc_id +
+    id_field) for each pipeline-backed structured collection.
+    """
+    system_prompt = _PIPELINE_CONFIG_AGENT_SYSTEM_PROMPT + _schemas_context(
         "Validated pipeline extraction schemas",
         extraction_schemas,
         intro="Use these extraction_schema values verbatim for extract-structured steps:",
-    ) + _schemas_context(
-        "Validated workflow output schemas",
-        workflow_schemas,
-        intro=(
-            "Use these values verbatim for llm-structured output_schema and "
-            "structured-save target collection schema:"
-        ),
     )
-    system_prompt = _CONFIG_AGENT_SYSTEM_PROMPT + schema_context
-
     sub_messages = [{"role": "system", "content": system_prompt}] + [
         {"role": m["role"], "content": m.get("content") or ""}
         for m in conversation_messages
@@ -1134,15 +1202,13 @@ async def _run_propose_config(
             if not isinstance(config_dict, dict):
                 raise ValueError("YAML must be a mapping at the top level")
             _inject_pipeline_record_schemas(config_dict)
-            _inject_workflow_output_schemas(config_dict, workflow_schemas)
             config = AppConfig.model_validate(config_dict)
         except Exception as exc:
             errors = [str(exc)]
             logger.warning(
-                "generate/propose_config attempt=%d errors=%s, config_yaml=%s",
+                "generate/propose_pipeline_config attempt=%d errors=%s",
                 attempt + 1,
                 errors,
-                config_yaml,
             )
             error_text = "\n".join(f"- {e}" for e in errors)
             sub_messages += [
@@ -1154,14 +1220,113 @@ async def _run_propose_config(
             ]
             continue
 
+        record_schemas = _extract_record_schemas(config_dict)
         stored_yaml = _serialize_config(config)
         logger.info(
-            "generate/propose_config validated app=%s attempt=%d", config.name, attempt + 1
+            "generate/propose_pipeline_config validated app=%s attempt=%d record_schemas=%s",
+            config.name,
+            attempt + 1,
+            list(record_schemas),
+        )
+        has_workflows = bool(config.workflows)
+        if has_workflows:
+            return "Pipeline config validated.", config_dict, record_schemas, None
+        return "Pipeline config validated.", config_dict, record_schemas, stored_yaml
+
+    return (
+        f"Pipeline config generation failed after {_MAX_CONFIG_RETRIES} attempts. Last errors:\n"
+        + "\n".join(f"- {e}" for e in errors),
+        None,
+        None,
+        None,
+    )
+
+
+async def _run_propose_workflow_config(
+    llm: LLMBase,
+    conversation_messages: list,
+    pipeline_config_dict: dict | None,
+    record_schemas: dict[str, str],
+    workflow_schemas: dict[str, str],
+) -> tuple[str, str | None]:
+    """Generate the workflow additions and assemble the final validated app config.
+
+    The LLM generates only the workflow output structured_collections and workflows.
+    These are merged with the already-validated pipeline_config_dict.
+    """
+    if not pipeline_config_dict:
+        return "Pipeline config not available — call propose_pipeline_config first.", None
+
+    workflow_schemas = workflow_schemas or {}
+    system_prompt = (
+        _WORKFLOW_CONFIG_AGENT_SYSTEM_PROMPT
+        + _pipeline_config_context(pipeline_config_dict)
+        + _schemas_context(
+            "Validated pipeline record schemas",
+            record_schemas,
+            intro=(
+                "Full stored record schemas (extraction fields + injected doc_id; "
+                "RecordMode.MANY collections also include the per-record id_field):"
+            ),
+        )
+        + _schemas_context(
+            "Validated workflow output schemas",
+            workflow_schemas,
+            intro=(
+                "Use these values verbatim for llm-structured output_schema and "
+                "workflow output structured_collections schema:"
+            ),
+        )
+    )
+    sub_messages = [{"role": "system", "content": system_prompt}] + [
+        {"role": m["role"], "content": m.get("content") or ""}
+        for m in conversation_messages
+        if m.get("role") in ("user", "assistant") and not m.get("tool_calls")
+    ]
+
+    errors: list[str] = []
+    for attempt in range(_MAX_CONFIG_RETRIES):
+        result = await llm.complete(sub_messages, temperature=0.2)
+        workflow_yaml = (result.get("content") or "").strip()
+        try:
+            workflow_additions = yaml.safe_load(workflow_yaml)
+            if not isinstance(workflow_additions, dict):
+                raise ValueError("YAML must be a mapping at the top level")
+            merged_dict = copy.deepcopy(pipeline_config_dict)
+            for sc in workflow_additions.get("structured_collections", []):
+                merged_dict.setdefault("structured_collections", []).append(sc)
+            merged_dict["workflows"] = workflow_additions.get("workflows", [])
+            if not merged_dict["workflows"]:
+                raise ValueError("workflows section is empty — at least one workflow is required")
+            _inject_workflow_output_schemas(merged_dict, workflow_schemas)
+            config = AppConfig.model_validate(merged_dict)
+        except Exception as exc:
+            errors = [str(exc)]
+            logger.warning(
+                "generate/propose_workflow_config attempt=%d errors=%s",
+                attempt + 1,
+                errors,
+            )
+            error_text = "\n".join(f"- {e}" for e in errors)
+            sub_messages += [
+                {"role": "assistant", "content": workflow_yaml},
+                {
+                    "role": "user",
+                    "content": f"Validation errors — fix and output the corrected YAML only:\n{error_text}",
+                },
+            ]
+            continue
+
+        stored_yaml = _serialize_config(config)
+        logger.info(
+            "generate/propose_workflow_config validated app=%s attempt=%d",
+            config.name,
+            attempt + 1,
         )
         return "Config validated.", stored_yaml
 
     return (
-        f"Config generation failed after {_MAX_CONFIG_RETRIES} attempts. Last errors:\n"
+        f"Workflow config generation failed after {_MAX_CONFIG_RETRIES} attempts. Last errors:\n"
         + "\n".join(f"- {e}" for e in errors),
         None,
     )
