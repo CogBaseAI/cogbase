@@ -93,6 +93,18 @@ class ExtractorConfig(ConfigPromptMixin, BaseModel):
                 raise ValueError(
                     f"record_mode=many requires: {', '.join(missing)}"
                 )
+            # Strip id_field from extraction_schema if the LLM included it — it is
+            # injected automatically via id_template and must not be extracted.
+            if self.id_field:
+                try:
+                    schema = json.loads(self.extraction_schema)
+                except (json.JSONDecodeError, ValueError):
+                    schema = None
+                if schema and self.id_field in schema.get("properties", {}):
+                    schema["properties"].pop(self.id_field)
+                    if self.id_field in schema.get("required", []):
+                        schema["required"].remove(self.id_field)
+                    self.extraction_schema = json.dumps(schema, separators=(",", ":"))
         elif self.record_mode == RecordMode.ONE:
             if self.id_field is not None:
                 raise ValueError("id_field must not be set for record_mode=one")

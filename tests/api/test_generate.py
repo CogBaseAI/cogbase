@@ -410,6 +410,57 @@ class TestInjectPipelineRecordSchemas:
         sc = cfg["structured_collections"][0]
         assert sc["primary_fields"] == ["doc_id"]
 
+    def test_many_mode_strips_id_field_from_extraction_schema(self):
+        # LLM mistakenly included clause_id in the extraction schema.
+        ext_schema = {
+            "type": "object",
+            "properties": {
+                "clause_id": {"type": "string", "description": "per-record id"},
+                "text": {"type": "string"},
+            },
+            "required": ["clause_id", "text"],
+        }
+        cfg = _make_config(ext_schema, collection="contract_clauses")
+        cfg["pipelines"][0]["steps"][0]["extractor"].update(
+            {"record_mode": "many", "id_field": "clause_id"}
+        )
+        _inject_pipeline_record_schemas(cfg)
+
+        # id_field must be absent from the extractor's extraction_schema
+        cleaned = json.loads(
+            cfg["pipelines"][0]["steps"][0]["extractor"]["extraction_schema"]
+        )
+        assert "clause_id" not in cleaned["properties"]
+        assert "clause_id" not in cleaned.get("required", [])
+
+        # id_field must still appear in the collection schema (injected by _make_record_schema)
+        sc = cfg["structured_collections"][0]
+        record_schema = json.loads(sc["schema"])
+        assert "clause_id" in record_schema["properties"]
+        assert "doc_id" in record_schema["properties"]
+        assert sc["primary_fields"] == ["doc_id", "clause_id"]
+
+    def test_many_mode_strips_id_field_not_in_required(self):
+        # id_field present in properties but not in required — still stripped cleanly.
+        ext_schema = {
+            "type": "object",
+            "properties": {
+                "clause_id": {"type": "string"},
+                "text": {"type": "string"},
+            },
+        }
+        cfg = _make_config(ext_schema, collection="clauses")
+        cfg["pipelines"][0]["steps"][0]["extractor"].update(
+            {"record_mode": "many", "id_field": "clause_id"}
+        )
+        _inject_pipeline_record_schemas(cfg)
+
+        cleaned = json.loads(
+            cfg["pipelines"][0]["steps"][0]["extractor"]["extraction_schema"]
+        )
+        assert "clause_id" not in cleaned["properties"]
+        assert "clause_id" not in cleaned.get("required", [])
+
     def test_overwrites_existing_primary_fields(self):
         ext_schema = {"type": "object", "properties": {"x": {"type": "string"}}}
         cfg = _make_config(ext_schema)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import textwrap
 
 import pytest
@@ -788,6 +789,48 @@ class TestExtractorConfig:
         assert cfg.response_field == "clauses"
         assert cfg.id_field == "clause_id"
         assert cfg.id_template == "{doc_id}__{index:04d}"
+
+    def test_many_mode_strips_id_field_from_extraction_schema(self):
+        schema_with_id = json.dumps({
+            "type": "object",
+            "properties": {
+                "clause_id": {"type": "string", "description": "per-record id"},
+                "text": {"type": "string"},
+            },
+            "required": ["clause_id", "text"],
+        })
+        cfg = ExtractorConfig(
+            extraction_schema=schema_with_id,
+            prompt="",
+            record_mode="many",
+            response_field="clauses",
+            id_field="clause_id",
+            id_template="{doc_id}__{index:04d}",
+        )
+        parsed = json.loads(cfg.extraction_schema)
+        assert "clause_id" not in parsed["properties"]
+        assert "clause_id" not in parsed.get("required", [])
+        assert "text" in parsed["properties"]
+
+    def test_many_mode_strips_id_field_not_in_required(self):
+        schema_with_id = json.dumps({
+            "type": "object",
+            "properties": {
+                "clause_id": {"type": "string"},
+                "text": {"type": "string"},
+            },
+        })
+        cfg = ExtractorConfig(
+            extraction_schema=schema_with_id,
+            prompt="",
+            record_mode="many",
+            response_field="clauses",
+            id_field="clause_id",
+            id_template="{doc_id}__{index:04d}",
+        )
+        parsed = json.loads(cfg.extraction_schema)
+        assert "clause_id" not in parsed["properties"]
+        assert "clause_id" not in parsed.get("required", [])
 
     def test_yaml_list_extractor_parses(self):
         _EXTRACTION_SCHEMA = '{"type":"object","properties":{"text":{"type":"string"}}}'

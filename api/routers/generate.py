@@ -678,15 +678,32 @@ def _inject_pipeline_record_schemas(config_dict: dict) -> None:
             ext_schema_str = extractor.get("extraction_schema", "")
             if not (collection and ext_schema_str):
                 continue
+
             try:
                 ext_schema = json.loads(ext_schema_str)
             except (json.JSONDecodeError, ValueError) as exc:
+                logger.exception(
+                    "pipeline collection=%s, extraction_schema is not valid JSON: %s",
+                    collection,
+                    ext_schema_str,
+                )
                 raise ValueError(
                     f"pipeline collection '{collection}': extraction_schema is not valid JSON: {exc}"
                 ) from exc
+
             record_id_field = (
                 extractor.get("id_field") if extractor.get("record_mode") == "many" else None
             )
+            if record_id_field and record_id_field in ext_schema.get("properties", {}):
+                # LLM mistakenly included the id_field in the extraction schema even though
+                # it is injected automatically via id_template. Strip it here so the extractor
+                # doesn't ask the LLM to produce it, and write the cleaned schema back so the
+                # stored config is consistent.
+                ext_schema["properties"].pop(record_id_field)
+                if record_id_field in ext_schema.get("required", []):
+                    ext_schema["required"].remove(record_id_field)
+                extractor["extraction_schema"] = json.dumps(ext_schema, separators=(",", ":"))
+
             ext_info[collection] = (ext_schema, record_id_field)
 
     for sc in config_dict.get("structured_collections", []):
@@ -1122,7 +1139,10 @@ async def _run_propose_config(
         except Exception as exc:
             errors = [str(exc)]
             logger.warning(
-                "generate/propose_config attempt=%d errors=%s", attempt + 1, errors
+                "generate/propose_config attempt=%d errors=%s, config_yaml=%s",
+                attempt + 1,
+                errors,
+                config_yaml,
             )
             error_text = "\n".join(f"- {e}" for e in errors)
             sub_messages += [
