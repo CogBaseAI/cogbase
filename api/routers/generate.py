@@ -44,73 +44,32 @@ _MAX_AGENT_CALLS = 10
 # Tool definitions
 # ---------------------------------------------------------------------------
 
-_PROPOSE_EXTRACTION_SCHEMAS_TOOL: ToolDefinition = {
-    "name": "propose_extraction_schemas",
+_PROPOSE_APP_CONFIG_TOOL: ToolDefinition = {
+    "name": "propose_app_config",
     "description": (
-        "Formalize the user-confirmed ingestion field list into validated JSON Schemas "
-        "for structured collections produced by pipeline extract-structured steps only. "
-        "Call this only after the user has confirmed the ingestion fields. "
-        "Returns a brief validation summary on success, or a validation error message."
+        "Generate and validate the complete app config from the confirmed field list and "
+        "workflow design. Call this once the user has confirmed all fields (and any workflow "
+        "steps). Returns a brief summary on success, or an error message."
     ),
     "parameters": {
         "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    },
-}
-
-_PROPOSE_PIPELINE_CONFIG_TOOL: ToolDefinition = {
-    "name": "propose_pipeline_config",
-    "description": (
-        "Generate and validate the pipeline section of a CogBase app config: "
-        "name, vector_collections, structured_collections (pipeline-backed only), and pipelines. "
-        "Call this after propose_extraction_schemas has succeeded. "
-        "For apps without workflows this produces the final validated config. "
-        "Returns 'Pipeline config validated.' on success, or a validation error message."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    },
-}
-
-_PROPOSE_WORKFLOW_SCHEMAS_TOOL: ToolDefinition = {
-    "name": "propose_workflow_schemas",
-    "description": (
-        "Generate and validate JSON Schemas for workflow output collections used as "
-        "llm-structured output_schema and structured-save storage schema. Call only if "
-        "the confirmed design includes workflows that save structured records, and only "
-        "after propose_pipeline_config has succeeded."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    },
-}
-
-_PROPOSE_WORKFLOW_CONFIG_TOOL: ToolDefinition = {
-    "name": "propose_workflow_config",
-    "description": (
-        "Generate and validate the workflow section of a CogBase app config. "
-        "Call this after propose_workflow_schemas has succeeded. "
-        "Generates the workflow output structured_collections and workflows, "
-        "merges them with the validated pipeline config, and validates the full app config. "
-        "Returns 'Config validated.' on success, or a validation error message."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {},
+        "properties": {
+            "needs_workflow": {
+                "type": "boolean",
+                "description": (
+                    "Set to true if the confirmed design includes a workflow "
+                    "(analytical fan-out over a collection). False for apps that only "
+                    "need ingestion and query."
+                ),
+            },
+        },
+        "required": ["needs_workflow"],
         "additionalProperties": False,
     },
 }
 
 _GENERATOR_TOOLS: list[ToolDefinition] = [
-    _PROPOSE_EXTRACTION_SCHEMAS_TOOL,
-    _PROPOSE_PIPELINE_CONFIG_TOOL,
-    _PROPOSE_WORKFLOW_SCHEMAS_TOOL,
-    _PROPOSE_WORKFLOW_CONFIG_TOOL,
+    _PROPOSE_APP_CONFIG_TOOL,
 ]
 
 # generate the extraction schema that llm will use to extract data from a document,
@@ -179,17 +138,15 @@ structured-save and used as llm-structured output_schema.
 Generate schemas that match exactly the workflow output fields the user has \
 already confirmed in the conversation — do not add, remove, or rename fields.
 
-Workflow output schemas are not extraction schemas. They describe records created \
-by workflow logic, so they may include stable identifiers and provenance fields \
-such as doc_id, clause_id, finding_id, source record ids, status fields, evidence \
-references, and LLM judgment fields.
+Workflow output schemas describe records created by workflow logic. They may \
+include provenance fields (doc_id, source record identifiers), status fields, \
+evidence references, and LLM judgment fields.
 
-Use the validated pipeline record schemas to preserve upstream identifiers and \
-concepts. These schemas are the full stored record schemas — they already include \
-doc_id (always present) and, for RecordMode.MANY collections, the per-record id_field \
-(e.g. clause_id, rule_id, item_id). If a workflow iterates over an extracted collection, \
-include the fields needed to trace each output record back to its source record or \
-source document, including the id_field when present.
+Use the validated pipeline record schemas to understand what fields and identifiers \
+are available in each upstream collection. If a workflow iterates over records from \
+a pipeline collection, include the fields needed to trace each output record back to \
+its source — these may include doc_id, per-record identifiers (e.g. clause_id, \
+rule_id), and any other provenance fields present in the source schema.
 
 Output ONLY a YAML mapping of workflow_output_collection_name → JSON Schema object. \
 If the confirmed design has no workflow output collections, output an empty YAML \
@@ -198,9 +155,9 @@ mapping: {}
 Schema rules:
 - Top-level keys are workflow output collection names (snake_case)
 - Each non-empty collection must be type: object with a non-empty properties block
-- doc_id is allowed when it is useful provenance
 - Include a stable identifier field when the workflow creates independently saved records \
-  (for example clause_id, finding_id, company_id, review_id)
+  (for example finding_id, review_id, or the source record's own identifier like clause_id)
+- Include doc_id when it is useful provenance
 - Optional/nullable scalars: anyOf: [{type: <T>}, {type: "null"}]
 - List fields: type: array, items: {...}, default: []
 - Nested objects: type: object with inline properties
@@ -617,7 +574,7 @@ without a workflow.
    Ask the user to confirm, add, remove, or rename fields. Revise conversationally until confirmed.
 
    If any queries require analytical fan-out (e.g. "check every clause for compliance",
-   "rank all companies by ARR"), also design the workflow before calling propose_extraction_schemas:
+   "rank all companies by ARR"), also design the workflow before calling propose_app_config:
    - Sketch the step sequence: what records to load, what to iterate over, what LLM judgment
      to apply, and where to save results.
    - For judgment workflows, choose retrieval based on the comparison target:
@@ -633,18 +590,9 @@ without a workflow.
      to the proposed field list — its schema will be generated after the pipeline extraction schemas.
    - Confirm the workflow design with the user.
 
-   Once the field list (and any workflow design) is confirmed, call propose_extraction_schemas.
-   When extraction schemas succeed, immediately call propose_pipeline_config — no additional
-   confirmation needed. propose_pipeline_config generates the data model: vector collections,
-   structured collections (pipeline-backed only), and pipelines. For apps without workflows,
-   this produces the final validated config.
-
-3. If the design includes workflows, after propose_pipeline_config succeeds call
-   propose_workflow_schemas, then immediately call propose_workflow_config — no additional
-   confirmation needed. propose_workflow_config generates the workflow output structured
-   collections and workflows, merges them with the validated pipeline config, and produces
-   the final validated config. When it succeeds, present the result to the user with a
-   plain-language explanation of what was set up and why."""
+   Once the field list (and any workflow design) is confirmed, call propose_app_config.
+   On success, present the result to the user with a plain-language explanation of what was
+   configured and why. On failure, explain what went wrong and ask for any clarification needed."""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -840,15 +788,54 @@ def _serialize_config(config: AppConfig) -> str:
     )
 
 
-def _categorize_error(exc: Exception, phase: str) -> str:
+def _categorize_error(exc: Exception) -> str:
     exc_module = type(exc).__module__ or ""
     if exc_module.startswith("openai") or exc_module.startswith("httpx"):
         return "LLM unavailable"
-    if phase == "schema":
-        return "schema generation failed"
-    if phase == "config":
-        return "config validation failed"
     return "stream failed"
+
+
+async def _propose_app_config(llm: LLMBase, messages: list, *, needs_workflow: bool):
+    """Orchestrate the app config generation pipeline.
+
+    Yields ``{"type": "token", "token": ...}`` progress events followed by a single
+    ``{"type": "result", "generation_context": ..., "config_yaml": ...}`` event.
+    Runs 2 steps for pipeline-only apps, 4 steps when ``needs_workflow`` is True.
+    """
+    yield {"type": "token", "token": "Generating extraction schemas...\n"}
+    ext_output, extraction_schemas = await _run_propose_extraction_schemas(llm, messages)
+    if extraction_schemas is None:
+        yield {"type": "result", "generation_context": f"Extraction schema generation failed: {ext_output}", "config_yaml": None}
+        return
+
+    yield {"type": "token", "token": "Generating pipeline config...\n"}
+    pipe_output, pipeline_config_dict, record_schemas, stored_yaml = (
+        await _run_propose_pipeline_config(llm, messages, extraction_schemas)
+    )
+    if pipeline_config_dict is None:
+        yield {"type": "result", "generation_context": f"Pipeline config generation failed: {pipe_output}", "config_yaml": None}
+        return
+
+    if not needs_workflow:
+        yield {"type": "result", "generation_context": "Config generation complete.", "config_yaml": stored_yaml}
+        return
+
+    yield {"type": "token", "token": "Generating workflow schemas...\n"}
+    wf_schema_output, workflow_schemas = await _run_propose_workflow_schemas(
+        llm, messages, record_schemas
+    )
+    if workflow_schemas is None:
+        yield {"type": "result", "generation_context": f"Workflow schema generation failed: {wf_schema_output}", "config_yaml": None}
+        return
+
+    yield {"type": "token", "token": "Generating workflow config...\n"}
+    wf_config_output, wf_config_yaml = await _run_propose_workflow_config(
+        llm, messages, pipeline_config_dict, record_schemas, workflow_schemas
+    )
+    if wf_config_yaml is None:
+        yield {"type": "result", "generation_context": f"Workflow config generation failed: {wf_config_output}", "config_yaml": None}
+    else:
+        yield {"type": "result", "generation_context": "Config generation complete.", "config_yaml": wf_config_yaml}
 
 
 async def _chat_turn_events(
@@ -872,24 +859,19 @@ async def _chat_turn_events(
     )
 
     validated_config_yaml: str | None = None
-    extraction_schemas: dict[str, str] = {}
-    pipeline_config_dict: dict | None = None
-    record_schemas: dict[str, str] = {}
-    workflow_schemas: dict[str, str] = {}
     final_content: str = ""
-    result = None
-    _phase = "streaming"
+    streamed_chunks: list[str] = []
 
     try:
         for call_num in range(_MAX_AGENT_CALLS):
-            streamed_chunks: list[str] = []
+            streamed_chunks = []
             result = None
             async for chunk in llm.complete_stream(messages, tools=_GENERATOR_TOOLS, temperature=0.3):
                 if isinstance(chunk, str):
                     streamed_chunks.append(chunk)
                     yield {"type": "token", "token": chunk}
                 else:
-                    result = chunk  # CompletionResult carrying tool_calls
+                    result = chunk
 
             tool_calls = result.get("tool_calls") if result else None
 
@@ -897,74 +879,44 @@ async def _chat_turn_events(
                 final_content = "".join(streamed_chunks).strip()
                 break
 
+            tc = tool_calls[0]
+            logger.info("%s call=%d tool=%s", log_prefix, call_num + 1, tc["name"])
+
             messages.append({
                 "role": "assistant",
                 "content": result.get("content"),
-                "tool_calls": [
-                    {
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                    }
-                    for tc in tool_calls
-                ],
+                "tool_calls": [{
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                }],
             })
 
-            tool_names = ", ".join(tc["name"] for tc in tool_calls)
-            logger.info("%s call=%d tools=%s", log_prefix, call_num + 1, tool_names)
+            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": "Running..."})
 
-            for tc in tool_calls:
-                if tc["name"] == "propose_extraction_schemas":
-                    yield {"type": "token", "token": "Generating extraction schemas...\n"}
-                    _phase = "schema"
-                    tool_output, schemas = await _run_propose_extraction_schemas(llm, messages)
-                    _phase = "streaming"
-                    if schemas is not None:
-                        extraction_schemas = schemas
-                elif tc["name"] == "propose_pipeline_config":
-                    yield {"type": "token", "token": "Generating pipeline config...\n"}
-                    _phase = "config"
-                    tool_output, p_config_dict, r_schemas, config_yaml = (
-                        await _run_propose_pipeline_config(llm, messages, extraction_schemas)
-                    )
-                    _phase = "streaming"
-                    if p_config_dict is not None:
-                        pipeline_config_dict = p_config_dict
-                        record_schemas = r_schemas or {}
-                    if config_yaml is not None:
-                        validated_config_yaml = config_yaml
-                elif tc["name"] == "propose_workflow_schemas":
-                    yield {"type": "token", "token": "Generating workflow schemas...\n"}
-                    _phase = "schema"
-                    tool_output, schemas = await _run_propose_workflow_schemas(
-                        llm,
-                        messages,
-                        record_schemas,
-                    )
-                    _phase = "streaming"
-                    if schemas is not None:
-                        workflow_schemas = schemas
-                elif tc["name"] == "propose_workflow_config":
-                    yield {"type": "token", "token": "Generating workflow config...\n"}
-                    _phase = "config"
-                    tool_output, config_yaml = await _run_propose_workflow_config(
-                        llm,
-                        messages,
-                        pipeline_config_dict,
-                        record_schemas,
-                        workflow_schemas,
-                    )
-                    _phase = "streaming"
-                    if config_yaml is not None:
-                        validated_config_yaml = config_yaml
+            try:
+                args = json.loads(tc.get("arguments") or "{}")
+            except (json.JSONDecodeError, ValueError):
+                args = {}
+            needs_workflow = bool(args.get("needs_workflow", False))
+
+            generation_context = ""
+            async for event in _propose_app_config(llm, messages, needs_workflow=needs_workflow):
+                if event["type"] == "token":
+                    yield {"type": "token", "token": event["token"]}
                 else:
-                    tool_output = f"Unknown tool: {tc['name']}"
+                    generation_context = event["generation_context"]
+                    validated_config_yaml = event["config_yaml"]
 
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": tool_output,
-                })
+            # Final LLM turn: user-facing summary or error explanation (no tools)
+            messages.append({"role": "user", "content": generation_context})
+            streamed_chunks = []
+            async for chunk in llm.complete_stream(messages, tools=[], temperature=0.3):
+                if isinstance(chunk, str):
+                    streamed_chunks.append(chunk)
+                    yield {"type": "token", "token": chunk}
+            final_content = "".join(streamed_chunks).strip()
+            break
         else:
             logger.warning(
                 "%s reached max_calls=%d without final answer",
@@ -986,7 +938,7 @@ async def _chat_turn_events(
         }
     except Exception as exc:
         logger.exception("%s failed", log_prefix)
-        yield {"type": "error", "error": _categorize_error(exc, _phase)}
+        yield {"type": "error", "error": _categorize_error(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -1104,9 +1056,8 @@ async def _run_propose_workflow_schemas(
             "Validated pipeline record schemas",
             record_schemas,
             intro=(
-                "Full stored record schemas for pipeline-backed structured collections "
-                "(extraction fields + injected doc_id; RecordMode.MANY collections also "
-                "include the per-record id_field, e.g. clause_id):"
+                "Full stored record schemas for pipeline-backed structured collections — "
+                "use these to understand what fields and identifiers are available in each collection:"
             ),
         )
     )
@@ -1177,8 +1128,8 @@ async def _run_propose_pipeline_config(
 ) -> tuple[str, dict | None, dict[str, str] | None, str | None]:
     """Generate and validate the pipeline section of the app config.
 
-    Returns (tool_output, pipeline_config_dict, record_schemas, config_yaml).
-    config_yaml is set when the app has no workflows (pipeline config IS the final config).
+    Returns (tool_output, pipeline_config_dict, record_schemas, stored_yaml).
+    stored_yaml is the serialized pipeline config; workflow sections are added in a later step.
     record_schemas contains the full stored record schemas (extraction fields + doc_id +
     id_field) for each pipeline-backed structured collection.
     """
@@ -1206,9 +1157,10 @@ async def _run_propose_pipeline_config(
         except Exception as exc:
             errors = [str(exc)]
             logger.warning(
-                "generate/propose_pipeline_config attempt=%d errors=%s",
+                "generate/propose_pipeline_config attempt=%d errors=%s, config_yaml=%s",
                 attempt + 1,
                 errors,
+                config_yaml,
             )
             error_text = "\n".join(f"- {e}" for e in errors)
             sub_messages += [
@@ -1228,9 +1180,6 @@ async def _run_propose_pipeline_config(
             attempt + 1,
             list(record_schemas),
         )
-        has_workflows = bool(config.workflows)
-        if has_workflows:
-            return "Pipeline config validated.", config_dict, record_schemas, None
         return "Pipeline config validated.", config_dict, record_schemas, stored_yaml
 
     return (

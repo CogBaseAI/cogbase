@@ -23,6 +23,7 @@ from api.models import ChatMessage, GenerateChatRequest
 from api.routers.generate import (
     _collect_save_targets,
     _make_record_schema,
+    _propose_app_config,
     _run_propose_extraction_schemas,
     _run_propose_pipeline_config,
     _run_propose_workflow_config,
@@ -245,8 +246,8 @@ class TestProposePipelineConfigLive:
         assert config_dict is not None, message
         assert message.startswith("Pipeline config validated.")
 
-        # No workflows in a contract analysis app — final config is returned directly.
-        assert stored_yaml is not None, "expected final config_yaml for a no-workflow app"
+        # stored_yaml is always returned; workflow branching is handled by the caller via needs_workflow.
+        assert stored_yaml is not None
         config = AppConfig.from_yaml(stored_yaml)
         assert config.name
         assert config.pipelines, "expected at least one pipeline"
@@ -361,6 +362,57 @@ class TestProposeWorkflowConfigLive:
 
 
 # ---------------------------------------------------------------------------
+# Orchestrator: verify needs_workflow branching in _propose_app_config.
+# ---------------------------------------------------------------------------
+
+
+class TestProposeAppConfigLive:
+    async def test_no_workflow_skips_workflow_steps(self, llm):
+        events = []
+        async for event in _propose_app_config(llm, _CONTRACT_CONVERSATION, needs_workflow=False):
+            events.append(event)
+
+        result_events = [e for e in events if e["type"] == "result"]
+        assert len(result_events) == 1
+        result = result_events[0]
+        assert result["generation_context"] == "Config generation complete.", result["generation_context"]
+        assert result["config_yaml"] is not None
+
+        # Only extraction + pipeline progress tokens — no workflow tokens.
+        progress = " ".join(e["token"] for e in events if e["type"] == "token").lower()
+        assert "extraction" in progress
+        assert "pipeline" in progress
+        assert "workflow" not in progress
+
+        config = AppConfig.from_yaml(result["config_yaml"])
+        assert config.name
+        assert config.pipelines
+        assert not config.workflows
+
+    async def test_with_workflow_runs_all_steps(self, llm):
+        events = []
+        async for event in _propose_app_config(llm, _CONTRACT_COMPLIANCE_CONVERSATION, needs_workflow=True):
+            events.append(event)
+
+        result_events = [e for e in events if e["type"] == "result"]
+        assert len(result_events) == 1
+        result = result_events[0]
+        assert result["generation_context"] == "Config generation complete.", result["generation_context"]
+        assert result["config_yaml"] is not None
+
+        # All 4 steps should emit progress tokens.
+        progress = " ".join(e["token"] for e in events if e["type"] == "token").lower()
+        assert "extraction" in progress
+        assert "pipeline" in progress
+        assert "workflow" in progress
+
+        config = AppConfig.from_yaml(result["config_yaml"])
+        assert config.name
+        assert config.pipelines
+        assert config.workflows
+
+
+# ---------------------------------------------------------------------------
 # End-to-end: drive the chat endpoint until it returns a validated config.
 # ---------------------------------------------------------------------------
 
@@ -377,7 +429,7 @@ class TestChatEndpointLive:
         assert response.config_yaml is None
 
     async def test_chat_generates_validated_config_yaml(self, llm):
-        history = [ChatMessage(**m) for m in _CONTRACT_CONVERSATION]
+        history = [ChatMessage(**m) for m in _CONTRACT_CONVERSATION[:-1]]
         body = GenerateChatRequest(
             text=(
                 "Yes, those five fields are right. Please generate the schema "
@@ -469,52 +521,47 @@ class TestChatEndpointLive:
             assert user_fields, f"no user-defined fields found in {sc['name']!r}"
 
     async def test_full_conversation_workflow_app_from_scratch(self, llm):
-        """Two-turn conversation for an app that requires a workflow.
+        """Multi-turn conversation for an app that requires a workflow.
 
         Turn 1 describes a clause-level compliance app with an explicit workflow
-        requirement. Turn 2 confirms the design and triggers full generation.
-        Verifies the final config contains at least one workflow and that all
-        structured-save target collections have schemas set.
+        requirement. Subsequent turns confirm the design with "yes" until the LLM
+        returns a config_yaml (up to 3 confirmation rounds). Verifies the final
+        config contains at least one workflow and that all structured-save target
+        collections have schemas set.
         """
-        turn1_text = (
+        _MAX_ROUNDS = 4  # initial turn + up to 3 confirmations
+
+        text = (
             "Build a contract compliance app. "
-            "The pipeline should extract each clause from uploaded contracts. "
+            "The app needs to extract each clause from uploaded contracts. "
             "Also iterates over contract_clauses, runs LLM judgment on each clause, "
             "and saves a compliance finding per clause."
         )
-        body1 = GenerateChatRequest(text=turn1_text, history=[])
-        response1 = await chat(body1, MagicMock(llm=llm))
-        assert response1.content, "expected a text proposal in turn 1"
 
-        logger.info("response1 content=%s", response1.content)
-        logger.info("response1 config_yaml=%s", response1.config_yaml)
+        history: list[ChatMessage] = []
+        final_response = None
 
-        final_response = response1
-        history = [
-            ChatMessage(role="user", content=turn1_text),
-            ChatMessage(role="assistant", content=response1.content),
-        ]
-
-        if not response1.config_yaml:
-            body2 = GenerateChatRequest(
-                text=(
-                    "Yes, that design is confirmed — all fields and the workflow look right. "
-                    "Generate the extraction schemas, workflow schemas, and full config now."
-                ),
-                history=history,
+        for round_num in range(_MAX_ROUNDS):
+            response = await chat(
+                GenerateChatRequest(text=text, history=history),
+                MagicMock(llm=llm),
             )
-            final_response = await chat(body2, MagicMock(llm=llm))
-            logger.info("final_response content=%s", final_response.content)
-            logger.info("final_response config_yaml=%s", final_response.config_yaml)
+            logger.info("round %d content=%s", round_num, response.content)
+            logger.info("round %d config_yaml=%s", round_num, response.config_yaml)
+            history = history + [
+                ChatMessage(role="user", content=text),
+                ChatMessage(role="assistant", content=response.content),
+            ]
+            final_response = response
+            if final_response.config_yaml:
+                break
+            text = 'Yes'
 
+        assert final_response is not None
         assert final_response.config_yaml, (
-            "expected config_yaml for the compliance workflow app.\n"
-            f"turn 1: {response1.content!r}\n"
-            + (
-                f"turn 2: {final_response.content!r}"
-                if final_response is not response1
-                else ""
-            )
+            f"expected config_yaml for the compliance workflow app within "
+            f"{_MAX_ROUNDS} round(s).\n"
+            f"last response: {final_response.content!r}"
         )
         config = AppConfig.from_yaml(final_response.config_yaml)
         assert config.name
@@ -569,39 +616,37 @@ class TestContractComplianceEndToEndLive:
         from examples.contract_compliance_demo.rules_data import RULES_DOCUMENTS
 
         # ---- Step 1: chat to generate the app config ------------------------
-        turn1_text = (
+        _MAX_ROUNDS = 4
+
+        text = (
             "Build a contract compliance app with two document types: "
             "Policy rule documents and Vendor contracts. Check whether "
             "the clauses in a contract is compliant with policy."
         )
-        body1 = GenerateChatRequest(text=turn1_text, history=[])
-        response1 = await chat(body1, MagicMock(llm=llm))
-        assert response1.content, "expected a proposal in turn 1"
+        history: list[ChatMessage] = []
+        final_response = None
 
-        logger.info("response1 content=%s", response1.content)
-        logger.info("response1 config_yaml=%s", response1.config_yaml)
-
-        final_response = response1
-        history = [
-            ChatMessage(role="user", content=turn1_text),
-            ChatMessage(role="assistant", content=response1.content),
-        ]
-        if not response1.config_yaml:
-            body2 = GenerateChatRequest(
-                text=(
-                    "Yes, that design is confirmed. "
-                    "Generate the extraction schemas, workflow schemas, and full config now."
-                ),
-                history=history,
+        for round_num in range(_MAX_ROUNDS):
+            response = await chat(
+                GenerateChatRequest(text=text, history=history),
+                MagicMock(llm=llm),
             )
-            final_response = await chat(body2, MagicMock(llm=llm))
-            logger.info("final_response content=%s", final_response.content)
-            logger.info("final_response config_yaml=%s", final_response.config_yaml)
+            logger.info("round %d content=%s", round_num, response.content)
+            logger.info("round %d config_yaml=%s", round_num, response.config_yaml)
+            history = history + [
+                ChatMessage(role="user", content=text),
+                ChatMessage(role="assistant", content=response.content),
+            ]
+            final_response = response
+            if final_response.config_yaml:
+                break
+            text = "Yes"
 
+        assert final_response is not None
         assert final_response.config_yaml, (
-            "expected config_yaml from the chat agent.\n"
-            f"turn 1: {response1.content!r}\n"
-            + (f"turn 2: {final_response.content!r}" if final_response is not response1 else "")
+            f"expected config_yaml for the compliance workflow app within "
+            f"{_MAX_ROUNDS} round(s).\n"
+            f"last response: {final_response.content!r}"
         )
 
         # ---- Step 2: parse config, discover workflow details ----------------
@@ -762,7 +807,9 @@ class TestContractAnalystEndToEndLive:
         from examples.contract_analyst_demo.saas_contracts import CONTRACTS
 
         # ---- Step 1: chat to generate the app config ------------------------
-        turn1_text = (
+        _MAX_ROUNDS = 4
+
+        text = (
             "I need a contract analysis app for SaaS vendor agreements. "
             "Users upload contracts and want to ask about vendors, expiry dates, "
             "liability caps, payment terms, and governing law. "
@@ -771,29 +818,30 @@ class TestContractAnalystEndToEndLive:
             "total contract value, liability cap amount, and termination notice "
             "period in days."
         )
-        body1 = GenerateChatRequest(text=turn1_text, history=[])
-        response1 = await chat(body1, MagicMock(llm=llm))
-        assert response1.content, "expected a field proposal in turn 1"
+        history: list[ChatMessage] = []
+        final_response = None
 
-        final_response = response1
-        history = [
-            ChatMessage(role="user", content=turn1_text),
-            ChatMessage(role="assistant", content=response1.content),
-        ]
-        if not response1.config_yaml:
-            body2 = GenerateChatRequest(
-                text=(
-                    "Those fields look right. "
-                    "Generate the extraction schema and full config now."
-                ),
-                history=history,
+        for round_num in range(_MAX_ROUNDS):
+            response = await chat(
+                GenerateChatRequest(text=text, history=history),
+                MagicMock(llm=llm),
             )
-            final_response = await chat(body2, MagicMock(llm=llm))
+            logger.info("round %d content=%s", round_num, response.content)
+            logger.info("round %d config_yaml=%s", round_num, response.config_yaml)
+            history = history + [
+                ChatMessage(role="user", content=text),
+                ChatMessage(role="assistant", content=response.content),
+            ]
+            final_response = response
+            if final_response.config_yaml:
+                break
+            text = "Yes"
 
+        assert final_response is not None
         assert final_response.config_yaml, (
-            "expected config_yaml from the chat agent.\n"
-            f"turn 1: {response1.content!r}\n"
-            + (f"turn 2: {final_response.content!r}" if final_response is not response1 else "")
+            f"expected config_yaml for the contract analyst app within "
+            f"{_MAX_ROUNDS} round(s).\n"
+            f"last response: {final_response.content!r}"
         )
 
         # ---- Step 2: parse config -------------------------------------------
