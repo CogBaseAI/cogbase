@@ -38,12 +38,18 @@ class IngestResult:
         records_extracted: Total number of records written across all structured
                            collections (0 when no structured collections are
                            configured or the extractor produced no output).
+        extraction_failed: ``True`` when at least one ``extract-structured`` step
+                           returned ``None`` after all retries (parse failure or
+                           blank document).  The document may still be partially
+                           ingested (e.g. vector chunks were written); this flag
+                           distinguishes that from a hard ingest failure.
         error:             The exception raised, when *success* is ``False``.
     """
 
     doc_id: str
     success: bool
     records_extracted: int = 0
+    extraction_failed: bool = False
     error: Exception | None = field(default=None, repr=False)
 
 
@@ -161,41 +167,52 @@ class IngestionPipeline:
 
         self._steps = list(steps or [])
 
-    async def _run_step(self, doc: Document, step: PipelineStep) -> int:
-        """Dispatch one step and return the number of records extracted (0 for non-structured steps)."""
+    async def _run_step(self, doc: Document, step: PipelineStep) -> tuple[int, bool]:
+        """Dispatch one step.
+
+        Returns:
+            ``(records_extracted, extraction_failed)`` — ``extraction_failed`` is
+            ``True`` only when an ``extract-structured`` step's extractor returned
+            ``None`` after all retries.
+        """
         if step.tool == "chunk-embed-upsert":
-            return await self._run_chunk_embed_upsert(doc, step)
+            return await self._run_chunk_embed_upsert(doc, step), False
         if step.tool == "extract-structured":
             return await self._run_extract_structured(doc, step)
         if step.tool == "document-embed-upsert":
             await self._run_document_embed_upsert(doc, step)
-            return 0
+            return 0, False
         logger.warning(
             "ingestion_pipeline.ingest.unknown_tool name=%s tool=%s", self.name, step.tool
         )
-        return 0
+        return 0, False
 
-    async def _ingest(self, doc: Document) -> int:
+    async def _ingest(self, doc: Document) -> tuple[int, bool]:
         """Ingest a document by executing each step, sequentially or in parallel.
 
         Returns:
-            Number of structured records saved (sum across all structured steps).
+            ``(records_extracted, extraction_failed)`` — ``extraction_failed`` is
+            ``True`` if any ``extract-structured`` step failed after all retries.
         """
         logger.info("ingestion_pipeline.ingest.start name=%s doc_id=%s", self.name, doc.doc_id)
 
         if self.parallel:
-            counts = await asyncio.gather(*[self._run_step(doc, step) for step in self._steps])
-            records_extracted = sum(counts)
+            results = await asyncio.gather(*[self._run_step(doc, step) for step in self._steps])
+            records_extracted = sum(r[0] for r in results)
+            extraction_failed = any(r[1] for r in results)
         else:
             records_extracted = 0
+            extraction_failed = False
             for step in self._steps:
-                records_extracted += await self._run_step(doc, step)
+                count, failed = await self._run_step(doc, step)
+                records_extracted += count
+                extraction_failed = extraction_failed or failed
 
         logger.info(
-            "ingestion_pipeline.ingest.done name=%s doc_id=%s records_extracted=%d",
-            self.name, doc.doc_id, records_extracted,
+            "ingestion_pipeline.ingest.done name=%s doc_id=%s records_extracted=%d extraction_failed=%s",
+            self.name, doc.doc_id, records_extracted, extraction_failed,
         )
-        return records_extracted
+        return records_extracted, extraction_failed
 
     async def _run_chunk_embed_upsert(self, doc: Document, step: PipelineStep) -> int:
         vc = self._vector_by_name.get(step.collection)
@@ -237,31 +254,41 @@ class IngestionPipeline:
         )
         return 0
 
-    async def _run_extract_structured(self, doc: Document, step: PipelineStep) -> int:
+    async def _run_extract_structured(self, doc: Document, step: PipelineStep) -> tuple[int, bool]:
         sc = self._structured_by_name.get(step.collection)
         if sc is None:
             logger.warning(
                 "ingestion_pipeline.extract_structured.unknown_collection name=%s collection=%s",
                 self.name, step.collection,
             )
-            return 0
+            return 0, False
         if step.extractor is None:
             logger.warning(
                 "ingestion_pipeline.extract_structured.no_extractor name=%s collection=%s",
                 self.name, step.collection,
             )
-            return 0
+            return 0, False
 
         records = await step.extractor.extract(doc)
+        if records is None:
+            logger.warning(
+                "ingestion_pipeline.extract_structured.failed name=%s doc_id=%s collection=%s",
+                self.name, doc.doc_id, step.collection,
+            )
+            return 0, True
         if not records:
-            return 0
+            logger.debug(
+                "ingestion_pipeline.extract_structured.no_records name=%s doc_id=%s collection=%s",
+                self.name, doc.doc_id, step.collection,
+            )
+            return 0, False
 
         await sc.store.save(sc.schema.name, records)
         logger.info(
             "ingestion_pipeline.extract_structured.saved name=%s doc_id=%s collection=%s count=%d",
             self.name, doc.doc_id, step.collection, len(records),
         )
-        return len(records)
+        return len(records), False
 
     async def _run_document_embed_upsert(self, doc: Document, step: PipelineStep) -> None:
         vc = self._vector_by_name.get(step.collection)
@@ -342,8 +369,13 @@ class IngestionPipeline:
 
         async def _ingest_one(doc: Document) -> IngestResult:
             try:
-                records_extracted = await self._ingest(doc)
-                return IngestResult(doc_id=doc.doc_id, success=True, records_extracted=records_extracted)
+                records_extracted, extraction_failed = await self._ingest(doc)
+                return IngestResult(
+                    doc_id=doc.doc_id,
+                    success=True,
+                    records_extracted=records_extracted,
+                    extraction_failed=extraction_failed,
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
                     "ingestion_pipeline.ingest_documents.failed name=%s doc_id=%s",

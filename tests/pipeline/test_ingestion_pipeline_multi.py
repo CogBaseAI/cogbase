@@ -320,8 +320,9 @@ class TestDocumentEmbedUpsert:
             steps=[PipelineStep(tool="document-embed-upsert", collection="summaries", llm=llm)],
             vector_collections=[vc],
         )
-        count = await pipeline._ingest(Document(doc_id="d-001", text="text"))
+        count, extraction_failed = await pipeline._ingest(Document(doc_id="d-001", text="text"))
         assert count == 0
+        assert not extraction_failed
         assert vector_store.ntotal("summaries") == 0
 
 
@@ -358,10 +359,11 @@ class TestThreeStepPipeline:
             structured_collections=[sc],
         )
 
-        count = await pipeline._ingest(Document(doc_id="d-001", text="word " * 20))
+        count, extraction_failed = await pipeline._ingest(Document(doc_id="d-001", text="word " * 20))
 
         assert chunk_store.ntotal("chunks") > 0, "chunk-embed-upsert did not populate vector store"
         assert count == 1, "extract-structured did not produce a record"
+        assert not extraction_failed
         assert summary_store.ntotal("summaries") == 1, "document-embed-upsert did not upsert summary"
 
     @pytest.mark.asyncio

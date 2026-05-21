@@ -6,6 +6,7 @@ from a document according to a caller-supplied Pydantic model.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Callable, Type
@@ -193,17 +194,44 @@ class LLMExtractor(ExtractorBase):
             return self._parse_list(doc, content, result)
         return self._parse_single(doc, content, result)
 
+    def _try_unwrap_single_item_list(self, content: str) -> BaseModel | None:
+        """Return the first element if the LLM returned a one-item list instead of an object."""
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, list):
+            items = parsed
+        elif isinstance(parsed, dict):
+            lists = [v for v in parsed.values() if isinstance(v, list)]
+            if len(lists) != 1:
+                return None
+            items = lists[0]
+        else:
+            return None
+        if len(items) != 1:
+            return None
+        try:
+            return self._extraction_model.model_validate(items[0])
+        except (ValidationError, ValueError):
+            return None
+
     def _parse_single(self, doc: Document, content: str, raw_result: dict) -> list[BaseModel] | None:
         try:
             extraction = self._extraction_model.model_validate_json(content)
         except (ValidationError, ValueError):
-            logger.exception(
-                "llm_extractor.parse_failed doc_id=%s, system_prompt=%s, result=%s",
-                doc.doc_id,
-                self._system_prompt,
-                raw_result,
+            extraction = self._try_unwrap_single_item_list(content)
+            if extraction is None:
+                logger.exception(
+                    "llm_extractor.parse_failed doc_id=%s, system_prompt=%s, result=%s",
+                    doc.doc_id,
+                    self._system_prompt,
+                    raw_result,
+                )
+                return None
+            logger.info(
+                "llm_extractor.unwrapped_single_item_list doc_id=%s", doc.doc_id
             )
-            return None
         injected = {k: fn(doc, extraction, 0) for k, fn in self._injected_fields.items()}
         try:
             record = self._record_model.model_validate({**extraction.model_dump(), **injected})

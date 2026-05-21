@@ -233,8 +233,8 @@ set schema inline using the exact value from "Validated workflow output schemas"
    should return per document:
    - record_mode: one (default) — the LLM returns ONE record for the whole document. \
      Use when the document yields exactly one entity of this type. Examples: contract-level \
-     metadata (one set of facts per contract), board update KPIs (one snapshot per deck), \
-     deal memo summary (one memo per document).
+     metadata (one set of header-level facts per contract), board update KPIs \
+     (one snapshot per deck), deal memo summary (one memo per document).
    - record_mode: many — the LLM returns MULTIPLE records as a list. Use when the document \
      contains a list of distinct entities of this type. Examples: clauses in a contract, \
      rules/prohibitions/requirements in a policy document, line items in an invoice, \
@@ -244,11 +244,15 @@ set schema inline using the exact value from "Validated workflow output schemas"
      clause_id, rule_id, item_id), and id_template (e.g. "{{doc_id}}__{{index:04d}}"). \
      The id_field is injected by the pipeline using id_template — it must NOT appear in \
      extraction_schema.properties.
-   Heuristic: if a natural plural ("the clauses", "the rules", "the line items") describes \
-   what the schema captures, choose record_mode: many. If the schema is a flat set of \
-   header-level facts about the document itself, choose record_mode: one. Getting this wrong \
-   collapses many entities into a single record (loses data) or wraps a singleton in a list \
-   for no reason.
+   Primary signal — multiplicity annotation in the conversation: when the field-proposal \
+   turn labels a collection as "many records per document" or "one per <entity>" \
+   (e.g. "one per clause", "one per rule", "one per line item"), ALWAYS set \
+   record_mode: many for that collection. Never override this with record_mode: one. \
+   Fallback heuristic when no annotation is present: if a natural plural \
+   ("the clauses", "the rules", "the line items") describes what the schema captures, \
+   choose record_mode: many. If the schema is a flat set of header-level facts about \
+   the document itself, choose record_mode: one. Getting this wrong collapses many \
+   entities into a single record (loses data) or wraps a singleton in a list for no reason.
 5. All content is INLINE — do not use .json or .txt filenames as values anywhere
 6. Pipeline step collections must exactly match declared vector/structured collection names
 7. Use snake_case for all collection names and field names
@@ -560,15 +564,31 @@ without a workflow.
        * Analytical fan-out over all records (e.g. "flag all X that…") → workflow
 
 2. Once you understand the domain, propose the target fields for each structured collection
-   as a bullet list. Use nested bullets for object or array fields. For example:
+   as a bullet list. Use nested bullets for object or array fields.
 
-   **contracts**
+   For each collection, start the heading with a multiplicity annotation that tells the
+   config generator how many records the LLM should produce per document:
+   - *(one record per document)* — a single set of header-level facts about the document
+     (e.g. contract-level metadata, board update KPIs, deal memo summary).
+   - *(many records per document — one per <entity>)* — a list of distinct entities
+     within the document (e.g. clauses in a contract, rules in a policy document, line
+     items in an invoice). Use this whenever the user's goal involves acting on individual
+     instances. Any task that says "check each clause", "flag every rule", or "review each
+     line item" always implies many records per document — never collapse these into one.
+
+   Example:
+
+   **contract_metadata** *(one record per contract)*
    - vendor_name — name of the vendor
    - effective_date — contract start date (ISO 8601)
    - payment_terms
      - schedule - payment schedule, e.g. "net-30", "monthly", "upfront", "milestone-based"
      - late_penalty - penalty or interest rate for late payment, verbatim if present
    - key_terms (list) - significant defined terms, unusual provisions
+
+   **contract_clauses** *(many records per contract — one per clause)*
+   - clause_type — category: liability, indemnification, termination, payment, etc.
+   - text — verbatim clause text
 
    Use domain knowledge to propose sensible fields — do not ask the user to enumerate them.
    Ask the user to confirm, add, remove, or rename fields. Revise conversationally until confirmed.

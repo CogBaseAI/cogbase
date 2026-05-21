@@ -198,9 +198,60 @@ async def test_extract_invalid_json_returns_none():
 
 @pytest.mark.asyncio
 async def test_extract_json_array_instead_of_object_returns_none():
-    """LLM accidentally returns an array — should return None, not crash."""
+    """LLM accidentally returns a multi-item non-model array — should return None."""
     extractor = _make_extractor(_make_llm("[1, 2, 3]"))
     result = await extractor.extract(Document(doc_id="doc-004", text="contract text"))
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# extract() — single-item list unwrap (RecordMode.ONE fallback)
+#
+# Pydantic's model_validate_json rejects a bare JSON array outright, so
+# only the bare-list shape ([{...}]) actually routes through
+# _try_unwrap_single_item_list.  A wrapped dict ({key: [{...}]}) is silently
+# "accepted" by Pydantic as an all-None record (unknown keys are ignored),
+# so that shape never reaches the fallback.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_extract_bare_single_item_list_succeeds():
+    """LLM returns [{...}] instead of {...} — unwrapped and accepted."""
+    payload = json.dumps([json.loads(_full_payload())])
+    extractor = _make_extractor(_make_llm(payload))
+    result = await extractor.extract(Document(doc_id="doc-SL1", text="contract text"))
+
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].contract_type == "NDA"
+    assert result[0].effective_date == "2024-03-01"
+
+
+@pytest.mark.asyncio
+async def test_extract_bare_single_item_list_sets_doc_id():
+    payload = json.dumps([json.loads(_full_payload())])
+    extractor = _make_extractor(_make_llm(payload))
+    result = await extractor.extract(Document(doc_id="doc-SL2", text="contract text"))
+
+    assert result[0].doc_id == "doc-SL2"
+
+
+@pytest.mark.asyncio
+async def test_extract_bare_multi_item_list_returns_none():
+    """LLM returns [{...}, {...}] — more than one item, unwrap refuses, returns None."""
+    payload = json.dumps([json.loads(_full_payload()), json.loads(_full_payload(contract_type="MSA"))])
+    extractor = _make_extractor(_make_llm(payload))
+    result = await extractor.extract(Document(doc_id="doc-SL3", text="contract text"))
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_extract_bare_empty_list_returns_none():
+    """LLM returns [] — no items, unwrap refuses, returns None."""
+    extractor = _make_extractor(_make_llm("[]"))
+    result = await extractor.extract(Document(doc_id="doc-SL4", text="contract text"))
+
     assert result is None
 
 

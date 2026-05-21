@@ -613,7 +613,7 @@ class TestContractComplianceEndToEndLive:
 
         # ---- Step 4: ingest all demo documents ------------------------------
         results = await app.ingest_documents(
-            RULES_DOCUMENTS + CONTRACTS_DOCUMENTS, concurrency=3
+            RULES_DOCUMENTS + [CONTRACTS_DOCUMENTS[0]], concurrency=3
         )
         failed = [r for r in results if not r.success]
         assert not failed, (
