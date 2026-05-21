@@ -102,15 +102,6 @@ def _resolve_file_refs(data: dict, files: dict[str, str]) -> None:
             _resolve_step_refs(step, files)
 
 
-def _serialize_config(config: AppConfig) -> str:
-    # by_alias=True preserves "schema" as the YAML key (field name is schema_).
-    # mode='json' so enums are serialized as their string values.
-    return yaml.dump(
-        config.model_dump(by_alias=True, mode="json", exclude_none=True),
-        allow_unicode=True,
-        default_flow_style=False,
-        sort_keys=False,
-    )
 
 
 def _parse_bundle(raw: bytes) -> tuple[str, AppConfig]:
@@ -147,7 +138,7 @@ def _parse_bundle(raw: bytes) -> tuple[str, AppConfig]:
 
     # Store the resolved config (file refs replaced with content) so the app
     # can be rebuilt from the system store without the original ZIP.
-    stored_yaml = _serialize_config(config)
+    stored_yaml = config.to_yaml()
     return stored_yaml, config
 
 
@@ -619,7 +610,7 @@ async def add_application_skill(
     if body.skill_name not in config.skills:
         updated_config = config.model_copy(update={"skills": config.skills + [body.skill_name]})
         updated_record = record.model_copy(
-            update={"config_yaml": _serialize_config(updated_config), "updated_at": _now()}
+            update={"config_yaml": updated_config.to_yaml(), "updated_at": _now()}
         )
         await system_store.save_app(updated_record)
         logger.info("Added skill '%s' to application '%s'", body.skill_name, app_name)
@@ -648,7 +639,7 @@ async def remove_application_skill(
 
     updated_config = config.model_copy(update={"skills": [s for s in config.skills if s != skill_name]})
     updated_record = record.model_copy(
-        update={"config_yaml": _serialize_config(updated_config), "updated_at": _now()}
+        update={"config_yaml": updated_config.to_yaml(), "updated_at": _now()}
     )
     await system_store.save_app(updated_record)
     logger.info("Removed skill '%s' from application '%s'", skill_name, app_name)

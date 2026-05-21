@@ -654,6 +654,14 @@ class AppConfig(ConfigPromptMixin, BaseModel):
             raise ValueError("YAML must be a mapping at the top level")
         return cls.model_validate(data)
 
+    def to_yaml(self) -> str:
+        return yaml.dump(
+            self.model_dump(by_alias=True, mode="json", exclude_none=True),
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=False,
+        )
+
     @classmethod
     def config_format_prompt(cls) -> str:
         """YAML config template for LLM system prompts; derived from the live model."""

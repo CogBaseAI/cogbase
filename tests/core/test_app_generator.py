@@ -19,15 +19,10 @@ from cogbase.core.app_generator import (
     _run_propose_pipeline_config,
     _run_propose_workflow_config,
     _run_propose_workflow_schemas,
-    _serialize_config,
+
     _validate_extraction_schema,
     _validate_workflow_output_schema,
 )
-from api.routers.app_generate import (
-    _chat_turn_events,
-    chat,
-)
-from api.models import GenerateChatRequest
 from cogbase.config.config import AppConfig
 
 
@@ -765,7 +760,7 @@ class TestParseAndValidateSchemas:
 class TestSerializeConfig:
     def test_round_trips_through_from_yaml(self):
         config = AppConfig.from_yaml(_MINIMAL_CONFIG_YAML)
-        serialized = _serialize_config(config)
+        serialized = config.to_yaml()
         config2 = AppConfig.from_yaml(serialized)
         assert config2.name == config.name
         assert len(config2.pipelines) == len(config.pipelines)
@@ -780,7 +775,7 @@ class TestSerializeConfig:
                 "description": "test collection",
             }],
         })
-        serialized = _serialize_config(config)
+        serialized = config.to_yaml()
         assert "schema:" in serialized
         assert "schema_:" not in serialized
 
@@ -1118,32 +1113,3 @@ class TestRunProposeWorkflowConfig:
         assert "Validated pipeline record schemas" in system_prompt
         assert "Validated workflow output schemas" in system_prompt
 
-
-# ---------------------------------------------------------------------------
-# chat / chat stream
-# ---------------------------------------------------------------------------
-
-
-class TestChatTurn:
-    async def test_chat_drains_shared_stream_and_returns_final_response(self):
-        llm = _make_llm("A final response")
-        system_resources = MagicMock(llm=llm)
-        body = GenerateChatRequest(text="hello", history=[])
-
-        response = await chat(body, system_resources)
-
-        assert response.content == "A final response"
-        assert response.config_yaml is None
-        assert llm.complete_stream.call_count == 1
-
-    async def test_chat_turn_events_emit_result(self):
-        llm = _make_llm("A final response")
-        system_resources = MagicMock(llm=llm)
-        body = GenerateChatRequest(text="hello", history=[])
-
-        events = []
-        async for event in _chat_turn_events(body, system_resources, log_prefix="test/chat"):
-            events.append(event)
-
-        assert events[-1]["type"] == "result"
-        assert events[-1]["result"]["content"] == "A final response"

@@ -29,7 +29,7 @@ from api.system_resources import SystemResources
 from cogbase.skills.registry import SkillRegistry
 from api.main import app
 from api.app_cache import AppCache
-from api.routers.applications import _serialize_config
+
 from api.system_store import SystemStore
 from cogbase.config.config import AppConfig, RecordMode
 from cogbase.core.models import Chunk
@@ -138,7 +138,7 @@ class TestSerializeConfig:
                       id_template: "{doc_id}__{index:04d}"
         """)
         cfg = AppConfig.model_validate(yaml.safe_load(config_yaml))
-        serialized = _serialize_config(cfg)
+        serialized = cfg.to_yaml()
 
         assert "!!python" not in serialized, "YAML must not contain Python-specific tags"
         assert "record_mode: many" in serialized
@@ -168,7 +168,7 @@ class TestSerializeConfig:
                       record_mode: one
         """)
         original = AppConfig.model_validate(yaml.safe_load(config_yaml))
-        serialized = _serialize_config(original)
+        serialized = original.to_yaml()
 
         # safe_load must succeed (no Python-specific tags that require unsafe load)
         parsed_back = yaml.safe_load(serialized)

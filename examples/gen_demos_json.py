@@ -17,7 +17,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from cogbase.config.config import AppConfig  # noqa: E402
-from api.routers.applications import _resolve_file_refs, _serialize_config  # noqa: E402
+from api.routers.applications import _resolve_file_refs  # noqa: E402
 from examples.contract_analyst_demo.saas_contracts import CONTRACTS as CONTRACT_ANALYST_DOCS  # noqa: E402
 from examples.contract_analyst_demo.schema import ContractExtraction, ContractExtractionRecord  # noqa: E402
 from examples.contract_compliance_demo.contracts_data import CONTRACTS_DOCUMENTS as COMPLIANCE_CONTRACT_DOCS  # noqa: E402
@@ -41,7 +41,7 @@ def _read_config(demo_dir: str, file_refs: dict[str, str]) -> str:
     data = yaml.safe_load(config_path.read_text())
     _resolve_file_refs(data, file_refs)
     config = AppConfig.model_validate(data)
-    return _serialize_config(config)
+    return config.to_yaml()
 
 
 def _file_refs_contract_analyst() -> dict[str, str]:

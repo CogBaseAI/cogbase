@@ -11,7 +11,6 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from datetime import datetime, timezone
 
 import yaml
 
@@ -20,8 +19,6 @@ from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
 from cogbase.llms.base import LLMBase, ToolDefinition
 
 logger = logging.getLogger(__name__)
-
-_MAX_AGENT_CALLS = 10
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -51,7 +48,7 @@ _PROPOSE_APP_CONFIG_TOOL: ToolDefinition = {
     },
 }
 
-_GENERATOR_TOOLS: list[ToolDefinition] = [
+GENERATOR_TOOLS: list[ToolDefinition] = [
     _PROPOSE_APP_CONFIG_TOOL,
 ]
 
@@ -473,7 +470,7 @@ workflows:
 # System prompt
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT = """\
+SYSTEM_PROMPT = """\
 You are an agentic CogBase application generator. Help the user build a complete, \
 correct CogBase app configuration through natural conversation. You drive the process.
 
@@ -577,10 +574,6 @@ without a workflow.
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _make_record_schema(extraction_schema: dict, id_field: str | None = None) -> dict:
@@ -759,23 +752,7 @@ def _parse_and_validate_schemas(
     return parsed, errors
 
 
-def _serialize_config(config: AppConfig) -> str:
-    return yaml.dump(
-        config.model_dump(by_alias=True, mode="json", exclude_none=True),
-        allow_unicode=True,
-        default_flow_style=False,
-        sort_keys=False,
-    )
-
-
-def _categorize_error(exc: Exception) -> str:
-    exc_module = type(exc).__module__ or ""
-    if exc_module.startswith("openai") or exc_module.startswith("httpx"):
-        return "LLM unavailable"
-    return "stream failed"
-
-
-async def _propose_app_config(llm: LLMBase, messages: list, *, needs_workflow: bool):
+async def propose_app_config(llm: LLMBase, messages: list, *, needs_workflow: bool):
     """Orchestrate the app config generation pipeline.
 
     Yields ``{"type": "token", "token": ...}`` progress events followed by a single
@@ -1053,7 +1030,7 @@ async def _run_propose_pipeline_config(
             continue
 
         record_schemas = _extract_record_schemas(config_dict)
-        stored_yaml = _serialize_config(config)
+        stored_yaml = config.to_yaml()
         logger.info(
             "generate/propose_pipeline_config validated app=%s attempt=%d record_schemas=%s",
             config.name,
@@ -1147,7 +1124,7 @@ async def _run_propose_workflow_config(
             ]
             continue
 
-        stored_yaml = _serialize_config(config)
+        stored_yaml = config.to_yaml()
         logger.info(
             "generate/propose_workflow_config validated app=%s attempt=%d",
             config.name,

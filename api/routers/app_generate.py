@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -24,17 +25,25 @@ from api.models import (
 from api.system_store import AppRecord
 from cogbase.config.config import AppConfig
 from cogbase.core.app_generator import (
-    _MAX_AGENT_CALLS,
-    _GENERATOR_TOOLS,
-    _SYSTEM_PROMPT,
-    _categorize_error,
-    _now,
-    _propose_app_config,
-    _serialize_config,
+    GENERATOR_TOOLS,
+    SYSTEM_PROMPT,
+    propose_app_config,
 )
 
 logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/generate", tags=["generate"])
+
+_MAX_AGENT_CALLS = 10
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def _categorize_error(exc: Exception) -> str:
+    exc_module = type(exc).__module__ or ""
+    if exc_module.startswith("openai") or exc_module.startswith("httpx"):
+        return "LLM unavailable"
+    return "stream failed"
 
 
 async def _chat_turn_events(
@@ -52,7 +61,7 @@ async def _chat_turn_events(
     logger.info("%s start text=%s ..., history=%d", log_prefix, body.text[:50], len(body.history))
 
     messages: list[LLMChatMessage] = (
-        [{"role": "system", "content": _SYSTEM_PROMPT}]
+        [{"role": "system", "content": SYSTEM_PROMPT}]
         + [{"role": m.role, "content": m.content} for m in body.history]
         + [{"role": "user", "content": body.text}]
     )
@@ -65,7 +74,7 @@ async def _chat_turn_events(
         for call_num in range(_MAX_AGENT_CALLS):
             streamed_chunks = []
             result = None
-            async for chunk in llm.complete_stream(messages, tools=_GENERATOR_TOOLS, temperature=0.3):
+            async for chunk in llm.complete_stream(messages, tools=GENERATOR_TOOLS, temperature=0.3):
                 if isinstance(chunk, str):
                     streamed_chunks.append(chunk)
                     yield {"type": "token", "token": chunk}
@@ -100,7 +109,7 @@ async def _chat_turn_events(
             needs_workflow = bool(args.get("needs_workflow", False))
 
             generation_context = ""
-            async for event in _propose_app_config(llm, messages, needs_workflow=needs_workflow):
+            async for event in propose_app_config(llm, messages, needs_workflow=needs_workflow):
                 if event["type"] == "token":
                     yield {"type": "token", "token": event["token"]}
                 else:
@@ -232,7 +241,7 @@ async def deploy(
             detail=f"Application '{config.name}' already exists",
         )
 
-    stored_yaml = _serialize_config(config)
+    stored_yaml = config.to_yaml()
     now = _now()
     record = AppRecord(
         name=config.name,
