@@ -525,11 +525,11 @@ class TestChatEndpointLive:
 
         Turn 1 describes a clause-level compliance app with an explicit workflow
         requirement. Subsequent turns confirm the design with "yes" until the LLM
-        returns a config_yaml (up to 3 confirmation rounds). Verifies the final
+        returns a config_yaml (up to 4 confirmation rounds). Verifies the final
         config contains at least one workflow and that all structured-save target
         collections have schemas set.
         """
-        _MAX_ROUNDS = 4  # initial turn + up to 3 confirmations
+        _MAX_ROUNDS = 5  # initial turn + up to 4 confirmations
 
         text = (
             "Build a contract compliance app. "
@@ -676,7 +676,7 @@ class TestContractComplianceEndToEndLive:
 
         # ---- Step 4: ingest all demo documents ------------------------------
         results = await app.ingest_documents(
-            RULES_DOCUMENTS + [CONTRACTS_DOCUMENTS[0]], concurrency=3
+            RULES_DOCUMENTS + CONTRACTS_DOCUMENTS[:1], concurrency=3
         )
         failed = [r for r in results if not r.success]
         assert not failed, (

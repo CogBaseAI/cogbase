@@ -237,6 +237,10 @@ generated in a separate step.
 7. Use snake_case for all collection names and field names
 8. Every pipeline must have a routing_description — a plain-language sentence describing \
    which documents belong in that pipeline (used by LLM routing to classify documents)
+9. YAML quoting: any plain string value that contains ": " (colon followed by a space) \
+   will break YAML parsing. Always wrap such values in double quotes. \
+   Example — BAD:  description: Facts extracted from contracts: vendor, dates, value. \
+   Example — GOOD: description: "Facts extracted from contracts: vendor, dates, value."
 
 ## Config format
 
@@ -248,20 +252,18 @@ name: vc-portfolio
 
 vector_collections:
   - name: portfolio_chunks
-    description: Full-text passages from all portfolio documents.
+    description: "Full-text passages from all portfolio documents."
   - name: portfolio_summaries
-    description: One-per-document summaries of portfolio documents.
+    description: "One-per-document summaries of portfolio documents."
 
 structured_collections:
   - name: portfolio_kpis
-    description: >
-      Financial and operational KPIs extracted from board decks and LP updates.
-      Use for exact lookups and cross-company comparisons.
+    description: "Financial and operational KPIs extracted from board decks and LP updates. Use for exact lookups and cross-company comparisons."
 
 pipelines:
   # board-update pipeline: chunk + extract KPIs + summarize
   - name: board-update
-    routing_description: Board decks and LP updates from portfolio companies containing financial KPIs, headcount, milestones, and risk sections.
+    routing_description: "Board decks and LP updates from portfolio companies containing financial KPIs, headcount, milestones, and risk sections."
     match:
       metadata:
         doc_type: board_update
@@ -294,7 +296,7 @@ pipelines:
 
   # deal-memo pipeline: chunk + summarize only — no KPI extraction from pitch decks
   - name: deal-memo
-    routing_description: Investment memos and pitch decks for prospective deals containing investment thesis, deal terms, and sector analysis.
+    routing_description: "Investment memos and pitch decks for prospective deals containing investment thesis, deal terms, and sector analysis."
     match:
       metadata:
         doc_type: deal_memo
@@ -317,26 +319,19 @@ name: contract-compliance
 
 vector_collections:
   - name: rule_chunks
-    description: >
-      Company policy passages and standards used as evidence for compliance judgments.
+    description: "Company policy passages and standards used as evidence for compliance judgments."
   - name: contract_chunks
-    description: >
-      Contract text passages for detailed questions about specific contract terms or clauses.
+    description: "Contract text passages for detailed questions about specific contract terms or clauses."
 
 structured_collections:
   - name: contract_metadata
-    description: >
-      Key facts per contract: parties, dates, value, governing law, termination
-      notice period. ONE record per contract document.
+    description: "Key facts per contract: parties, dates, value, governing law, termination notice period. ONE record per contract document."
   - name: contract_clauses
-    description: >
-      Individual clauses extracted from contracts. MANY records per contract — each
-      record is one clause with its type and verbatim text. Filter by doc_id to
-      retrieve all clauses for a contract, or by clause_type for a specific category.
+    description: "Individual clauses extracted from contracts. MANY records per contract — each record is one clause with its type and verbatim text."
 
 pipelines:
   - name: rules
-    routing_description: Company policy documents, internal standards, compliance guidelines, and fallback positions that define rules contracts must be checked against.
+    routing_description: "Company policy documents, internal standards, compliance guidelines, and fallback positions that define rules contracts must be checked against."
     match:
       metadata:
         doc_type: rules
@@ -345,7 +340,7 @@ pipelines:
         collection: rule_chunks
 
   - name: contracts
-    routing_description: Vendor contracts, commercial agreements, and service agreements to be reviewed for compliance against company policy.
+    routing_description: "Vendor contracts, commercial agreements, and service agreements to be reviewed for compliance against company policy."
     match:
       metadata:
         doc_type: contract
@@ -431,15 +426,17 @@ the workflow steps.
      duplicate facts, evidence gaps, reconciliations, or cross-record consistency,
      use structured-query with selective filters such as issue, entity, date range,
      doc_id, account_id, or contract_id to load only the relevant peer records.
+7. YAML quoting: any plain string value that contains ": " (colon followed by a space) \
+   will break YAML parsing. Always wrap such values in double quotes. \
+   Example — BAD:  description: Findings produced by the workflow: compliance status, severity. \
+   Example — GOOD: description: "Findings produced by the workflow: compliance status, severity."
 
 ## Example output
 
 # Only these two sections — nothing else
 structured_collections:
   - name: clause_compliance_findings
-    description: >
-      Clause-level compliance findings produced by the compliance workflow. Each record
-      captures whether a clause complies with company policy, with severity and reasoning.
+    description: "Clause-level compliance findings produced by the compliance workflow. Each record captures whether a clause complies with company policy, with severity and reasoning."
 
 workflows:
   - name: check-contract-compliance
@@ -918,12 +915,14 @@ async def _chat_turn_events(
             final_content = "".join(streamed_chunks).strip()
             break
         else:
+            final_content = "".join(streamed_chunks).strip()
             logger.warning(
-                "%s reached max_calls=%d without final answer",
+                "%s reached max_calls=%d without final answer, final_content=%s, messages=%s",
                 log_prefix,
                 _MAX_AGENT_CALLS,
+                final_content,
+                messages,
             )
-            final_content = "".join(streamed_chunks).strip()
 
         logger.info(
             "%s turn=%d config_validated=%s final_content=%d",
@@ -1103,7 +1102,10 @@ async def _run_propose_workflow_schemas(
             return f"Workflow schemas validated.\n{field_summary}", schemas_as_json
 
         logger.warning(
-            "generate/propose_workflow_schemas attempt=%d errors=%s", attempt + 1, errors
+            "generate/propose_workflow_schemas attempt=%d errors=%s schemas_yaml=%s",
+            attempt + 1,
+            errors,
+            schemas_yaml,
         )
         error_text = "\n".join(f"- {e}" for e in errors)
         sub_messages += [
@@ -1252,9 +1254,10 @@ async def _run_propose_workflow_config(
         except Exception as exc:
             errors = [str(exc)]
             logger.warning(
-                "generate/propose_workflow_config attempt=%d errors=%s",
+                "generate/propose_workflow_config attempt=%d errors=%s workflow_yaml=%s",
                 attempt + 1,
                 errors,
+                workflow_yaml,
             )
             error_text = "\n".join(f"- {e}" for e in errors)
             sub_messages += [
