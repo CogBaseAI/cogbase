@@ -1,4 +1,4 @@
-"""Unit tests for helper functions in api/routers/generate.py."""
+"""Unit tests for cogbase/core/app_generator.py."""
 
 from __future__ import annotations
 
@@ -9,8 +9,7 @@ import pytest
 
 import yaml
 
-from api.routers.generate import (
-    _chat_turn_events,
+from cogbase.core.app_generator import (
     _extract_record_schemas,
     _inject_pipeline_record_schemas,
     _inject_workflow_output_schemas,
@@ -23,6 +22,9 @@ from api.routers.generate import (
     _serialize_config,
     _validate_extraction_schema,
     _validate_workflow_output_schema,
+)
+from api.routers.app_generate import (
+    _chat_turn_events,
     chat,
 )
 from api.models import GenerateChatRequest
@@ -278,8 +280,6 @@ class TestMakeRecordSchema:
         assert result["required"] == ["doc_id"]
 
     def test_realistic_schema_with_type_and_additional_properties(self):
-        # Schema as produced by the LLM in practice: has "type", nested "items",
-        # and "additionalProperties": false.
         schema = {
             "type": "object",
             "properties": {
@@ -292,19 +292,15 @@ class TestMakeRecordSchema:
         }
         result = _make_record_schema(schema)
 
-        # top-level keywords preserved
         assert result["type"] == "object"
         assert result["additionalProperties"] is False
 
-        # doc_id injected
         assert result["properties"]["doc_id"] == {
             "type": "string",
             "description": "document identifier",
         }
-        # original fields intact
         assert result["properties"]["parties"] == {"type": "array", "items": {"type": "string"}}
 
-        # doc_id leads required; original fields follow
         assert result["required"][0] == "doc_id"
         assert set(result["required"]) == {"doc_id", "contract_type", "parties", "effective_date"}
 
@@ -327,7 +323,6 @@ class TestMakeRecordSchema:
             "type": "string",
             "description": "record identifier",
         }
-        # doc_id leads required, id_field also required
         assert result["required"][0] == "doc_id"
         assert "clause_id" in result["required"]
 
@@ -513,14 +508,12 @@ class TestInjectPipelineRecordSchemas:
         )
         _inject_pipeline_record_schemas(cfg)
 
-        # id_field must be absent from the extractor's extraction_schema
         cleaned = json.loads(
             cfg["pipelines"][0]["steps"][0]["extractor"]["extraction_schema"]
         )
         assert "clause_id" not in cleaned["properties"]
         assert "clause_id" not in cleaned.get("required", [])
 
-        # id_field must still appear in the collection schema (injected by _make_record_schema)
         sc = cfg["structured_collections"][0]
         record_schema = json.loads(sc["schema"])
         assert "clause_id" in record_schema["properties"]
@@ -528,7 +521,6 @@ class TestInjectPipelineRecordSchemas:
         assert sc["primary_fields"] == ["doc_id", "clause_id"]
 
     def test_many_mode_strips_id_field_not_in_required(self):
-        # id_field present in properties but not in required — still stripped cleanly.
         ext_schema = {
             "type": "object",
             "properties": {
@@ -657,7 +649,6 @@ class TestValidateExtractionSchema:
         assert any("at least one field" in e for e in errors)
 
     def test_doc_id_error_returned_before_build_model(self):
-        # doc_id error short-circuits before JSON Schema validation
         schema = {"properties": {"doc_id": {"type": "string"}, "x": {"type": "string"}}}
         errors = _validate_extraction_schema(schema, "col")
         assert not any("invalid JSON Schema" in e for e in errors)
@@ -837,7 +828,6 @@ class TestRunProposeSchema:
         sent_messages = llm.complete.call_args[0][0]
         roles = [m["role"] for m in sent_messages]
         assert "tool" not in roles
-        # assistant message with tool_calls is also excluded
         assert not any(m.get("tool_calls") for m in sent_messages)
 
     async def test_each_collection_has_extraction_schema_line(self):

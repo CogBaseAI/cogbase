@@ -19,7 +19,7 @@ from cogbase.llms import build_llm
 from cogbase.stores import build_document_store, build_structured_store, build_vector_store
 from api.app_cache import AppCache
 from api.routers.applications import router as applications_router
-from api.routers.generate import router as generate_router
+from api.routers.app_generate import router as generate_router
 from api.routers.skills import router as skills_router
 from api.system_config import SystemConfig
 from api.system_resources import SystemResources

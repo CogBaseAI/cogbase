@@ -1,4 +1,4 @@
-"""Live integration tests for api/routers/generate.py against the real OpenAI API.
+"""Live integration tests for cogbase/core/app_generator.py against the real OpenAI API.
 
 These tests build a real ``OpenAILLM`` backed by ``openai.AsyncOpenAI`` and the
 ``OPENAI_API_KEY`` from the repo-root ``.env``. The whole module is skipped when
@@ -20,7 +20,8 @@ import pytest
 import yaml
 
 from api.models import ChatMessage, GenerateChatRequest
-from api.routers.generate import (
+from api.routers.app_generate import chat
+from cogbase.core.app_generator import (
     _collect_save_targets,
     _make_record_schema,
     _propose_app_config,
@@ -28,7 +29,6 @@ from api.routers.generate import (
     _run_propose_pipeline_config,
     _run_propose_workflow_config,
     _run_propose_workflow_schemas,
-    chat,
 )
 from cogbase.config.config import AppConfig
 
@@ -169,8 +169,6 @@ class TestProposeExtractionSchemasLive:
 
 class TestProposeWorkflowSchemasLive:
     async def test_returns_validated_workflow_schemas(self, llm):
-        # Full record schemas (extraction fields + injected doc_id + id_field for
-        # RecordMode.MANY) — this is what _run_propose_pipeline_config produces.
         clause_extraction_schema = {
             "type": "object",
             "properties": {
@@ -194,8 +192,6 @@ class TestProposeWorkflowSchemasLive:
         )
         assert schemas is not None, message
         assert "Workflow schemas validated." in message
-        # Expect at least one workflow output collection that traces back to
-        # the source clause/document.
         assert schemas, "expected at least one workflow output collection"
         for name, schema_json in schemas.items():
             schema = json.loads(schema_json)
@@ -246,7 +242,6 @@ class TestProposePipelineConfigLive:
         assert config_dict is not None, message
         assert message.startswith("Pipeline config validated.")
 
-        # stored_yaml is always returned; workflow branching is handled by the caller via needs_workflow.
         assert stored_yaml is not None
         config = AppConfig.from_yaml(stored_yaml)
         assert config.name
@@ -255,7 +250,6 @@ class TestProposePipelineConfigLive:
         first_step = config.pipelines[0].steps[0]
         assert getattr(first_step, "tool", None) == "chunk-embed-upsert"
 
-        # record_schemas contains the full stored schemas (doc_id injected).
         assert "contracts" in record_schemas or any("contract" in k for k in record_schemas)
         for coll_name, schema_json in record_schemas.items():
             schema = json.loads(schema_json)
@@ -263,7 +257,6 @@ class TestProposePipelineConfigLive:
                 f"record_schemas[{coll_name!r}] must include injected doc_id"
             )
 
-        # Serialized config also has doc_id in the structured collection schema.
         data = yaml.safe_load(stored_yaml)
         for sc in data.get("structured_collections", []):
             record_schema = json.loads(sc["schema"])
@@ -273,7 +266,6 @@ class TestProposePipelineConfigLive:
 
 class TestProposeWorkflowConfigLive:
     async def test_generates_valid_workflow_config(self, llm):
-        # Step 1: pipeline config (extraction schemas → pipeline config dict + record schemas).
         clause_extraction_schema = {
             "type": "object",
             "properties": {
@@ -295,7 +287,6 @@ class TestProposeWorkflowConfigLive:
         )
         assert pipeline_config_dict is not None, p_message
 
-        # record_schemas must include clause_id for the RecordMode.MANY collection.
         assert record_schemas, "expected at least one record schema from the pipeline step"
         for coll_name, schema_json in record_schemas.items():
             schema = json.loads(schema_json)
@@ -303,7 +294,6 @@ class TestProposeWorkflowConfigLive:
                 f"record_schemas[{coll_name!r}] must include doc_id"
             )
 
-        # Step 2: workflow schemas (record schemas → workflow output schemas).
         workflow_schemas = {
             "clause_compliance_findings": json.dumps(
                 {
@@ -334,8 +324,6 @@ class TestProposeWorkflowConfigLive:
             )
         }
 
-        # Step 3: workflow config (pipeline config dict + record schemas + workflow schemas →
-        # final validated config).
         message, stored_yaml = await _run_propose_workflow_config(
             llm,
             _CONTRACT_COMPLIANCE_CONVERSATION,
@@ -378,7 +366,6 @@ class TestProposeAppConfigLive:
         assert result["generation_context"] == "Config generation complete.", result["generation_context"]
         assert result["config_yaml"] is not None
 
-        # Only extraction + pipeline progress tokens — no workflow tokens.
         progress = " ".join(e["token"] for e in events if e["type"] == "token").lower()
         assert "extraction" in progress
         assert "pipeline" in progress
@@ -400,7 +387,6 @@ class TestProposeAppConfigLive:
         assert result["generation_context"] == "Config generation complete.", result["generation_context"]
         assert result["config_yaml"] is not None
 
-        # All 4 steps should emit progress tokens.
         progress = " ".join(e["token"] for e in events if e["type"] == "token").lower()
         assert "extraction" in progress
         assert "pipeline" in progress
@@ -425,7 +411,6 @@ class TestChatEndpointLive:
         )
         response = await chat(body, MagicMock(llm=llm))
         assert response.content
-        # No tool calls should fire on an informational question.
         assert response.config_yaml is None
 
     async def test_chat_generates_validated_config_yaml(self, llm):
@@ -463,14 +448,12 @@ class TestChatEndpointLive:
         response1 = await chat(body1, MagicMock(llm=llm))
         assert response1.content, "expected a text proposal in turn 1"
 
-        # Model may generate a config immediately if it's confident — accept it.
         if response1.config_yaml:
             config = AppConfig.from_yaml(response1.config_yaml)
             assert config.name
             assert config.pipelines
             return
 
-        # Turn 2: confirm the proposal and explicitly request generation.
         history = [
             ChatMessage(role="user", content=turn1_text),
             ChatMessage(role="assistant", content=response1.content),
@@ -499,7 +482,6 @@ class TestChatEndpointLive:
             f"got {getattr(first_step, 'tool', None)!r}"
         )
 
-        # Verify doc_id was injected into every extract-structured target schema.
         data = yaml.safe_load(response2.config_yaml)
         extract_targets = {
             step.get("collection")
@@ -568,7 +550,6 @@ class TestChatEndpointLive:
         assert config.pipelines
         assert config.workflows, "expected at least one workflow in the config"
 
-        # Every structured-save target must exist in structured_collections with a schema.
         data = yaml.safe_load(final_response.config_yaml)
         sc_by_name = {sc["name"]: sc for sc in data.get("structured_collections", [])}
 
@@ -615,7 +596,6 @@ class TestContractComplianceEndToEndLive:
         from examples.contract_compliance_demo.contracts_data import CONTRACTS_DOCUMENTS
         from examples.contract_compliance_demo.rules_data import RULES_DOCUMENTS
 
-        # ---- Step 1: chat to generate the app config ------------------------
         _MAX_ROUNDS = 4
 
         text = (
@@ -649,23 +629,18 @@ class TestContractComplianceEndToEndLive:
             f"last response: {final_response.content!r}"
         )
 
-        # ---- Step 2: parse config, discover workflow details ----------------
         config = AppConfig.from_yaml(final_response.config_yaml)
         assert config.workflows, "generated config must have at least one workflow"
 
-        # Discover the structured-save target collection(s) from the workflow steps.
         data = yaml.safe_load(final_response.config_yaml)
         save_targets: set[str] = set()
         for wf in data.get("workflows", []):
             _collect_save_targets(wf.get("steps", []), save_targets)
         assert save_targets, "workflow must contain at least one structured-save step"
 
-        # The first workflow is the compliance workflow; discover its name and
-        # the input key the LLM chose (should be doc_id, but inspect to be safe).
         workflow_cfg = config.workflows[0]
         workflow_input_key = "doc_id"
 
-        # ---- Step 3: build the app in-process with in-memory stores ---------
         system = SystemResources(
             structured_store=InMemoryStructuredStore(),
             vector_store=FAISSVectorStore(),
@@ -674,7 +649,6 @@ class TestContractComplianceEndToEndLive:
         )
         app = await build_app(config, system=system, app_status="new")
 
-        # ---- Step 4: ingest all demo documents ------------------------------
         results = await app.ingest_documents(
             RULES_DOCUMENTS + CONTRACTS_DOCUMENTS[:1], concurrency=3
         )
@@ -689,14 +663,12 @@ class TestContractComplianceEndToEndLive:
             "check that the contracts pipeline includes an extract-structured step"
         )
 
-        # ---- Step 5: run the compliance workflow for contract-001 -----------
         findings: list[dict] = []
         workflow = app.get_workflow(workflow_cfg.name)
         async for record in workflow.run({workflow_input_key: "contract-001"}):
             findings.append(record)
 
         if not findings:
-            # Dump structured store contents and config to aid debugging.
             diag_parts = [
                 f"workflow '{workflow_cfg.name}' produced no findings for contract-001.\n",
                 "--- generated config YAML ---\n",
@@ -729,10 +701,6 @@ class TestContractComplianceEndToEndLive:
             )
             assert False, "\n".join(diag_parts)
 
-        # The LLM-generated schema may name the status field anything from
-        # "status" to "compliance_status" to "compliance" — locate it by name
-        # pattern, skipping prose fields whose values may also contain
-        # "compliant"/"non-compliant" in free text.
         def _status_value(finding: dict) -> str:
             for k, v in finding.items():
                 if not isinstance(v, str):
@@ -747,8 +715,6 @@ class TestContractComplianceEndToEndLive:
                     return v.lower()
             return ""
 
-        # contract-001 has known non-compliant clauses (liability cap 3 months,
-        # one-sided consequential exclusion, 48-hour breach notification).
         non_compliant = [f for f in findings if "non" in _status_value(f)]
         assert non_compliant, (
             "expected at least one non-compliant finding for contract-001 — "
@@ -756,14 +722,12 @@ class TestContractComplianceEndToEndLive:
             f"findings: {findings}"
         )
 
-        # contract-001 also has compliant clauses (payment net-30, mutual indemnification).
         compliant = [
             f for f in findings
             if (val := _status_value(f)) and "compliant" in val and "non" not in val
         ]
         assert compliant, f"expected at least one compliant finding. findings: {findings}"
 
-        # ---- Step 6: natural-language queries over the live data -------------
         async def _query(text: str) -> str:
             result = None
             async for chunk in app.query_stream(text):
@@ -772,7 +736,6 @@ class TestContractComplianceEndToEndLive:
             assert result is not None, f"query_stream produced no QueryResult for: {text!r}"
             return result.answer
 
-        # Non-compliant findings query — must surface at least one violation.
         answer1 = (await _query(
             "what are the non-compliant clauses in contract-001?"
         )).lower()
@@ -781,7 +744,6 @@ class TestContractComplianceEndToEndLive:
             for kw in ("non-compliant", "non_compliant", "violat", "liability", "breach", "finding")
         ), f"expected a non-compliance reference in the answer:\n{answer1}"
 
-        # Governing-law query — contract-001 is governed by New York law.
         answer2 = (await _query(
             "what is the governing law for contract-001?"
         )).lower()
@@ -806,7 +768,6 @@ class TestContractAnalystEndToEndLive:
         from cogbase.stores.vector.faiss_store import FAISSVectorStore
         from examples.contract_analyst_demo.saas_contracts import CONTRACTS
 
-        # ---- Step 1: chat to generate the app config ------------------------
         _MAX_ROUNDS = 4
 
         text = (
@@ -844,11 +805,9 @@ class TestContractAnalystEndToEndLive:
             f"last response: {final_response.content!r}"
         )
 
-        # ---- Step 2: parse config -------------------------------------------
         config = AppConfig.from_yaml(final_response.config_yaml)
         assert config.pipelines, "generated config must have at least one pipeline"
 
-        # ---- Step 3: build the app in-process with in-memory stores ---------
         system = SystemResources(
             structured_store=InMemoryStructuredStore(),
             vector_store=FAISSVectorStore(),
@@ -857,7 +816,6 @@ class TestContractAnalystEndToEndLive:
         )
         app = await build_app(config, system=system, app_status="new")
 
-        # ---- Step 4: ingest all 5 SaaS contracts ----------------------------
         documents = [
             Document(doc_id=doc_id, text=text) for doc_id, text in CONTRACTS.items()
         ]
@@ -871,7 +829,6 @@ class TestContractAnalystEndToEndLive:
             "expected each contract to produce at least one extracted record"
         )
 
-        # ---- Step 5: queries over extracted records and full text -----------
         async def _query(text: str) -> str:
             result = None
             async for chunk in app.query_stream(text):
@@ -880,10 +837,6 @@ class TestContractAnalystEndToEndLive:
             assert result is not None, f"query_stream produced no QueryResult for: {text!r}"
             return result.answer
 
-        # Three contracts expire before 2026-01-01:
-        #   saas-001 (Acme / CloudStore Pro, Jun 2025)
-        #   saas-003 (Nexus / SecureVault, Dec 2025)
-        #   saas-005 (Apex / WorkflowManager, Sep 2025)
         answer1 = (await _query("which contracts expire before 2026-01-01?")).lower()
         expiring_hits = sum(
             any(kw in answer1 for kw in ids)
@@ -897,7 +850,6 @@ class TestContractAnalystEndToEndLive:
             f"expected ≥2 of the 3 contracts expiring before 2026 to be named:\n{answer1}"
         )
 
-        # Only saas-003 has a liability cap above $1M (USD 2,000,000, Nexus Security).
         answer2 = (await _query(
             "which contracts have a liability cap above 1 million dollars?"
         )).lower()
@@ -906,7 +858,6 @@ class TestContractAnalystEndToEndLive:
             for kw in ("saas-003", "securevault", "nexus", "2,000,000", "2000000", "2 million")
         ), f"expected saas-003 / Nexus / $2M cap in answer:\n{answer2}"
 
-        # saas-005 (Apex / WorkflowManager) has an unusually long 180-day notice period.
         answer3 = (await _query(
             "which contract has the longest termination notice period?"
         )).lower()
