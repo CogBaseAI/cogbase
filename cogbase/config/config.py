@@ -1,4 +1,31 @@
-"""Pydantic models for parsing application YAML configs."""
+"""Pydantic models for parsing application YAML configs.
+
+Schema lifecycle
+----------------
+Pipeline extraction schema  (ExtractorConfig.extraction_schema)
+    The JSON schema the LLM receives during ingest.  It covers only the fields
+    the LLM should extract from the document text — never ``doc_id`` and never
+    the ``id_field`` used by RecordMode.MANY (e.g. ``clause_id``).  Those
+    identifiers are injected automatically at ingest time and must not appear in
+    the extraction schema.
+
+Structured-collection record schema  (StructuredCollectionConfig.schema_)
+    The full schema stored in the collection.  Built from the extraction schema
+    plus fields injected at config-load time:
+      • ``doc_id``   — always present; links every record to its source document.
+      • ``id_field`` — present only for RecordMode.MANY (e.g. ``clause_id``);
+                       generated from ``id_template`` rather than extracted.
+
+    This is the schema that callers and workflows work with.
+
+Workflows operate on record schemas, not extraction schemas
+    ``structured-query`` returns records shaped by the collection's record
+    schema.  ``structured-save`` writes records whose fields must satisfy that
+    same schema.  When a workflow needs to save a finding keyed by both
+    ``doc_id`` and ``clause_id`` (e.g. clause compliance findings), both fields
+    must appear in the relevant ``llm-structured`` step's ``output_schema``,
+    because the LLM receives them as input and must pass them through verbatim.
+"""
 
 from __future__ import annotations
 
@@ -57,6 +84,7 @@ class VectorCollectionConfig(ConfigPromptMixin, BaseModel):
 
 class ExtractorConfig(ConfigPromptMixin, BaseModel):
     type: Literal["llm"] = Field(default="llm", description="Extractor implementation.")
+    # Extraction-only schema: no doc_id, no id_field.  See module docstring.
     extraction_schema: str = Field(description="Resolved JSON schema used for extraction.")
     prompt: str = Field(
         description="System prompt for the extraction LLM.",
@@ -118,7 +146,8 @@ class StructuredCollectionConfig(ConfigPromptMixin, BaseModel):
     description: str = Field(
         description="Collection description, shown to the LLM as context for a query.",
     )
-    # skip both schema_ and primary_fields in app generator system prompt, they will be explicitly injected
+    # Full record schema (extraction fields + doc_id + id_field).  See module docstring.
+    # Skipped in app-generator prompts; injected explicitly by the generator.
     schema_: str = Field(
         alias="schema",
         description="Resolved JSON schema for the collection.",
