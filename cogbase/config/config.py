@@ -561,7 +561,7 @@ class AppConfig(ConfigPromptMixin, BaseModel):
     )
     structured_collections: list[StructuredCollectionConfig] = Field(
         default_factory=list,
-        description="Structured collections available to pipelines.",
+        description="Structured collections available to pipelines and workflows.",
     )
     pipelines: list[PipelineConfig] = Field(
         default_factory=list,

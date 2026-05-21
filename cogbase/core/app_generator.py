@@ -14,7 +14,7 @@ import logging
 
 import yaml
 
-from cogbase.config.config import AppConfig
+from cogbase.config.config import AppConfig, StructuredCollectionConfig, WorkflowConfig
 from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
 from cogbase.llms.base import LLMBase, ToolDefinition
 
@@ -351,7 +351,8 @@ pipelines:
             Return ONLY the JSON object — no explanation, no markdown fences.\
 """
 
-_WORKFLOW_CONFIG_AGENT_SYSTEM_PROMPT = """\
+_WORKFLOW_CONFIG_AGENT_SYSTEM_PROMPT = (
+    """\
 You are a CogBase workflow config generator. Given a validated pipeline config, \
 full pipeline record schemas, and validated workflow output schemas — all injected \
 below — produce the workflow additions to the config.
@@ -361,8 +362,7 @@ collections only) and workflows. Do NOT output name, vector_collections, pipelin
 or pipeline-backed structured_collections — those are already validated and locked.
 
 Use the output_schema values from "Validated workflow output schemas" verbatim in \
-llm-structured steps. Use these same values as the schema for workflow output \
-structured_collections.
+llm-structured steps.
 
 The "Validated pipeline record schemas" section shows the full stored record schema \
 for each pipeline-backed structured collection — extraction fields plus injected \
@@ -374,8 +374,9 @@ the workflow steps.
 1. output_schema in llm-structured workflow steps must be an inline JSON string — use \
    the exact value from "Validated workflow output schemas". Never use a .json filename.
 2. prompt in llm-structured workflow steps must be inline text. Never use a .txt filename.
-3. Workflow output collections must have schema set inline using the value from \
-   "Validated workflow output schemas" — they are NOT auto-injected like pipeline collections.
+3. Do NOT set schema on workflow output structured_collections — schema is injected \
+   automatically from the validated workflow output schemas. Output only name and \
+   description for each workflow output collection.
 4. structured-save depends on the upstream llm-structured step that produces its records. \
    Every field listed in a structured-save `primary_fields` MUST also be declared as a \
    property in that upstream llm-structured `output_schema`. structured-save persists \
@@ -410,6 +411,18 @@ the workflow steps.
    will break YAML parsing. Always wrap such values in double quotes. \
    Example — BAD:  description: Findings produced by the workflow: compliance status, severity. \
    Example — GOOD: description: "Findings produced by the workflow: compliance status, severity."
+
+## Config format — workflow output collection
+
+"""
+    + StructuredCollectionConfig.config_format_prompt()
+    + """
+
+## Config format — workflow
+
+"""
+    + WorkflowConfig.config_format_prompt()
+    + """
 
 ## Example output
 
@@ -452,11 +465,12 @@ workflows:
               Rules:
               - Ground every finding exclusively in the provided excerpts.
               - If excerpts are insufficient, set status=needs_review.
+              - Copy clause_id and doc_id verbatim from the input clause into your output.
               - Return ONLY valid JSON — no markdown fences, no explanation.
             input:
               clause: "{{ item }}"
               rules: "{{ steps.retrieve_rules.chunks }}"
-            output_schema: '<verbatim value from Validated workflow output schemas>'
+            output_schema: '<verbatim JSON from Validated workflow output schemas — clause_compliance_findings>'
 
           - id: save_finding
             tool: structured-save
@@ -465,6 +479,7 @@ workflows:
             records:
               - "{{ steps.judge.output }}"\
 """
+)
 
 # ---------------------------------------------------------------------------
 # System prompt
