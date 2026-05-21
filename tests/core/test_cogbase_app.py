@@ -763,3 +763,56 @@ class TestRoutingStrategyAuto:
         await app.ingest_documents([doc])
 
         assert doc.metadata["doc_type"] == "custom"
+
+    @pytest.mark.asyncio
+    async def test_match_none_pipeline_does_not_short_circuit_metadata_routing(self):
+        """A pipeline with match=None must not be returned by metadata routing.
+
+        Before the fix, _find_pipeline_by_metadata returned the first pipeline
+        whose match was None, preventing LLM fallback from ever running in
+        multi-pipeline apps where no pipeline declared match conditions.
+        """
+        no_match = self._pipeline_stub("no_match", None)
+        specific = self._pipeline_stub("specific", {"doc_type": "legal"})
+        app = self._make_app("specific", no_match, specific)
+
+        doc = Document(doc_id="d-001", text="legal document text")
+        await app.ingest_documents([doc])
+
+        # Metadata routing skips match=None; LLM picks "specific".
+        app._llm.complete.assert_called_once()
+        specific.ingest_documents.assert_called_once()
+        no_match.ingest_documents.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_all_match_none_pipelines_use_llm_routing(self):
+        """When every pipeline has match=None, LLM routing decides."""
+        alpha = self._pipeline_stub("alpha", None)
+        beta = self._pipeline_stub("beta", None)
+        app = self._make_app("beta", alpha, beta)
+
+        doc = Document(doc_id="d-001", text="some document text")
+        await app.ingest_documents([doc])
+
+        app._llm.complete.assert_called_once()
+        beta.ingest_documents.assert_called_once()
+        alpha.ingest_documents.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unmatched_error_names_pipelines_and_suggests_action(self):
+        """Unmatched documents get an error message listing tried pipelines and next steps."""
+        legal = self._pipeline_stub("legal", {"doc_type": "legal"})
+        finance = self._pipeline_stub("finance", {"doc_type": "finance"})
+        # LLM returns an unknown name so both routing strategies fail.
+        app = self._make_app("unknown_pipeline", legal, finance)
+
+        doc = Document(doc_id="d-001", text="unclassifiable text")
+        results = await app.ingest_documents([doc])
+
+        assert len(results) == 1
+        result = results[0]
+        assert not result.success
+        msg = str(result.error)
+        assert "d-001" in msg
+        assert "legal" in msg and "finance" in msg
+        assert "routing_description" in msg

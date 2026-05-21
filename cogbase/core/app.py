@@ -69,7 +69,7 @@ class CogBaseApp:
 
     def _find_pipeline_by_metadata(self, doc: Document) -> IngestionPipeline | None:
         for p in self._pipelines:
-            if p.match is None or all(doc.metadata.get(k) == v for k, v in p.match.items()):
+            if p.match is not None and all(doc.metadata.get(k) == v for k, v in p.match.items()):
                 return p
         return None
 
@@ -127,7 +127,12 @@ class CogBaseApp:
         """
         if concurrency < 1:
             raise ValueError(f"concurrency must be at least 1, got {concurrency}")
-        logger.info("app.ingest_documents.start documents=%d concurrency=%d", len(documents), concurrency)
+        logger.info(
+            "app.ingest_documents.start app=%s documents=%d concurrency=%d",
+            self.name,
+            len(documents),
+            concurrency,
+        )
 
         store_failures: dict[str, Exception] = {}
         docs_to_process: list[Document] = list(documents)
@@ -161,11 +166,16 @@ class CogBaseApp:
         for group_results in group_results_lists:
             for r in group_results:
                 results_by_id[r.doc_id] = r
+        pipeline_names = ", ".join(p.name for p in self._pipelines)
         for doc in unmatched:
             results_by_id[doc.doc_id] = IngestResult(
                 doc_id=doc.doc_id,
                 success=False,
-                error=ValueError(f"no pipeline matched doc_id={doc.doc_id!r}"),
+                error=ValueError(
+                    f"no pipeline matched doc_id={doc.doc_id!r} "
+                    f"(tried: {pipeline_names}) — adjust routing_description on an existing "
+                    f"pipeline or add a new pipeline for this document type"
+                ),
             )
 
         results = [

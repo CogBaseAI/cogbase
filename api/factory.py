@@ -216,6 +216,13 @@ async def build_app(
             match=p_cfg.match.metadata if p_cfg.match else None,
             parallel=p_cfg.parallel,
         ))
+        logger.info(
+            "registered pipeline=%s app=%s match=%s steps=%d",
+            p_cfg.name,
+            config.name,
+            p_cfg.match,
+            len(p_cfg.steps),
+        )
 
     vc_schemas = [vc.schema for vc in vector_collections]
 
@@ -242,6 +249,15 @@ async def build_app(
         )
         logger.info("registered workflow=%s app=%s trigger=%s", wf_cfg.name, config.name, wf_cfg.trigger.type)
 
+    logger.info(
+        "build app=%s, pipelines=%d routing=%s, workflows=%d vector_collections=%d structured_collections=%d",
+        config.name,
+        len(config.pipelines),
+        config.pipeline_routing,
+        len(config.workflows),
+        len(config.vector_collections),
+        len(config.structured_collections),
+    )
     return CogBaseApp(
         config.name,
         pipelines,

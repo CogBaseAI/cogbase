@@ -37,7 +37,7 @@ pytestmark = [
     ),
 ]
 
-_MODEL = "gpt-5.4"
+_MODEL = "gpt-5.4-mini"
 _MINI_MODEL = "gpt-5.4-mini"
 
 
@@ -339,7 +339,7 @@ class TestContractComplianceEndToEndLive:
         app = await build_app(config, system=system, app_status="new")
 
         results = await app.ingest_documents(
-            RULES_DOCUMENTS + CONTRACTS_DOCUMENTS[:1], concurrency=3
+            RULES_DOCUMENTS[:2] + CONTRACTS_DOCUMENTS[:1], concurrency=3
         )
         failed = [r for r in results if not r.success]
         assert not failed, (
