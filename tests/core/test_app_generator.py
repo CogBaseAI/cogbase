@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 from cogbase.core.app_generator import (
+    _build_collection_to_pipeline_map,
     _extract_record_schemas,
     _inject_pipeline_record_schemas,
     _inject_workflow_output_schemas,
@@ -19,8 +20,8 @@ from cogbase.core.app_generator import (
     _run_propose_pipeline_config,
     _run_propose_workflow_config,
     _run_propose_workflow_schemas,
-
     _validate_extraction_schema,
+    _validate_workflow_cross_pipeline_doc_id_filters,
     _validate_workflow_output_schema,
 )
 from cogbase.config.config import AppConfig
@@ -1112,4 +1113,471 @@ class TestRunProposeWorkflowConfig:
         assert "Validated pipeline config" in system_prompt
         assert "Validated pipeline record schemas" in system_prompt
         assert "Validated workflow output schemas" in system_prompt
+
+    async def test_cross_pipeline_doc_id_filter_triggers_retry(self):
+        # First response has a structured-query on pipe-b's collection filtered by
+        # input.doc_id from pipe-a's driver. Second response corrects it.
+        llm = _make_llm(_BAD_CROSS_PIPELINE_WORKFLOW_YAML, _GOOD_SAME_PIPELINE_WORKFLOW_YAML)
+        message, stored_yaml = await _run_propose_workflow_config(
+            llm, _CONVERSATION, _TWO_PIPELINE_CONFIG_DICT, _TWO_PIPELINE_RECORD_SCHEMAS,
+            {"findings": _SIMPLE_FINDING_WORKFLOW_SCHEMA},
+        )
+        assert message == "Config validated."
+        assert stored_yaml is not None
+        assert llm.complete.call_count == 2
+        # The error message sent back on retry names the bad collection and explains the fix.
+        retry_user_msg = llm.complete.call_args_list[1][0][0][-1]["content"]
+        assert "col_b" in retry_user_msg
+        assert "vector-search" in retry_user_msg
+
+
+# ---------------------------------------------------------------------------
+# Fixtures for cross-pipeline doc_id filter tests
+# ---------------------------------------------------------------------------
+
+_TWO_PIPELINE_CONFIG_DICT = {
+    "name": "two-pipeline-app",
+    "vector_collections": [
+        {"name": "docs_a", "description": "Docs A."},
+        {"name": "docs_b", "description": "Docs B."},
+    ],
+    "structured_collections": [
+        {
+            "name": "col_a",
+            "description": "Records from pipeline A.",
+            "schema": '{"type":"object","properties":{"doc_id":{"type":"string","description":"doc id"},"value":{"type":"string","description":"value"}},"required":["doc_id"]}',
+            "primary_fields": ["doc_id"],
+        },
+        {
+            "name": "col_b",
+            "description": "Records from pipeline B.",
+            "schema": '{"type":"object","properties":{"doc_id":{"type":"string","description":"doc id"},"value":{"type":"string","description":"value"}},"required":["doc_id"]}',
+            "primary_fields": ["doc_id"],
+        },
+    ],
+    "pipelines": [
+        {
+            "name": "pipe-a",
+            "routing_description": "Type A documents.",
+            "steps": [
+                {"tool": "chunk-embed-upsert", "collection": "docs_a"},
+                {
+                    "tool": "extract-structured",
+                    "collection": "col_a",
+                    "extractor": {
+                        "type": "llm",
+                        "extraction_schema": '{"type":"object","properties":{"value":{"type":"string","description":"Value"}}}',
+                        "prompt": "Extract value.",
+                    },
+                },
+            ],
+        },
+        {
+            "name": "pipe-b",
+            "routing_description": "Type B documents.",
+            "steps": [
+                {"tool": "chunk-embed-upsert", "collection": "docs_b"},
+                {
+                    "tool": "extract-structured",
+                    "collection": "col_b",
+                    "extractor": {
+                        "type": "llm",
+                        "extraction_schema": '{"type":"object","properties":{"value":{"type":"string","description":"Value"}}}',
+                        "prompt": "Extract value.",
+                    },
+                },
+            ],
+        },
+    ],
+}
+
+_TWO_PIPELINE_RECORD_SCHEMAS = {
+    "col_a": '{"type":"object","properties":{"doc_id":{"type":"string"},"value":{"type":"string"}},"required":["doc_id"]}',
+    "col_b": '{"type":"object","properties":{"doc_id":{"type":"string"},"value":{"type":"string"}},"required":["doc_id"]}',
+}
+
+_SIMPLE_FINDING_WORKFLOW_SCHEMA = json.dumps({
+    "type": "object",
+    "properties": {
+        "doc_id": {"type": "string", "description": "Source doc id"},
+        "result": {"type": "string", "description": "Result"},
+    },
+})
+
+# Workflow YAML that incorrectly filters a pipe-b collection by a pipe-a doc_id.
+_BAD_CROSS_PIPELINE_WORKFLOW_YAML = """\
+structured_collections:
+  - name: findings
+    description: Analysis findings.
+workflows:
+  - name: analyze
+    trigger:
+      type: manual
+    params_from_collection:
+      collection: col_a
+      filters:
+        doc_id: "{{ doc.doc_id }}"
+      params:
+        doc_id: "{{ record.doc_id }}"
+    steps:
+      - id: bad_step
+        tool: structured-query
+        collection: col_b
+        filters:
+          doc_id: "{{ input.doc_id }}"
+      - id: judge
+        tool: llm-structured
+        prompt: "Judge."
+        input:
+          context: "{{ steps.bad_step.records }}"
+        output_schema: '{"type":"object","properties":{"doc_id":{"type":"string","description":"Source doc id"},"result":{"type":"string","description":"Result"}}}'
+      - id: save
+        tool: structured-save
+        collection: findings
+        primary_fields: [doc_id]
+        records:
+          - "{{ steps.judge.output }}"
+"""
+
+# Corrected workflow using a same-pipeline query instead.
+_GOOD_SAME_PIPELINE_WORKFLOW_YAML = """\
+structured_collections:
+  - name: findings
+    description: Analysis findings.
+workflows:
+  - name: analyze
+    trigger:
+      type: manual
+    params_from_collection:
+      collection: col_a
+      filters:
+        doc_id: "{{ doc.doc_id }}"
+      params:
+        doc_id: "{{ record.doc_id }}"
+    steps:
+      - id: load_records
+        tool: structured-query
+        collection: col_a
+        filters:
+          doc_id: "{{ input.doc_id }}"
+      - id: judge
+        tool: llm-structured
+        prompt: "Judge."
+        input:
+          context: "{{ steps.load_records.records }}"
+        output_schema: '{"type":"object","properties":{"doc_id":{"type":"string","description":"Source doc id"},"result":{"type":"string","description":"Result"}}}'
+      - id: save
+        tool: structured-save
+        collection: findings
+        primary_fields: [doc_id]
+        records:
+          - "{{ steps.judge.output }}"
+"""
+
+
+# ---------------------------------------------------------------------------
+# _build_collection_to_pipeline_map
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCollectionToPipelineMap:
+    def test_empty_config_returns_empty_map(self):
+        assert _build_collection_to_pipeline_map({}) == {}
+
+    def test_maps_each_collection_to_its_pipeline(self):
+        cfg = {
+            "pipelines": [
+                {
+                    "name": "pipe-a",
+                    "steps": [
+                        {"tool": "extract-structured", "collection": "col_a"},
+                        {"tool": "chunk-embed-upsert", "collection": "chunks"},
+                    ],
+                },
+                {
+                    "name": "pipe-b",
+                    "steps": [
+                        {"tool": "extract-structured", "collection": "col_b"},
+                    ],
+                },
+            ]
+        }
+        result = _build_collection_to_pipeline_map(cfg)
+        assert result == {"col_a": "pipe-a", "chunks": "pipe-a", "col_b": "pipe-b"}
+
+    def test_step_without_collection_key_is_ignored(self):
+        cfg = {
+            "pipelines": [
+                {
+                    "name": "pipe-a",
+                    "steps": [{"tool": "some-tool"}],
+                }
+            ]
+        }
+        assert _build_collection_to_pipeline_map(cfg) == {}
+
+    def test_no_pipelines_key_returns_empty_map(self):
+        assert _build_collection_to_pipeline_map({"workflows": []}) == {}
+
+
+# ---------------------------------------------------------------------------
+# _validate_workflow_cross_pipeline_doc_id_filters
+# ---------------------------------------------------------------------------
+
+
+def _two_pipeline_base() -> dict:
+    """Config with two pipelines: vendor-contracts (col_a) and policy-documents (col_b)."""
+    return {
+        "pipelines": [
+            {
+                "name": "vendor-contracts",
+                "steps": [
+                    {"tool": "extract-structured", "collection": "vendor_contract_clauses"},
+                    {"tool": "extract-structured", "collection": "vendor_contract_metadata"},
+                ],
+            },
+            {
+                "name": "policy-documents",
+                "steps": [
+                    {"tool": "extract-structured", "collection": "policy_rules"},
+                    {"tool": "extract-structured", "collection": "policy_documents"},
+                    {"tool": "chunk-embed-upsert", "collection": "policy_chunks"},
+                ],
+            },
+        ],
+    }
+
+
+class TestValidateWorkflowCrossPipelineDocIdFilters:
+    def test_no_workflows_returns_no_errors(self):
+        cfg = {**_two_pipeline_base(), "workflows": []}
+        assert _validate_workflow_cross_pipeline_doc_id_filters(cfg) == []
+
+    def test_empty_config_returns_no_errors(self):
+        assert _validate_workflow_cross_pipeline_doc_id_filters({}) == []
+
+    def test_same_pipeline_doc_id_filter_is_ok(self):
+        # Querying vendor_contract_clauses by input.doc_id is fine — same pipeline.
+        cfg = {
+            **_two_pipeline_base(),
+            "workflows": [
+                {
+                    "name": "check-contracts",
+                    "params_from_collection": {
+                        "collection": "vendor_contract_metadata",
+                        "params": {"doc_id": "{{ record.doc_id }}"},
+                    },
+                    "steps": [
+                        {
+                            "id": "load_clauses",
+                            "tool": "structured-query",
+                            "collection": "vendor_contract_clauses",
+                            "filters": {"doc_id": "{{ input.doc_id }}"},
+                        }
+                    ],
+                }
+            ],
+        }
+        assert _validate_workflow_cross_pipeline_doc_id_filters(cfg) == []
+
+    def test_cross_pipeline_input_doc_id_returns_error(self):
+        # Querying policy_rules with a contract doc_id: the exact bug from the live log.
+        cfg = {
+            **_two_pipeline_base(),
+            "workflows": [
+                {
+                    "name": "check-contracts",
+                    "params_from_collection": {
+                        "collection": "vendor_contract_metadata",
+                        "params": {"doc_id": "{{ record.doc_id }}"},
+                    },
+                    "steps": [
+                        {
+                            "id": "retrieve_policy_rules",
+                            "tool": "structured-query",
+                            "collection": "policy_rules",
+                            "filters": {"doc_id": "{{ input.doc_id }}"},
+                        }
+                    ],
+                }
+            ],
+        }
+        errors = _validate_workflow_cross_pipeline_doc_id_filters(cfg)
+        assert len(errors) == 1
+        assert "policy_rules" in errors[0]
+        assert "vendor-contracts" in errors[0]
+        assert "policy-documents" in errors[0]
+        assert "vector-search" in errors[0]
+
+    def test_cross_pipeline_item_doc_id_in_foreach_returns_error(self):
+        # Inside a foreach, filtering policy_rules by item.doc_id is equally wrong.
+        cfg = {
+            **_two_pipeline_base(),
+            "workflows": [
+                {
+                    "name": "check-contracts",
+                    "params_from_collection": {
+                        "collection": "vendor_contract_metadata",
+                        "params": {"doc_id": "{{ record.doc_id }}"},
+                    },
+                    "steps": [
+                        {
+                            "id": "load_clauses",
+                            "tool": "structured-query",
+                            "collection": "vendor_contract_clauses",
+                            "filters": {"doc_id": "{{ input.doc_id }}"},
+                        },
+                        {
+                            "id": "review_each_clause",
+                            "foreach": "{{ steps.load_clauses.records }}",
+                            "steps": [
+                                {
+                                    "id": "bad_nested_step",
+                                    "tool": "structured-query",
+                                    "collection": "policy_rules",
+                                    "filters": {"doc_id": "{{ item.doc_id }}"},
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+        errors = _validate_workflow_cross_pipeline_doc_id_filters(cfg)
+        assert len(errors) == 1
+        assert "bad_nested_step" in errors[0]
+        assert "policy_rules" in errors[0]
+
+    def test_multiple_cross_pipeline_steps_each_flagged(self):
+        # Both policy_rules and policy_documents queried with contract doc_id.
+        cfg = {
+            **_two_pipeline_base(),
+            "workflows": [
+                {
+                    "name": "check-contracts",
+                    "params_from_collection": {
+                        "collection": "vendor_contract_metadata",
+                        "params": {"doc_id": "{{ record.doc_id }}"},
+                    },
+                    "steps": [
+                        {
+                            "id": "foreach_block",
+                            "foreach": "{{ [] }}",
+                            "steps": [
+                                {
+                                    "id": "bad_rules",
+                                    "tool": "structured-query",
+                                    "collection": "policy_rules",
+                                    "filters": {"doc_id": "{{ input.doc_id }}"},
+                                },
+                                {
+                                    "id": "bad_docs",
+                                    "tool": "structured-query",
+                                    "collection": "policy_documents",
+                                    "filters": {"doc_id": "{{ input.doc_id }}"},
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        errors = _validate_workflow_cross_pipeline_doc_id_filters(cfg)
+        assert len(errors) == 2
+        flagged_ids = {e.split("step '")[1].split("'")[0] for e in errors}
+        assert flagged_ids == {"bad_rules", "bad_docs"}
+
+    def test_fixed_string_doc_id_filter_not_flagged(self):
+        # A hard-coded doc_id value (no Jinja2) is not flagged.
+        cfg = {
+            **_two_pipeline_base(),
+            "workflows": [
+                {
+                    "name": "check-contracts",
+                    "params_from_collection": {
+                        "collection": "vendor_contract_metadata",
+                        "params": {"doc_id": "{{ record.doc_id }}"},
+                    },
+                    "steps": [
+                        {
+                            "id": "lookup",
+                            "tool": "structured-query",
+                            "collection": "policy_rules",
+                            "filters": {"doc_id": "some-fixed-policy-id"},
+                        }
+                    ],
+                }
+            ],
+        }
+        assert _validate_workflow_cross_pipeline_doc_id_filters(cfg) == []
+
+    def test_cross_pipeline_non_doc_id_filter_not_flagged(self):
+        # Cross-pipeline query filtering by a field other than doc_id is not caught.
+        cfg = {
+            **_two_pipeline_base(),
+            "workflows": [
+                {
+                    "name": "check-contracts",
+                    "params_from_collection": {
+                        "collection": "vendor_contract_metadata",
+                        "params": {"doc_id": "{{ record.doc_id }}"},
+                    },
+                    "steps": [
+                        {
+                            "id": "lookup",
+                            "tool": "structured-query",
+                            "collection": "policy_rules",
+                            "filters": {"topic": "{{ item.clause_type }}"},
+                        }
+                    ],
+                }
+            ],
+        }
+        assert _validate_workflow_cross_pipeline_doc_id_filters(cfg) == []
+
+    def test_driver_collection_not_in_any_pipeline_skips_gracefully(self):
+        # params_from_collection references a collection with no known pipeline.
+        cfg = {
+            **_two_pipeline_base(),
+            "workflows": [
+                {
+                    "name": "orphan",
+                    "params_from_collection": {"collection": "unknown_collection"},
+                    "steps": [
+                        {
+                            "id": "step",
+                            "tool": "structured-query",
+                            "collection": "policy_rules",
+                            "filters": {"doc_id": "{{ input.doc_id }}"},
+                        }
+                    ],
+                }
+            ],
+        }
+        assert _validate_workflow_cross_pipeline_doc_id_filters(cfg) == []
+
+    def test_vector_search_on_cross_pipeline_collection_not_flagged(self):
+        # vector-search is the correct cross-pipeline tool — should never be flagged.
+        cfg = {
+            **_two_pipeline_base(),
+            "workflows": [
+                {
+                    "name": "check-contracts",
+                    "params_from_collection": {
+                        "collection": "vendor_contract_metadata",
+                        "params": {"doc_id": "{{ record.doc_id }}"},
+                    },
+                    "steps": [
+                        {
+                            "id": "retrieve_policy_context",
+                            "tool": "vector-search",
+                            "collection": "policy_chunks",
+                            "query": "{{ item.clause_text }}",
+                            "top_k": 5,
+                        }
+                    ],
+                }
+            ],
+        }
+        assert _validate_workflow_cross_pipeline_doc_id_filters(cfg) == []
 

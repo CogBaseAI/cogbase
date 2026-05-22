@@ -279,11 +279,82 @@ class TestContractComplianceEndToEndLive:
     async def test_ingest_workflow_and_query(self, llm, embedder):
         from api.factory import build_app
         from api.system_resources import SystemResources
+        from cogbase.core.models import Document
         from cogbase.core.query_runner import QueryResult
         from cogbase.stores.structured.memory import InMemoryStructuredStore
         from cogbase.stores.vector.faiss_store import FAISSVectorStore
-        from examples.contract_compliance_demo.contracts_data import CONTRACTS_DOCUMENTS
-        from examples.contract_compliance_demo.rules_data import RULES_DOCUMENTS
+
+        # Short documents — enough coverage for the assertions, fast to ingest.
+        # Rules: 12-month liability cap (mutual), mutual consequential exclusion,
+        #        net-30 minimum payment, ≤1.5%/month late interest.
+        # Contract-001: 3-month liability cap (NON-COMPLIANT), vendor-only
+        #   consequential exclusion (NON-COMPLIANT), net-30 payment (COMPLIANT),
+        #   New York governing law (needed for the governing-law query).
+        RULES_DOCUMENTS = [
+            Document(
+                doc_id="rules-001",
+                metadata={"doc_type": "rules", "topic": "liability"},
+                text="""\
+COMPANY VENDOR CONTRACT STANDARDS — LIABILITY AND INDEMNIFICATION
+
+1. LIABILITY CAP
+1.1  Each party's total aggregate liability shall not exceed the total fees paid
+in the twelve (12) months immediately preceding the event giving rise to the claim.
+
+2. EXCLUSION OF CONSEQUENTIAL DAMAGES
+2.1  Neither party shall be liable for indirect, incidental, special, or consequential
+damages, including loss of profits or data.
+2.2  The consequential damages exclusion must be mutual. Excluding them for the Vendor
+only while preserving them for the Company is not acceptable.
+
+3. INDEMNIFICATION
+3.1  Indemnification obligations must be mutual. Requiring the Company to indemnify
+the Vendor for the Vendor's own IP infringement is not acceptable.
+""",
+            ),
+            Document(
+                doc_id="rules-002",
+                metadata={"doc_type": "rules", "topic": "payment_terms"},
+                text="""\
+COMPANY VENDOR CONTRACT STANDARDS — PAYMENT TERMS
+
+1. STANDARD PAYMENT TERMS
+1.1  Payment terms shorter than net-30 are not acceptable without CFO approval.
+
+2. LATE PAYMENT INTEREST
+2.1  Late-payment interest shall not exceed 1.5% per month on overdue amounts.
+""",
+            ),
+        ]
+        CONTRACTS_DOCUMENTS = [
+            Document(
+                doc_id="contract-001",
+                metadata={"doc_type": "contract", "source": "apex_cloud_saas_agreement.txt"},
+                text="""\
+CLOUD SOFTWARE SERVICES AGREEMENT
+Effective Date: March 1, 2025
+Vendor: Apex Cloud Solutions Inc. ("Vendor")
+Company: Acme Corporation ("Company")
+
+ARTICLE 2 — PAYMENT TERMS
+2.1  Company shall pay each undisputed invoice within thirty (30) days of receipt.
+2.2  Overdue amounts accrue interest at 1.5% per month until paid in full.
+
+ARTICLE 5 — LIMITATION OF LIABILITY
+5.1  VENDOR'S TOTAL AGGREGATE LIABILITY SHALL NOT EXCEED THE TOTAL FEES PAID BY
+COMPANY TO VENDOR IN THE THREE (3) MONTHS IMMEDIATELY PRECEDING THE EVENT GIVING
+RISE TO THE CLAIM.
+5.2  IN NO EVENT SHALL VENDOR BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL,
+PUNITIVE, OR CONSEQUENTIAL DAMAGES, INCLUDING LOSS OF PROFITS OR DATA.
+
+ARTICLE 9 — GOVERNING LAW
+9.1  This Agreement shall be governed by the laws of the State of New York,
+without regard to conflict-of-law principles.
+
+IN WITNESS WHEREOF, the parties have executed this Agreement as of the Effective Date.
+""",
+            ),
+        ]
 
         _MAX_ROUNDS = 4
 
@@ -339,7 +410,7 @@ class TestContractComplianceEndToEndLive:
         app = await build_app(config, system=system, app_status="new")
 
         results = await app.ingest_documents(
-            RULES_DOCUMENTS[:2] + CONTRACTS_DOCUMENTS[:1], concurrency=3
+            RULES_DOCUMENTS + CONTRACTS_DOCUMENTS, concurrency=3
         )
         failed = [r for r in results if not r.success]
         assert not failed, (
@@ -456,7 +527,61 @@ class TestContractAnalystEndToEndLive:
         from cogbase.core.query_runner import QueryResult
         from cogbase.stores.structured.memory import InMemoryStructuredStore
         from cogbase.stores.vector.faiss_store import FAISSVectorStore
-        from examples.contract_analyst_demo.saas_contracts import CONTRACTS
+
+        # Two short contracts — enough to satisfy all three query assertions.
+        # saas-003: Nexus Security / $2M liability cap / expires 2025-12-31 / Delaware / 90-day notice.
+        # saas-005: Apex Systems / $500K cap / expires 2025-09-30 / Texas / 180-day notice.
+        # Both expire before 2026-01-01 (satisfies answer1 ≥2 hits).
+        # Only saas-003 has a cap above $1M (satisfies answer2).
+        # saas-005 has the longest notice period at 180 days (satisfies answer3).
+        CONTRACTS = {
+            "saas-003": """\
+CLOUD SECURITY PLATFORM SUBSCRIPTION AGREEMENT
+Contract ID: CSPSA-2024-0512
+Effective Date: January 1, 2024
+Expiry Date: December 31, 2025
+Customer: Meridian Analytics Inc. ("Customer")
+Provider: Nexus Security Ltd., Wilmington, DE ("Provider")
+
+1. FEES
+Annual subscription fee: USD 180,000, payable upfront within 15 days of the Effective Date.
+
+2. LIMITATION OF LIABILITY
+2.1  Provider's total aggregate liability for all claims shall not exceed USD 2,000,000.
+2.2  Neither party shall be liable for indirect, incidental, or consequential damages.
+
+3. TERMINATION
+Either party may terminate for convenience upon ninety (90) days' prior written notice.
+
+4. GOVERNING LAW
+This Agreement is governed by the laws of the State of Delaware.
+""",
+            "saas-005": """\
+ENTERPRISE WORKFLOW MANAGEMENT SUBSCRIPTION AGREEMENT
+Contract Reference: EWMSA-2023-0312
+Effective Date: October 1, 2023
+Expiry Date: September 30, 2025
+Customer: Meridian Analytics Inc. ("Customer")
+Provider: Apex Systems Inc., Houston, TX ("Provider")
+
+1. FEES
+Annual subscription fee: USD 360,000, payable within 30 days of the Effective Date.
+
+2. LIMITATION OF LIABILITY
+Provider's aggregate liability shall not exceed USD 500,000.
+Neither party shall be liable for indirect, consequential, or punitive damages.
+
+3. TERMINATION
+3.1  Either party may terminate for convenience upon one hundred eighty (180) days' prior
+written notice.  This extended notice period reflects Customer's operational dependency on
+the platform and the time required for migration to an alternative solution.
+3.2  Either party may terminate for cause if the breaching party fails to cure a material
+breach within 30 days of written notice.
+
+4. GOVERNING LAW
+This Agreement is governed by the laws of the State of Texas.
+""",
+        }
 
         _MAX_ROUNDS = 4
 
@@ -531,13 +656,12 @@ class TestContractAnalystEndToEndLive:
         expiring_hits = sum(
             any(kw in answer1 for kw in ids)
             for ids in [
-                ("saas-001", "cloudstore", "acme"),
                 ("saas-003", "securevault", "nexus"),
                 ("saas-005", "workflowmanager", "apex"),
             ]
         )
         assert expiring_hits >= 2, (
-            f"expected ≥2 of the 3 contracts expiring before 2026 to be named:\n{answer1}"
+            f"expected both contracts (saas-003, saas-005) expiring before 2026 to be named:\n{answer1}"
         )
 
         answer2 = (await _query(

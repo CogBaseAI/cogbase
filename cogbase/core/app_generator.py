@@ -407,6 +407,13 @@ the workflow steps.
      duplicate facts, evidence gaps, reconciliations, or cross-record consistency,
      use structured-query with selective filters such as issue, entity, date range,
      doc_id, account_id, or contract_id to load only the relevant peer records.
+   - Never filter a collection from one pipeline by a doc_id derived from a different
+     pipeline. For example, if a workflow iterates over vendor contract clauses
+     (where input.doc_id is a contract ID), do NOT query policy_rules or policy_documents
+     with filters: {doc_id: '{{ input.doc_id }}'} or {doc_id: '{{ item.doc_id }}'} —
+     policy records carry policy doc_ids, not contract doc_ids, so this filter always
+     returns zero results. Use vector-search instead to retrieve cross-pipeline reference
+     material by semantic similarity (e.g. query policy_chunks by clause text or topic).
 7. YAML quoting: any plain string value that contains ": " (colon followed by a space) \
    will break YAML parsing. Always wrap such values in double quotes. \
    Example — BAD:  description: Findings produced by the workflow: compliance status, severity. \
@@ -747,6 +754,71 @@ def _validate_workflow_output_schema(schema_dict: dict, collection_name: str) ->
         build_model_from_json_schema(schema_dict, model_name=collection_name)
     except Exception as exc:
         errors.append(f"[{collection_name}] invalid JSON Schema: {exc}")
+    return errors
+
+
+def _build_collection_to_pipeline_map(config_dict: dict) -> dict[str, str]:
+    """Return a mapping from structured collection name to the pipeline that writes to it."""
+    mapping: dict[str, str] = {}
+    for pipeline in config_dict.get("pipelines", []):
+        pipeline_name = pipeline.get("name", "")
+        for step in pipeline.get("steps", []):
+            coll = step.get("collection", "")
+            if coll:
+                mapping[coll] = pipeline_name
+    return mapping
+
+
+def _check_steps_cross_pipeline_doc_id(
+    steps: list,
+    driver_pipeline: str,
+    coll_to_pipeline: dict[str, str],
+    wf_name: str,
+) -> list[str]:
+    errors: list[str] = []
+    for step in steps:
+        inner = step.get("steps")
+        if inner:
+            errors.extend(
+                _check_steps_cross_pipeline_doc_id(inner, driver_pipeline, coll_to_pipeline, wf_name)
+            )
+        if step.get("tool") != "structured-query":
+            continue
+        coll = step.get("collection", "")
+        target_pipeline = coll_to_pipeline.get(coll)
+        if not target_pipeline or target_pipeline == driver_pipeline:
+            continue
+        doc_id_val = str((step.get("filters") or {}).get("doc_id", ""))
+        if "{{" in doc_id_val:
+            errors.append(
+                f"Workflow '{wf_name}' step '{step.get('id', '?')}': structured-query on "
+                f"collection '{coll}' (pipeline '{target_pipeline}') filtered by doc_id "
+                f"derived from pipeline '{driver_pipeline}'. Records in '{coll}' carry "
+                f"'{target_pipeline}' doc_ids — this filter always returns zero results. "
+                f"Use vector-search to retrieve cross-pipeline reference material instead."
+            )
+    return errors
+
+
+def _validate_workflow_cross_pipeline_doc_id_filters(config_dict: dict) -> list[str]:
+    """Detect structured-query steps filtering a cross-pipeline collection by a doc_id template."""
+    coll_to_pipeline = _build_collection_to_pipeline_map(config_dict)
+    errors: list[str] = []
+    for workflow in config_dict.get("workflows", []):
+        wf_name = workflow.get("name", "")
+        pfc = workflow.get("params_from_collection") or {}
+        driver_coll = pfc.get("collection", "")
+        driver_pipeline = coll_to_pipeline.get(driver_coll)
+        if not driver_pipeline:
+            continue
+        errors.extend(
+            _check_steps_cross_pipeline_doc_id(
+                workflow.get("steps", []),
+                driver_pipeline,
+                coll_to_pipeline,
+                wf_name,
+            )
+        )
     return errors
 
 
@@ -1120,6 +1192,9 @@ async def _run_propose_workflow_config(
             if not merged_dict["workflows"]:
                 raise ValueError("workflows section is empty — at least one workflow is required")
             _inject_workflow_output_schemas(merged_dict, workflow_schemas)
+            cross_pipeline_errors = _validate_workflow_cross_pipeline_doc_id_filters(merged_dict)
+            if cross_pipeline_errors:
+                raise ValueError("\n".join(cross_pipeline_errors))
             config = AppConfig.model_validate(merged_dict)
         except Exception as exc:
             errors = [str(exc)]
