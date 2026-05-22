@@ -7,5 +7,3 @@ Rules:
 - reporting_period must be in "Q# YYYY" format (e.g. "Q3 2024"). If only a year is given, use "FY YYYY".
 - key_milestones and notable_risks must be concise verbatim phrases from the document, not paraphrases.
 - Return ONLY the JSON object — no explanation, no markdown fences.
-
-Return a single JSON object with these fields:

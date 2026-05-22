@@ -6,5 +6,3 @@ Rules:
 - Return ONLY the JSON object — no explanation, no markdown fences.
 - Format dates as YYYY-MM-DD.
 - For parties, return an array where each element has 'name' (legal name) and 'role' (role in the agreement, e.g. vendor, customer) keys.
-
-Return a single JSON object with these fields:

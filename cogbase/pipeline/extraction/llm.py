@@ -34,6 +34,7 @@ _DEFAULT_LIST_SYSTEM_PROMPT_PREFIX = (
     "- Use null for any field not found.\n"
     "- Return an empty array when no items are found.\n"
     "- Return ONLY the JSON object — no explanation, no markdown fences.\n\n"
+    "Return a single JSON object matching this JSON Schema:\n\n"
 )
 
 
@@ -91,8 +92,9 @@ class LLMExtractor(ExtractorBase):
                 + "Each element must validate against this JSON Schema:\n\n"
                 + schema_hint
             )
-        base = (config.prompt or "") if config.prompt else _DEFAULT_SYSTEM_PROMPT_PREFIX
-        return base + schema_hint
+        if config.prompt:
+            return config.prompt + "\n\nReturn a single JSON object matching this JSON Schema:\n\n" + schema_hint
+        return _DEFAULT_SYSTEM_PROMPT_PREFIX + schema_hint
 
     def _validate_schema_contract(self, config: ExtractorConfig) -> None:
         extraction_fields = set(self._extraction_schema.get("properties", {}).keys())
