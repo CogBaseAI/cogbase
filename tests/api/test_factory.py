@@ -124,6 +124,92 @@ class TestJsonSchemaToCollectionFields:
         result = _json_schema_to_collection_fields(schema)
         assert list(result.keys()) == ["z", "a"]
 
+    def test_anyof_ref_and_null_maps_to_json(self):
+        # Regression: PaymentTerms | None → anyOf[$ref, null] was incorrectly
+        # mapped to STRING because $ref has no "type" key and was filtered out.
+        schema = {
+            "properties": {
+                "payment_terms": {
+                    "anyOf": [
+                        {"$ref": "#/$defs/PaymentTerms"},
+                        {"type": "null"},
+                    ]
+                }
+            }
+        }
+        result = _json_schema_to_collection_fields(schema)
+        assert result["payment_terms"].type == FieldType.JSON
+
+    def test_anyof_ref_without_null_maps_to_json(self):
+        schema = {
+            "properties": {
+                "nested": {"anyOf": [{"$ref": "#/$defs/SomeModel"}]}
+            }
+        }
+        result = _json_schema_to_collection_fields(schema)
+        assert result["nested"].type == FieldType.JSON
+
+    def test_bare_ref_field_maps_to_json(self):
+        schema = {"properties": {"nested": {"$ref": "#/$defs/SomeModel"}}}
+        result = _json_schema_to_collection_fields(schema)
+        assert result["nested"].type == FieldType.JSON
+
+
+# ---------------------------------------------------------------------------
+# Regression: nested-object (anyOf $ref | null) round-trip via SQLite
+# ---------------------------------------------------------------------------
+
+class TestNestedObjectSqliteRoundTrip:
+    """Verify that $ref-typed fields survive a full SQLite save/query cycle.
+
+    Before the fix, _json_schema_to_collection_fields mapped PaymentTerms | None
+    to FieldType.STRING, causing sqlite3.InterfaceError when a dict value arrived.
+    """
+
+    async def test_ref_nullable_field_saves_and_queries(self):
+        from pydantic import BaseModel, Field, create_model
+        from cogbase.stores.structured.sqlite import SQLiteStructuredStore
+        from cogbase.stores.schema import CollectionSchema
+
+        class PaymentTerms(BaseModel):
+            schedule: str | None = None
+            due_date: str | None = None
+
+        class ContractExtraction(BaseModel):
+            contract_type: str | None = None
+            payment_terms: PaymentTerms | None = None
+
+        ContractRecord = create_model(
+            "ContractRecord", doc_id=(str, ...), __base__=ContractExtraction
+        )
+
+        json_schema = ContractRecord.model_json_schema()
+        fields = _json_schema_to_collection_fields(json_schema)
+
+        assert fields["payment_terms"].type == FieldType.JSON
+
+        schema = CollectionSchema(
+            name="contracts",
+            description="test",
+            primary_fields=["doc_id"],
+            fields=fields,
+        )
+
+        store = SQLiteStructuredStore(":memory:")
+        await store.create_collection(schema)
+
+        record = ContractRecord(
+            doc_id="doc-1",
+            contract_type="SaaS",
+            payment_terms=PaymentTerms(schedule="net-30", due_date="2025-01-01"),
+        )
+        await store.save("contracts", [record.model_dump()])
+
+        rows = await store.query("contracts")
+        assert len(rows) == 1
+        assert rows[0]["doc_id"] == "doc-1"
+        assert rows[0]["payment_terms"] == {"schedule": "net-30", "due_date": "2025-01-01"}
+
 
 # ---------------------------------------------------------------------------
 # build_app — structured store resolution

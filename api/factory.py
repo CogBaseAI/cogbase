@@ -56,7 +56,7 @@ def _json_schema_to_collection_fields(schema: dict) -> dict[str, FieldSchema]:
         # unwrap anyOf nullable: [{"type": "X"}, {"type": "null"}]
         any_of = field_schema.get("anyOf")
         if any_of:
-            non_null = [s for s in any_of if s.get("type") not in ("null", None)]
+            non_null = [s for s in any_of if s.get("type") != "null"]
             field_schema = non_null[0] if non_null else {"type": "string"}
         t = field_schema.get("type")
         if t == "integer":
@@ -65,7 +65,7 @@ def _json_schema_to_collection_fields(schema: dict) -> dict[str, FieldSchema]:
             result[field_name] = FieldSchema(type=FieldType.FLOAT)
         elif t == "boolean":
             result[field_name] = FieldSchema(type=FieldType.BOOLEAN)
-        elif t in ("object", "array"):
+        elif t in ("object", "array") or "$ref" in field_schema:
             result[field_name] = FieldSchema(type=FieldType.JSON)
         else:
             result[field_name] = FieldSchema(type=FieldType.STRING)
