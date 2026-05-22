@@ -11,8 +11,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pydantic import BaseModel
-
 from cogbase.stores.structured.base import StructuredStoreBase
 from cogbase.stores.filters import Filter, Op
 from cogbase.stores.schema import CollectionSchema, FieldType
@@ -140,7 +138,7 @@ class PostgresStructuredStore(StructuredStoreBase):
 
         self._schemas[schema.name] = schema
 
-    async def save(self, collection: str, records: list[BaseModel | dict]) -> None:
+    async def _save(self, collection: str, records: list[dict]) -> None:
         schema = self._get_schema(collection)
         pool = self._get_pool()
         cols = list(schema.fields.keys())
@@ -270,8 +268,8 @@ class PostgresStructuredStore(StructuredStoreBase):
 # Row helpers
 # ---------------------------------------------------------------------------
 
-def _to_pg_row(record: BaseModel | dict, schema: CollectionSchema) -> tuple:
-    raw = record.model_dump(mode="json") if isinstance(record, BaseModel) else record
+def _to_pg_row(record: dict, schema: CollectionSchema) -> tuple:
+    raw = record
     row = []
     for field_name, field in schema.fields.items():
         val = raw.get(field_name)
@@ -280,6 +278,9 @@ def _to_pg_row(record: BaseModel | dict, schema: CollectionSchema) -> tuple:
         elif field.type == FieldType.JSON:
             # asyncpg accepts a JSON string for JSONB columns.
             row.append(json.dumps(val))
+        elif field.type == FieldType.STRING and not isinstance(val, str):
+            # asyncpg won't coerce non-string Python types (e.g. datetime) into TEXT.
+            row.append(str(val))
         else:
             row.append(val)
     return tuple(row)

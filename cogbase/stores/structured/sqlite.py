@@ -4,8 +4,6 @@ import json
 import sqlite3
 from pathlib import Path
 
-from pydantic import BaseModel
-
 from cogbase.stores.structured.base import StructuredStoreBase
 from cogbase.stores.filters import Filter, matches, to_sql_where
 from cogbase.stores.schema import CollectionSchema, FieldType
@@ -90,7 +88,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
         self._conn.commit()
         self._schemas[schema.name] = schema
 
-    async def save(self, collection: str, records: list[BaseModel | dict]) -> None:
+    async def _save(self, collection: str, records: list[dict]) -> None:
         schema = self._get_schema(collection)
         cols = list(schema.fields.keys())
         col_list = ", ".join(f'"{c}"' for c in cols)
@@ -244,8 +242,8 @@ class SQLiteStructuredStore(StructuredStoreBase):
 # Row helpers
 # ------------------------------------------------------------------
 
-def _to_sql_row(record: BaseModel | dict, schema: CollectionSchema) -> tuple:
-    raw = record.model_dump(mode="json") if isinstance(record, BaseModel) else record
+def _to_sql_row(record: dict, schema: CollectionSchema) -> tuple:
+    raw = record
     row = []
     for field_name, field in schema.fields.items():
         val = raw.get(field_name)

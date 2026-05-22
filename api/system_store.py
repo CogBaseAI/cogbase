@@ -48,7 +48,7 @@ class SystemStore:
         await self._store.create_collection(APP_RECORDS_SCHEMA)
 
     async def save_app(self, record: AppRecord) -> None:
-        await self._store.save("app_records", [record])
+        await self._store.save("app_records", [record.model_dump()])
 
     async def get_app(self, name: str) -> AppRecord | None:
         rows = await self._store.query_as(

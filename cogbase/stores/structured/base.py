@@ -55,13 +55,18 @@ class StructuredStoreBase(abc.ABC):
     async def create_collection(self, schema: CollectionSchema) -> None:
         """Declare a collection. Idempotent - safe to call on every startup."""
 
-    @abc.abstractmethod
-    async def save(self, collection: str, records: list[BaseModel | dict]) -> None:
+    async def save(self, collection: str, records: list[dict]) -> None:
         """Upsert records into ``collection``.
 
         Fields not declared in the schema are dropped; ``primary_fields`` drive
-        the upsert key.  Each record may be a Pydantic model or a plain dict.
+        the upsert key.  Accepts both plain dicts and Pydantic models.
         """
+        dicts = [r.model_dump() if hasattr(r, "model_dump") else r for r in records]
+        await self._save(collection, dicts)
+
+    @abc.abstractmethod
+    async def _save(self, collection: str, records: list[dict]) -> None:
+        """Backend implementation of save; always receives plain dicts."""
 
     @abc.abstractmethod
     async def query(
