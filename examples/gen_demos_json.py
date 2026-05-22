@@ -16,7 +16,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from cogbase.config.config import AppConfig  # noqa: E402
+from cogbase.config.config import AppConfig, _iter_save_steps  # noqa: E402
 from api.routers.applications import _resolve_file_refs  # noqa: E402
 from examples.contract_analyst_demo.saas_contracts import CONTRACTS as CONTRACT_ANALYST_DOCS  # noqa: E402
 from examples.contract_analyst_demo.schema import ContractExtraction, ContractExtractionRecord  # noqa: E402
@@ -76,6 +76,31 @@ def _file_refs_vc_portfolio() -> dict[str, str]:
     }
 
 
+def _workflow_save_targets(config_yaml: str, workflow_actions: list[dict]) -> list[dict]:
+    """Return metadata linking each structured-save collection to its source params collection.
+
+    Used by the demo UI to detect which docs in params_from_collection are missing from
+    the save target, so it can prompt the user to run the workflow for those docs.
+    """
+    config = AppConfig.from_yaml(config_yaml)
+    targets = []
+    wf_name_to_action_idx = {wa["name"]: i for i, wa in enumerate(workflow_actions)}
+    for wf in config.workflows:
+        params_col = wf.params_from_collection.collection
+        param_key = next(iter(wf.params_from_collection.params.keys()), None)
+        if not param_key:
+            continue
+        action_idx = wf_name_to_action_idx.get(wf.name, 0)
+        for save_step in _iter_save_steps(wf.steps):
+            targets.append({
+                "save_collection": save_step.collection,
+                "params_collection": params_col,
+                "param_key": param_key,
+                "workflow_action_index": action_idx,
+            })
+    return targets
+
+
 def _docs_from_pairs(items: dict[str, str], metadata: dict) -> list[dict]:
     return [{"doc_id": doc_id, "text": text, "metadata": dict(metadata)} for doc_id, text in items.items()]
 
@@ -129,9 +154,6 @@ def build_catalog() -> dict:
                 ],
                 "notes": "Ingests board updates, LP updates, and investment memos for the portfolio demo.",
             },
-        ]
-    }
-"""
             {
                 "key": "contract-compliance",
                 "name": "contract-compliance",
@@ -163,8 +185,13 @@ def build_catalog() -> dict:
                         ],
                     }
                 ],
+                "workflow_save_targets": _workflow_save_targets(
+                    config_yaml_cc,
+                    [{"name": "check-contract-compliance"}],
+                ),
             },
-"""
+        ]
+    }
 
 
 if __name__ == "__main__":
