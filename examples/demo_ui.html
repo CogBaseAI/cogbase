@@ -518,6 +518,28 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
   border-radius: 8px; color: var(--text); font-size: 13px; padding: 7px 10px;
 }
 .wf-modal-output { max-height: 300px; }
+.demo-wf-wrap {
+  position: relative;
+  display: inline-block;
+}
+.demo-wf-wrap:has(button:disabled):hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  z-index: 100;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,.2);
+}
 .demo-pre {
   font-family: 'SF Mono', 'Cascadia Code', monospace;
   font-size: 11px;
@@ -932,7 +954,7 @@ tr:hover td { background: var(--bg3); }
         </div>
         <div class="wf-pending-bar" id="wfPendingBar">
           <div class="wf-pending-bar-msg" id="wfPendingMsg"></div>
-          <button class="btn btn-primary btn-sm" id="wfPendingBtn" onclick="openWfModalPending()">Run workflow →</button>
+          <span class="demo-wf-wrap" data-tip="Select this app under Apps, or click Deploy &amp; Ingest first"><button class="btn btn-primary btn-sm demo-wf-btn" id="wfPendingBtn" onclick="openWfModalPending()">Run workflow →</button></span>
         </div>
         <div class="data-table-wrap" id="dataTableWrap">
           <div class="empty"><p>Click a collection on the left to browse its records.</p></div>
@@ -1042,6 +1064,7 @@ function refreshWarnings() {
   toggle('queryWarn', !has);
   document.getElementById('uploadBtn').disabled = !has || pickedFiles.length === 0;
   document.getElementById('querySendBtn').disabled = !has || querying;
+  document.querySelectorAll('.demo-wf-btn').forEach(b => { b.disabled = !has; });
 }
 
 function toggle(id, show) {
@@ -1307,7 +1330,7 @@ function renderDemoCard(demo) {
         <div style="display:flex;flex-wrap:wrap;gap:8px">
           <button class="btn btn-green" id="demoDeployBtn-${esc(demo.key)}" onclick="deployDemo('${esc(demo.key)}')">Deploy &amp; Ingest</button>
           <button class="btn btn-ghost" onclick="openConfigModalByRef('${esc(demo.key)}')">View full config</button>
-          ${hasWorkflows ? `<button class="btn btn-ghost" onclick="openWfModal('${esc(demo.key)}',0)">▶ ${esc((demo.workflow_actions[0]||{}).label||'Run Workflow')}</button>` : ''}
+          ${hasWorkflows ? `<span class="demo-wf-wrap" data-tip="Select this app under Apps, or click Deploy &amp; Ingest first"><button class="btn btn-ghost demo-wf-btn" onclick="openWfModal('${esc(demo.key)}',0)" ${currentApp ? '' : 'disabled'}>▶ ${esc((demo.workflow_actions[0]||{}).label||'Run Workflow')}</button></span>` : ''}
         </div>
       </div>
       <div class="demo-block">
@@ -1417,22 +1440,63 @@ async function runDemoWorkflow(demoKey, appName, workflowName, paramKey, selectI
 
 let wfModalState = null;
 
-function openWfModal(demoKey, wfIndex, overrideValues) {
+async function openWfModal(demoKey, wfIndex, overrideValues) {
   const demo = demoCatalog.find(d => d.key === demoKey);
   if (!demo) return;
   const wf = (demo.workflow_actions || [])[wfIndex];
   if (!wf) return;
   wfModalState = { appName: demo.name, workflowName: wf.name, paramKey: wf.param_key, label: wf.label };
   document.getElementById('wfModalTitle').textContent = wf.label;
-  const values = overrideValues || wf.param_values || [];
-  const desc = overrideValues
-    ? overrideValues.length + ' ' + wf.param_label.toLowerCase() + (overrideValues.length === 1 ? ' has' : 's have') + ' not been checked yet. Select one and run the workflow.'
-    : (wf.description || ('Run the ' + wf.label + ' workflow for the selected ' + wf.param_label.toLowerCase() + '.'));
+
+  let values = overrideValues || wf.param_values || [];
+  let desc = null;
+  let allDone = false;
+
+  // When opened directly (no overrideValues) and the matching app is selected,
+  // compute pending IDs live so we only show unprocessed items.
+  if (!overrideValues && currentApp === demo.name && demo.workflow_save_targets) {
+    const target = demo.workflow_save_targets.find(t => t.workflow_action_index === wfIndex);
+    if (target) {
+      try {
+        const base = api() + '/applications/' + encodeURIComponent(currentApp) + '/collections/';
+        const [saveResp, sourceResp] = await Promise.all([
+          fetch(base + encodeURIComponent(target.save_collection) + '/query',
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filters: [], fields: null }) }),
+          fetch(base + encodeURIComponent(target.params_collection) + '/query',
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filters: [], fields: null }) }),
+        ]);
+        if (saveResp.ok && sourceResp.ok) {
+          const { records: saveRecords = [] } = await saveResp.json();
+          const { records: sourceRecords = [] } = await sourceResp.json();
+          const checkedIds = new Set(saveRecords.map(r => r[target.param_key]).filter(Boolean));
+          const pendingIds = sourceRecords.map(r => r[target.param_key]).filter(id => id && !checkedIds.has(id));
+          if (pendingIds.length) {
+            values = pendingIds;
+            desc = pendingIds.length + ' ' + wf.param_label.toLowerCase() +
+              (pendingIds.length === 1 ? ' has' : 's have') +
+              ' not been checked yet. Select one and run the workflow.';
+          } else if (sourceRecords.length) {
+            allDone = true;
+            desc = 'All ' + wf.param_label.toLowerCase() + 's have been checked — nothing to do.';
+          }
+        }
+      } catch { /* fall through to static values */ }
+    }
+  }
+
+  if (!desc) {
+    desc = overrideValues
+      ? overrideValues.length + ' ' + wf.param_label.toLowerCase() + (overrideValues.length === 1 ? ' has' : 's have') + ' not been checked yet. Select one and run the workflow.'
+      : (wf.description || ('Run the ' + wf.label + ' workflow for the selected ' + wf.param_label.toLowerCase() + '.'));
+  }
+
   document.getElementById('wfModalDesc').textContent = desc;
   document.getElementById('wfModalParamLabel').textContent = wf.param_label + ':';
   const sel = document.getElementById('wfModalSelect');
   sel.innerHTML = values.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  sel.disabled = allDone;
   document.getElementById('wfModalRunBtn').textContent = wf.label;
+  document.getElementById('wfModalRunBtn').disabled = allDone;
   const out = document.getElementById('wfModalOutput');
   out.innerHTML = '';
   out.style.display = 'none';
@@ -1441,6 +1505,8 @@ function openWfModal(demoKey, wfIndex, overrideValues) {
 
 function closeWfModal() {
   document.getElementById('wfModal').classList.remove('show');
+  document.getElementById('wfModalSelect').disabled = false;
+  document.getElementById('wfModalRunBtn').disabled = false;
   wfModalState = null;
 }
 
