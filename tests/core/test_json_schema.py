@@ -134,6 +134,21 @@ class TestNullableAnyOf:
         M = build_model_from_json_schema(schema)
         assert M(x="ok").x == "ok"
 
+    def test_anyof_json_null_value_not_null_string(self):
+        """LLM-generated schemas may emit {"type": null} (JSON null) instead of
+        {"type": "null"} (string). Both forms must be treated as nullable."""
+        schema = _make({"title": {"anyOf": [{"type": "string"}, {"type": None}], "default": None}})
+        M = build_model_from_json_schema(schema)
+        assert M().title is None
+        assert M(title="Introduction").title == "Introduction"
+        assert M.model_validate_json('{"title": null}').title is None
+
+    def test_anyof_json_null_value_first(self):
+        schema = _make({"x": {"anyOf": [{"type": None}, {"type": "integer"}], "default": None}})
+        M = build_model_from_json_schema(schema)
+        assert M().x is None
+        assert M(x=42).x == 42
+
 
 # ---------------------------------------------------------------------------
 # Nullable — type-array form (draft-04+, hand-authored schemas)
@@ -156,6 +171,14 @@ class TestNullableTypeArray:
         schema = _make({"x": {"type": ["null", "string"], "default": None}})
         M = build_model_from_json_schema(schema)
         assert M(x="ok").x == "ok"
+
+    def test_type_array_none_value_instead_of_null_string(self):
+        """["string", None] (Python None in list) must be treated the same as
+        ["string", "null"] — defence against malformed but plausible schemas."""
+        schema = _make({"r": {"type": ["string", None], "default": None}})
+        M = build_model_from_json_schema(schema)
+        assert M().r is None
+        assert M(r="hello").r == "hello"
 
     def test_type_array_with_description(self):
         schema = _make({"r": {"type": ["string", "null"], "description": "role", "default": None}})

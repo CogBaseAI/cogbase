@@ -66,7 +66,7 @@ class ExtractorBase(abc.ABC):
 
         for attempt in range(self._max_retries + 1):
             if attempt > 0:
-                await asyncio.sleep(2 ** (attempt - 1))
+                await asyncio.sleep(0.2 * 2 ** (attempt - 1))
             result = await self._extract_once(doc)
             if result is not None:
                 return result

@@ -123,6 +123,7 @@ class LLMExtractor(ExtractorBase):
         base = (config.prompt or "") if config.prompt else _DEFAULT_SYSTEM_PROMPT_PREFIX
         return (
             base
+            + "\nReturn a single JSON object with these fields:\n\n"
             + cls_json_schema_for_llm(self._extraction_model)
         )
 

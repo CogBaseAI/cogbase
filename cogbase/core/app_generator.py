@@ -372,8 +372,8 @@ the workflow steps.
 
 ## Rules
 1. output_schema in llm-structured workflow steps must be an inline JSON string — use \
-   the exact value from "Validated workflow output schemas". Never use a .json filename.
-2. prompt in llm-structured workflow steps must be inline text. Never use a .txt filename.
+   the exact value from "Validated workflow output schemas".
+2. All content is INLINE — do not use .json or .txt filenames as values anywhere.
 3. Do NOT set schema on workflow output structured_collections — schema is injected \
    automatically from the validated workflow output schemas. Output only name and \
    description for each workflow output collection.

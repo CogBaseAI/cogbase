@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, TYPE_CHECKING
@@ -23,6 +24,9 @@ def _json_default(obj: Any) -> Any:
     return str(obj)
 
 
+_MAX_RETRIES = 2
+
+
 async def run(
     step: "LLMStructuredStepConfig",
     ctx: dict,
@@ -31,30 +35,46 @@ async def run(
     if llm is None:
         raise RuntimeError("llm-structured requires an LLM")
 
-    system_message = str(render_value(step.prompt, ctx))
+    schema_model = build_model_from_json_schema(step.output_schema)
+    schema_hint = cls_json_schema_for_llm(schema_model)
+
+    system_message = (
+        str(render_value(step.prompt, ctx))
+        + f"\n\nReturn ONLY valid JSON matching this schema. No markdown fences, no explanation:\n{schema_hint}"
+    )
 
     input_values: dict[str, Any] = {
         k: render_value(v, ctx) for k, v in step.input.items()
     }
 
-    schema_model = build_model_from_json_schema(step.output_schema)
-    schema_hint = cls_json_schema_for_llm(schema_model)
+    user_message = json.dumps(input_values, default=_json_default, indent=2)
 
-    user_message = (
-        json.dumps(input_values, default=_json_default, indent=2)
-        + f"\n\n---\n\nReturn ONLY valid JSON matching this schema. No markdown fences, no explanation:\n{schema_hint}"
-    )
+    messages = [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": user_message},
+    ]
 
-    result = await llm.complete(
-        [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message},
-        ],
-        temperature=0.0,
-    )
-    content = result.get("content", "")
-    if not content:
-        raise ValueError("llm-structured: LLM returned empty response")
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        if attempt > 0:
+            await asyncio.sleep(0.2 * 2 ** (attempt - 1))
 
-    output = schema_model.model_validate_json(content)
-    return {"output": output}
+        result = await llm.complete(messages, temperature=0.0)
+        content = result.get("content", "")
+        if not content:
+            raise ValueError("llm-structured: LLM returned empty response")
+
+        try:
+            output = schema_model.model_validate_json(content)
+            return {"output": output}
+        except Exception as exc:
+            last_exc = exc
+            logger.error(
+                "llm_structured.parse_failed attempt=%d/%d error=%s, content=%s",
+                attempt + 1,
+                _MAX_RETRIES + 1,
+                exc,
+                content,
+            )
+
+    raise ValueError("llm-structured: failed to parse LLM response after retries") from last_exc

@@ -461,31 +461,59 @@ IN WITNESS WHEREOF, the parties have executed this Agreement as of the Effective
             )
             assert False, "\n".join(diag_parts)
 
+        # Signals for non-compliance and compliance (LLM phrasing varies).
+        _NON_SIGNALS = (
+            "non-compliant", "non_compliant", "noncompliant",
+            "not compliant", "does not comply", "violat", "breach",
+            "not met", "fails to", "not satisfy",
+        )
+        _POS_SIGNALS = (
+            "complies", "compliant", "satisf", "conform", "adhere",
+            "passes", "meets", "met",
+        )
+        # Field-name fragments that indicate a status/verdict field vs. free-text fields to skip.
+        _SKIP_FRAGS = ("summary", "reason", "explanation", "rationale", "description", "note", "evidence", "action", "recommend")
+        _STATUS_FRAGS = ("status", "compliance", "compliant", "verdict", "type", "finding", "result", "outcome", "conclusion", "assessment")
+
         def _status_value(finding: dict) -> str:
+            """Return the value of the most status-like field, lowercased, or ''."""
             for k, v in finding.items():
                 if not isinstance(v, str):
                     continue
                 kl = k.lower()
-                if any(h in kl for h in (
-                    "summary", "reason", "explanation",
-                    "rationale", "description", "note",
-                )):
+                if any(h in kl for h in _SKIP_FRAGS):
                     continue
-                if any(h in kl for h in ("status", "compliance", "compliant", "verdict")):
+                if any(h in kl for h in _STATUS_FRAGS):
                     return v.lower()
             return ""
 
-        non_compliant = [f for f in findings if "non" in _status_value(f)]
+        def _is_non_compliant(finding: dict) -> bool:
+            val = _status_value(finding) or str(finding).lower()
+            return any(sig in val for sig in _NON_SIGNALS)
+
+        def _is_compliant(finding: dict) -> bool:
+            val = _status_value(finding)
+            if val:
+                return (
+                    any(sig in val for sig in _POS_SIGNALS)
+                    and not any(sig in val for sig in _NON_SIGNALS)
+                )
+            # Full-string fallback: avoid "compliant" alone since it's a substring of "non-compliant".
+            s = str(finding).lower()
+            unambiguous_pos = tuple(sig for sig in _POS_SIGNALS if sig != "compliant")
+            return (
+                any(sig in s for sig in unambiguous_pos)
+                and not any(sig in s for sig in _NON_SIGNALS)
+            )
+
+        non_compliant = [f for f in findings if _is_non_compliant(f)]
         assert non_compliant, (
             "expected at least one non-compliant finding for contract-001 — "
             "the liability cap (3 months) should violate the 12-month policy rule. "
             f"findings: {findings}"
         )
 
-        compliant = [
-            f for f in findings
-            if (val := _status_value(f)) and "compliant" in val and "non" not in val
-        ]
+        compliant = [f for f in findings if _is_compliant(f)]
         assert compliant, f"expected at least one compliant finding. findings: {findings}"
 
         async def _query(text: str) -> str:

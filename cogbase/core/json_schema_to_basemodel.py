@@ -94,8 +94,8 @@ def _unwrap_nullable(
     # --- type-array form: "type": ["string", "null"] ----------------------
     raw_type = field_schema.get("type")
     if isinstance(raw_type, list):
-        non_null = [t for t in raw_type if t != "null"]
-        has_null = "null" in raw_type
+        non_null = [t for t in raw_type if t not in ("null", None)]
+        has_null = len(non_null) < len(raw_type)
         if len(non_null) == 1:
             inner = {**field_schema, "type": non_null[0]}
             return inner, has_null
@@ -107,7 +107,7 @@ def _unwrap_nullable(
     if not any_of:
         return field_schema, False
 
-    non_null = [s for s in any_of if s.get("type") != "null"]
+    non_null = [s for s in any_of if s.get("type") not in ("null", None)]
     has_null = len(non_null) < len(any_of)
 
     if len(non_null) == 1:
