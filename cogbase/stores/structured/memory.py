@@ -80,7 +80,7 @@ class InMemoryStructuredStore(StructuredStoreBase):
         self._frames[schema.name] = df
         self._schemas[schema.name] = schema
 
-    async def save(self, collection: str, records: list[BaseModel]) -> None:
+    async def save(self, collection: str, records: list[BaseModel | dict]) -> None:
         schema = self._get_schema(collection)
         rows = [_serialize(r, schema) for r in records]
         new_df = _to_frame(rows, schema)
@@ -285,8 +285,8 @@ def _clean(v: Any) -> Any:
     return v
 
 
-def _serialize(record: BaseModel, schema: CollectionSchema) -> dict:
-    raw = record.model_dump(mode="python")
+def _serialize(record: BaseModel | dict, schema: CollectionSchema) -> dict:
+    raw = record.model_dump(mode="python") if isinstance(record, BaseModel) else record
     row: dict = {}
     for name, field in schema.fields.items():
         val = raw.get(name)

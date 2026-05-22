@@ -7,8 +7,8 @@ import json
 import logging
 from typing import Any, TYPE_CHECKING
 
-from cogbase.core.basemodel_to_schema import cls_json_schema_for_llm
-from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
+import jsonschema
+
 from cogbase.llms.base import LLMBase
 from cogbase.workflows.context import render_value
 
@@ -24,6 +24,18 @@ def _json_default(obj: Any) -> Any:
     return str(obj)
 
 
+def _normalize_schema(schema: Any) -> Any:
+    """Recursively replace {"type": null} with {"type": "null"} for JSON Schema spec compliance."""
+    if isinstance(schema, dict):
+        return {
+            k: ("null" if k == "type" and v is None else _normalize_schema(v))
+            for k, v in schema.items()
+        }
+    if isinstance(schema, list):
+        return [_normalize_schema(item) for item in schema]
+    return schema
+
+
 _MAX_RETRIES = 2
 
 
@@ -35,12 +47,16 @@ async def run(
     if llm is None:
         raise RuntimeError("llm-structured requires an LLM")
 
-    schema_model = build_model_from_json_schema(step.output_schema)
-    schema_hint = cls_json_schema_for_llm(schema_model)
+    raw_schema = step.output_schema
+    schema: dict = json.loads(raw_schema) if isinstance(raw_schema, str) else raw_schema
+    schema = _normalize_schema(schema)
 
+    schema_hint = json.dumps(schema, indent=2)
     system_message = (
         str(render_value(step.prompt, ctx))
-        + f"\n\nReturn ONLY valid JSON matching this schema. No markdown fences, no explanation:\n{schema_hint}"
+        + "\n\nReturn ONLY a JSON object, not markdown and not the schema."
+        + "\nThe JSON object must validate against this JSON Schema:\n"
+        + schema_hint
     )
 
     input_values: dict[str, Any] = {
@@ -65,8 +81,9 @@ async def run(
             raise ValueError("llm-structured: LLM returned empty response")
 
         try:
-            output = schema_model.model_validate_json(content)
-            return {"output": output}
+            parsed = json.loads(content)
+            jsonschema.validate(instance=parsed, schema=schema)
+            return {"output": parsed}
         except Exception as exc:
             last_exc = exc
             logger.error(

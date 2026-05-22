@@ -56,11 +56,11 @@ class StructuredStoreBase(abc.ABC):
         """Declare a collection. Idempotent - safe to call on every startup."""
 
     @abc.abstractmethod
-    async def save(self, collection: str, records: list[BaseModel]) -> None:
+    async def save(self, collection: str, records: list[BaseModel | dict]) -> None:
         """Upsert records into ``collection``.
 
         Fields not declared in the schema are dropped; ``primary_fields`` drive
-        the upsert key.
+        the upsert key.  Each record may be a Pydantic model or a plain dict.
         """
 
     @abc.abstractmethod

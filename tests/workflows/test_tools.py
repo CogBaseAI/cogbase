@@ -219,8 +219,8 @@ class TestLLMStructuredTool:
         output = await ls_run(step, {}, llm)
         assert "output" in output
         result = output["output"]
-        assert result.finding_id == "f1"
-        assert result.status == "compliant"
+        assert result["finding_id"] == "f1"
+        assert result["status"] == "compliant"
 
     async def test_input_values_are_template_rendered(self):
         llm = _make_llm('{"finding_id": "f1", "status": "ok"}')
@@ -247,9 +247,10 @@ class TestLLMStructuredTool:
         await ls_run(step, {}, llm)
         messages = llm.complete.call_args[0][0]
         assert messages[0]["role"] == "system"
-        assert messages[0]["content"] == "You are a compliance expert."
+        assert messages[0]["content"].startswith("You are a compliance expert.")
 
-    async def test_schema_hint_in_user_message(self):
+    async def test_schema_hint_in_system_message(self):
+        """Schema is injected into the system message so the LLM knows the expected shape."""
         llm = _make_llm('{"finding_id": "f1", "status": "ok"}')
         step = _make_step(
             tool="llm-structured",
@@ -258,9 +259,10 @@ class TestLLMStructuredTool:
         )
         await ls_run(step, {}, llm)
         messages = llm.complete.call_args[0][0]
-        user_msg = messages[1]["content"]
-        assert "finding_id" in user_msg
-        assert "status" in user_msg
+        system_msg = messages[0]["content"]
+        assert "finding_id" in system_msg
+        assert "status" in system_msg
+        assert "JSON Schema" in system_msg
 
     async def test_llm_called_with_zero_temperature(self):
         llm = _make_llm('{"finding_id": "f1", "status": "ok"}')
@@ -301,8 +303,112 @@ class TestLLMStructuredTool:
             prompt="x",
             output_schema=_FINDING_JSON_SCHEMA,
         )
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValueError, match="failed to parse"):
             await ls_run(step, {}, _make_llm("not valid json"))
+
+    async def test_schema_violation_raises_after_retries(self):
+        """A well-formed JSON that fails schema validation exhausts retries."""
+        step = _make_step(
+            tool="llm-structured",
+            prompt="x",
+            output_schema=_FINDING_JSON_SCHEMA,
+        )
+        # Missing required "status" field
+        with pytest.raises(ValueError, match="failed to parse"):
+            await ls_run(step, {}, _make_llm('{"finding_id": "f1"}'))
+
+    # --- null-type schema variations ---
+
+    _NULLABLE_SCHEMA = json.dumps({
+        "type": "object",
+        "properties": {
+            "id":    {"type": "string"},
+            "title": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "score": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+        },
+        "required": ["id"],
+    })
+
+    _NULL_VALUE_SCHEMA = json.dumps({
+        "type": "object",
+        "properties": {
+            "id":    {"type": "string"},
+            # LLM-generated schema: {"type": null} instead of {"type": "null"}
+            "title": {"anyOf": [{"type": "string"}, {"type": None}]},
+        },
+        "required": ["id"],
+    })
+
+    async def test_nullable_field_accepts_null(self):
+        """anyOf [string, null] must accept JSON null without validation error."""
+        step = _make_step(
+            tool="llm-structured",
+            prompt="x",
+            output_schema=self._NULLABLE_SCHEMA,
+        )
+        output = await ls_run(step, {}, _make_llm('{"id": "r1", "title": null}'))
+        assert output["output"]["title"] is None
+
+    async def test_nullable_field_accepts_string(self):
+        step = _make_step(
+            tool="llm-structured",
+            prompt="x",
+            output_schema=self._NULLABLE_SCHEMA,
+        )
+        output = await ls_run(step, {}, _make_llm('{"id": "r1", "title": "Introduction"}'))
+        assert output["output"]["title"] == "Introduction"
+
+    async def test_nullable_number_field_accepts_null(self):
+        step = _make_step(
+            tool="llm-structured",
+            prompt="x",
+            output_schema=self._NULLABLE_SCHEMA,
+        )
+        output = await ls_run(step, {}, _make_llm('{"id": "r1", "score": null}'))
+        assert output["output"]["score"] is None
+
+    async def test_null_value_type_in_schema_normalized(self):
+        """{"type": null} (Python None) is normalized to {"type": "null"} before validation."""
+        step = _make_step(
+            tool="llm-structured",
+            prompt="x",
+            output_schema=self._NULL_VALUE_SCHEMA,
+        )
+        output = await ls_run(step, {}, _make_llm('{"id": "r1", "title": null}'))
+        assert output["output"]["title"] is None
+
+    async def test_schema_hint_contains_normalized_schema(self):
+        """The system prompt must not contain raw null type values — they are normalized to "null"."""
+        llm = _make_llm('{"id": "r1"}')
+        step = _make_step(
+            tool="llm-structured",
+            prompt="Analyse.",
+            output_schema=self._NULL_VALUE_SCHEMA,
+        )
+        await ls_run(step, {}, llm)
+        system_msg = llm.complete.call_args[0][0][0]["content"]
+        assert '"type": null' not in system_msg
+        assert '"null"' in system_msg
+
+    async def test_full_compliance_finding_schema_with_nulls(self):
+        """Regression test for the schema that triggered the original bug."""
+        schema = json.dumps({
+            "type": "object",
+            "properties": {
+                "finding_id":   {"type": "string"},
+                "clause_title": {"anyOf": [{"type": "string"}, {"type": None}]},
+                "compliant":    {"type": "string"},
+                "severity":     {"anyOf": [{"type": "string"}, {"type": None}]},
+            },
+            "required": ["finding_id", "compliant"],
+        })
+        step = _make_step(tool="llm-structured", prompt="x", output_schema=schema)
+        payload = '{"finding_id": "f1", "clause_title": null, "compliant": "compliant", "severity": null}'
+        output = await ls_run(step, {}, _make_llm(payload))
+        result = output["output"]
+        assert result["finding_id"] == "f1"
+        assert result["clause_title"] is None
+        assert result["severity"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +456,20 @@ class TestStructuredSaveTool:
         )
         output = await ss_run(step, ctx, store)
         assert output["records"][0] is finding
+
+    async def test_saves_dict_record(self):
+        """structured-save must accept plain dicts (e.g. llm-structured output)."""
+        store = await self._make_finding_store()
+        ctx = {"steps": {"judge": {"output": {"finding_id": "f3", "status": "compliant"}}}}
+        step = _make_step(
+            tool="structured-save",
+            collection="findings",
+            records=["{{ steps.judge.output }}"],
+        )
+        await ss_run(step, ctx, store)
+        rows = await store.query("findings")
+        assert len(rows) == 1
+        assert rows[0]["finding_id"] == "f3"
 
     async def test_empty_records_skips_save(self):
         store = MagicMock(spec=InMemoryStructuredStore)

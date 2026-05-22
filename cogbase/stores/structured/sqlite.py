@@ -90,7 +90,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
         self._conn.commit()
         self._schemas[schema.name] = schema
 
-    async def save(self, collection: str, records: list[BaseModel]) -> None:
+    async def save(self, collection: str, records: list[BaseModel | dict]) -> None:
         schema = self._get_schema(collection)
         cols = list(schema.fields.keys())
         col_list = ", ".join(f'"{c}"' for c in cols)
@@ -244,8 +244,8 @@ class SQLiteStructuredStore(StructuredStoreBase):
 # Row helpers
 # ------------------------------------------------------------------
 
-def _to_sql_row(record: BaseModel, schema: CollectionSchema) -> tuple:
-    raw = record.model_dump(mode="json")
+def _to_sql_row(record: BaseModel | dict, schema: CollectionSchema) -> tuple:
+    raw = record.model_dump(mode="json") if isinstance(record, BaseModel) else record
     row = []
     for field_name, field in schema.fields.items():
         val = raw.get(field_name)

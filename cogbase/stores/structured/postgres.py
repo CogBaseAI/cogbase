@@ -140,7 +140,7 @@ class PostgresStructuredStore(StructuredStoreBase):
 
         self._schemas[schema.name] = schema
 
-    async def save(self, collection: str, records: list[BaseModel]) -> None:
+    async def save(self, collection: str, records: list[BaseModel | dict]) -> None:
         schema = self._get_schema(collection)
         pool = self._get_pool()
         cols = list(schema.fields.keys())
@@ -270,8 +270,8 @@ class PostgresStructuredStore(StructuredStoreBase):
 # Row helpers
 # ---------------------------------------------------------------------------
 
-def _to_pg_row(record: BaseModel, schema: CollectionSchema) -> tuple:
-    raw = record.model_dump(mode="json")
+def _to_pg_row(record: BaseModel | dict, schema: CollectionSchema) -> tuple:
+    raw = record.model_dump(mode="json") if isinstance(record, BaseModel) else record
     row = []
     for field_name, field in schema.fields.items():
         val = raw.get(field_name)
