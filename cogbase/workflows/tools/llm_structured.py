@@ -24,18 +24,6 @@ def _json_default(obj: Any) -> Any:
     return str(obj)
 
 
-def _normalize_schema(schema: Any) -> Any:
-    """Recursively replace {"type": null} with {"type": "null"} for JSON Schema spec compliance."""
-    if isinstance(schema, dict):
-        return {
-            k: ("null" if k == "type" and v is None else _normalize_schema(v))
-            for k, v in schema.items()
-        }
-    if isinstance(schema, list):
-        return [_normalize_schema(item) for item in schema]
-    return schema
-
-
 _MAX_RETRIES = 2
 
 
@@ -47,16 +35,12 @@ async def run(
     if llm is None:
         raise RuntimeError("llm-structured requires an LLM")
 
-    raw_schema = step.output_schema
-    schema: dict = json.loads(raw_schema) if isinstance(raw_schema, str) else raw_schema
-    schema = _normalize_schema(schema)
-
-    schema_hint = json.dumps(schema, indent=2)
+    schema: dict = json.loads(step.output_schema)
     system_message = (
         str(render_value(step.prompt, ctx))
         + "\n\nReturn ONLY a JSON object, not markdown and not the schema."
         + "\nThe JSON object must validate against this JSON Schema:\n"
-        + schema_hint
+        + step.output_schema
     )
 
     input_values: dict[str, Any] = {

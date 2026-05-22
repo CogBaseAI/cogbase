@@ -23,19 +23,15 @@ from cogbase.core.models import Document
 from cogbase.config.config import ExtractorConfig
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import LLMBase
-from cogbase.core.basemodel_to_schema import cls_generate_schema
-from cogbase.pipeline.extraction.llm import LLMExtractor, _build_record_model
+from api.factory import _json_schema_to_collection_fields
+from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.stores import CollectionSchema
 from cogbase.pipeline.chunking.fixed import FixedSizeChunker
 from cogbase.stores import VectorCollectionSchema
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
 from examples.contract_analyst_demo.demo import _CONTRACTS_COLLECTION
-from examples.contract_analyst_demo.schema import (
-    ContractExtraction,
-    Party,
-    PaymentTerms,
-)
+from examples.contract_analyst_demo.schema import ContractExtraction
 
 
 # ---------------------------------------------------------------------------
@@ -96,23 +92,29 @@ class StubEmbedding(EmbeddingBase):
         return [[0.1] * self._dim for _ in texts]
 
 
+_EXTRACTION_SCHEMA = ContractExtraction.model_json_schema()
+_RECORD_SCHEMA = {
+    **_EXTRACTION_SCHEMA,
+    "properties": {**_EXTRACTION_SCHEMA.get("properties", {}), "doc_id": {"type": "string"}},
+}
+
 _CONTRACTS_SCHEMA = CollectionSchema(
     name=_CONTRACTS_COLLECTION,
     description="Extracted contract metadata: parties, dates, and governing law.",
     primary_fields=["doc_id"],
-    fields=cls_generate_schema(_build_record_model(ContractExtraction)),
+    fields=_json_schema_to_collection_fields(_RECORD_SCHEMA),
 )
 
 
 def _make_extractor(llm: MagicMock) -> LLMExtractor:
     return LLMExtractor(
         llm,
-        extraction_model=ContractExtraction,
+        extraction_schema=_EXTRACTION_SCHEMA,
         config=ExtractorConfig(
             extraction_schema='{"type":"object","properties":{"value":{"type":"string"}}}',
             prompt="Extract the relevant fields from the document.",
         ),
-        record_model=_build_record_model(ContractExtraction),
+        record_schema=_RECORD_SCHEMA,
     )
 
 
@@ -321,15 +323,16 @@ class TestCogBaseAppQuery:
         llm.complete_stream = _stream
         app = await _make_app(llm, store)
 
-        extractor = _make_extractor(_make_llm("{}"))
-        record_model = extractor._record_model
-        record = record_model(
-            contract_id="c-001_abc",
-            doc_id="c-001",
-            contract_type="NDA",
-            parties=[Party(name="Acme Corp", role="discloser"), Party(name="Supplier Ltd", role="recipient")],
-            payment_terms=PaymentTerms(schedule="net-30", verbatim="Payment is due within 30 days."),
-        )
+        record = {
+            "contract_id": "c-001_abc",
+            "doc_id": "c-001",
+            "contract_type": "NDA",
+            "parties": [
+                {"name": "Acme Corp", "role": "discloser"},
+                {"name": "Supplier Ltd", "role": "recipient"},
+            ],
+            "payment_terms": {"schedule": "net-30", "verbatim": "Payment is due within 30 days."},
+        }
         await store.save(_CONTRACTS_COLLECTION, [record])
 
         result = await _drain_query(app, "list NDA contracts")

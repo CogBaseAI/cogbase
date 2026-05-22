@@ -1,23 +1,18 @@
-"""LLM-backed extractor — general-purpose structured extraction from documents.
-
-``LLMExtractor`` calls an OpenAI-compatible LLM to extract structured data
-from a document according to a caller-supplied Pydantic model.
-"""
+"""LLM-backed extractor — general-purpose structured extraction from documents."""
 
 from __future__ import annotations
 
 import json
 import logging
 import time
-from typing import Callable, Type
+from typing import Any, Callable
 
-from pydantic import BaseModel, ValidationError, create_model
+import jsonschema
 
 from cogbase.config.config import ExtractorConfig, RecordMode
 from cogbase.core.models import Document
 from cogbase.llms import LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
-from cogbase.core.basemodel_to_schema import cls_generate_schema, cls_json_schema_for_llm
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +23,7 @@ _DEFAULT_SYSTEM_PROMPT_PREFIX = (
     "- Do not invent information not present in the document.\n"
     "- Use null for any field not found in the document.\n"
     "- Return ONLY the JSON object — no explanation, no markdown fences.\n\n"
-    "Return a single JSON object with these fields:\n\n"
+    "Return a single JSON object matching this JSON Schema:\n\n"
 )
 
 _DEFAULT_LIST_SYSTEM_PROMPT_PREFIX = (
@@ -42,72 +37,48 @@ _DEFAULT_LIST_SYSTEM_PROMPT_PREFIX = (
 )
 
 
-def _build_record_model(extraction_model: Type[BaseModel]) -> Type[BaseModel]:
-    return create_model(
-        "_RecordModel",
-        doc_id=(str, ...),
-        __base__=extraction_model,
-    )
-
-
-def _build_list_record_model(extraction_model: Type[BaseModel], item_id_field: str) -> Type[BaseModel]:
-    return create_model(
-        "_ListItemRecordModel",
-        doc_id=(str, ...),
-        **{item_id_field: (str, ...)},
-        __base__=extraction_model,
-    )
-
-
 class LLMExtractor(ExtractorBase):
     """Extracts structured records from documents using an LLM.
 
-    In single-record mode (``record_mode="one"``, default) each call to ``extract``
-    produces one record per document.  In list mode (``record_mode="many"``) the LLM
+    In single-record mode (``record_mode=\"one\"``, default) each call to ``extract``
+    produces one record per document.  In list mode (``record_mode=\"many\"``) the LLM
     returns a JSON object whose ``response_field`` key holds an array; each item
     becomes a separate row.
 
     Args:
-        llm:              LLM backend.
-        extraction_model: Pydantic model describing what the LLM should return.
-                          Injected identity fields (``doc_id``, item id) must NOT
-                          appear here; supply them via *config*.
-        record_model:     Pydantic model used for final validation and storage.
-        config:           ExtractorConfig describing record mode, prompt, and
-                          injected identity fields.
-        max_retries:      Retries on unparseable JSON.
+        llm:               LLM backend.
+        extraction_schema: JSON Schema dict describing what the LLM should return.
+                           Must not include injected identity fields (``doc_id``, item id).
+        config:            ExtractorConfig describing record mode, prompt, and
+                           injected identity fields.
+        record_schema:     JSON Schema dict for the final stored record (includes injected
+                           fields such as ``doc_id`` and optional item id).
+        max_retries:       Retries on unparseable JSON.
     """
 
     def __init__(
         self,
         llm: LLMBase,
-        extraction_model: Type[BaseModel],
+        extraction_schema: dict,
         *,
         config: ExtractorConfig,
-        record_model: Type[BaseModel],
+        record_schema: dict,
         max_retries: int = 2,
     ) -> None:
         super().__init__(max_retries=max_retries)
         self._llm = llm
-        self._extraction_model = extraction_model
-        self._record_model = record_model
+        self._extraction_schema = extraction_schema
+        self._record_schema = record_schema
 
         self._validate_schema_contract(config)
 
         self._record_mode = config.record_mode
         self._response_field = config.response_field
         self._injected_fields = self._build_injected_fields_from_config(config)
-
-        if config.record_mode == RecordMode.MANY:
-            self._wrapper_model: Type[BaseModel] = create_model(
-                "_WrapperModel",
-                **{config.response_field: (list[extraction_model], ...)},  # type: ignore[call-overload]
-            )
-            self._system_prompt = self._build_system_prompt_from_config(config)
-        else:
-            self._system_prompt = self._build_system_prompt_from_config(config)
+        self._system_prompt = self._build_system_prompt_from_config(config)
 
     def _build_system_prompt_from_config(self, config: ExtractorConfig) -> str:
+        schema_hint = json.dumps(self._extraction_schema, indent=2)
         if config.record_mode == RecordMode.MANY:
             base = (
                 (config.prompt or "")
@@ -116,19 +87,15 @@ class LLMExtractor(ExtractorBase):
             )
             return (
                 base
-                + f'\nReturn a JSON object with a single key "{config.response_field}" whose value is an array.\n'
-                + "Each element must have these fields:\n\n"
-                + cls_json_schema_for_llm(self._extraction_model)
+                + f'\nReturn a JSON object with a single key \"{config.response_field}\" whose value is an array.\n'
+                + "Each element must validate against this JSON Schema:\n\n"
+                + schema_hint
             )
         base = (config.prompt or "") if config.prompt else _DEFAULT_SYSTEM_PROMPT_PREFIX
-        return (
-            base
-            + "\nReturn a single JSON object with these fields:\n\n"
-            + cls_json_schema_for_llm(self._extraction_model)
-        )
+        return base + schema_hint
 
     def _validate_schema_contract(self, config: ExtractorConfig) -> None:
-        extraction_fields = set(self._extraction_model.model_fields)
+        extraction_fields = set(self._extraction_schema.get("properties", {}).keys())
         if "doc_id" in extraction_fields:
             raise ValueError(
                 "extraction_schema must not include 'doc_id' (it is injected by the pipeline)"
@@ -138,7 +105,7 @@ class LLMExtractor(ExtractorBase):
                 f"extraction_schema must not include '{config.id_field}' (it is injected by the pipeline)"
             )
 
-        record_fields = set(self._record_model.model_fields)
+        record_fields = set(self._record_schema.get("properties", {}).keys())
         if "doc_id" not in record_fields:
             raise ValueError("record schema must include 'doc_id'")
         if config.record_mode == RecordMode.MANY and config.id_field not in record_fields:
@@ -163,7 +130,7 @@ class LLMExtractor(ExtractorBase):
                 )
         return injected_fields
 
-    async def _extract_once(self, doc: Document) -> list[BaseModel] | None:
+    async def _extract_once(self, doc: Document) -> list[dict] | None:
         t0 = time.monotonic()
         result = await self._llm.complete(
             [
@@ -195,7 +162,7 @@ class LLMExtractor(ExtractorBase):
             return self._parse_list(doc, content, result)
         return self._parse_single(doc, content, result)
 
-    def _try_unwrap_single_item_list(self, content: str) -> BaseModel | None:
+    def _try_unwrap_single_item_list(self, content: str) -> dict | None:
         """Return the first element if the LLM returned a one-item list instead of an object."""
         try:
             parsed = json.loads(content)
@@ -213,14 +180,17 @@ class LLMExtractor(ExtractorBase):
         if len(items) != 1:
             return None
         try:
-            return self._extraction_model.model_validate(items[0])
-        except (ValidationError, ValueError):
+            jsonschema.validate(instance=items[0], schema=self._extraction_schema)
+            return items[0]
+        except (jsonschema.ValidationError, Exception):
             return None
 
-    def _parse_single(self, doc: Document, content: str, raw_result: dict) -> list[BaseModel] | None:
+    def _parse_single(self, doc: Document, content: str, raw_result: dict) -> list[dict] | None:
         try:
-            extraction = self._extraction_model.model_validate_json(content)
-        except (ValidationError, ValueError):
+            parsed = json.loads(content)
+            jsonschema.validate(instance=parsed, schema=self._extraction_schema)
+            extraction = parsed
+        except (json.JSONDecodeError, jsonschema.ValidationError):
             extraction = self._try_unwrap_single_item_list(content)
             if extraction is None:
                 logger.exception(
@@ -234,20 +204,12 @@ class LLMExtractor(ExtractorBase):
                 "llm_extractor.unwrapped_single_item_list doc_id=%s", doc.doc_id
             )
         injected = {k: fn(doc, extraction, 0) for k, fn in self._injected_fields.items()}
-        try:
-            record = self._record_model.model_validate({**extraction.model_dump(), **injected})
-        except (ValidationError, ValueError):
-            logger.exception(
-                "llm_extractor.record_validation_failed doc_id=%s",
-                doc.doc_id,
-            )
-            return None
-        return [record]
+        return [{**extraction, **injected}]
 
-    def _parse_list(self, doc: Document, content: str, raw_result: dict) -> list[BaseModel] | None:
+    def _parse_list(self, doc: Document, content: str, raw_result: dict) -> list[dict] | None:
         try:
-            wrapper = self._wrapper_model.model_validate_json(content)
-        except (ValidationError, ValueError):
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
             logger.exception(
                 "llm_extractor.parse_failed doc_id=%s, system_prompt=%s, result=%s",
                 doc.doc_id,
@@ -255,18 +217,24 @@ class LLMExtractor(ExtractorBase):
                 raw_result,
             )
             return None
-        items = getattr(wrapper, self._response_field)
+        if not isinstance(parsed, dict) or self._response_field not in parsed:
+            logger.error(
+                "llm_extractor.parse_failed doc_id=%s missing response_field=%s, result=%s",
+                doc.doc_id,
+                self._response_field,
+                raw_result,
+            )
+            return None
+        items: Any = parsed[self._response_field]
+        if not isinstance(items, list):
+            logger.error(
+                "llm_extractor.parse_failed doc_id=%s response_field not a list, result=%s",
+                doc.doc_id,
+                raw_result,
+            )
+            return None
         records = []
         for index, item in enumerate(items):
             injected = {k: fn(doc, item, index) for k, fn in self._injected_fields.items()}
-            try:
-                record = self._record_model.model_validate({**item.model_dump(), **injected})
-            except (ValidationError, ValueError):
-                logger.exception(
-                    "llm_extractor.record_validation_failed doc_id=%s index=%d",
-                    doc.doc_id,
-                    index,
-                )
-                return None
-            records.append(record)
+            records.append({**item, **injected})
         return records

@@ -8,9 +8,10 @@ import pytest
 
 from cogbase.config.config import AppConfig
 from cogbase.config.stores import StructuredStoreConfig
-from api.factory import build_app
+from api.factory import build_app, _json_schema_to_collection_fields
 from api.system_resources import SystemResources
 from cogbase.stores import build_structured_store
+from cogbase.stores.schema import FieldType
 from cogbase.pipeline.ingestion_pipeline import VectorCollection, PipelineStep
 from cogbase.stores.document.local_fs import LocalFSDocumentStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -39,6 +40,89 @@ class TestBuildStructuredStore:
         store = build_structured_store(cfg)
         assert isinstance(store, SQLiteStructuredStore)
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# _json_schema_to_collection_fields
+# ---------------------------------------------------------------------------
+
+class TestJsonSchemaToCollectionFields:
+    def test_empty_schema_returns_empty_dict(self):
+        assert _json_schema_to_collection_fields({}) == {}
+
+    def test_empty_properties_returns_empty_dict(self):
+        assert _json_schema_to_collection_fields({"type": "object", "properties": {}}) == {}
+
+    def test_string_field(self):
+        result = _json_schema_to_collection_fields({"properties": {"name": {"type": "string"}}})
+        assert result["name"].type == FieldType.STRING
+
+    def test_integer_field(self):
+        result = _json_schema_to_collection_fields({"properties": {"count": {"type": "integer"}}})
+        assert result["count"].type == FieldType.INTEGER
+
+    def test_number_field(self):
+        result = _json_schema_to_collection_fields({"properties": {"price": {"type": "number"}}})
+        assert result["price"].type == FieldType.FLOAT
+
+    def test_boolean_field(self):
+        result = _json_schema_to_collection_fields({"properties": {"active": {"type": "boolean"}}})
+        assert result["active"].type == FieldType.BOOLEAN
+
+    def test_object_field(self):
+        result = _json_schema_to_collection_fields({"properties": {"meta": {"type": "object"}}})
+        assert result["meta"].type == FieldType.JSON
+
+    def test_array_field(self):
+        result = _json_schema_to_collection_fields({"properties": {"tags": {"type": "array"}}})
+        assert result["tags"].type == FieldType.JSON
+
+    def test_unknown_type_falls_back_to_string(self):
+        result = _json_schema_to_collection_fields({"properties": {"x": {"type": "null"}}})
+        assert result["x"].type == FieldType.STRING
+
+    def test_missing_type_falls_back_to_string(self):
+        result = _json_schema_to_collection_fields({"properties": {"x": {}}})
+        assert result["x"].type == FieldType.STRING
+
+    def test_anyof_nullable_unwraps_to_non_null_type(self):
+        schema = {"properties": {"score": {"anyOf": [{"type": "number"}, {"type": "null"}]}}}
+        result = _json_schema_to_collection_fields(schema)
+        assert result["score"].type == FieldType.FLOAT
+
+    def test_anyof_nullable_null_first(self):
+        schema = {"properties": {"flag": {"anyOf": [{"type": "null"}, {"type": "boolean"}]}}}
+        result = _json_schema_to_collection_fields(schema)
+        assert result["flag"].type == FieldType.BOOLEAN
+
+    def test_anyof_all_null_falls_back_to_string(self):
+        schema = {"properties": {"x": {"anyOf": [{"type": "null"}, {"type": "null"}]}}}
+        result = _json_schema_to_collection_fields(schema)
+        assert result["x"].type == FieldType.STRING
+
+    def test_multiple_fields_mixed_types(self):
+        schema = {
+            "properties": {
+                "title": {"type": "string"},
+                "year": {"type": "integer"},
+                "price": {"type": "number"},
+                "active": {"type": "boolean"},
+                "details": {"type": "object"},
+                "tags": {"type": "array"},
+            }
+        }
+        result = _json_schema_to_collection_fields(schema)
+        assert result["title"].type == FieldType.STRING
+        assert result["year"].type == FieldType.INTEGER
+        assert result["price"].type == FieldType.FLOAT
+        assert result["active"].type == FieldType.BOOLEAN
+        assert result["details"].type == FieldType.JSON
+        assert result["tags"].type == FieldType.JSON
+
+    def test_field_order_preserved(self):
+        schema = {"properties": {"z": {"type": "string"}, "a": {"type": "integer"}}}
+        result = _json_schema_to_collection_fields(schema)
+        assert list(result.keys()) == ["z", "a"]
 
 
 # ---------------------------------------------------------------------------

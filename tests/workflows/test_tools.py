@@ -329,16 +329,6 @@ class TestLLMStructuredTool:
         "required": ["id"],
     })
 
-    _NULL_VALUE_SCHEMA = json.dumps({
-        "type": "object",
-        "properties": {
-            "id":    {"type": "string"},
-            # LLM-generated schema: {"type": null} instead of {"type": "null"}
-            "title": {"anyOf": [{"type": "string"}, {"type": None}]},
-        },
-        "required": ["id"],
-    })
-
     async def test_nullable_field_accepts_null(self):
         """anyOf [string, null] must accept JSON null without validation error."""
         step = _make_step(
@@ -367,48 +357,6 @@ class TestLLMStructuredTool:
         output = await ls_run(step, {}, _make_llm('{"id": "r1", "score": null}'))
         assert output["output"]["score"] is None
 
-    async def test_null_value_type_in_schema_normalized(self):
-        """{"type": null} (Python None) is normalized to {"type": "null"} before validation."""
-        step = _make_step(
-            tool="llm-structured",
-            prompt="x",
-            output_schema=self._NULL_VALUE_SCHEMA,
-        )
-        output = await ls_run(step, {}, _make_llm('{"id": "r1", "title": null}'))
-        assert output["output"]["title"] is None
-
-    async def test_schema_hint_contains_normalized_schema(self):
-        """The system prompt must not contain raw null type values — they are normalized to "null"."""
-        llm = _make_llm('{"id": "r1"}')
-        step = _make_step(
-            tool="llm-structured",
-            prompt="Analyse.",
-            output_schema=self._NULL_VALUE_SCHEMA,
-        )
-        await ls_run(step, {}, llm)
-        system_msg = llm.complete.call_args[0][0][0]["content"]
-        assert '"type": null' not in system_msg
-        assert '"null"' in system_msg
-
-    async def test_full_compliance_finding_schema_with_nulls(self):
-        """Regression test for the schema that triggered the original bug."""
-        schema = json.dumps({
-            "type": "object",
-            "properties": {
-                "finding_id":   {"type": "string"},
-                "clause_title": {"anyOf": [{"type": "string"}, {"type": None}]},
-                "compliant":    {"type": "string"},
-                "severity":     {"anyOf": [{"type": "string"}, {"type": None}]},
-            },
-            "required": ["finding_id", "compliant"],
-        })
-        step = _make_step(tool="llm-structured", prompt="x", output_schema=schema)
-        payload = '{"finding_id": "f1", "clause_title": null, "compliant": "compliant", "severity": null}'
-        output = await ls_run(step, {}, _make_llm(payload))
-        result = output["output"]
-        assert result["finding_id"] == "f1"
-        assert result["clause_title"] is None
-        assert result["severity"] is None
 
 
 # ---------------------------------------------------------------------------

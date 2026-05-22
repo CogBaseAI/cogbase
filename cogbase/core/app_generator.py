@@ -12,10 +12,10 @@ import copy
 import json
 import logging
 
+import jsonschema
 import yaml
 
 from cogbase.config.config import AppConfig, StructuredCollectionConfig, WorkflowConfig
-from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
 from cogbase.llms.base import LLMBase, ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -716,6 +716,20 @@ def _inject_workflow_output_schemas(
             sc["schema"] = json.dumps(schema_dict, separators=(",", ":"))
 
 
+def _collect_refs(schema: object) -> list[str]:
+    """Recursively collect all $ref strings in a schema."""
+    refs: list[str] = []
+    if isinstance(schema, dict):
+        if "$ref" in schema:
+            refs.append(schema["$ref"])
+        for v in schema.values():
+            refs.extend(_collect_refs(v))
+    elif isinstance(schema, list):
+        for item in schema:
+            refs.extend(_collect_refs(item))
+    return refs
+
+
 def _validate_extraction_schema(schema_dict: dict, collection_name: str) -> list[str]:
     errors: list[str] = []
     if not isinstance(schema_dict, dict):
@@ -731,9 +745,17 @@ def _validate_extraction_schema(schema_dict: dict, collection_name: str) -> list
     if errors:
         return errors
     try:
-        build_model_from_json_schema(schema_dict, model_name=collection_name)
-    except Exception as exc:
-        errors.append(f"[{collection_name}] invalid JSON Schema: {exc}")
+        jsonschema.Draft7Validator.check_schema(schema_dict)
+    except jsonschema.SchemaError as exc:
+        errors.append(f"[{collection_name}] invalid JSON Schema: {exc.message}")
+        return errors
+    # Check that all $ref entries can be resolved within the schema's $defs/definitions.
+    defs = {**schema_dict.get("$defs", {}), **schema_dict.get("definitions", {})}
+    for ref in _collect_refs(schema_dict):
+        if ref.startswith("#/"):
+            key = ref.split("/")[-1]
+            if key not in defs:
+                errors.append(f"[{collection_name}] invalid JSON Schema: $ref '{ref}' not found in $defs")
     return errors
 
 
@@ -751,9 +773,9 @@ def _validate_workflow_output_schema(schema_dict: dict, collection_name: str) ->
     if errors:
         return errors
     try:
-        build_model_from_json_schema(schema_dict, model_name=collection_name)
-    except Exception as exc:
-        errors.append(f"[{collection_name}] invalid JSON Schema: {exc}")
+        jsonschema.Draft7Validator.check_schema(schema_dict)
+    except jsonschema.SchemaError as exc:
+        errors.append(f"[{collection_name}] invalid JSON Schema: {exc.message}")
     return errors
 
 

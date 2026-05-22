@@ -176,6 +176,7 @@ class TestAfterIngestTrigger:
     async def test_after_ingest_not_fired_for_failed_docs(self):
         """A document that fails pipeline ingestion must not trigger the workflow."""
         pipeline = MagicMock(spec=IngestionPipeline)
+        pipeline.name = "test-pipeline"
         from cogbase.pipeline.ingestion_pipeline import IngestResult
         pipeline.ingest_documents = AsyncMock(return_value=[
             IngestResult(doc_id="d-fail", success=False, error=RuntimeError("boom")),

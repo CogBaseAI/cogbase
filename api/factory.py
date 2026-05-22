@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as _json
 from typing import Any
 
 from cogbase.config.config import (
@@ -27,8 +28,7 @@ from cogbase.stores import (
 )
 from cogbase.core.app import CogBaseApp
 from cogbase.core.query_runner import QueryRunner
-from cogbase.core.json_schema_to_basemodel import build_model_from_json_schema
-from cogbase.core.basemodel_to_schema import cls_generate_schema
+from cogbase.stores.schema import FieldSchema, FieldType
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
@@ -46,6 +46,31 @@ DEFAULT_DOC_PROMPT = (
     "Summarize this document in a concise way, focusing on the most important "
     "points and avoiding unnecessary detail."
 )
+
+
+def _json_schema_to_collection_fields(schema: dict) -> dict[str, FieldSchema]:
+    """Map JSON Schema properties to FieldSchema — replaces cls_generate_schema."""
+    properties = schema.get("properties", {})
+    result: dict[str, FieldSchema] = {}
+    for field_name, field_schema in properties.items():
+        # unwrap anyOf nullable: [{"type": "X"}, {"type": "null"}]
+        any_of = field_schema.get("anyOf")
+        if any_of:
+            non_null = [s for s in any_of if s.get("type") not in ("null", None)]
+            field_schema = non_null[0] if non_null else {"type": "string"}
+        t = field_schema.get("type")
+        if t == "integer":
+            result[field_name] = FieldSchema(type=FieldType.INTEGER)
+        elif t == "number":
+            result[field_name] = FieldSchema(type=FieldType.FLOAT)
+        elif t == "boolean":
+            result[field_name] = FieldSchema(type=FieldType.BOOLEAN)
+        elif t in ("object", "array"):
+            result[field_name] = FieldSchema(type=FieldType.JSON)
+        else:
+            result[field_name] = FieldSchema(type=FieldType.STRING)
+    return result
+
 
 def _build_chunker(cfg: ChunkerConfig) -> Any:
     if cfg.type == "fixed":
@@ -151,12 +176,12 @@ async def build_app(
                 " (configure structured_store in the app config or system config)"
             )
 
-        record_model = build_model_from_json_schema(sc_cfg.schema_, model_name=sc_cfg.name.upper() + "_RECORD")
+        record_schema = _json.loads(sc_cfg.schema_)
         sc_schema = CollectionSchema(
             name=sc_cfg.name,
             description=sc_cfg.description,
             primary_fields=sc_cfg.primary_fields,
-            fields=cls_generate_schema(record_model),
+            fields=_json_schema_to_collection_fields(record_schema),
         )
 
         structured_collections.append(StructuredCollection(schema=sc_schema, store=structured_store))
@@ -165,14 +190,12 @@ async def build_app(
         step = step_by_col.get(sc_cfg.name)
         ext_cfg: ExtractorConfig | None = step.extractor if isinstance(step, ExtractStructuredStepConfig) else None
         if ext_cfg is not None:
-            extraction_model = build_model_from_json_schema(
-                ext_cfg.extraction_schema, model_name=sc_cfg.name.upper() + "_EXTRACTION"
-            )
+            extraction_schema = _json.loads(ext_cfg.extraction_schema)
             extractor = LLMExtractor(
                 llm,
-                extraction_model=extraction_model,
-                record_model=record_model,
+                extraction_schema=extraction_schema,
                 config=ext_cfg,
+                record_schema=record_schema,
             )
             extractors_by_col[sc_cfg.name] = extractor
 

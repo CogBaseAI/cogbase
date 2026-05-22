@@ -4,8 +4,6 @@ import abc
 import asyncio
 import logging
 
-from pydantic import BaseModel
-
 from cogbase.core.models import Document
 
 logger = logging.getLogger(__name__)
@@ -28,7 +26,7 @@ class ExtractorBase(abc.ABC):
     Example::
 
         class ClauseExtractor(ExtractorBase):
-            async def _extract_once(self, doc: Document) -> list[BaseModel] | None:
+            async def _extract_once(self, doc: Document) -> list[dict] | None:
                 ...
     """
 
@@ -36,11 +34,11 @@ class ExtractorBase(abc.ABC):
         self._max_retries = max_retries
 
     @abc.abstractmethod
-    async def _extract_once(self, doc: Document) -> list[BaseModel] | None:
+    async def _extract_once(self, doc: Document) -> list[dict] | None:
         """Single extraction attempt for *doc*.
 
-        Called by ``extract``; do not call directly.  Return a list of Pydantic
-        records on success, an empty list when the document contains no matching
+        Called by ``extract``; do not call directly.  Return a list of dicts
+        on success, an empty list when the document contains no matching
         data, or ``None`` on parse failure (triggers a retry).
 
         Args:
@@ -48,11 +46,11 @@ class ExtractorBase(abc.ABC):
                  whose ``doc_id`` should be propagated onto the returned records.
 
         Returns:
-            A list of Pydantic records whose fields match ``self.schema``,
+            A list of dicts whose keys match the schema,
             an empty list when no data is found, or ``None`` on parse failure.
         """
 
-    async def extract(self, doc: Document) -> list[BaseModel] | None:
+    async def extract(self, doc: Document) -> list[dict] | None:
         """Extract records from *doc*, retrying on parse failures.
 
         Returns ``None`` immediately for blank ``doc.text``.  Otherwise calls
