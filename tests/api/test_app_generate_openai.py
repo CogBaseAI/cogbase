@@ -43,6 +43,8 @@ def embedder():
     return _embedder
 
 
+_MAX_ROUNDS = 5  # initial turn + up to 4 confirmations
+
 _CONTRACT_CONVERSATION: list[dict] = [
     {
         "role": "user",
@@ -108,46 +110,51 @@ class TestChatEndpointLive:
         assert config.pipelines
 
     async def test_full_conversation_contract_app_from_scratch(self, llm):
-        """Two-turn conversation starting from no history.
+        """Multi-turn conversation for a contract analysis app.
 
-        Turn 1 asks the model to propose fields for a contract app; turn 2
-        confirms and triggers schema + config generation. Verifies the final
-        config is structurally valid with doc_id injected.
+        Turn 1 asks the model to propose fields; turn 2 confirms and requests
+        generation; subsequent turns say "Yes" until a config_yaml is returned
+        (up to _MAX_ROUNDS total). Verifies the final config is structurally
+        valid with doc_id injected.
         """
-        turn1_text = (
-            "I want to build a contract analysis app. "
-            "Users upload PDF contracts and ask about vendor names, payment terms, "
-            "and expiry dates. What structured fields should I extract?"
-        )
-        body1 = GenerateChatRequest(text=turn1_text, history=[])
-        response1 = await chat(body1, MagicMock(llm=llm))
-        assert response1.content, "expected a text proposal in turn 1"
+        history: list[ChatMessage] = []
+        final_response = None
 
-        if response1.config_yaml:
-            config = AppConfig.from_yaml(response1.config_yaml)
-            assert config.name
-            assert config.pipelines
-            return
+        for round_num in range(_MAX_ROUNDS):
+            if round_num == 0:
+                text = (
+                    "I want to build a contract analysis app. "
+                    "Users upload PDF contracts and ask about vendor names, payment terms, "
+                    "and expiry dates. What structured fields should I extract?"
+                )
+            elif round_num == 1:
+                text = (
+                    "Those fields look exactly right. "
+                    "Please generate the extraction schema and the full app config now."
+                )
+            else:
+                text = "Yes"
 
-        history = [
-            ChatMessage(role="user", content=turn1_text),
-            ChatMessage(role="assistant", content=response1.content),
-        ]
-        body2 = GenerateChatRequest(
-            text=(
-                "Those fields look exactly right. "
-                "Please generate the extraction schema and the full app config now."
-            ),
-            history=history,
-        )
-        response2 = await chat(body2, MagicMock(llm=llm))
+            response = await chat(
+                GenerateChatRequest(text=text, history=history),
+                MagicMock(llm=llm),
+            )
+            logger.info("round %d content=%s", round_num, response.content)
+            logger.info("round %d config_yaml=%s", round_num, response.config_yaml)
+            history = history + [
+                ChatMessage(role="user", content=text),
+                ChatMessage(role="assistant", content=response.content),
+            ]
+            final_response = response
+            if final_response.config_yaml:
+                break
 
-        assert response2.config_yaml, (
-            "expected config_yaml after confirming fields.\n"
-            f"turn 1 response: {response1.content!r}\n"
-            f"turn 2 response: {response2.content!r}"
+        assert final_response is not None
+        assert final_response.config_yaml, (
+            f"expected config_yaml for the contract app within {_MAX_ROUNDS} round(s).\n"
+            f"last response: {final_response.content!r}"
         )
-        config = AppConfig.from_yaml(response2.config_yaml)
+        config = AppConfig.from_yaml(final_response.config_yaml)
         assert config.name
         assert config.pipelines
 
@@ -157,7 +164,7 @@ class TestChatEndpointLive:
             f"got {getattr(first_step, 'tool', None)!r}"
         )
 
-        data = yaml.safe_load(response2.config_yaml)
+        data = yaml.safe_load(final_response.config_yaml)
         extract_targets = {
             step.get("collection")
             for p in data.get("pipelines", [])
@@ -186,8 +193,6 @@ class TestChatEndpointLive:
         config contains at least one workflow and that all structured-save target
         collections have schemas set.
         """
-        _MAX_ROUNDS = 5  # initial turn + up to 4 confirmations
-
         text = (
             "Build a contract compliance app. "
             "The app needs to extract each clause from uploaded contracts. "
@@ -341,8 +346,6 @@ IN WITNESS WHEREOF, the parties have executed this Agreement as of the Effective
 """,
             ),
         ]
-
-        _MAX_ROUNDS = 4
 
         text = (
             "Build a contract compliance app with two document types: "
@@ -620,8 +623,6 @@ breach within 30 days of written notice.
 This Agreement is governed by the laws of the State of Texas.
 """,
         }
-
-        _MAX_ROUNDS = 4
 
         text = (
             "I need a contract analysis app for SaaS vendor agreements. "

@@ -598,6 +598,16 @@ without a workflow.
 # ---------------------------------------------------------------------------
 
 
+def _strip_yaml_fences(text: str) -> str:
+    """Remove optional ```yaml / ``` fences that some LLMs wrap around YAML output."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text[text.index("\n") + 1 :] if "\n" in text else ""
+    if text.endswith("```"):
+        text = text[: text.rfind("```")].rstrip()
+    return text
+
+
 def _make_record_schema(extraction_schema: dict, id_field: str | None = None) -> dict:
     """Add required doc_id (and optional id_field) to produce the record schema.
 
@@ -960,7 +970,7 @@ async def _run_propose_extraction_schemas(
     errors: list[str] = []
     for attempt in range(_MAX_SCHEMA_RETRIES):
         result = await llm.complete(sub_messages, temperature=0.2)
-        schemas_yaml = (result.get("content") or "").strip()
+        schemas_yaml = _strip_yaml_fences(result.get("content") or "")
         schemas, errors = _parse_and_validate_schemas(
             schemas_yaml,
             validator=_validate_extraction_schema,
@@ -1033,7 +1043,7 @@ async def _run_propose_workflow_schemas(
     errors: list[str] = []
     for attempt in range(_MAX_SCHEMA_RETRIES):
         result = await llm.complete(sub_messages, temperature=0.2)
-        schemas_yaml = (result.get("content") or "").strip()
+        schemas_yaml = _strip_yaml_fences(result.get("content") or "")
         schemas, errors = _parse_and_validate_schemas(
             schemas_yaml,
             validator=_validate_workflow_output_schema,
@@ -1113,7 +1123,7 @@ async def _run_propose_pipeline_config(
     errors: list[str] = []
     for attempt in range(_MAX_CONFIG_RETRIES):
         result = await llm.complete(sub_messages, temperature=0.2)
-        config_yaml = (result.get("content") or "").strip()
+        config_yaml = _strip_yaml_fences(result.get("content") or "")
         try:
             config_dict = yaml.safe_load(config_yaml)
             if not isinstance(config_dict, dict):
@@ -1202,7 +1212,7 @@ async def _run_propose_workflow_config(
     errors: list[str] = []
     for attempt in range(_MAX_CONFIG_RETRIES):
         result = await llm.complete(sub_messages, temperature=0.2)
-        workflow_yaml = (result.get("content") or "").strip()
+        workflow_yaml = _strip_yaml_fences(result.get("content") or "")
         try:
             workflow_additions = yaml.safe_load(workflow_yaml)
             if not isinstance(workflow_additions, dict):

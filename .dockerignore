@@ -3,6 +3,8 @@
 **/*.pyo
 .claude
 .env
+.env.yaml
+cogbase_system.yaml
 .git
 .mypy_cache
 .ruff_cache

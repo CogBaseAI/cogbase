@@ -552,7 +552,7 @@ class QueryRunner:
 
             tool_calls = final_result.get("tool_calls") if final_result else None
             if not tool_calls:
-                answer = "".join(tokens)
+                answer = "".join(tokens) + "\n"
                 yield QueryResult(
                     answer=answer,
                     structured_records=all_records,
@@ -577,7 +577,7 @@ class QueryRunner:
             tool_names = ", ".join(tc["name"] for tc in tool_calls)
             logger.info("[runner] tool_calls (skill=%s): %s", current_skill.name if current_skill else "none", tool_names)
 
-            yield f"Executing: {tool_names}..."
+            yield f"Executing: {tool_names}...\n"
 
             # --- Tool execution ---
             for tc in tool_calls:
