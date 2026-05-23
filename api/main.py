@@ -80,6 +80,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         system_resources.embedding_config = system_cfg.embedding
         logger.info("system embedding provider=%s model=%s", system_cfg.embedding.provider, system_cfg.embedding.model)
 
+    # Apply runtime overrides persisted via PATCH /system/config — these win over YAML.
+    from cogbase.config.models import EmbeddingConfig, LLMConfig
+    overrides = await system_store.load_system_config_overrides()
+    if "llm" in overrides:
+        try:
+            llm_cfg = LLMConfig.model_validate_json(overrides["llm"])
+            system_resources.llm = build_llm(llm_cfg)
+            system_resources.llm_config = llm_cfg
+            logger.info("system llm restored from db provider=%s model=%s", llm_cfg.provider, llm_cfg.model)
+        except Exception as exc:
+            logger.warning("failed to restore llm override from db: %s", exc)
+    if "embedding" in overrides:
+        try:
+            emb_cfg = EmbeddingConfig.model_validate_json(overrides["embedding"])
+            system_resources.embedder = build_embedding(emb_cfg)
+            system_resources.embedding_config = emb_cfg
+            logger.info("system embedding restored from db provider=%s model=%s", emb_cfg.provider, emb_cfg.model)
+        except Exception as exc:
+            logger.warning("failed to restore embedding override from db: %s", exc)
+
     skill_registry = SkillRegistry()
     if system_cfg.skills_dir is not None:
         skill_registry.load_from_dir(system_cfg.skills_dir)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from pydantic import BaseModel
 
 from cogbase.stores import Col, CollectionSchema, FieldSchema, FieldType, StructuredStoreBase
@@ -19,6 +21,24 @@ APP_RECORDS_SCHEMA = CollectionSchema(
         "updated_at":  FieldSchema(type=FieldType.STRING, nullable=False),
     },
 )
+
+
+SYSTEM_CONFIG_OVERRIDES_SCHEMA = CollectionSchema(
+    name="system_config_overrides",
+    description="Runtime overrides for system-level LLM and embedding configuration, set via PATCH /system/config.",
+    primary_fields=["key"],
+    fields={
+        "key":        FieldSchema(type=FieldType.STRING, nullable=False),
+        "value_json": FieldSchema(type=FieldType.STRING, nullable=False),
+        "updated_at": FieldSchema(type=FieldType.STRING, nullable=False),
+    },
+)
+
+
+class SystemConfigOverride(BaseModel):
+    key: str         # "llm" | "embedding"
+    value_json: str  # JSON-serialized LLMConfig or EmbeddingConfig
+    updated_at: str  # ISO-8601 UTC
 
 
 class AppRecord(BaseModel):
@@ -44,8 +64,9 @@ class SystemStore:
         self._store = store
 
     async def setup(self) -> None:
-        """Create the app_records collection if it does not exist. Idempotent."""
+        """Create managed collections if they do not exist. Idempotent."""
         await self._store.create_collection(APP_RECORDS_SCHEMA)
+        await self._store.create_collection(SYSTEM_CONFIG_OVERRIDES_SCHEMA)
 
     async def save_app(self, record: AppRecord) -> None:
         await self._store.save("app_records", [record.model_dump()])
@@ -66,3 +87,19 @@ class SystemStore:
             "app_records",
             filters=[Col("name") == name],
         )
+
+    async def save_system_config_override(self, key: str, value_json: str) -> None:
+        record = SystemConfigOverride(
+            key=key,
+            value_json=value_json,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        await self._store.save("system_config_overrides", [record.model_dump()])
+
+    async def load_system_config_overrides(self) -> dict[str, str]:
+        rows = await self._store.query_as(
+            "system_config_overrides",
+            filters=None,
+            model=SystemConfigOverride,
+        )
+        return {r.key: r.value_json for r in rows}

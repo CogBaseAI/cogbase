@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, status
 from cogbase.config.models import EmbeddingConfig, LLMConfig
 from cogbase.embeddings import build_embedding
 from cogbase.llms import build_llm
-from api.dependencies import AppCacheDep, SystemResourcesDep
+from api.dependencies import AppCacheDep, SystemResourcesDep, SystemStoreDep
 from api.models import (
     SystemConfigResponse,
     SystemEmbeddingConfigResponse,
@@ -66,6 +66,7 @@ async def update_system_config(
     body: UpdateSystemConfigRequest,
     resources: SystemResourcesDep,
     app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
 ) -> SystemConfigResponse:
     """Replace the system-level LLM and/or embedding configuration at runtime.
 
@@ -102,6 +103,7 @@ async def update_system_config(
             )
         resources.llm = new_llm
         resources.llm_config = llm_cfg
+        await system_store.save_system_config_override("llm", llm_cfg.model_dump_json())
         logger.info("system llm updated provider=%s model=%s", llm_cfg.provider, llm_cfg.model)
 
     if body.embedding is not None:
@@ -122,6 +124,7 @@ async def update_system_config(
             )
         resources.embedder = new_embedder
         resources.embedding_config = emb_cfg
+        await system_store.save_system_config_override("embedding", emb_cfg.model_dump_json())
         logger.info("system embedding updated provider=%s model=%s", emb_cfg.provider, emb_cfg.model)
 
     app_cache.clear()

@@ -45,10 +45,7 @@ def _make_embedding_config(**kwargs) -> EmbeddingConfig:
 
 @pytest_asyncio.fixture
 async def client_with_resources(request):
-    """Return an (AsyncClient, SystemResources, AppCache) triple.
-
-    ``request.param`` may be a SystemResources instance; defaults to empty.
-    """
+    """Yield (AsyncClient, SystemResources, AppCache, SystemStore)."""
     resources: SystemResources = getattr(request, "param", None) or SystemResources()
     system_store = SystemStore(store=InMemoryStructuredStore())
     await system_store.setup()
@@ -61,7 +58,7 @@ async def client_with_resources(request):
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac, resources, app_cache
+        yield ac, resources, app_cache, system_store
 
     app.dependency_overrides.clear()
 
@@ -115,14 +112,14 @@ class TestMaskKey:
 class TestGetSystemConfig:
     @pytest.mark.asyncio
     async def test_returns_nulls_when_no_config(self, client_with_resources):
-        client, _, _ = client_with_resources
+        client, _, _, _ = client_with_resources
         data = await _get(client)
         assert data["llm"] is None
         assert data["embedding"] is None
 
     @pytest.mark.asyncio
     async def test_returns_llm_config(self, client_with_resources):
-        client, resources, _ = client_with_resources
+        client, resources, _, _ = client_with_resources
         resources.llm_config = _make_llm_config(model="gpt-4o", api_key="sk-abcdefgh")
         data = await _get(client)
         assert data["llm"]["provider"] == "openai"
@@ -132,7 +129,7 @@ class TestGetSystemConfig:
 
     @pytest.mark.asyncio
     async def test_returns_embedding_config(self, client_with_resources):
-        client, resources, _ = client_with_resources
+        client, resources, _, _ = client_with_resources
         resources.embedding_config = _make_embedding_config(model="text-embedding-3-large", api_key="sk-xxxx1234")
         data = await _get(client)
         assert data["llm"] is None
@@ -142,7 +139,7 @@ class TestGetSystemConfig:
 
     @pytest.mark.asyncio
     async def test_returns_both_configs(self, client_with_resources):
-        client, resources, _ = client_with_resources
+        client, resources, _, _ = client_with_resources
         resources.llm_config = _make_llm_config()
         resources.embedding_config = _make_embedding_config()
         data = await _get(client)
@@ -151,7 +148,7 @@ class TestGetSystemConfig:
 
     @pytest.mark.asyncio
     async def test_api_key_masked_in_response(self, client_with_resources):
-        client, resources, _ = client_with_resources
+        client, resources, _, _ = client_with_resources
         resources.llm_config = _make_llm_config(api_key="sk-supersecretkey")
         data = await _get(client)
         assert "supersecretkey" not in data["llm"]["api_key"]
@@ -159,14 +156,14 @@ class TestGetSystemConfig:
 
     @pytest.mark.asyncio
     async def test_empty_api_key_passthrough(self, client_with_resources):
-        client, resources, _ = client_with_resources
+        client, resources, _, _ = client_with_resources
         resources.llm_config = _make_llm_config(api_key="EMPTY")
         data = await _get(client)
         assert data["llm"]["api_key"] == "EMPTY"
 
     @pytest.mark.asyncio
     async def test_mini_model_returned(self, client_with_resources):
-        client, resources, _ = client_with_resources
+        client, resources, _, _ = client_with_resources
         resources.llm_config = _make_llm_config(mini_model="gpt-4o-mini")
         data = await _get(client)
         assert data["llm"]["mini_model"] == "gpt-4o-mini"
@@ -179,13 +176,13 @@ class TestGetSystemConfig:
 class TestPatchSystemConfig:
     @pytest.mark.asyncio
     async def test_requires_at_least_one_field(self, client_with_resources):
-        client, _, _ = client_with_resources
+        client, _, _, _ = client_with_resources
         resp = await client.patch("/system/config", json={})
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
     async def test_update_llm_config(self, client_with_resources):
-        client, resources, _ = client_with_resources
+        client, resources, _, _ = client_with_resources
         mock_llm = MagicMock()
         with patch("api.routers.system.build_llm", return_value=mock_llm):
             resp = await client.patch("/system/config", json={
@@ -205,7 +202,7 @@ class TestPatchSystemConfig:
 
     @pytest.mark.asyncio
     async def test_update_embedding_config(self, client_with_resources):
-        client, resources, _ = client_with_resources
+        client, resources, _, _ = client_with_resources
         mock_embedder = MagicMock()
         with patch("api.routers.system.build_embedding", return_value=mock_embedder):
             resp = await client.patch("/system/config", json={
@@ -226,7 +223,7 @@ class TestPatchSystemConfig:
 
     @pytest.mark.asyncio
     async def test_update_both_llm_and_embedding(self, client_with_resources):
-        client, resources, _ = client_with_resources
+        client, resources, _, _ = client_with_resources
         mock_llm = MagicMock()
         mock_embedder = MagicMock()
         with patch("api.routers.system.build_llm", return_value=mock_llm), \
@@ -253,7 +250,7 @@ class TestPatchSystemConfig:
 
     @pytest.mark.asyncio
     async def test_clears_app_cache_on_success(self, client_with_resources):
-        client, _, app_cache = client_with_resources
+        client, _, app_cache, _ = client_with_resources
         app_cache.add("some-app", MagicMock())
         mock_llm = MagicMock()
         with patch("api.routers.system.build_llm", return_value=mock_llm):
@@ -270,7 +267,7 @@ class TestPatchSystemConfig:
 
     @pytest.mark.asyncio
     async def test_bad_llm_config_returns_422(self, client_with_resources):
-        client, _, _ = client_with_resources
+        client, _, _, _ = client_with_resources
         with patch("api.routers.system.build_llm", side_effect=ValueError("bad provider")):
             resp = await client.patch("/system/config", json={
                 "llm": {
@@ -285,7 +282,7 @@ class TestPatchSystemConfig:
 
     @pytest.mark.asyncio
     async def test_bad_embedding_config_returns_422(self, client_with_resources):
-        client, _, _ = client_with_resources
+        client, _, _, _ = client_with_resources
         with patch("api.routers.system.build_embedding", side_effect=ValueError("bad model")):
             resp = await client.patch("/system/config", json={
                 "embedding": {
@@ -301,7 +298,7 @@ class TestPatchSystemConfig:
 
     @pytest.mark.asyncio
     async def test_response_masks_api_key(self, client_with_resources):
-        client, _, _ = client_with_resources
+        client, _, _, _ = client_with_resources
         mock_llm = MagicMock()
         with patch("api.routers.system.build_llm", return_value=mock_llm):
             resp = await client.patch("/system/config", json={
@@ -319,7 +316,7 @@ class TestPatchSystemConfig:
 
     @pytest.mark.asyncio
     async def test_omitting_llm_leaves_existing_llm_unchanged(self, client_with_resources):
-        client, resources, _ = client_with_resources
+        client, resources, _, _ = client_with_resources
         original_llm = MagicMock()
         resources.llm = original_llm
         resources.llm_config = _make_llm_config(model="gpt-3.5-turbo")
@@ -338,3 +335,61 @@ class TestPatchSystemConfig:
         assert resp.status_code == 200
         assert resources.llm is original_llm
         assert resources.llm_config.model == "gpt-3.5-turbo"
+
+    @pytest.mark.asyncio
+    async def test_llm_override_persisted_to_system_store(self, client_with_resources):
+        client, _, _, system_store = client_with_resources
+        mock_llm = MagicMock()
+        with patch("api.routers.system.build_llm", return_value=mock_llm):
+            resp = await client.patch("/system/config", json={
+                "llm": {
+                    "provider": "openai",
+                    "model": "gpt-4o",
+                    "api_key": "sk-abcdefgh",
+                    "base_url": "https://api.openai.com/v1",
+                }
+            })
+        assert resp.status_code == 200
+        overrides = await system_store.load_system_config_overrides()
+        assert "llm" in overrides
+        from cogbase.config.models import LLMConfig
+        restored = LLMConfig.model_validate_json(overrides["llm"])
+        assert restored.model == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_embedding_override_persisted_to_system_store(self, client_with_resources):
+        client, _, _, system_store = client_with_resources
+        mock_embedder = MagicMock()
+        with patch("api.routers.system.build_embedding", return_value=mock_embedder):
+            resp = await client.patch("/system/config", json={
+                "embedding": {
+                    "provider": "openai",
+                    "model": "text-embedding-3-large",
+                    "api_key": "sk-abcdefgh",
+                    "base_url": "https://api.openai.com/v1",
+                    "dimensions": 3072,
+                }
+            })
+        assert resp.status_code == 200
+        overrides = await system_store.load_system_config_overrides()
+        assert "embedding" in overrides
+        from cogbase.config.models import EmbeddingConfig
+        restored = EmbeddingConfig.model_validate_json(overrides["embedding"])
+        assert restored.model == "text-embedding-3-large"
+        assert restored.dimensions == 3072
+
+    @pytest.mark.asyncio
+    async def test_failed_build_does_not_persist_override(self, client_with_resources):
+        client, _, _, system_store = client_with_resources
+        with patch("api.routers.system.build_llm", side_effect=ValueError("bad")):
+            resp = await client.patch("/system/config", json={
+                "llm": {
+                    "provider": "openai",
+                    "model": "gpt-4o",
+                    "api_key": "sk-abcdefgh",
+                    "base_url": "https://api.openai.com/v1",
+                }
+            })
+        assert resp.status_code == 422
+        overrides = await system_store.load_system_config_overrides()
+        assert "llm" not in overrides
