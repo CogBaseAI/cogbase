@@ -1,11 +1,14 @@
-"""Live integration tests for api/routers/app_generate.py against the real OpenAI API."""
+"""Live integration tests for api/routers/app_generate.py.
+
+LLM and embedding backends are loaded from .env.yaml (same config that
+``api/main.py`` uses).  Falls back to OpenAI via ``OPENAI_API_KEY`` when
+.env.yaml is absent or contains no ``llm`` / ``embedding`` section.
+"""
 
 from __future__ import annotations
 
 import logging
 import json
-import os
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,46 +18,29 @@ from api.models import ChatMessage, GenerateChatRequest
 from api.routers.app_generate import chat
 from cogbase.core.app_generator import _collect_save_targets
 from cogbase.config.config import AppConfig
+from tests.live_setup import make_llm, make_embedding
 
 logger = logging.getLogger(__name__)
 
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-except ImportError:
-    pass
-
+_llm = make_llm()
+_embedder = make_embedding()
 
 openai = pytest.importorskip("openai", reason="openai package not installed")
 
-_openai_api_key = os.environ.get("OPENAI_API_KEY", "")
 pytestmark = [
     pytest.mark.live,
-    pytest.mark.skipif(
-        not _openai_api_key,
-        reason="OPENAI_API_KEY not set in .env",
-    ),
+    pytest.mark.skipif(_llm is None, reason="No LLM configured: set llm in .env.yaml or OPENAI_API_KEY"),
 ]
-
-_MODEL = "gpt-5.4-mini"
-_MINI_MODEL = "gpt-5.4-mini"
 
 
 @pytest.fixture(scope="module")
 def llm():
-    from cogbase.llms.openai import OpenAILLM
-
-    client = openai.AsyncOpenAI(api_key=_openai_api_key)
-    return OpenAILLM(client, model=_MODEL, mini_model=_MINI_MODEL)
+    return _llm
 
 
 @pytest.fixture(scope="module")
 def embedder():
-    from cogbase.embeddings.openai import OpenAIEmbedding
-
-    client = openai.AsyncOpenAI(api_key=_openai_api_key)
-    return OpenAIEmbedding(client)
+    return _embedder
 
 
 _CONTRACT_CONVERSATION: list[dict] = [

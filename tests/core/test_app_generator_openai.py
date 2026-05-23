@@ -1,10 +1,10 @@
-"""Live integration tests for cogbase/core/app_generator.py against the real OpenAI API.
+"""Live integration tests for cogbase/core/app_generator.py.
 
-These tests build a real ``OpenAILLM`` backed by ``openai.AsyncOpenAI`` and the
-``OPENAI_API_KEY`` from the repo-root ``.env``. The whole module is skipped when
-the key is not set, mirroring ``tests/embeddings/test_openai_embeddings.py``.
+LLM backend is loaded from .env.yaml (same config that ``api/main.py`` uses).
+Falls back to OpenAI via ``OPENAI_API_KEY`` when .env.yaml is absent or
+contains no ``llm`` section.
 
-Costs/latency: each test issues real OpenAI requests. The end-to-end chat test
+Costs/latency: each test issues real LLM requests. The end-to-end chat test
 may run the full agent loop with multiple tool calls.
 """
 
@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import logging
 import json
-import os
-from pathlib import Path
 
 import pytest
 import yaml
@@ -27,37 +25,23 @@ from cogbase.core.app_generator import (
     _run_propose_workflow_schemas,
 )
 from cogbase.config.config import AppConfig
+from tests.live_setup import make_llm
 
 logger = logging.getLogger(__name__)
 
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-except ImportError:
-    pass
-
+_llm = make_llm()
 
 openai = pytest.importorskip("openai", reason="openai package not installed")
 
-_openai_api_key = os.environ.get("OPENAI_API_KEY", "")
 pytestmark = [
     pytest.mark.live,
-    pytest.mark.skipif(
-        not _openai_api_key,
-        reason="OPENAI_API_KEY not set in .env",
-    ),
+    pytest.mark.skipif(_llm is None, reason="No LLM configured: set llm in .env.yaml or OPENAI_API_KEY"),
 ]
-
-_MODEL = "gpt-5.4-mini"
 
 
 @pytest.fixture(scope="module")
 def llm():
-    from cogbase.llms.openai import OpenAILLM
-
-    client = openai.AsyncOpenAI(api_key=_openai_api_key)
-    return OpenAILLM(client, model=_MODEL)
+    return _llm
 
 
 # Conversations are kept compact so the model has a clear, confirmed brief

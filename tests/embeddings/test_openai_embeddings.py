@@ -1,44 +1,35 @@
-"""Tests for OpenAIEmbedding."""
+"""Tests for the configured embedding backend.
 
-import os
-from pathlib import Path
+The embedder is loaded from .env.yaml (same config that ``api/main.py`` uses).
+Falls back to OpenAI ``text-embedding-3-small`` via ``OPENAI_API_KEY`` when
+.env.yaml is absent or contains no ``embedding`` section.
+"""
 
 import pytest
 
 from cogbase.embeddings import EmbeddingBase
 from cogbase.embeddings.openai import OpenAIEmbedding
 from tests.embeddings.test_embeddings import make_chunks, assert_embedder_contract
-
-# Load .env from the repo root so OPENAI_API_KEY is available when present.
-try:
-    from dotenv import load_dotenv
-    load_dotenv(Path(__file__).resolve().parents[3] / ".env")
-except ImportError:
-    pass
-
+from tests.live_setup import make_embedding
 
 openai = pytest.importorskip("openai", reason="openai package not installed")
 
-_openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+_embedder = make_embedding()
+
 pytestmark = [
     pytest.mark.live,
-    pytest.mark.skipif(
-        not _openai_api_key,
-        reason="OPENAI_API_KEY not set in .env",
-    ),
+    pytest.mark.skipif(_embedder is None, reason="No embedding configured: set embedding in .env.yaml or OPENAI_API_KEY"),
 ]
 
 
 class TestOpenAIEmbedding:
     @pytest.fixture(scope="class")
     def embedder(self):
-        client = openai.AsyncOpenAI(api_key=_openai_api_key)
-        return OpenAIEmbedding(client, model="text-embedding-3-small")
+        return _embedder
 
     @pytest.fixture(scope="class")
     def embedder_with_dimensions(self):
-        client = openai.AsyncOpenAI(api_key=_openai_api_key)
-        return OpenAIEmbedding(client, model="text-embedding-3-small", dimensions=256)
+        return make_embedding(dimensions=256)
 
     @pytest.mark.asyncio
     async def test_contract(self, embedder):
