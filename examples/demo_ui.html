@@ -1330,7 +1330,7 @@ function renderDemoCard(demo) {
         <div style="display:flex;flex-wrap:wrap;gap:8px">
           <button class="btn btn-green" id="demoDeployBtn-${esc(demo.key)}" onclick="deployDemo('${esc(demo.key)}')">Deploy &amp; Ingest</button>
           <button class="btn btn-ghost" onclick="openConfigModalByRef('${esc(demo.key)}')">View full config</button>
-          ${hasWorkflows ? `<span class="demo-wf-wrap" data-tip="Select this app under Apps, or click Deploy &amp; Ingest first"><button class="btn btn-ghost demo-wf-btn" onclick="openWfModal('${esc(demo.key)}',0)" ${currentApp ? '' : 'disabled'}>▶ ${esc((demo.workflow_actions[0]||{}).label||'Run Workflow')}</button></span>` : ''}
+          ${(demo.workflow_actions || []).map((wf, i) => `<span class="demo-wf-wrap" data-tip="Select this app under Apps, or click Deploy &amp; Ingest first"><button class="btn btn-ghost demo-wf-btn" onclick="openWfModal('${esc(demo.key)}',${i})" ${currentApp ? '' : 'disabled'}>▶ ${esc(wf.label||'Run Workflow')}</button></span>`).join('')}
         </div>
       </div>
       <div class="demo-block">

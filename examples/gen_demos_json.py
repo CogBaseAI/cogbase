@@ -32,6 +32,23 @@ from examples.contract_compliance_demo.schema import (  # noqa: E402
 from examples.vc_portfolio_demo.portfolio_data import BOARD_UPDATES as VC_BOARD_UPDATES  # noqa: E402
 from examples.vc_portfolio_demo.portfolio_data import DEAL_MEMOS as VC_DEAL_MEMOS  # noqa: E402
 from examples.vc_portfolio_demo.schema import PortfolioKPIExtraction, PortfolioKPIRecord  # noqa: E402
+from examples.legal_case_prep_demo.case_data import CASE_DOCUMENTS as LEGAL_CASE_DOCUMENTS  # noqa: E402
+from examples.legal_case_prep_demo.schema import (  # noqa: E402
+    CaseDocument,
+    CaseDocumentRecord,
+    Contradiction,
+    ContradictionList,
+    Entity,
+    EntityRecord,
+    EvidenceGap,
+    EvidenceGapList,
+    Fact,
+    FactRecord,
+    StructuredDataItem,
+    StructuredDataItemRecord,
+    TimelineEvent,
+    TimelineEventRecord,
+)
 
 _EXAMPLES_DIR = pathlib.Path(__file__).resolve().parent
 
@@ -76,6 +93,33 @@ def _file_refs_vc_portfolio() -> dict[str, str]:
     }
 
 
+def _file_refs_legal_case_prep() -> dict[str, str]:
+    demo_dir = _EXAMPLES_DIR / "legal_case_prep_demo"
+    return {
+        "case_document_record_schema.json": json.dumps(CaseDocumentRecord.model_json_schema()),
+        "case_document_extraction_schema.json": json.dumps(CaseDocument.model_json_schema()),
+        "case_document_prompt.txt": (demo_dir / "case_document_prompt.txt").read_text(),
+        "timeline_event_record_schema.json": json.dumps(TimelineEventRecord.model_json_schema()),
+        "timeline_event_extraction_schema.json": json.dumps(TimelineEvent.model_json_schema()),
+        "timeline_event_prompt.txt": (demo_dir / "timeline_event_prompt.txt").read_text(),
+        "entity_record_schema.json": json.dumps(EntityRecord.model_json_schema()),
+        "entity_extraction_schema.json": json.dumps(Entity.model_json_schema()),
+        "entity_prompt.txt": (demo_dir / "entity_prompt.txt").read_text(),
+        "fact_record_schema.json": json.dumps(FactRecord.model_json_schema()),
+        "fact_extraction_schema.json": json.dumps(Fact.model_json_schema()),
+        "fact_prompt.txt": (demo_dir / "fact_prompt.txt").read_text(),
+        "structured_data_record_schema.json": json.dumps(StructuredDataItemRecord.model_json_schema()),
+        "structured_data_extraction_schema.json": json.dumps(StructuredDataItem.model_json_schema()),
+        "structured_data_prompt.txt": (demo_dir / "structured_data_prompt.txt").read_text(),
+        "contradiction_record_schema.json": json.dumps(Contradiction.model_json_schema()),
+        "contradiction_list_schema.json": json.dumps(ContradictionList.model_json_schema()),
+        "contradiction_judge_prompt.txt": (demo_dir / "contradiction_judge_prompt.txt").read_text(),
+        "evidence_gap_record_schema.json": json.dumps(EvidenceGap.model_json_schema()),
+        "evidence_gap_list_schema.json": json.dumps(EvidenceGapList.model_json_schema()),
+        "evidence_gap_judge_prompt.txt": (demo_dir / "evidence_gap_judge_prompt.txt").read_text(),
+    }
+
+
 def _workflow_save_targets(config_yaml: str, workflow_actions: list[dict]) -> list[dict]:
     """Return metadata linking each structured-save collection to its source params collection.
 
@@ -117,6 +161,7 @@ def build_catalog() -> dict:
     config_yaml_ca = _read_config("contract_analyst_demo", _file_refs_contract_analyst())
     config_yaml_vc = _read_config("vc_portfolio_demo", _file_refs_vc_portfolio())
     config_yaml_cc = _read_config("contract_compliance_demo", _file_refs_contract_compliance())
+    config_yaml_lcp = _read_config("legal_case_prep_demo", _file_refs_legal_case_prep())
 
     return {
         "demos": [
@@ -188,6 +233,52 @@ def build_catalog() -> dict:
                 "workflow_save_targets": _workflow_save_targets(
                     config_yaml_cc,
                     [{"name": "check-contract-compliance"}],
+                ),
+            },
+            {
+                "key": "legal-case-prep",
+                "name": "legal-case-prep",
+                "title": "Legal Case Preparation",
+                "description": (
+                    "Upload a litigation case bundle — correspondence, contracts, witness "
+                    "statements, expert reports, and pleadings — and let the system build "
+                    "the working artefacts a lawyer needs: a document inventory, "
+                    "chronological timeline, cast of characters, fact matrix, contradiction "
+                    "detection, and evidence-gap identification."
+                ),
+                "config_yaml": config_yaml_lcp,
+                "docs": _docs_from_documents(LEGAL_CASE_DOCUMENTS),
+                "query_examples": [
+                    "Which documents discuss the delivery on 14 March 2025?",
+                    "Who is Sarah Patel and which documents mention her?",
+                    "What does Beacon allege about the condition of the valves?",
+                    "Summarise the case against Acme based on the witness statement.",
+                ],
+                "notes": (
+                    "Ingests a nine-document fictional commercial dispute (Acme v Beacon). "
+                    "After ingestion, run the workflows to detect contradictions and "
+                    "identify evidence gaps per issue."
+                ),
+                "workflow_actions": [
+                    {
+                        "name": "detect-contradictions",
+                        "label": "Detect Contradictions",
+                        "param_key": "issue",
+                        "param_label": "Issue",
+                    },
+                    {
+                        "name": "identify-evidence-gaps",
+                        "label": "Identify Evidence Gaps",
+                        "param_key": "issue",
+                        "param_label": "Issue",
+                    },
+                ],
+                "workflow_save_targets": _workflow_save_targets(
+                    config_yaml_lcp,
+                    [
+                        {"name": "detect-contradictions"},
+                        {"name": "identify-evidence-gaps"},
+                    ],
                 ),
             },
         ]

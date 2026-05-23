@@ -1,0 +1,249 @@
+# Legal Case Preparation Assistant — CogBase app config
+#
+# Bundle structure:
+#   legal_case_prep.zip
+#   ├── config.yaml                                  (this file)
+#   ├── case_document_record_schema.json             (record schema — includes doc_id)
+#   ├── case_document_extraction_schema.json         (LLM extraction schema)
+#   ├── case_document_prompt.txt                     (LLM system prompt)
+#   ├── timeline_event_record_schema.json            (record schema — includes event_id, doc_id)
+#   ├── timeline_event_extraction_schema.json        (LLM extraction schema)
+#   ├── timeline_event_prompt.txt                    (LLM system prompt)
+#   ├── entity_record_schema.json                    (record schema — includes entity_id, doc_id)
+#   ├── entity_extraction_schema.json                (LLM extraction schema)
+#   ├── entity_prompt.txt                            (LLM system prompt)
+#   ├── fact_record_schema.json                      (record schema — includes fact_id, doc_id)
+#   ├── fact_extraction_schema.json                  (LLM extraction schema)
+#   ├── fact_prompt.txt                              (LLM system prompt)
+#   ├── structured_data_record_schema.json           (record schema — includes item_id, doc_id)
+#   ├── structured_data_extraction_schema.json       (LLM extraction schema)
+#   ├── structured_data_prompt.txt                   (LLM system prompt)
+#   ├── contradiction_record_schema.json             (workflow output record schema)
+#   ├── contradiction_list_schema.json               (llm-structured output wrapper)
+#   ├── contradiction_judge_prompt.txt               (LLM system prompt)
+#   ├── evidence_gap_record_schema.json              (workflow output record schema)
+#   ├── evidence_gap_list_schema.json                (llm-structured output wrapper)
+#   └── evidence_gap_judge_prompt.txt                (LLM system prompt)
+#
+# One pipeline handles every document in the case bundle. The lawyer uploads
+# mixed correspondence, contracts, witness statements, expert reports, invoices,
+# court orders and pleadings; the pipeline classifies, summarises, and pulls
+# out the entities, events, facts and structured data needed for the fact matrix.
+
+name: legal-case-prep
+
+vector_collections:
+  - name: case_chunks
+    description: >-
+      Passage chunks across every document in the case bundle. Use this for
+      detailed questions about specific wording, paragraphs, or events inside
+      one document or across a small set of documents.
+
+  - name: case_summaries
+    description: >-
+      One short summary per document. Use this for broad questions like
+      "which documents discuss the alleged late delivery?" or "which documents
+      mention the project manager?"
+
+structured_collections:
+  - name: case_documents
+    description: >-
+      Document inventory. One record per ingested document with its type,
+      title, summary, relevance tag, authors, recipients, and date range.
+      Use to list, filter, or locate documents in the case bundle.
+    schema: case_document_record_schema.json
+    primary_fields: [doc_id]
+
+  - name: timeline_events
+    description: >-
+      Every dated event, communication, obligation, and action extracted from
+      the case bundle. Each event links back to its source document and a
+      verbatim quote. Use to build the chronological timeline of the case.
+    schema: timeline_event_record_schema.json
+    primary_fields: [doc_id, event_id]
+
+  - name: entities
+    description: >-
+      Every named individual, company, organisation, or government body that
+      appears anywhere in the case bundle, with the role each played at the
+      time of the document. Use to build the cast of characters and to find
+      every document a person or entity appears in.
+    schema: entity_record_schema.json
+    primary_fields: [doc_id, entity_id]
+
+  - name: facts
+    description: >-
+      Factual assertions made in the case bundle, each attributed to the party
+      asserting it and linked to a verbatim source quote. Filter by issue to
+      pull every assertion bearing on the same disputed point across documents.
+      Used as the source for the fact matrix.
+    schema: fact_record_schema.json
+    primary_fields: [doc_id, fact_id]
+
+  - name: structured_data
+    description: >-
+      Reference table of dates and deadlines, monetary amounts and payments,
+      contractual obligations with their clause references, notices served,
+      and alleged breaches. Used directly when preparing submissions,
+      affidavits, or cross-examination outlines.
+    schema: structured_data_record_schema.json
+    primary_fields: [doc_id, item_id]
+
+  - name: contradictions
+    description: >-
+      Pairs of facts in the case bundle that make incompatible claims about
+      the same event, date, obligation, or state of mind. Produced by the
+      detect-contradictions workflow; ranked by likely legal significance.
+    schema: contradiction_record_schema.json
+
+  - name: evidence_gaps
+    description: >-
+      Facts asserted in one document but uncorroborated by any other source.
+      Produced by the identify-evidence-gaps workflow; each gap is tagged with
+      its potential impact and a suggested next step.
+    schema: evidence_gap_record_schema.json
+
+pipelines:
+  - name: case-document
+    routing_description: >-
+      Every document in the litigation case bundle — correspondence, contracts,
+      invoices, witness statements, expert reports, court orders, pleadings, and
+      disclosed evidence. All documents flow through the same extraction pipeline
+      regardless of format.
+    steps:
+      - tool: chunk-embed-upsert
+        collection: case_chunks
+
+      - tool: extract-structured
+        collection: case_documents
+        extractor:
+          type: llm
+          extraction_schema: case_document_extraction_schema.json
+          prompt: case_document_prompt.txt
+
+      - tool: extract-structured
+        collection: timeline_events
+        extractor:
+          type: llm
+          extraction_schema: timeline_event_extraction_schema.json
+          prompt: timeline_event_prompt.txt
+          record_mode: many
+          response_field: events
+          id_field: event_id
+          id_template: "{doc_id}__evt__{index:04d}"
+
+      - tool: extract-structured
+        collection: entities
+        extractor:
+          type: llm
+          extraction_schema: entity_extraction_schema.json
+          prompt: entity_prompt.txt
+          record_mode: many
+          response_field: entities
+          id_field: entity_id
+          id_template: "{doc_id}__ent__{index:04d}"
+
+      - tool: extract-structured
+        collection: facts
+        extractor:
+          type: llm
+          extraction_schema: fact_extraction_schema.json
+          prompt: fact_prompt.txt
+          record_mode: many
+          response_field: facts
+          id_field: fact_id
+          id_template: "{doc_id}__fact__{index:04d}"
+
+      - tool: extract-structured
+        collection: structured_data
+        extractor:
+          type: llm
+          extraction_schema: structured_data_extraction_schema.json
+          prompt: structured_data_prompt.txt
+          record_mode: many
+          response_field: items
+          id_field: item_id
+          id_template: "{doc_id}__item__{index:04d}"
+
+      - tool: document-embed-upsert
+        collection: case_summaries
+        doc_prompt: >-
+          Summarise this case document in three or four sentences. State the
+          document type, who wrote it, who it is addressed to, the dates it
+          covers, and the disputed issue it bears on. Be neutral and factual.
+
+workflows:
+  - name: detect-contradictions
+    trigger:
+      type: after_ingest
+    params_from_collection:
+      collection: facts
+      filters:
+        doc_id: "{{ doc.doc_id }}"
+      params:
+        issue: "{{ record.issue }}"
+    steps:
+      - id: load_facts
+        tool: structured-query
+        collection: facts
+        filters:
+          issue: "{{ input.issue }}"
+
+      - id: judge
+        tool: llm-structured
+        prompt: contradiction_judge_prompt.txt
+        input:
+          issue: "{{ input.issue }}"
+          facts: "{{ steps.load_facts.records }}"
+        output_schema: contradiction_list_schema.json
+
+      - id: save_each
+        foreach: "{{ steps.judge.output.contradictions }}"
+        steps:
+          - id: save_one
+            tool: structured-save
+            collection: contradictions
+            primary_fields: [contradiction_id]
+            records:
+              - "{{ item }}"
+
+  - name: identify-evidence-gaps
+    trigger:
+      type: after_ingest
+    params_from_collection:
+      collection: facts
+      filters:
+        doc_id: "{{ doc.doc_id }}"
+      params:
+        issue: "{{ record.issue }}"
+    steps:
+      - id: load_facts
+        tool: structured-query
+        collection: facts
+        filters:
+          issue: "{{ input.issue }}"
+
+      - id: load_structured_data
+        tool: structured-query
+        collection: structured_data
+        filters:
+          issue: "{{ input.issue }}"
+
+      - id: judge
+        tool: llm-structured
+        prompt: evidence_gap_judge_prompt.txt
+        input:
+          issue: "{{ input.issue }}"
+          facts: "{{ steps.load_facts.records }}"
+          structured_data: "{{ steps.load_structured_data.records }}"
+        output_schema: evidence_gap_list_schema.json
+
+      - id: save_each
+        foreach: "{{ steps.judge.output.gaps }}"
+        steps:
+          - id: save_one
+            tool: structured-save
+            collection: evidence_gaps
+            primary_fields: [gap_id]
+            records:
+              - "{{ item }}"
