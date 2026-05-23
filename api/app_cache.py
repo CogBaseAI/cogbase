@@ -30,3 +30,7 @@ class AppCache:
     def remove(self, name: str) -> None:
         with self.lock:
             self._cache.pop(name, None)
+
+    def clear(self) -> None:
+        with self.lock:
+            self._cache.clear()

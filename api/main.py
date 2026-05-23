@@ -21,6 +21,7 @@ from api.app_cache import AppCache
 from api.routers.applications import router as applications_router
 from api.routers.app_generate import router as generate_router
 from api.routers.skills import router as skills_router
+from api.routers.system import router as system_router
 from api.system_config import SystemConfig
 from api.system_resources import SystemResources
 from api.system_store import SystemStore
@@ -71,10 +72,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     if system_cfg.llm is not None:
         system_resources.llm = build_llm(system_cfg.llm)
+        system_resources.llm_config = system_cfg.llm
         logger.info("system llm provider=%s model=%s", system_cfg.llm.provider, system_cfg.llm.model)
 
     if system_cfg.embedding is not None:
         system_resources.embedder = build_embedding(system_cfg.embedding)
+        system_resources.embedding_config = system_cfg.embedding
         logger.info("system embedding provider=%s model=%s", system_cfg.embedding.provider, system_cfg.embedding.model)
 
     skill_registry = SkillRegistry()
@@ -134,6 +137,7 @@ app.add_middleware(
 app.include_router(applications_router)
 app.include_router(generate_router)
 app.include_router(skills_router)
+app.include_router(system_router)
 
 _EXAMPLES_DIR = pathlib.Path(__file__).parent.parent / "examples"
 _DEMO_UI = _EXAMPLES_DIR / "demo_ui.html"

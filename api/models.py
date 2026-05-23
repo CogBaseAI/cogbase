@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class ApplicationResponse(BaseModel):
@@ -174,3 +174,56 @@ class DeployResponse(BaseModel):
     name: str
     status: str
     error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# System config models
+# ---------------------------------------------------------------------------
+
+
+class SystemLLMConfigResponse(BaseModel):
+    provider: str
+    base_url: str
+    api_key: str
+    model: str
+    mini_model: str | None = None
+
+
+class SystemEmbeddingConfigResponse(BaseModel):
+    provider: str
+    model: str
+    base_url: str
+    api_key: str
+    dimensions: int
+
+
+class SystemConfigResponse(BaseModel):
+    llm: SystemLLMConfigResponse | None = None
+    embedding: SystemEmbeddingConfigResponse | None = None
+
+
+_DEFAULT_OPENAI_API_URL = 'https://api.openai.com/v1'
+
+class UpdateLLMConfig(BaseModel):
+    provider: Literal["openai", "openai-compatible"] = "openai"
+    model: str
+    mini_model: str | None = None
+    base_url: str = _DEFAULT_OPENAI_API_URL
+    api_key: str = Field(
+        description="API key. Use 'EMPTY' for local openai-compatible servers that require no auth (e.g. vLLM).",
+    )
+
+
+class UpdateEmbeddingConfig(BaseModel):
+    provider: Literal["openai", "openai-compatible"] = "openai"
+    model: str
+    base_url: str = _DEFAULT_OPENAI_API_URL
+    api_key: str = Field(
+        description="API key. Use 'EMPTY' for local openai-compatible servers that require no auth (e.g. vLLM).",
+    )
+    dimensions: int
+
+
+class UpdateSystemConfigRequest(BaseModel):
+    llm: UpdateLLMConfig | None = None
+    embedding: UpdateEmbeddingConfig | None = None
