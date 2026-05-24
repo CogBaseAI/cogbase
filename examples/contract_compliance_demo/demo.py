@@ -104,7 +104,7 @@ async def main() -> None:
                 ]
                 print(f"Ingesting {len(documents)} built-in rule documents...")
                 try:
-                    results = await client.ingest_documents(documents, timeout=180)
+                    results = await client.upload_text_documents(documents, timeout=180)
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     return True
@@ -123,13 +123,10 @@ async def main() -> None:
                 if not file_path.exists():
                     print(f"  File not found: {file_path}")
                     return True
-                doc_id = file_path.stem
-                text = file_path.read_text(errors="replace")
-                print(f"Ingesting {file_path.name} as doc_id={doc_id!r}...")
+                print(f"Ingesting {file_path.name}...")
                 try:
-                    results = await client.ingest_documents(
-                        [{"doc_id": doc_id, "text": text, "metadata": {"doc_type": "rules"}}],
-                        timeout=180,
+                    results = await client.upload_documents(
+                        [file_path], metadata={"doc_type": "rules"}, timeout=180
                     )
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
@@ -148,7 +145,7 @@ async def main() -> None:
                     for doc in CONTRACTS_DOCUMENTS
                 ]
                 try:
-                    results = await client.ingest_documents(documents, timeout=180)
+                    results = await client.upload_text_documents(documents, timeout=180)
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     return True
@@ -167,22 +164,19 @@ async def main() -> None:
                 if not file_path.exists():
                     print(f"  File not found: {file_path}")
                     return True
-                doc_id = file_path.stem
-                text = file_path.read_text(errors="replace")
-                print(f"Ingesting {file_path.name} as doc_id={doc_id!r}...")
+                print(f"Ingesting {file_path.name}...")
                 try:
-                    results = await client.ingest_documents(
-                        [{"doc_id": doc_id, "text": text, "metadata": {"doc_type": "contract"}}],
-                        timeout=180,
+                    results = await client.upload_documents(
+                        [file_path], metadata={"doc_type": "contract"}, timeout=180
                     )
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     return True
                 r = results[0]
                 if r["success"]:
-                    print(f"  {doc_id}  OK")
+                    print(f"  {r['doc_id']}  OK")
                 else:
-                    print(f"  {doc_id}  FAILED: {r['error']}")
+                    print(f"  {r['doc_id']}  FAILED: {r['error']}")
                 return True
 
             if lower.startswith("/check"):

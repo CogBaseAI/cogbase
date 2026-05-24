@@ -44,28 +44,6 @@ class DocListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class DocumentRequest(BaseModel):
-    doc_id: str
-    text: str
-    metadata: dict[str, Any] = {}
-
-
-class IngestDocumentsRequest(BaseModel):
-    documents: list[DocumentRequest]
-    concurrency: int = 5
-
-
-class IngestResultResponse(BaseModel):
-    doc_id: str
-    success: bool
-    records_extracted: int
-    error: str | None
-
-
-class IngestDocumentsResponse(BaseModel):
-    results: list[IngestResultResponse]
-
-
 class IngestDocumentsAcceptedResponse(BaseModel):
     task_ids: list[str]
     total: int

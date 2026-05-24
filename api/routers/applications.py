@@ -32,9 +32,6 @@ from api.models import (
     DocResponse,
     FilterRequest,
     IngestDocumentsAcceptedResponse,
-    IngestDocumentsRequest,
-    IngestDocumentsResponse,
-    IngestResultResponse,
     QueryRequest,
     QueryResponse,
     CollectionQueryRequest,
@@ -362,76 +359,6 @@ async def _get_active_app(
     app = await build_app(config, system=system_resources, app_status=record.status, task_store=system_store)
     app_cache.add(app_name, app)
     return app
-
-
-@router.post("/{app_name}/ingest_documents", response_model=IngestDocumentsAcceptedResponse, status_code=status.HTTP_202_ACCEPTED)
-async def ingest_documents(
-    app_name: str,
-    body: IngestDocumentsRequest,
-    app_cache: AppCacheDep,
-    system_store: SystemStoreDep,
-    system_resources: SystemResourcesDep,
-) -> IngestDocumentsAcceptedResponse:
-    """Queue a batch of documents for background ingestion.
-
-    Returns task IDs immediately (HTTP 202). Poll
-    GET /{app_name}/tasks?task_type=ingest to track progress.
-    """
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
-    documents = [Document(doc_id=d.doc_id, text=d.text, metadata=d.metadata) for d in body.documents]
-
-    now = _now()
-    task_doc_pairs: list[tuple[str, Document]] = []
-    for doc in documents:
-        task_id = str(uuid.uuid4())
-        await system_store.create_task(TaskRecord(
-            task_id=task_id,
-            app_name=app_name,
-            task_type="ingest",
-            task_name="ingest",
-            doc_id=doc.doc_id,
-            status="pending",
-            started_at=now,
-        ))
-        task_doc_pairs.append((task_id, doc))
-
-    async def _run_ingest_bg() -> None:
-        semaphore = asyncio.Semaphore(body.concurrency)
-
-        async def _ingest_one(task_id: str, doc: Document) -> None:
-            async with semaphore:
-                await system_store.update_task(task_id, status="running", started_at=_now())
-                try:
-                    current_app = app_cache.get(app_name) or app
-                    results = await current_app.ingest_documents([doc], concurrency=1)
-                    result = results[0]
-                    if result.success:
-                        await system_store.update_task(task_id, status="done", completed_at=_now())
-                        await system_store.save_doc(DocRecord(
-                            app_name=app_name,
-                            doc_id=doc.doc_id,
-                            status="active",
-                            ingested_at=_now(),
-                            metadata=json.dumps(doc.metadata) if doc.metadata else None,
-                        ))
-                    else:
-                        await system_store.update_task(
-                            task_id, status="failed", completed_at=_now(),
-                            error=str(result.error) if result.error else "ingest failed",
-                        )
-                except Exception as exc:
-                    logger.exception("ingest_bg failed app=%s doc_id=%s", app_name, doc.doc_id)
-                    await system_store.update_task(
-                        task_id, status="failed", completed_at=_now(), error=str(exc)
-                    )
-
-        await asyncio.gather(*(_ingest_one(tid, doc) for tid, doc in task_doc_pairs))
-
-    asyncio.create_task(_run_ingest_bg())
-    return IngestDocumentsAcceptedResponse(
-        task_ids=[tid for tid, _ in task_doc_pairs],
-        total=len(task_doc_pairs),
-    )
 
 
 @router.post("/{app_name}/upload_documents", response_model=IngestDocumentsAcceptedResponse, status_code=status.HTTP_202_ACCEPTED)

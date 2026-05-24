@@ -81,7 +81,7 @@ async def main() -> None:
                 print(f"Ingesting {len(CONTRACTS)} built-in SaaS contracts...")
                 documents = [{"doc_id": doc_id, "text": text} for doc_id, text in CONTRACTS.items()]
                 try:
-                    results = await client.ingest_documents(documents)
+                    results = await client.upload_text_documents(documents)
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     return True

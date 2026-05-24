@@ -142,7 +142,7 @@ async def _ingest_built_in(client: CogBaseClient) -> None:
         for doc in CASE_DOCUMENTS
     ]
     try:
-        results = await client.ingest_documents(documents, timeout=600)
+        results = await client.upload_text_documents(documents, timeout=600)
     except httpx.HTTPStatusError as exc:
         print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
         return

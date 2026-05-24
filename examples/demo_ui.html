@@ -1804,17 +1804,33 @@ async function deployDemo(key) {
       }
     }
 
-    const ingestResp = await fetch(api() + '/applications/' + encodeURIComponent(demo.name) + '/ingest_documents', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ documents: demo.docs, concurrency: 4 }),
-    });
-    const ingestData = await ingestResp.json();
-    if (!ingestResp.ok) {
-      throw new Error(ingestData.detail || ingestResp.statusText);
+    // Group docs by metadata so each upload call carries a uniform metadata batch.
+    const metaGroups = {};
+    for (const doc of (demo.docs || [])) {
+      const key = JSON.stringify(doc.metadata || {});
+      if (!metaGroups[key]) metaGroups[key] = [];
+      metaGroups[key].push(doc);
+    }
+    const allIngestTaskIds = [];
+    for (const [metaJson, docs] of Object.entries(metaGroups)) {
+      const formData = new FormData();
+      for (const doc of docs) {
+        const blob = new Blob([doc.text || ''], { type: 'text/plain' });
+        formData.append('files', blob, doc.doc_id + '.txt');
+      }
+      formData.append('metadata', metaJson);
+      const ingestResp = await fetch(api() + '/applications/' + encodeURIComponent(demo.name) + '/upload_documents', {
+        method: 'POST',
+        body: formData,
+      });
+      const ingestData = await ingestResp.json();
+      if (!ingestResp.ok) {
+        throw new Error(ingestData.detail || ingestResp.statusText);
+      }
+      allIngestTaskIds.push(...ingestData.task_ids);
     }
 
-    const ingestTasks = await waitForTasks(demo.name, ingestData.task_ids, { timeout: 600000 });
+    const ingestTasks = await waitForTasks(demo.name, allIngestTaskIds, { timeout: 600000 });
     const okCount = ingestTasks.filter(t => t && t.status === 'done').length;
     setDemoStatus('✓ "' + demo.title + '" is deployed and ' + okCount + ' document batch(es) were ingested.');
     setApp(demo.name);

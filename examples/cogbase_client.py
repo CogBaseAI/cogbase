@@ -241,34 +241,34 @@ class CogBaseClient:
 
         return [results[tid] for tid in task_ids]
 
-    async def ingest_documents(
+    async def upload_text_documents(
         self, documents: list[dict], timeout: float = 120
     ) -> list[dict]:
-        """Ingest documents and wait for all tasks to complete.
+        """Ingest in-memory text documents by uploading them as .txt files.
 
-        Submits the batch (HTTP 202), then polls until every per-document
-        task reaches a terminal status. Returns one result dict per document
-        with ``doc_id``, ``success``, ``records_extracted``, and ``error``.
+        Groups documents with identical metadata into a single upload call.
+        Returns one result dict per document with ``doc_id``, ``success``, and ``error``.
         """
-        resp = await self._http.post(
-            f"{self.api_base}/applications/{self.app_name}/ingest_documents",
-            json={"documents": documents, "concurrency": 3},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        body = resp.json()
-        task_ids: list[str] = body["task_ids"]
+        import tempfile
 
-        tasks = await self.wait_for_tasks(task_ids, poll_interval=2.0, timeout=timeout)
-        return [
-            {
-                "doc_id": t["doc_id"],
-                "success": t["status"] == "done",
-                "records_extracted": 0,
-                "error": t.get("error"),
-            }
-            for t in tasks
-        ]
+        groups: dict[str, list[dict]] = {}
+        for doc in documents:
+            key = json.dumps(doc.get("metadata") or {}, sort_keys=True)
+            groups.setdefault(key, []).append(doc)
+
+        all_results: list[dict] = []
+        for meta_json, group in groups.items():
+            meta = json.loads(meta_json)
+            with tempfile.TemporaryDirectory() as tmpdir:
+                paths = [
+                    pathlib.Path(tmpdir) / f"{doc['doc_id']}.txt"
+                    for doc in group
+                ]
+                for path, doc in zip(paths, group):
+                    path.write_text(doc.get("text") or "")
+                results = await self.upload_documents(paths, metadata=meta, timeout=timeout)
+                all_results.extend(results)
+        return all_results
 
     def clear_query_history(self) -> None:
         """Reset the chat history."""

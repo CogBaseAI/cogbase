@@ -76,7 +76,7 @@ async def _ingest_batch(client: CogBaseClient, batch: dict[str, dict], label: st
     ]
     print(f"Ingesting {len(documents)} {label}...")
     try:
-        results = await client.ingest_documents(documents, timeout=300)
+        results = await client.upload_text_documents(documents, timeout=300)
     except httpx.HTTPStatusError as exc:
         print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
         return
