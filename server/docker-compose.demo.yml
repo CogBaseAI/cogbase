@@ -7,7 +7,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - COGBASE_CONFIG=/app/server/cogbase_system.demo.yaml
+      # Passed through only when set in the host environment; omit to configure via UI Settings.
+      - OPENAI_API_KEY
     volumes:
       - ../data:/data

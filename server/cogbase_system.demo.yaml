@@ -14,13 +14,16 @@ document_store:
   type: local
   path: /data/documents
 
-llm:
-  provider: openai
-  model: gpt-5.5
-  mini_model: gpt-5.4-mini
-  # api_key: sk-...          # omit to use OPENAI_API_KEY env var
+# LLM and embedding are not pre-configured — set them via the UI Settings tab,
+# or add the blocks below (with a valid api_key):
+# llm:
+#   provider: openai
+#   model: gpt-5.4
+#   mini_model: gpt-5.4-mini
+#   api_key: sk-xxx
 
-embedding:
-  provider: openai
-  model: text-embedding-3-small
+# embedding:
+#   provider: openai
+#   model: text-embedding-3-small
+#   api_key: sk-xxx
 
