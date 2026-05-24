@@ -1,12 +1,10 @@
 # Running CogBase locally with Docker
 
-The demo setup uses SQLite + FAISS + local file storage — no external databases required. The only prerequisite is an OpenAI API key.
+The demo setup uses SQLite + FAISS + local file storage — no external databases required. Configure your LLM and embedding provider (including API key) via the UI Settings tab after the container starts.
 
 ## Option 1: Pull and run a pre-built image (simpler)
 
 ```bash
-export OPENAI_API_KEY=sk-...
-
 # Run latest, no data persistence
 ./server/run_docker_hub_demo.sh
 
@@ -25,7 +23,6 @@ docker rm -f cogbase-demo
 ## Option 2: Build and run from source
 
 ```bash
-export OPENAI_API_KEY=sk-...
 docker compose -f server/docker-compose.demo.yml up --build
 ```
 

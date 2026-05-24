@@ -18,8 +18,6 @@ Commands:
   stop                Stop and remove the running container
   logs                Tail logs from the running container
 
-Environment:
-  OPENAI_API_KEY      Passed into the container when set (configure via UI if omitted)
 EOF
 }
 
@@ -57,17 +55,11 @@ cmd_run() {
     MOUNT_ARG="-v $LOCAL_DATA_DIR:/data"
   fi
 
-  ENV_ARG=""
-  if [[ -n "${OPENAI_API_KEY:-}" ]]; then
-    ENV_ARG="-e OPENAI_API_KEY=$OPENAI_API_KEY"
-  fi
-
   echo "Starting $CONTAINER_NAME"
   # shellcheck disable=SC2086
   docker run -d \
     --name "$CONTAINER_NAME" \
     -p 8000:8000 \
-    $ENV_ARG \
     $MOUNT_ARG \
     "$DOCKER_REPO:$VERSION"
 
