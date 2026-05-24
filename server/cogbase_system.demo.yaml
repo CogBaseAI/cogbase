@@ -17,13 +17,15 @@ document_store:
 # LLM and embedding are not pre-configured — set them via the UI Settings tab,
 # or add the blocks below (with a valid api_key):
 # llm:
-#   provider: openai
+#   provider: openai           # "openai" | "openai-compatible"
 #   model: gpt-5.4
 #   mini_model: gpt-5.4-mini
+#   base_url: https://api.openai.com/v1
 #   api_key: sk-xxx
 
 # embedding:
-#   provider: openai
+#   provider: openai           # "openai" | "openai-compatible"
 #   model: text-embedding-3-small
+#   dimensions: 1536
+#   base_url: https://api.openai.com/v1
 #   api_key: sk-xxx
-

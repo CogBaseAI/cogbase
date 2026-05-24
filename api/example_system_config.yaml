@@ -61,7 +61,7 @@ llm:
 embedding:                   # shared across all vector and summarize collections
   provider: openai           # "openai" | "openai-compatible" | "sentence-transformers"
   model: text-embedding-3-small
-  # dimensions: 1536         # optional, default 1536
+  dimensions: 1536
   api_key: sk-xxx
 
   # OpenAI-compatible embedding providers (vLLM, Alibaba DashScope, etc.):

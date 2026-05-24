@@ -5,11 +5,13 @@ The demo setup uses SQLite + FAISS + local file storage — no external database
 ## Option 1: Pull and run a pre-built image (simpler)
 
 ```bash
-# Run latest, no data persistence
-./server/run_docker_hub_demo.sh
+# Pull and run latest, no data persistence
+./server/docker_hub_demo.sh pull
+./server/docker_hub_demo.sh run
 
-# Run a specific version with a local data directory for persistence
-./server/run_docker_hub_demo.sh 0.1.0 /path/to/local/data
+# Pull and run a specific version with a local data directory for persistence
+./server/docker_hub_demo.sh pull 0.1.0
+./server/docker_hub_demo.sh run 0.1.0 /path/to/local/data
 ```
 
 The API is available at `http://localhost:8000`. API docs are at `http://localhost:8000/docs`.
@@ -17,7 +19,7 @@ The API is available at `http://localhost:8000`. API docs are at `http://localho
 To stop and remove the container:
 
 ```bash
-docker rm -f cogbase-demo
+./server/docker_hub_demo.sh stop
 ```
 
 ## Option 2: Build and run from source
@@ -30,23 +32,26 @@ The API is available at `http://localhost:8000`. API docs are at `http://localho
 
 ## Data persistence
 
-All data is written to `../data/` (relative to `server/`) on the host:
+All data lives under `/data` inside the container, with these paths:
 
 | Path | Contents |
 |------|----------|
-| `data/cogbase_system.db` | Application registry |
-| `data/cogbase.db` | Structured extraction data |
-| `data/faiss_vector_store/` | Vector index |
-| `data/documents/` | Ingested document text |
+| `/data/cogbase_system.db` | Application registry and background task tracking |
+| `/data/cogbase.db` | Structured extraction data |
+| `/data/faiss_vector_store/` | Vector index |
+| `/data/documents/` | Ingested document text |
 
-Remove the `data/` directory to reset to a clean state.
+- **Option 1 without a DIR**: `/data` is inside the container and is lost when the container is removed.
+- **Option 1 with a DIR**: `/data` is mounted from the host path you specified.
+- **Option 2**: `/data` is mounted from `../data/` relative to `server/` on the host.
+
+To reset to a clean state, remove the host data directory (Options 1+DIR or 2) or stop and remove the container (Option 1 without DIR).
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `run_docker_hub_demo.sh` | Pull a pre-built image from Docker Hub and run it |
-| `docker_hub_demo.sh` | Build and push the demo image to Docker Hub |
+| `docker_hub_demo.sh` | Pull, run, stop, build, push, and release the demo image |
 | `Dockerfile.demo` | Builds the service image |
 | `docker-compose.demo.yml` | Wires up ports, env vars, and the data volume |
 | `cogbase_system.demo.yaml` | System config: SQLite + FAISS + local document store |
