@@ -1479,7 +1479,7 @@ async function runDemoWorkflow(demoKey, appName, workflowName, paramKey, selectI
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [paramKey]: paramValue }),
+        body: JSON.stringify({ doc_id: paramValue }),
       }
     );
     if (!resp.ok) {
@@ -1563,35 +1563,25 @@ async function openWfModal(demoKey, wfIndex, overrideValues) {
   let allDone = false;
 
   // When opened directly (no overrideValues) and the matching app is selected,
-  // compute pending IDs live so we only show unprocessed items.
-  if (!overrideValues && currentApp === demo.name && demo.workflow_save_targets) {
-    const target = demo.workflow_save_targets.find(t => t.workflow_action_index === wfIndex);
-    if (target) {
-      try {
-        const base = api() + '/applications/' + encodeURIComponent(currentApp) + '/collections/';
-        const [saveResp, sourceResp] = await Promise.all([
-          fetch(base + encodeURIComponent(target.save_collection) + '/query',
-            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filters: [], fields: null }) }),
-          fetch(base + encodeURIComponent(target.params_collection) + '/query',
-            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filters: [], fields: null }) }),
-        ]);
-        if (saveResp.ok && sourceResp.ok) {
-          const { records: saveRecords = [] } = await saveResp.json();
-          const { records: sourceRecords = [] } = await sourceResp.json();
-          const checkedIds = new Set(saveRecords.map(r => r[target.param_key]).filter(Boolean));
-          const pendingIds = sourceRecords.map(r => r[target.param_key]).filter(id => id && !checkedIds.has(id));
-          if (pendingIds.length) {
-            values = pendingIds;
-            desc = pendingIds.length + ' ' + wf.param_label.toLowerCase() +
-              (pendingIds.length === 1 ? ' has' : 's have') +
-              ' not been checked yet. Select one and run the workflow.';
-          } else if (sourceRecords.length) {
-            allDone = true;
-            desc = 'All ' + wf.param_label.toLowerCase() + 's have been checked — nothing to do.';
-          }
+  // query pending workflow tasks to show which doc_ids still need processing.
+  if (!overrideValues && currentApp === demo.name) {
+    try {
+      const tasksResp = await fetch(
+        api() + '/applications/' + encodeURIComponent(currentApp) + '/tasks?task_type=workflow&task_name=' + encodeURIComponent(wf.name) + '&status=pending'
+      );
+      if (tasksResp.ok) {
+        const { tasks = [] } = await tasksResp.json();
+        const pendingIds = [...new Set(tasks.map(t => t.doc_id).filter(Boolean))];
+        if (pendingIds.length) {
+          values = pendingIds;
+          desc = pendingIds.length + ' ' + wf.param_label.toLowerCase() +
+            (pendingIds.length === 1 ? ' has' : 's have') +
+            ' pending tasks. Select one and run the workflow.';
+        } else if (tasks.length === 0) {
+          // No pending tasks — either all done or ingest not yet run
         }
-      } catch { /* fall through to static values */ }
-    }
+      }
+    } catch { /* fall through to static values */ }
   }
 
   if (!desc) {
@@ -2125,7 +2115,7 @@ async function selectCollection(name) {
 
     document.getElementById('dataRowCount').textContent = records.length + ' row' + (records.length !== 1 ? 's' : '');
 
-    checkWorkflowPending(name, records);
+    checkWorkflowPending(name);
 
     if (!records.length) {
       wrap.innerHTML = '<div class="empty"><div class="ei">🗄️</div><p>No records yet — ingest some documents first.</p></div>';
@@ -2177,7 +2167,7 @@ async function selectCollection(name) {
   }
 }
 
-async function checkWorkflowPending(collName, saveRecords) {
+async function checkWorkflowPending(collName) {
   if (!demoCatalog.length) {
     try {
       const r = await fetch(api() + '/examples/demos');
@@ -2189,24 +2179,23 @@ async function checkWorkflowPending(collName, saveRecords) {
   const target = demo.workflow_save_targets.find(t => t.save_collection === collName);
   if (!target) return;
 
+  const wf = (demo.workflow_actions || [])[target.workflow_action_index];
+  if (!wf) return;
+
   try {
     const resp = await fetch(
-      api() + '/applications/' + encodeURIComponent(currentApp) + '/collections/' + encodeURIComponent(target.params_collection) + '/query',
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filters: [], fields: null }) }
+      api() + '/applications/' + encodeURIComponent(currentApp) + '/tasks?task_type=workflow&task_name=' + encodeURIComponent(wf.name) + '&status=pending'
     );
     if (!resp.ok) return;
-    const { records: sourceRecords = [] } = await resp.json();
-
-    const checkedIds = new Set(saveRecords.map(r => r[target.param_key]).filter(Boolean));
-    const pendingIds = sourceRecords.map(r => r[target.param_key]).filter(id => id && !checkedIds.has(id));
+    const { tasks = [] } = await resp.json();
+    const pendingIds = [...new Set(tasks.map(t => t.doc_id).filter(Boolean))];
     if (!pendingIds.length) return;
 
-    const wf = (demo.workflow_actions || [])[target.workflow_action_index];
-    const label = wf ? wf.label : 'Run Workflow';
+    const label = wf.label || 'Run Workflow';
     const bar = document.getElementById('wfPendingBar');
     const msg = document.getElementById('wfPendingMsg');
     msg.innerHTML =
-      `⚠ ${pendingIds.length} ${pendingIds.length === 1 ? 'item has' : 'items have'} not been checked yet — ` +
+      `⚠ ${pendingIds.length} ${pendingIds.length === 1 ? 'doc has' : 'docs have'} pending workflow tasks — ` +
       `<span class="wf-pending-bar-ids">${pendingIds.map(id => esc(id)).join(', ')}</span>`;
     document.getElementById('wfPendingBtn').textContent = label + ' →';
     bar._pendingState = { demoKey: demo.key, wfActionIndex: target.workflow_action_index, pendingIds };
