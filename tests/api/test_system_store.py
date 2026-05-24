@@ -258,7 +258,7 @@ class TestCreateWorkflowTask:
         assert task.task_name == "analyze"
         assert task.doc_id == "doc-42"
         assert task.params_json == '{"issue": "x"}'
-        assert task.status == "running"
+        assert task.status == "pending"
         assert task.completed_at is None
 
     @pytest.mark.asyncio

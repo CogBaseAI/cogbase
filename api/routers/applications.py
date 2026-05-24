@@ -41,7 +41,6 @@ from api.models import (
     TaskResponse,
     WorkflowListResponse,
     WorkflowRunRequest,
-    WorkflowRunResponse,
 )
 from api.system_store import AppRecord, SystemStore, TaskRecord
 from cogbase.core.models import Document
@@ -800,39 +799,6 @@ async def list_workflows(
     return WorkflowListResponse(app_name=app_name, workflows=app.workflows)
 
 
-@router.post("/{app_name}/workflows/{workflow_name}/run", response_model=WorkflowRunResponse)
-async def run_workflow(
-    app_name: str,
-    workflow_name: str,
-    body: WorkflowRunRequest,
-    app_cache: AppCacheDep,
-    system_store: SystemStoreDep,
-    system_resources: SystemResourcesDep,
-) -> WorkflowRunResponse:
-    """Run a workflow and return all saved records when it completes."""
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
-    try:
-        wf_runner = app.get_workflow(workflow_name)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
-
-    task_id = await system_store.create_workflow_task(
-        app_name, workflow_name, body.doc_id, None
-    )
-    records: list[dict] = []
-    try:
-        params_list = await app.resolve_workflow_params(wf_runner, body.doc_id)
-        for params in params_list:
-            async for record in wf_runner.run(params):
-                records.append(record)
-        await system_store.complete_workflow_task(task_id, success=True)
-    except Exception as exc:
-        logger.exception("run_workflow failed app=%s workflow=%s", app_name, workflow_name)
-        await system_store.complete_workflow_task(task_id, success=False, error=str(exc))
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    return WorkflowRunResponse(workflow=workflow_name, records=records, total=len(records))
-
 
 @router.post("/{app_name}/workflows/{workflow_name}/stream")
 async def stream_workflow(
@@ -854,21 +820,30 @@ async def stream_workflow(
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
-    params_list = await app.resolve_workflow_params(wf_runner, body.doc_id)
-    task_id = await system_store.create_workflow_task(
-        app_name, workflow_name, body.doc_id, None
+    pending = await system_store.list_tasks(
+        app_name, task_type="workflow", task_name=workflow_name, doc_id=body.doc_id, status="pending"
     )
+    if not pending:
+        params_list = await app.resolve_workflow_params(wf_runner, body.doc_id)
+        pending = [
+            await system_store.get_task(
+                await system_store.create_workflow_task(app_name, workflow_name, body.doc_id, json.dumps(p))
+            )
+            for p in params_list
+        ]
 
     async def event_stream():
-        try:
-            for params in params_list:
+        for task in pending:
+            params = json.loads(task.params_json) if task.params_json else {}
+            await system_store.update_task(task.task_id, status="running")
+            try:
                 async for record in wf_runner.run(params):
                     yield f"data: {json.dumps({'record': record})}\n\n"
-            await system_store.complete_workflow_task(task_id, success=True)
-        except Exception as exc:
-            logger.exception("stream_workflow failed app=%s workflow=%s", app_name, workflow_name)
-            await system_store.complete_workflow_task(task_id, success=False, error=str(exc))
-            yield f"data: {json.dumps({'error': 'workflow stream failed'})}\n\n"
+                await system_store.complete_workflow_task(task.task_id, success=True)
+            except Exception as exc:
+                logger.exception("stream_workflow failed app=%s workflow=%s task=%s", app_name, workflow_name, task.task_id)
+                await system_store.complete_workflow_task(task.task_id, success=False, error=str(exc))
+                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

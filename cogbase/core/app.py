@@ -212,11 +212,11 @@ class CogBaseApp:
                         doc.doc_id,
                     )
                     continue
+                import json as _json
                 for params in workflow_params:
                     task_id: str | None = None
                     if self._task_store is not None:
                         try:
-                            import json as _json
                             task_id = await self._task_store.create_workflow_task(
                                 self.name, wf_runner.workflow.name, doc.doc_id, _json.dumps(params)
                             )

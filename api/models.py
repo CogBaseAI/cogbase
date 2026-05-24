@@ -168,11 +168,6 @@ class WorkflowRunRequest(BaseModel):
     doc_id: str
 
 
-class WorkflowRunResponse(BaseModel):
-    workflow: str
-    records: list[dict]
-    total: int
-
 
 # ---------------------------------------------------------------------------
 # Generator models

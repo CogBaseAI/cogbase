@@ -143,7 +143,6 @@ Application lifecycle:
 - `GET/POST/DELETE /applications/{name}/skills` — manage skills per application
 
 Workflows:
-- `POST /applications/{name}/workflows/{workflow_name}/run` — run a workflow (blocking)
 - `POST /applications/{name}/workflows/{workflow_name}/stream` — run a workflow (SSE)
 
 Adaptive evolution (planned):

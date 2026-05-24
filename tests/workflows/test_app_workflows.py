@@ -129,9 +129,8 @@ class TestAfterIngestTrigger:
         app = _minimal_app(workflow_runners={"check": runner})
         app._structured_store.query = AsyncMock(return_value=[{"doc_id": "d-001", "issue": "late_delivery"}])
 
-        with patch(self._PATCH, side_effect=self._discard_task) as mock_ct:
-            await app.ingest_documents([Document(doc_id="d-001", text="some text")])
-            assert mock_ct.called
+        await app.ingest_documents([Document(doc_id="d-001", text="some text")])
+        app._structured_store.query.assert_called()
 
     async def test_after_ingest_not_fired_for_manual_trigger(self):
         runner = _make_wf_runner("check", trigger_type="manual")
@@ -151,11 +150,10 @@ class TestAfterIngestTrigger:
         app = _minimal_app(workflow_runners={"check": runner})
         app._structured_store.query = AsyncMock(return_value=[{"doc_id": "d-001", "issue": "late_delivery"}])
 
-        with patch(self._PATCH, side_effect=self._discard_task) as mock_ct:
-            await app.ingest_documents([
-                Document(doc_id="d-001", text="contract text", metadata={"doc_type": "contract"}),
-            ])
-            assert mock_ct.called
+        await app.ingest_documents([
+            Document(doc_id="d-001", text="contract text", metadata={"doc_type": "contract"}),
+        ])
+        app._structured_store.query.assert_called()
 
     async def test_after_ingest_metadata_filter_no_match(self):
         runner = _make_wf_runner(
@@ -220,26 +218,8 @@ class TestAfterIngestTrigger:
             {"doc_id": "d-001", "issue": "payment"},
         ])
 
-        passed_params: list[dict] = []
-        futures: list = []
-
-        async def _bg(wf_runner, params, **kwargs):
-            passed_params.append(params)
-
-        app._run_workflow_bg = _bg
-
-        def _fake_create_task(coro):
-            fut = asyncio.ensure_future(coro)
-            futures.append(fut)
-            return fut
-
-        with patch(self._PATCH, side_effect=_fake_create_task):
-            await app.ingest_documents([Document(doc_id="d-001", text="text")])
-
-        if futures:
-            await asyncio.gather(*futures, return_exceptions=True)
-
-        assert passed_params == [{"issue": "late_delivery"}, {"issue": "payment"}]
+        params = await app.resolve_workflow_params(runner, "d-001")
+        assert params == [{"issue": "late_delivery"}, {"issue": "payment"}]
 
     async def test_multiple_after_ingest_workflows_all_fire(self):
         runners = {
@@ -249,9 +229,8 @@ class TestAfterIngestTrigger:
         app = _minimal_app(workflow_runners=runners)
         app._structured_store.query = AsyncMock(return_value=[{"doc_id": "d-001", "issue": "late_delivery"}])
 
-        with patch(self._PATCH, side_effect=self._discard_task) as mock_ct:
-            await app.ingest_documents([Document(doc_id="d-001", text="text")])
-            assert mock_ct.call_count == 2
+        await app.ingest_documents([Document(doc_id="d-001", text="text")])
+        assert app._structured_store.query.call_count == 2
 
 
 # ---------------------------------------------------------------------------

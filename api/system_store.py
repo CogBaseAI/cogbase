@@ -194,7 +194,7 @@ class SystemStore:
             task_name=workflow_name,
             doc_id=doc_id,
             params_json=params_json,
-            status="running",
+            status="pending",
             started_at=now,
         ))
         return task_id
