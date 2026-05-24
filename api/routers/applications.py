@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
+import uuid
 import zipfile
 from datetime import datetime, timezone
 
@@ -27,6 +29,7 @@ from api.models import (
     ChunkResponse,
     CollectionsResponse,
     FilterRequest,
+    IngestDocumentsAcceptedResponse,
     IngestDocumentsRequest,
     IngestDocumentsResponse,
     IngestResultResponse,
@@ -34,11 +37,13 @@ from api.models import (
     QueryResponse,
     CollectionQueryRequest,
     CollectionQueryResponse,
+    TaskListResponse,
+    TaskResponse,
     WorkflowListResponse,
     WorkflowRunRequest,
     WorkflowRunResponse,
 )
-from api.system_store import AppRecord, SystemStore
+from api.system_store import AppRecord, SystemStore, TaskRecord
 from cogbase.core.models import Document
 from cogbase.pipeline.document_parser import parse_to_markdown
 from cogbase.stores.filters import Filter, Op
@@ -337,52 +342,75 @@ async def _get_active_app(
     if record is None or record.status != "active":
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found or not active")
     config = AppConfig.from_yaml(record.config_yaml)
-    app = await build_app(config, system=system_resources, app_status=record.status)
+    app = await build_app(config, system=system_resources, app_status=record.status, task_store=system_store)
     app_cache.add(app_name, app)
     return app
 
 
-# TODO ingest a list of documents may run a long time, make it a background task,
-#      client checks and waits for task to complete.
-# TODO support long documents
-@router.post("/{app_name}/ingest_documents", response_model=IngestDocumentsResponse)
+@router.post("/{app_name}/ingest_documents", response_model=IngestDocumentsAcceptedResponse, status_code=status.HTTP_202_ACCEPTED)
 async def ingest_documents(
     app_name: str,
     body: IngestDocumentsRequest,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
     system_resources: SystemResourcesDep,
-) -> IngestDocumentsResponse:
-    """Ingest a batch of documents into an active application.
+) -> IngestDocumentsAcceptedResponse:
+    """Queue a batch of documents for background ingestion.
 
-    Documents are processed concurrently up to *concurrency* at a time.  A
-    failure on one document does not abort the others — each result carries
-    ``success`` and ``error`` for per-document reporting.
+    Returns task IDs immediately (HTTP 202). Poll
+    GET /{app_name}/tasks?task_type=ingest to track progress.
     """
     app = await _get_active_app(app_name, app_cache, system_store, system_resources)
     documents = [Document(doc_id=d.doc_id, text=d.text, metadata=d.metadata) for d in body.documents]
-    try:
-        results = await app.ingest_documents(documents, concurrency=body.concurrency)
-    except Exception:
-        logger.exception("ingest_documents failed for app '%s', retrying with fresh app", app_name)
-        app = await _get_active_app(
-            app_name, app_cache, system_store, system_resources, force_refresh=True
-        )
-        results = await app.ingest_documents(documents, concurrency=body.concurrency)
-    return IngestDocumentsResponse(
-        results=[
-            IngestResultResponse(
-                doc_id=r.doc_id,
-                success=r.success,
-                records_extracted=r.records_extracted,
-                error=str(r.error) if r.error is not None else None,
-            )
-            for r in results
-        ]
+
+    now = _now()
+    task_doc_pairs: list[tuple[str, Document]] = []
+    for doc in documents:
+        task_id = str(uuid.uuid4())
+        await system_store.create_task(TaskRecord(
+            task_id=task_id,
+            app_name=app_name,
+            task_type="ingest",
+            task_name="ingest",
+            doc_id=doc.doc_id,
+            status="pending",
+            started_at=now,
+        ))
+        task_doc_pairs.append((task_id, doc))
+
+    async def _run_ingest_bg() -> None:
+        semaphore = asyncio.Semaphore(body.concurrency)
+
+        async def _ingest_one(task_id: str, doc: Document) -> None:
+            async with semaphore:
+                await system_store.update_task(task_id, status="running", started_at=_now())
+                try:
+                    current_app = app_cache.get(app_name) or app
+                    results = await current_app.ingest_documents([doc], concurrency=1)
+                    result = results[0]
+                    if result.success:
+                        await system_store.update_task(task_id, status="done", completed_at=_now())
+                    else:
+                        await system_store.update_task(
+                            task_id, status="failed", completed_at=_now(),
+                            error=str(result.error) if result.error else "ingest failed",
+                        )
+                except Exception as exc:
+                    logger.exception("ingest_bg failed app=%s doc_id=%s", app_name, doc.doc_id)
+                    await system_store.update_task(
+                        task_id, status="failed", completed_at=_now(), error=str(exc)
+                    )
+
+        await asyncio.gather(*(_ingest_one(tid, doc) for tid, doc in task_doc_pairs))
+
+    asyncio.create_task(_run_ingest_bg())
+    return IngestDocumentsAcceptedResponse(
+        task_ids=[tid for tid, _ in task_doc_pairs],
+        total=len(task_doc_pairs),
     )
 
 
-@router.post("/{app_name}/upload_documents", response_model=IngestDocumentsResponse)
+@router.post("/{app_name}/upload_documents", response_model=IngestDocumentsAcceptedResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_documents(
     app_name: str,
     files: list[UploadFile],
@@ -393,23 +421,19 @@ async def upload_documents(
     # routing (match conditions) and workflow triggers (when.metadata).  For
     # per-file metadata, make separate upload calls.
     metadata: str = Form(default="{}"),
-) -> IngestDocumentsResponse:
-    """Upload files and ingest them into an active application.
+) -> IngestDocumentsAcceptedResponse:
+    """Upload files and queue them for background ingestion.
 
-    Each file is parsed to markdown via markitdown.  When the application has a
-    document store configured, the original binary and the parsed markdown are
-    both persisted there — original at ``originals/{doc_id}{ext}``, markdown at
-    ``{doc_id}`` (same key as ``ingest_documents`` would use for the same doc_id).
-
-    The ``doc_id`` for each document is derived from the uploaded filename stem.
+    Files are parsed to markdown synchronously; ingestion runs in the background.
+    Returns task IDs immediately (HTTP 202). Poll GET /{app_name}/tasks?task_type=ingest.
     """
-    import json
+    import json as _json_mod
     import pathlib
     import re
 
     try:
-        extra_metadata: dict = json.loads(metadata)
-    except json.JSONDecodeError as exc:
+        extra_metadata: dict = _json_mod.loads(metadata)
+    except _json_mod.JSONDecodeError as exc:
         raise HTTPException(status_code=422, detail=f"metadata must be a valid JSON object: {exc}")
     if not isinstance(extra_metadata, dict):
         raise HTTPException(status_code=422, detail="metadata must be a JSON object")
@@ -420,35 +444,50 @@ async def upload_documents(
         stem = pathlib.Path(filename).stem
         return re.sub(r"[^\w\-]", "_", stem)
 
-    results: list[IngestResultResponse] = []
-    documents_to_ingest: list[Document] = []
-    original_saves: list[tuple[str, bytes, str]] = []  # (doc_id, content, suffix)
+    now = _now()
+    task_doc_pairs: list[tuple[str, Document]] = []
+    original_saves: list[tuple[str, bytes, str]] = []
+    all_task_ids: list[str] = []
 
     for upload in files:
         filename = upload.filename or "upload"
         suffix = pathlib.Path(filename).suffix.lower()
         doc_id = _safe_doc_id(filename)
+        task_id = str(uuid.uuid4())
+        all_task_ids.append(task_id)
 
         content = await upload.read()
         try:
             markdown_text = parse_to_markdown(content, filename)
         except Exception as exc:
-            results.append(IngestResultResponse(
+            await system_store.create_task(TaskRecord(
+                task_id=task_id,
+                app_name=app_name,
+                task_type="ingest",
+                task_name="ingest",
                 doc_id=doc_id,
-                success=False,
-                records_extracted=0,
+                status="failed",
+                started_at=now,
+                completed_at=now,
                 error=f"Failed to parse {filename!r}: {exc}",
             ))
             continue
 
+        await system_store.create_task(TaskRecord(
+            task_id=task_id,
+            app_name=app_name,
+            task_type="ingest",
+            task_name="ingest",
+            doc_id=doc_id,
+            status="pending",
+            started_at=now,
+        ))
         original_saves.append((doc_id, content, suffix))
-        documents_to_ingest.append(Document(
+        task_doc_pairs.append((task_id, Document(
             doc_id=doc_id,
             text=markdown_text,
-            # source_filename/source_format are set automatically; extra_metadata
-            # (applied to all files in the batch) is merged in and takes precedence.
             metadata={"source_filename": filename, "source_format": suffix.lstrip("."), **extra_metadata},
-        ))
+        )))
 
     # Save original binary files to document store if configured.
     if app._document_store is not None:
@@ -462,27 +501,32 @@ async def upload_documents(
                     "upload_documents: failed to save original file doc_id=%s", doc_id
                 )
 
-    if documents_to_ingest:
-        try:
-            ingest_results = await app.ingest_documents(documents_to_ingest)
-        except Exception:
-            logger.exception("upload_documents: ingest failed for app '%s', retrying", app_name)
-            app = await _get_active_app(
-                app_name, app_cache, system_store, system_resources, force_refresh=True
-            )
-            ingest_results = await app.ingest_documents(documents_to_ingest)
+    if task_doc_pairs:
+        async def _run_upload_bg() -> None:
+            async def _ingest_one(task_id: str, doc: Document) -> None:
+                await system_store.update_task(task_id, status="running", started_at=_now())
+                try:
+                    current_app = app_cache.get(app_name) or app
+                    results = await current_app.ingest_documents([doc], concurrency=1)
+                    result = results[0]
+                    if result.success:
+                        await system_store.update_task(task_id, status="done", completed_at=_now())
+                    else:
+                        await system_store.update_task(
+                            task_id, status="failed", completed_at=_now(),
+                            error=str(result.error) if result.error else "ingest failed",
+                        )
+                except Exception as exc:
+                    logger.exception("upload_bg failed app=%s doc_id=%s", app_name, doc.doc_id)
+                    await system_store.update_task(
+                        task_id, status="failed", completed_at=_now(), error=str(exc)
+                    )
 
-        results.extend(
-            IngestResultResponse(
-                doc_id=r.doc_id,
-                success=r.success,
-                records_extracted=r.records_extracted,
-                error=str(r.error) if r.error is not None else None,
-            )
-            for r in ingest_results
-        )
+            await asyncio.gather(*(_ingest_one(tid, doc) for tid, doc in task_doc_pairs))
 
-    return IngestDocumentsResponse(results=results)
+        asyncio.create_task(_run_upload_bg())
+
+    return IngestDocumentsAcceptedResponse(task_ids=all_task_ids, total=len(all_task_ids))
 
 
 async def _drain_query(app, text: str, history: list[dict] | None = None):
@@ -698,6 +742,48 @@ async def query_collection(
 
 
 # ---------------------------------------------------------------------------
+# Task endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{app_name}/tasks", response_model=TaskListResponse)
+async def list_tasks(
+    app_name: str,
+    system_store: SystemStoreDep,
+    task_type: str | None = None,
+    task_name: str | None = None,
+    doc_id: str | None = None,
+    status: str | None = None,
+) -> TaskListResponse:
+    """List background tasks for an application.
+
+    Filter by task_type ('ingest' or 'workflow'), task_name (workflow name),
+    doc_id, or status ('pending', 'running', 'done', 'failed').
+    """
+    record = await system_store.get_app(app_name)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
+    tasks = await system_store.list_tasks(
+        app_name, task_type=task_type, task_name=task_name, doc_id=doc_id, status=status
+    )
+    items = [TaskResponse(**t.model_dump()) for t in tasks]
+    return TaskListResponse(tasks=items, total=len(items))
+
+
+@router.get("/{app_name}/tasks/{task_id}", response_model=TaskResponse)
+async def get_task(
+    app_name: str,
+    task_id: str,
+    system_store: SystemStoreDep,
+) -> TaskResponse:
+    """Return a single task by ID."""
+    task = await system_store.get_task(task_id)
+    if task is None or task.app_name != app_name:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return TaskResponse(**task.model_dump())
+
+
+# ---------------------------------------------------------------------------
 # Workflow endpoints
 # ---------------------------------------------------------------------------
 
@@ -714,8 +800,6 @@ async def list_workflows(
     return WorkflowListResponse(app_name=app_name, workflows=app.workflows)
 
 
-# TODO a workflow may run a long time, need to make it a background task,
-#      client checks and waits for task to complete.
 @router.post("/{app_name}/workflows/{workflow_name}/run", response_model=WorkflowRunResponse)
 async def run_workflow(
     app_name: str,
@@ -732,14 +816,19 @@ async def run_workflow(
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
+    task_id = await system_store.create_workflow_task(
+        app_name, workflow_name, body.doc_id, None
+    )
     records: list[dict] = []
     try:
         params_list = await app.resolve_workflow_params(wf_runner, body.doc_id)
         for params in params_list:
             async for record in wf_runner.run(params):
                 records.append(record)
+        await system_store.complete_workflow_task(task_id, success=True)
     except Exception as exc:
         logger.exception("run_workflow failed app=%s workflow=%s", app_name, workflow_name)
+        await system_store.complete_workflow_task(task_id, success=False, error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return WorkflowRunResponse(workflow=workflow_name, records=records, total=len(records))
@@ -766,14 +855,19 @@ async def stream_workflow(
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
     params_list = await app.resolve_workflow_params(wf_runner, body.doc_id)
+    task_id = await system_store.create_workflow_task(
+        app_name, workflow_name, body.doc_id, None
+    )
 
     async def event_stream():
         try:
             for params in params_list:
                 async for record in wf_runner.run(params):
                     yield f"data: {json.dumps({'record': record})}\n\n"
-        except Exception:
+            await system_store.complete_workflow_task(task_id, success=True)
+        except Exception as exc:
             logger.exception("stream_workflow failed app=%s workflow=%s", app_name, workflow_name)
+            await system_store.complete_workflow_task(task_id, success=False, error=str(exc))
             yield f"data: {json.dumps({'error': 'workflow stream failed'})}\n\n"
         yield "data: [DONE]\n\n"
 

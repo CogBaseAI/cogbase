@@ -223,7 +223,7 @@ class TestAfterIngestTrigger:
         passed_params: list[dict] = []
         futures: list = []
 
-        async def _bg(wf_runner, params):
+        async def _bg(wf_runner, params, **kwargs):
             passed_params.append(params)
 
         app._run_workflow_bg = _bg

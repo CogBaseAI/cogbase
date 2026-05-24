@@ -48,6 +48,29 @@ class IngestDocumentsResponse(BaseModel):
     results: list[IngestResultResponse]
 
 
+class IngestDocumentsAcceptedResponse(BaseModel):
+    task_ids: list[str]
+    total: int
+
+
+class TaskResponse(BaseModel):
+    task_id: str
+    app_name: str
+    task_type: str
+    task_name: str
+    doc_id: str | None
+    params_json: str | None
+    status: str
+    started_at: str
+    completed_at: str | None
+    error: str | None
+
+
+class TaskListResponse(BaseModel):
+    tasks: list[TaskResponse]
+    total: int
+
+
 # ---------------------------------------------------------------------------
 # Query models
 # ---------------------------------------------------------------------------

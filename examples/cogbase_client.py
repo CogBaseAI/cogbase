@@ -205,16 +205,70 @@ class CogBaseClient:
         if resp.status_code not in (204, 404):
             resp.raise_for_status()
 
+    async def wait_for_tasks(
+        self,
+        task_ids: list[str],
+        *,
+        poll_interval: float = 2.0,
+        timeout: float = 300.0,
+    ) -> list[dict]:
+        """Poll task records until every task reaches a terminal status.
+
+        Returns a list of task dicts in the same order as *task_ids*.
+        Tasks that are still pending when *timeout* expires are returned
+        with ``status='failed'`` and an error of ``'timeout'``.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+        pending = set(task_ids)
+        results: dict[str, dict] = {}
+
+        while pending:
+            if asyncio.get_event_loop().time() > deadline:
+                for tid in pending:
+                    results[tid] = {"task_id": tid, "doc_id": None, "status": "failed", "error": "timeout"}
+                break
+            await asyncio.sleep(poll_interval)
+            for tid in list(pending):
+                resp = await self._http.get(
+                    f"{self.api_base}/applications/{self.app_name}/tasks/{tid}",
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    task = resp.json()
+                    if task["status"] in ("done", "failed"):
+                        results[tid] = task
+                        pending.discard(tid)
+
+        return [results[tid] for tid in task_ids]
+
     async def ingest_documents(
         self, documents: list[dict], timeout: float = 120
     ) -> list[dict]:
+        """Ingest documents and wait for all tasks to complete.
+
+        Submits the batch (HTTP 202), then polls until every per-document
+        task reaches a terminal status. Returns one result dict per document
+        with ``doc_id``, ``success``, ``records_extracted``, and ``error``.
+        """
         resp = await self._http.post(
             f"{self.api_base}/applications/{self.app_name}/ingest_documents",
             json={"documents": documents, "concurrency": 3},
-            timeout=timeout,
+            timeout=30,
         )
         resp.raise_for_status()
-        return resp.json()["results"]
+        body = resp.json()
+        task_ids: list[str] = body["task_ids"]
+
+        tasks = await self.wait_for_tasks(task_ids, poll_interval=2.0, timeout=timeout)
+        return [
+            {
+                "doc_id": t["doc_id"],
+                "success": t["status"] == "done",
+                "records_extracted": 0,
+                "error": t.get("error"),
+            }
+            for t in tasks
+        ]
 
     def clear_query_history(self) -> None:
         """Reset the chat history."""
@@ -273,8 +327,9 @@ class CogBaseClient:
     ) -> list[dict]:
         """Upload files to the server for ingestion via POST /upload_documents.
 
-        Files are parsed to markdown server-side.  *metadata* is applied to
-        every file in the batch — use separate calls for per-file metadata.
+        Files are parsed to markdown server-side. Submits the batch (HTTP 202),
+        then polls until every per-document task reaches a terminal status.
+        *metadata* is applied to every file in the batch.
         """
         files = [
             ("files", (p.name, p.read_bytes(), "application/octet-stream"))
@@ -284,10 +339,22 @@ class CogBaseClient:
             f"{self.api_base}/applications/{self.app_name}/upload_documents",
             files=files,
             data={"metadata": json.dumps(metadata or {})},
-            timeout=timeout,
+            timeout=30,
         )
         resp.raise_for_status()
-        return resp.json()["results"]
+        body = resp.json()
+        task_ids: list[str] = body["task_ids"]
+
+        tasks = await self.wait_for_tasks(task_ids, poll_interval=2.0, timeout=timeout)
+        return [
+            {
+                "doc_id": t["doc_id"],
+                "success": t["status"] == "done",
+                "records_extracted": 0,
+                "error": t.get("error"),
+            }
+            for t in tasks
+        ]
 
     async def query_structured_collection(
         self,
@@ -416,7 +483,7 @@ async def cmd_ingest_file(
         return
     for r in results:
         if r["success"]:
-            print(f"  {r['doc_id']:<30}  OK  ({r['records_extracted']} records extracted)")
+            print(f"  {r['doc_id']:<30}  OK")
         else:
             print(f"  {r['doc_id']:<30}  FAILED: {r['error']}")
 

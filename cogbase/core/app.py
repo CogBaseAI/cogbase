@@ -57,6 +57,7 @@ class CogBaseApp:
         workflow_runners: dict[str, "WorkflowRunner"] | None = None,
         llm: LLMBase | None = None,
         routing_strategy: RoutingStrategy = RoutingStrategy.AUTO,
+        task_store: Any | None = None,
     ) -> None:
         self.name = name
         self._pipelines = pipelines
@@ -66,6 +67,7 @@ class CogBaseApp:
         self._workflows: dict[str, "WorkflowRunner"] = workflow_runners or {}
         self._llm = llm
         self._routing_strategy = routing_strategy
+        self._task_store = task_store
 
     def _find_pipeline_by_metadata(self, doc: Document) -> IngestionPipeline | None:
         for p in self._pipelines:
@@ -201,7 +203,6 @@ class CogBaseApp:
                 when_meta = trigger.when.metadata if trigger.when else {}
                 if not all(doc.metadata.get(k) == v for k, v in when_meta.items()):
                     continue
-                # TODO the workflow task may fail, for example, node crashes, need to ensure the state is tracked
                 try:
                     workflow_params = await self.resolve_workflow_params(wf_runner, doc.doc_id)
                 except Exception:
@@ -212,7 +213,19 @@ class CogBaseApp:
                     )
                     continue
                 for params in workflow_params:
-                    asyncio.create_task(self._run_workflow_bg(wf_runner, params))
+                    task_id: str | None = None
+                    if self._task_store is not None:
+                        try:
+                            import json as _json
+                            task_id = await self._task_store.create_workflow_task(
+                                self.name, wf_runner.workflow.name, doc.doc_id, _json.dumps(params)
+                            )
+                        except Exception:
+                            logger.exception(
+                                "app.task_store.create_workflow_task.failed workflow=%s doc_id=%s",
+                                wf_runner.workflow.name, doc.doc_id,
+                            )
+                    asyncio.create_task(self._run_workflow_bg(wf_runner, params, task_id=task_id))
 
         return results
 
@@ -249,7 +262,13 @@ class CogBaseApp:
             params_list.append(params)
         return params_list
 
-    async def _run_workflow_bg(self, wf_runner: "WorkflowRunner", params: dict[str, Any]) -> None:
+    async def _run_workflow_bg(
+        self,
+        wf_runner: "WorkflowRunner",
+        params: dict[str, Any],
+        *,
+        task_id: str | None = None,
+    ) -> None:
         try:
             async for _ in wf_runner.run(params):
                 pass
@@ -257,12 +276,15 @@ class CogBaseApp:
                 "app.after_ingest_workflow.done workflow=%s params=%s",
                 wf_runner.workflow.name, params,
             )
-        except Exception:
-            # TODO update task state
+            if task_id is not None and self._task_store is not None:
+                await self._task_store.complete_workflow_task(task_id, success=True)
+        except Exception as exc:
             logger.exception(
                 "app.after_ingest_workflow.failed workflow=%s params=%s",
                 wf_runner.workflow.name, params,
             )
+            if task_id is not None and self._task_store is not None:
+                await self._task_store.complete_workflow_task(task_id, success=False, error=str(exc))
 
     async def query_stream(self, text: str, history: list[dict] | None = None):
         """Stream the answer token-by-token, then yield a final QueryResult.

@@ -87,7 +87,7 @@ async def main() -> None:
                     return True
                 for r in results:
                     if r["success"]:
-                        print(f"  {r['doc_id']:<12}  OK  ({r['records_extracted']} record extracted)")
+                        print(f"  {r['doc_id']:<12}  OK")
                     else:
                         print(f"  {r['doc_id']:<12}  FAILED: {r['error']}")
                 return True

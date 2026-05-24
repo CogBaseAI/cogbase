@@ -148,7 +148,7 @@ async def _ingest_built_in(client: CogBaseClient) -> None:
         return
     for r in results:
         if r["success"]:
-            print(f"  {r['doc_id']:<10}  OK  ({r['records_extracted']} records extracted)")
+            print(f"  {r['doc_id']:<10}  OK")
         else:
             print(f"  {r['doc_id']:<10}  FAILED: {r['error']}")
 

@@ -81,9 +81,8 @@ async def _ingest_batch(client: CogBaseClient, batch: dict[str, dict], label: st
         print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
         return
     for r in results:
-        extracted = r.get("records_extracted", 0)
         if r["success"]:
-            print(f"  {r['doc_id']:<30}  OK  ({extracted} record extracted)")
+            print(f"  {r['doc_id']:<30}  OK")
         else:
             print(f"  {r['doc_id']:<30}  FAILED: {r['error']}")
 

@@ -96,6 +96,7 @@ async def build_app(
     *,
     system: SystemResources | None = None,
     app_status: str,
+    task_store: Any | None = None,
 ) -> Any:
     """Instantiate a CogBase application from *config*.
 
@@ -290,4 +291,5 @@ async def build_app(
         workflow_runners=workflow_runners,
         llm=llm,
         routing_strategy=config.pipeline_routing.strategy,
+        task_store=task_store,
     )

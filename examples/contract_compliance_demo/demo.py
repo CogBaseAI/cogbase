@@ -154,7 +154,7 @@ async def main() -> None:
                     return True
                 for r in results:
                     if r["success"]:
-                        print(f"  {r['doc_id']:<14}  OK  ({r['records_extracted']} records extracted)")
+                        print(f"  {r['doc_id']:<14}  OK")
                     else:
                         print(f"  {r['doc_id']:<14}  FAILED: {r['error']}")
                 return True
@@ -180,7 +180,7 @@ async def main() -> None:
                     return True
                 r = results[0]
                 if r["success"]:
-                    print(f"  {doc_id}  OK  ({r['records_extracted']} records extracted)")
+                    print(f"  {doc_id}  OK")
                 else:
                     print(f"  {doc_id}  FAILED: {r['error']}")
                 return True

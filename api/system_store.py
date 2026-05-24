@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 
 from pydantic import BaseModel
@@ -33,6 +34,38 @@ SYSTEM_CONFIG_OVERRIDES_SCHEMA = CollectionSchema(
         "updated_at": FieldSchema(type=FieldType.STRING, nullable=False),
     },
 )
+
+
+TASKS_SCHEMA = CollectionSchema(
+    name="tasks",
+    description="Background task records tracking ingest and workflow execution per application.",
+    primary_fields=["task_id"],
+    fields={
+        "task_id":      FieldSchema(type=FieldType.STRING, nullable=False),
+        "app_name":     FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "task_type":    FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "task_name":    FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "doc_id":       FieldSchema(type=FieldType.STRING, nullable=True, index=True),
+        "params_json":  FieldSchema(type=FieldType.STRING, nullable=True),
+        "status":       FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "started_at":   FieldSchema(type=FieldType.STRING, nullable=False),
+        "completed_at": FieldSchema(type=FieldType.STRING, nullable=True),
+        "error":        FieldSchema(type=FieldType.STRING, nullable=True),
+    },
+)
+
+
+class TaskRecord(BaseModel):
+    task_id: str
+    app_name: str
+    task_type: str      # "ingest" | "workflow"
+    task_name: str      # "ingest" for ingest tasks; workflow name for workflow tasks
+    doc_id: str | None = None
+    params_json: str | None = None  # JSON-serialized params for workflow tasks
+    status: str         # "pending" | "running" | "done" | "failed"
+    started_at: str     # ISO-8601 UTC
+    completed_at: str | None = None
+    error: str | None = None
 
 
 class SystemConfigOverride(BaseModel):
@@ -67,6 +100,7 @@ class SystemStore:
         """Create managed collections if they do not exist. Idempotent."""
         await self._store.create_collection(APP_RECORDS_SCHEMA)
         await self._store.create_collection(SYSTEM_CONFIG_OVERRIDES_SCHEMA)
+        await self._store.create_collection(TASKS_SCHEMA)
 
     async def save_app(self, record: AppRecord) -> None:
         await self._store.save("app_records", [record.model_dump()])
@@ -103,3 +137,79 @@ class SystemStore:
             model=SystemConfigOverride,
         )
         return {r.key: r.value_json for r in rows}
+
+    # ------------------------------------------------------------------
+    # Task tracking
+    # ------------------------------------------------------------------
+
+    async def create_task(self, record: TaskRecord) -> None:
+        await self._store.save("tasks", [record.model_dump()])
+
+    async def update_task(self, task_id: str, **fields) -> None:
+        task = await self.get_task(task_id)
+        if task is None:
+            return
+        await self._store.save("tasks", [task.model_copy(update=fields).model_dump()])
+
+    async def get_task(self, task_id: str) -> TaskRecord | None:
+        rows = await self._store.query_as(
+            "tasks", filters=[Col("task_id") == task_id], model=TaskRecord
+        )
+        return rows[0] if rows else None
+
+    async def list_tasks(
+        self,
+        app_name: str,
+        *,
+        task_type: str | None = None,
+        task_name: str | None = None,
+        doc_id: str | None = None,
+        status: str | None = None,
+    ) -> list[TaskRecord]:
+        filters = [Col("app_name") == app_name]
+        if task_type is not None:
+            filters.append(Col("task_type") == task_type)
+        if task_name is not None:
+            filters.append(Col("task_name") == task_name)
+        if doc_id is not None:
+            filters.append(Col("doc_id") == doc_id)
+        if status is not None:
+            filters.append(Col("status") == status)
+        return await self._store.query_as("tasks", filters=filters, model=TaskRecord)
+
+    async def create_workflow_task(
+        self,
+        app_name: str,
+        workflow_name: str,
+        doc_id: str | None,
+        params_json: str | None,
+    ) -> str:
+        """Create a workflow task record and return its task_id."""
+        task_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        await self.create_task(TaskRecord(
+            task_id=task_id,
+            app_name=app_name,
+            task_type="workflow",
+            task_name=workflow_name,
+            doc_id=doc_id,
+            params_json=params_json,
+            status="running",
+            started_at=now,
+        ))
+        return task_id
+
+    async def complete_workflow_task(
+        self,
+        task_id: str,
+        *,
+        success: bool,
+        error: str | None = None,
+    ) -> None:
+        """Mark a workflow task as done or failed."""
+        await self.update_task(
+            task_id,
+            status="done" if success else "failed",
+            completed_at=datetime.now(timezone.utc).isoformat(),
+            error=error,
+        )

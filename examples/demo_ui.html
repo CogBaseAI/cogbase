@@ -1756,6 +1756,29 @@ async function loadDemos() {
   }
 }
 
+async function waitForTasks(appName, taskIds, { pollInterval = 2000, timeout = 300000 } = {}) {
+  const deadline = Date.now() + timeout;
+  const pending = new Set(taskIds);
+  const results = {};
+  while (pending.size > 0) {
+    if (Date.now() > deadline) {
+      for (const tid of pending) results[tid] = { task_id: tid, doc_id: null, status: 'failed', error: 'timeout' };
+      break;
+    }
+    await new Promise(r => setTimeout(r, pollInterval));
+    for (const tid of [...pending]) {
+      try {
+        const resp = await fetch(api() + '/applications/' + encodeURIComponent(appName) + '/tasks/' + encodeURIComponent(tid));
+        if (resp.ok) {
+          const task = await resp.json();
+          if (task.status === 'done' || task.status === 'failed') { results[tid] = task; pending.delete(tid); }
+        }
+      } catch { /* network blip — retry next interval */ }
+    }
+  }
+  return taskIds.map(tid => results[tid]);
+}
+
 async function deployDemo(key) {
   const demo = demoCatalog.find(d => d.key === key);
   if (!demo) return;
@@ -1801,7 +1824,8 @@ async function deployDemo(key) {
       throw new Error(ingestData.detail || ingestResp.statusText);
     }
 
-    const okCount = (ingestData.results || []).filter(r => r.success).length;
+    const ingestTasks = await waitForTasks(demo.name, ingestData.task_ids, { timeout: 600000 });
+    const okCount = ingestTasks.filter(t => t && t.status === 'done').length;
     setDemoStatus('✓ "' + demo.title + '" is deployed and ' + okCount + ' document batch(es) were ingested.');
     setApp(demo.name);
     loadApps();
@@ -1860,14 +1884,14 @@ async function uploadFiles() {
       method: 'POST', body: form,
     });
     if (!resp.ok) { log.innerHTML = `<p style="color:var(--red)">Error ${resp.status}: ${esc(await resp.text())}</p>`; return; }
-    const { results } = await resp.json();
-    log.innerHTML = results.map(r => `
+    const uploadBody = await resp.json();
+    log.innerHTML = '<p style="color:var(--muted);font-size:12px"><span class="spinning">⟳</span> Processing…</p>';
+    const tasks = await waitForTasks(currentApp, uploadBody.task_ids, { timeout: 300000 });
+    log.innerHTML = tasks.map(t => `
       <div class="result-row">
-        <span style="color:${r.success?'var(--green)':'var(--red)'}">${r.success?'✓':'✗'}</span>
-        <span style="font-weight:500">${esc(r.doc_id)}</span>
-        ${r.success
-          ? `<span style="color:var(--muted)">${r.records_extracted} record${r.records_extracted!==1?'s':''} extracted</span>`
-          : `<span style="color:var(--red)">${esc(r.error||'unknown error')}</span>`}
+        <span style="color:${t.status==='done'?'var(--green)':'var(--red)'}">${t.status==='done'?'✓':'✗'}</span>
+        <span style="font-weight:500">${esc(t.doc_id || t.task_id)}</span>
+        ${t.status !== 'done' ? `<span style="color:var(--red)">${esc(t.error||'unknown error')}</span>` : ''}
       </div>`).join('');
     pickedFiles = [];
     document.getElementById('fileChips').innerHTML = '';

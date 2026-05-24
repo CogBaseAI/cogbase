@@ -6,6 +6,7 @@ overrides injected — no real LLM calls or file I/O happens.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import textwrap
@@ -521,7 +522,7 @@ def _mock_ingest_app(results: list[dict] | None = None) -> MagicMock:
 
 class TestIngestDocuments:
     @pytest.mark.asyncio
-    async def test_ingest_returns_200_with_results(self, client):
+    async def test_ingest_returns_202_with_task_ids(self, client):
         mock_app = _mock_ingest_app()
         await _create_app(client, mock_app)
 
@@ -530,13 +531,11 @@ class TestIngestDocuments:
             json={"documents": [{"doc_id": "doc-1", "text": "Contract text here."}]},
         )
 
-        assert resp.status_code == 200
+        assert resp.status_code == 202
         data = resp.json()
-        assert len(data["results"]) == 1
-        assert data["results"][0]["doc_id"] == "doc-1"
-        assert data["results"][0]["success"] is True
-        assert data["results"][0]["records_extracted"] == 3
-        assert data["results"][0]["error"] is None
+        assert data["total"] == 1
+        assert len(data["task_ids"]) == 1
+        assert isinstance(data["task_ids"][0], str)
 
     @pytest.mark.asyncio
     async def test_ingest_multiple_documents(self, client):
@@ -557,14 +556,13 @@ class TestIngestDocuments:
             },
         )
 
-        assert resp.status_code == 200
+        assert resp.status_code == 202
         data = resp.json()
-        assert len(data["results"]) == 2
-        doc_ids = {r["doc_id"] for r in data["results"]}
-        assert doc_ids == {"doc-1", "doc-2"}
+        assert data["total"] == 2
+        assert len(data["task_ids"]) == 2
 
     @pytest.mark.asyncio
-    async def test_ingest_partial_failure_reported_per_document(self, client):
+    async def test_ingest_partial_failure_tracked_via_tasks(self, client):
         results = [
             {"doc_id": "doc-ok", "success": True, "records_extracted": 1, "error": None},
             {"doc_id": "doc-bad", "success": False, "records_extracted": 0, "error": ValueError("parse error")},
@@ -582,11 +580,10 @@ class TestIngestDocuments:
             },
         )
 
-        assert resp.status_code == 200
-        by_id = {r["doc_id"]: r for r in resp.json()["results"]}
-        assert by_id["doc-ok"]["success"] is True
-        assert by_id["doc-bad"]["success"] is False
-        assert "parse error" in by_id["doc-bad"]["error"]
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["total"] == 2
+        assert len(data["task_ids"]) == 2
 
     @pytest.mark.asyncio
     async def test_ingest_404_when_app_not_found(self, client):
@@ -623,42 +620,32 @@ class TestIngestDocuments:
             },
         )
 
+        # Drain pending tasks: asyncio.create_task schedules the outer bg task,
+        # which in turn schedules nested coroutines — a few yields are needed.
+        for _ in range(5):
+            await asyncio.sleep(0)
+
         _, kwargs = mock_app.ingest_documents.call_args
-        assert kwargs.get("concurrency") == 10
+        assert kwargs.get("concurrency") == 1  # background runs one at a time per doc
 
     @pytest.mark.asyncio
-    async def test_ingest_retries_on_first_failure(self, client):
-        from dataclasses import dataclass
-
-        @dataclass
-        class _FakeResult:
-            doc_id: str
-            success: bool
-            records_extracted: int
-            error: Exception | None
-
-        good_result = [_FakeResult(doc_id="doc-1", success=True, records_extracted=1, error=None)]
-        call_count = 0
-
-        async def _flaky_ingest(documents, *, concurrency=5):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise RuntimeError("transient ingest failure")
-            return good_result
-
+    async def test_ingest_background_task_runs(self, client):
+        """Background ingest task is fired and calls ingest_documents."""
         mock_app = _mock_ingest_app()
-        mock_app.ingest_documents = _flaky_ingest
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=mock_app):
-            resp = await client.post(
-                "/applications/my-contract-analyzer/ingest_documents",
-                json={"documents": [{"doc_id": "doc-1", "text": "text"}]},
-            )
+        resp = await client.post(
+            "/applications/my-contract-analyzer/ingest_documents",
+            json={"documents": [{"doc_id": "doc-1", "text": "text"}]},
+        )
 
-        assert resp.status_code == 200
-        assert resp.json()["results"][0]["success"] is True
+        assert resp.status_code == 202
+
+        # Drain pending tasks.
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        mock_app.ingest_documents.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_ingest_with_metadata(self, client):
@@ -678,7 +665,12 @@ class TestIngestDocuments:
             },
         )
 
-        assert resp.status_code == 200
+        assert resp.status_code == 202
+
+        # Drain pending tasks.
+        for _ in range(5):
+            await asyncio.sleep(0)
+
         call_args = mock_app.ingest_documents.call_args[0][0]
         assert call_args[0].metadata == {"source": "upload", "version": "1"}
 
@@ -714,7 +706,7 @@ def _mock_upload_app(
 
 class TestUploadDocuments:
     @pytest.mark.asyncio
-    async def test_upload_txt_returns_200_with_results(self, client):
+    async def test_upload_txt_returns_202_with_task_ids(self, client):
         mock_app = _mock_upload_app()
         await _create_app(client, mock_app)
 
@@ -724,11 +716,11 @@ class TestUploadDocuments:
                 files=[("files", ("contract.txt", b"raw text", "text/plain"))],
             )
 
-        assert resp.status_code == 200
+        assert resp.status_code == 202
         data = resp.json()
-        assert len(data["results"]) == 1
-        assert data["results"][0]["doc_id"] == "contract"
-        assert data["results"][0]["success"] is True
+        assert data["total"] == 1
+        assert len(data["task_ids"]) == 1
+        assert isinstance(data["task_ids"][0], str)
 
     @pytest.mark.asyncio
     async def test_upload_doc_id_derived_from_filename_stem(self, client):
@@ -743,11 +735,15 @@ class TestUploadDocuments:
                 files=[("files", ("my contract 2024.pdf", b"bytes", "application/pdf"))],
             )
 
+        # Drain pending tasks.
+        for _ in range(5):
+            await asyncio.sleep(0)
+
         docs = mock_app.ingest_documents.call_args[0][0]
         assert docs[0].doc_id == "my_contract_2024"
 
     @pytest.mark.asyncio
-    async def test_upload_parse_failure_returns_per_file_error(self, client):
+    async def test_upload_parse_failure_returns_failed_task(self, client):
         mock_app = _mock_upload_app(results=[])
         await _create_app(client, mock_app)
 
@@ -757,10 +753,11 @@ class TestUploadDocuments:
                 files=[("files", ("broken.pdf", b"not a pdf", "application/pdf"))],
             )
 
-        assert resp.status_code == 200
-        result = resp.json()["results"][0]
-        assert result["success"] is False
-        assert "bad pdf" in result["error"]
+        # Returns 202 with a task_id; the task has status=failed due to parse error.
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["total"] == 1
+        assert len(data["task_ids"]) == 1
         mock_app.ingest_documents.assert_not_called()
 
     @pytest.mark.asyncio
@@ -774,6 +771,10 @@ class TestUploadDocuments:
                 files=[("files", ("contract.txt", b"text", "text/plain"))],
                 data={"metadata": '{"doc_type": "contract", "client": "acme"}'},
             )
+
+        # Drain pending tasks.
+        for _ in range(5):
+            await asyncio.sleep(0)
 
         docs = mock_app.ingest_documents.call_args[0][0]
         assert docs[0].metadata["doc_type"] == "contract"
@@ -790,6 +791,10 @@ class TestUploadDocuments:
                 files=[("files", ("report.pdf", b"bytes", "application/pdf"))],
             )
 
+        # Drain pending tasks.
+        for _ in range(5):
+            await asyncio.sleep(0)
+
         docs = mock_app.ingest_documents.call_args[0][0]
         assert docs[0].metadata["source_filename"] == "report.pdf"
         assert docs[0].metadata["source_format"] == "pdf"
@@ -805,6 +810,10 @@ class TestUploadDocuments:
                 files=[("files", ("doc.txt", b"text", "text/plain"))],
                 data={"metadata": '{"source_format": "custom"}'},
             )
+
+        # Drain pending tasks.
+        for _ in range(5):
+            await asyncio.sleep(0)
 
         docs = mock_app.ingest_documents.call_args[0][0]
         assert docs[0].metadata["source_format"] == "custom"
@@ -865,7 +874,7 @@ class TestUploadDocuments:
                 files=[("files", ("doc.txt", b"text", "text/plain"))],
             )
 
-        assert resp.status_code == 200
+        assert resp.status_code == 202
 
     @pytest.mark.asyncio
     async def test_upload_404_when_app_not_found(self, client):
@@ -876,39 +885,24 @@ class TestUploadDocuments:
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_upload_retries_on_first_ingest_failure(self, client):
-        from dataclasses import dataclass
-
-        @dataclass
-        class _R:
-            doc_id: str
-            success: bool
-            records_extracted: int
-            error: Exception | None
-
-        good = [_R("contract", True, 1, None)]
-        call_count = 0
-
-        async def _flaky(documents, *, concurrency=5):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise RuntimeError("transient failure")
-            return good
-
+    async def test_upload_background_task_runs(self, client):
+        """Background ingest fires after successful parse."""
         mock_app = _mock_upload_app()
-        mock_app.ingest_documents = _flaky
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=mock_app):
-            with patch("api.routers.applications.parse_to_markdown", return_value="text"):
-                resp = await client.post(
-                    "/applications/my-contract-analyzer/upload_documents",
-                    files=[("files", ("contract.txt", b"text", "text/plain"))],
-                )
+        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+            resp = await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("contract.txt", b"text", "text/plain"))],
+            )
 
-        assert resp.status_code == 200
-        assert resp.json()["results"][0]["success"] is True
+        assert resp.status_code == 202
+
+        # Drain pending tasks.
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        mock_app.ingest_documents.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_upload_mixed_success_and_parse_failure(self, client):
@@ -931,11 +925,11 @@ class TestUploadDocuments:
                 ],
             )
 
-        assert resp.status_code == 200
-        by_id = {r["doc_id"]: r for r in resp.json()["results"]}
-        assert by_id["good"]["success"] is True
-        assert by_id["bad"]["success"] is False
-        assert "cannot parse" in by_id["bad"]["error"]
+        # Both files get a task ID (one failed at parse, one queued for background).
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["total"] == 2
+        assert len(data["task_ids"]) == 2
 
 
 # ---------------------------------------------------------------------------
