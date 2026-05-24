@@ -17,8 +17,16 @@ from cogbase.core.app import CogBaseApp
 from cogbase.core.models import Document
 from cogbase.core.query_runner import QueryRunner
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline
+from cogbase.stores.document.memory import InMemoryDocumentStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.workflows.runner import WorkflowRunner
+
+
+def _mock_task_store():
+    m = MagicMock()
+    m.create_workflow_task = AsyncMock(return_value=None)
+    m.complete_workflow_task = AsyncMock()
+    return m
 
 
 # ---------------------------------------------------------------------------
@@ -36,8 +44,11 @@ def _minimal_app(workflow_runners: dict | None = None) -> CogBaseApp:
         "test-app",
         [pipeline],
         runner,
+        document_store=InMemoryDocumentStore(),
         structured_store=store,
-        workflow_runners=workflow_runners,
+        workflow_runners=workflow_runners or {},
+        llm=llm,
+        task_store=_mock_task_store(),
     )
 
 
@@ -190,7 +201,7 @@ class TestAfterIngestTrigger:
             trigger_type="after_ingest",
             params_from_collection=_after_ingest_source(),
         )
-        app = CogBaseApp("test-app", [pipeline], qrunner, workflow_runners={"check": runner})
+        app = CogBaseApp("test-app", [pipeline], qrunner, document_store=InMemoryDocumentStore(), structured_store=store, workflow_runners={"check": runner}, llm=llm, task_store=_mock_task_store())
 
         with patch(self._PATCH, side_effect=self._discard_task) as mock_ct:
             await app.ingest_documents([Document(doc_id="d-fail", text="text")])

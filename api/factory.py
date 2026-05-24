@@ -273,6 +273,19 @@ async def build_app(
         )
         logger.info("registered workflow=%s app=%s trigger=%s", wf_cfg.name, config.name, wf_cfg.trigger.type)
 
+    if document_store is None:
+        raise ValueError(
+            "document_store is required: set it in the app config or in the system config"
+        )
+    if structured_store is None:
+        raise ValueError(
+            "structured_store is required: set it in the app config or in the system config"
+        )
+    if task_store is None:
+        raise ValueError(
+            "task_store is required: provide it when calling build_app"
+        )
+
     logger.info(
         "build app=%s, pipelines=%d routing=%s, workflows=%d vector_collections=%d structured_collections=%d",
         config.name,

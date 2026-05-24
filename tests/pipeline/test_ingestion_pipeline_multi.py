@@ -22,10 +22,18 @@ from cogbase.pipeline.ingestion_pipeline import (
     PipelineStep,
 )
 from cogbase.stores import CollectionSchema, FieldSchema, FieldType, VectorCollectionSchema
+from cogbase.stores.document.memory import InMemoryDocumentStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.structured.base import StructuredStoreBase
 from cogbase.stores.vector.base import VectorStoreBase
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
+
+
+def _mock_task_store():
+    m = MagicMock()
+    m.create_workflow_task = AsyncMock(return_value=None)
+    m.complete_workflow_task = AsyncMock()
+    return m
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +508,14 @@ class TestWhenConditionRouting:
         llm = MagicMock()
         llm.complete = AsyncMock(return_value={"content": "ok", "tool_calls": None})
         runner = QueryRunner(llm=llm, structured_store=store)
-        return CogBaseApp("app", pipelines, runner)
+        return CogBaseApp(
+            "app", pipelines, runner,
+            document_store=InMemoryDocumentStore(),
+            structured_store=store,
+            workflow_runners={},
+            llm=llm,
+            task_store=_mock_task_store(),
+        )
 
     @pytest.mark.asyncio
     async def test_matching_doc_type_runs_step(self, make_vector_store):

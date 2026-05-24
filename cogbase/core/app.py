@@ -42,7 +42,7 @@ class CogBaseApp:
                           condition is satisfied; a pipeline with ``match=None``
                           accepts all documents.
         runner:           Pre-built ``QueryRunner`` (query layer).
-        document_store:   Optional document store for raw document persistence.
+        document_store:   Document store for raw document persistence.
         workflow_runners: Named ``WorkflowRunner`` instances keyed by workflow name.
     """
 
@@ -52,19 +52,19 @@ class CogBaseApp:
         pipelines: list[IngestionPipeline],
         runner: QueryRunner,
         *,
-        document_store: DocumentStoreBase | None = None,
-        structured_store: StructuredStoreBase | None = None,
-        workflow_runners: dict[str, "WorkflowRunner"] | None = None,
-        llm: LLMBase | None = None,
+        document_store: DocumentStoreBase,
+        structured_store: StructuredStoreBase,
+        workflow_runners: dict[str, "WorkflowRunner"],
+        llm: LLMBase,
         routing_strategy: RoutingStrategy = RoutingStrategy.AUTO,
-        task_store: Any | None = None,
+        task_store: Any,
     ) -> None:
         self.name = name
         self._pipelines = pipelines
         self._runner = runner
         self._document_store = document_store
         self._structured_store = structured_store
-        self._workflows: dict[str, "WorkflowRunner"] = workflow_runners or {}
+        self._workflows: dict[str, "WorkflowRunner"] = workflow_runners
         self._llm = llm
         self._routing_strategy = routing_strategy
         self._task_store = task_store
@@ -76,7 +76,7 @@ class CogBaseApp:
         return None
 
     async def _find_pipeline_by_llm(self, doc: Document) -> IngestionPipeline | None:
-        if not self._llm or not self._pipelines:
+        if not self._pipelines:
             return None
         pipeline_list = "\n".join(f"- {p.name}: {p.description}" for p in self._pipelines)
         messages: list[ChatMessage] = [
@@ -137,17 +137,14 @@ class CogBaseApp:
         )
 
         store_failures: dict[str, Exception] = {}
-        docs_to_process: list[Document] = list(documents)
-
-        if self._document_store is not None:
-            docs_to_process = []
-            for doc in documents:
-                try:
-                    await self._document_store.save(self.name, doc.doc_id, doc.text)
-                    docs_to_process.append(doc)
-                except Exception as exc:  # noqa: BLE001
-                    logger.exception("app.ingest_documents.store_save_failed doc_id=%s", doc.doc_id)
-                    store_failures[doc.doc_id] = exc
+        docs_to_process: list[Document] = []
+        for doc in documents:
+            try:
+                await self._document_store.save(self.name, doc.doc_id, doc.text)
+                docs_to_process.append(doc)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("app.ingest_documents.store_save_failed doc_id=%s", doc.doc_id)
+                store_failures[doc.doc_id] = exc
 
         pipeline_groups: dict[int, tuple[IngestionPipeline, list[Document]]] = {}
         unmatched: list[Document] = []
@@ -215,16 +212,15 @@ class CogBaseApp:
                 import json as _json
                 for params in workflow_params:
                     task_id: str | None = None
-                    if self._task_store is not None:
-                        try:
-                            task_id = await self._task_store.create_workflow_task(
-                                self.name, wf_runner.workflow.name, doc.doc_id, _json.dumps(params)
-                            )
-                        except Exception:
-                            logger.exception(
-                                "app.task_store.create_workflow_task.failed workflow=%s doc_id=%s",
-                                wf_runner.workflow.name, doc.doc_id,
-                            )
+                    try:
+                        task_id = await self._task_store.create_workflow_task(
+                            self.name, wf_runner.workflow.name, doc.doc_id, _json.dumps(params)
+                        )
+                    except Exception:
+                        logger.exception(
+                            "app.task_store.create_workflow_task.failed workflow=%s doc_id=%s",
+                            wf_runner.workflow.name, doc.doc_id,
+                        )
                     asyncio.create_task(self._run_workflow_bg(wf_runner, params, task_id=task_id))
 
         return results
@@ -235,10 +231,6 @@ class CogBaseApp:
         doc_id: str,
     ) -> list[dict[str, Any]]:
         source = wf_runner.workflow.params_from_collection
-        if self._structured_store is None:
-            raise ValueError(
-                f"workflow {wf_runner.workflow.name!r} requires a structured store"
-            )
         ctx = {"doc": {"doc_id": doc_id}}
         filter_values = render_value(source.filters, ctx)
         filters = [Col(field) == value for field, value in filter_values.items()]
@@ -276,14 +268,14 @@ class CogBaseApp:
                 "app.after_ingest_workflow.done workflow=%s params=%s",
                 wf_runner.workflow.name, params,
             )
-            if task_id is not None and self._task_store is not None:
+            if task_id is not None:
                 await self._task_store.complete_workflow_task(task_id, success=True)
         except Exception as exc:
             logger.exception(
                 "app.after_ingest_workflow.failed workflow=%s params=%s",
                 wf_runner.workflow.name, params,
             )
-            if task_id is not None and self._task_store is not None:
+            if task_id is not None:
                 await self._task_store.complete_workflow_task(task_id, success=False, error=str(exc))
 
     async def query_stream(self, text: str, history: list[dict] | None = None):
@@ -328,6 +320,5 @@ class CogBaseApp:
         return self._runner
 
     @property
-    def document_store(self) -> DocumentStoreBase | None:
-        """The document store, if configured."""
+    def document_store(self) -> DocumentStoreBase:
         return self._document_store

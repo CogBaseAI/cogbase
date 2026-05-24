@@ -28,6 +28,7 @@ from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.stores import CollectionSchema
 from cogbase.pipeline.chunking.fixed import FixedSizeChunker
 from cogbase.stores import VectorCollectionSchema
+from cogbase.stores.document.memory import InMemoryDocumentStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
 from examples.contract_analyst_demo.demo import _CONTRACTS_COLLECTION
@@ -47,6 +48,13 @@ def _make_llm(content: str) -> MagicMock:
 
     llm.complete_stream = _stream
     return llm
+
+
+def _mock_task_store():
+    m = MagicMock()
+    m.create_workflow_task = AsyncMock(return_value=None)
+    m.complete_workflow_task = AsyncMock()
+    return m
 
 
 async def _drain_query(app: CogBaseApp, text: str) -> QueryResult:
@@ -168,7 +176,14 @@ async def _make_app(
         vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None,
         structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None,
     )
-    return CogBaseApp(name, [pipeline], runner)
+    return CogBaseApp(
+        name, [pipeline], runner,
+        document_store=InMemoryDocumentStore(),
+        structured_store=store,
+        workflow_runners={},
+        llm=llm,
+        task_store=_mock_task_store(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +213,15 @@ class TestCogBaseAppConstruction:
         store = InMemoryStructuredStore()
         pipeline = await _make_pipeline(_make_llm("{}"), store)
         runner = QueryRunner(llm=_make_llm("{}"), structured_store=store, structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None)
-        app = CogBaseApp("test", [pipeline], runner)
+        llm = _make_llm("{}")
+        app = CogBaseApp(
+            "test", [pipeline], runner,
+            document_store=InMemoryDocumentStore(),
+            structured_store=store,
+            workflow_runners={},
+            llm=llm,
+            task_store=_mock_task_store(),
+        )
         assert app._pipelines[0] is pipeline
 
     async def test_custom_name(self):
@@ -425,7 +448,14 @@ class TestVectorOnlyMode:
             embedder=vc_embedder,
             vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None,
         )
-        return CogBaseApp("vector-only", [pipeline], runner)
+        return CogBaseApp(
+            "vector-only", [pipeline], runner,
+            document_store=InMemoryDocumentStore(),
+            structured_store=InMemoryStructuredStore(),
+            workflow_runners={},
+            llm=llm,
+            task_store=_mock_task_store(),
+        )
 
     def _tool_names(self, app: CogBaseApp) -> list[str]:
         return [t["name"] for t in app.query_runner._tool_defs]
@@ -462,7 +492,14 @@ class TestVectorOnlyMode:
             vector_collections=[vc],
         )
         runner = QueryRunner(llm=_make_llm("{}"), vector_store=vector_store, embedder=StubEmbedding(dim=4), vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None)
-        app = CogBaseApp("testapp", [pipeline], runner)
+        app = CogBaseApp(
+            "testapp", [pipeline], runner,
+            document_store=InMemoryDocumentStore(),
+            structured_store=InMemoryStructuredStore(),
+            workflow_runners={},
+            llm=_make_llm("{}"),
+            task_store=_mock_task_store(),
+        )
         results = await app.ingest_documents([Document(doc_id="d-001", text="word " * 20)])
         assert results[0].success is True
         assert results[0].records_extracted == 0
@@ -716,8 +753,12 @@ class TestRoutingStrategyAuto:
             "test",
             list(pipelines),
             MagicMock(spec=QueryRunner),
+            document_store=InMemoryDocumentStore(),
+            structured_store=InMemoryStructuredStore(),
+            workflow_runners={},
             llm=llm,
             routing_strategy=RoutingStrategy.AUTO,
+            task_store=_mock_task_store(),
         )
 
     @pytest.mark.asyncio
