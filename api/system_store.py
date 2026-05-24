@@ -83,7 +83,7 @@ class TaskRecord(BaseModel):
     task_type: str      # "ingest" | "workflow"
     task_name: str      # "ingest" for ingest tasks; workflow name for workflow tasks
     doc_id: str | None = None
-    params_json: str | None = None  # JSON-serialized params for workflow tasks
+    params_json: str | None = None  # JSON-serialized params
     status: str         # "pending" | "running" | "done" | "failed"
     started_at: str     # ISO-8601 UTC
     completed_at: str | None = None

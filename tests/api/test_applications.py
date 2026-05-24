@@ -499,11 +499,19 @@ class TestDeleteApplication:
 # POST /applications/{app_name}/upload_documents
 # ---------------------------------------------------------------------------
 
+_EXPLICIT_NONE = object()  # sentinel: caller explicitly wants document_store=None
+
+
 def _mock_upload_app(
     results: list[dict] | None = None,
-    document_store=None,
+    document_store=_EXPLICIT_NONE,
 ) -> MagicMock:
-    """Mock CogBaseApp for upload_documents tests."""
+    """Mock CogBaseApp for upload_documents tests.
+
+    By default provides an in-memory document store mock so background ingest
+    tasks (which now call load_bytes) can complete successfully in tests.
+    Pass ``document_store=None`` explicitly to test the no-store path.
+    """
     from dataclasses import dataclass
 
     @dataclass
@@ -519,8 +527,28 @@ def _mock_upload_app(
     fake_results = [_FakeIngestResult(**r) for r in results]
     inst = MagicMock()
     inst.ingest_documents = AsyncMock(return_value=fake_results)
-    inst.document_store = document_store
     inst.name = "my-contract-analyzer"
+
+    if document_store is _EXPLICIT_NONE:
+        # Default: a store that accepts save_bytes and returns them on load_bytes.
+        _storage: dict[tuple, bytes] = {}
+
+        async def _save(collection, doc_id, content):
+            _storage[(collection, doc_id)] = content
+
+        async def _load(collection, doc_id):
+            try:
+                return _storage[(collection, doc_id)]
+            except KeyError:
+                raise KeyError(doc_id)
+
+        store = MagicMock()
+        store.save_bytes = AsyncMock(side_effect=_save)
+        store.load_bytes = AsyncMock(side_effect=_load)
+        inst.document_store = store
+    else:
+        inst.document_store = document_store
+
     return inst
 
 
@@ -750,6 +778,78 @@ class TestUploadDocuments:
         data = resp.json()
         assert data["total"] == 2
         assert len(data["task_ids"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_upload_task_params_json_persists_doc_path_and_metadata(self, client):
+        """Task record must carry doc_path + doc_metadata so a restarted node can re-run it."""
+        mock_app = _mock_upload_app()
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+            resp = await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("invoice.pdf", b"bytes", "application/pdf"))],
+                data={"metadata": '{"client": "acme"}'},
+            )
+
+        assert resp.status_code == 202
+        task_id = resp.json()["task_ids"][0]
+
+        task_resp = await client.get(f"/applications/my-contract-analyzer/tasks/{task_id}")
+        assert task_resp.status_code == 200
+        params = json.loads(task_resp.json()["params_json"])
+        assert params["doc_path"] == "originals/invoice.pdf"
+        assert params["doc_metadata"]["source_filename"] == "invoice.pdf"
+        assert params["doc_metadata"]["source_format"] == "pdf"
+        assert params["doc_metadata"]["client"] == "acme"
+
+    @pytest.mark.asyncio
+    async def test_upload_ingest_reads_bytes_from_document_store(self, client):
+        """Background task must load bytes from document_store, not from an in-memory closure."""
+        raw_bytes = b"original invoice bytes"
+        mock_app = _mock_upload_app()
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.parse_to_markdown", return_value="text") as mock_parse:
+            await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("invoice.pdf", raw_bytes, "application/pdf"))],
+            )
+            # Drain pending background tasks.
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+        # parse_to_markdown must receive the bytes that came back from load_bytes (same content).
+        assert mock_parse.called
+        content_passed = mock_parse.call_args[0][0]
+        assert content_passed == raw_bytes
+
+    @pytest.mark.asyncio
+    async def test_upload_load_bytes_failure_marks_task_failed(self, client):
+        """If load_bytes raises, the task must be marked failed with a clear error message."""
+        store = MagicMock()
+        store.save_bytes = AsyncMock()
+        store.load_bytes = AsyncMock(side_effect=KeyError("invoice.pdf not found in store"))
+        mock_app = _mock_upload_app(document_store=store)
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+            resp = await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("invoice.pdf", b"bytes", "application/pdf"))],
+            )
+
+        task_id = resp.json()["task_ids"][0]
+
+        # Drain pending background tasks.
+        for _ in range(10):
+            await asyncio.sleep(0)
+
+        task_resp = await client.get(f"/applications/my-contract-analyzer/tasks/{task_id}")
+        data = task_resp.json()
+        assert data["status"] == "failed"
+        assert "load" in data["error"].lower() or "not found" in data["error"].lower()
+        mock_app.ingest_documents.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

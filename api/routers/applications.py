@@ -399,7 +399,7 @@ async def upload_documents(
 
     now = _now()
     all_task_ids: list[str] = []
-    pending: list[tuple[str, str, str, bytes, dict]] = []  # task_id, doc_id, filename, content, doc_metadata
+    pending_task_ids: list[str] = []
 
     for upload in files:
         filename = upload.filename or "upload"
@@ -409,35 +409,63 @@ async def upload_documents(
         all_task_ids.append(task_id)
         content = await upload.read()
         doc_metadata = {"source_filename": filename, "source_format": suffix.lstrip("."), **extra_metadata}
+        doc_path = f"originals/{doc_id}{suffix}"
 
-        # 1. Save document to document store.
+        # 1. Save document bytes to document store.
         try:
-            await app.document_store.save_bytes(app.name, f"originals/{doc_id}{suffix}", content)
+            await app.document_store.save_bytes(app.name, doc_path, content)
         except NotImplementedError:
             logger.warning("upload_documents: save_bytes not supported, skipping raw save doc_id=%s", doc_id)
         except Exception:
             logger.exception("upload_documents: failed to save original doc_id=%s", doc_id)
 
-        # 2. Create ingestion task.
+        # 2. Create ingestion task with doc_path + doc_metadata in params_json so the
+        #    task is self-contained: if the node crashes and the task is retried, it can
+        #    reconstruct everything it needs from the task record + document store alone.
         await system_store.create_task(TaskRecord(
             task_id=task_id,
             app_name=app_name,
             task_type="ingest",
             task_name="ingest",
             doc_id=doc_id,
+            params_json=json.dumps({"doc_path": doc_path, "doc_metadata": doc_metadata}),
             status="pending",
             started_at=now,
         ))
-        pending.append((task_id, doc_id, filename, content, doc_metadata))
+        pending_task_ids.append(task_id)
 
-    # 3. Background: parse_to_markdown then ingest_documents for each task.
-    if pending:
+    # 3. Background: for each pending task load bytes from document store, parse, ingest.
+    if pending_task_ids:
         async def _run_upload_bg() -> None:
             # TODO make 5 configurable
             semaphore = asyncio.Semaphore(5)
 
-            async def _ingest_one(task_id: str, doc_id: str, filename: str, content: bytes, doc_metadata: dict) -> None:
+            async def _ingest_one(task_id: str) -> None:
                 async with semaphore:
+                    task = await system_store.get_task(task_id)
+                    if task is None:
+                        return
+
+                    try:
+                        params = json.loads(task.params_json) if task.params_json else {}
+                    except Exception:
+                        params = {}
+
+                    doc_path = params.get("doc_path", "")
+                    doc_metadata = params.get("doc_metadata", {})
+                    doc_id = task.doc_id or ""
+                    filename = doc_metadata.get("source_filename", doc_id)
+
+                    try:
+                        current_app = app_cache.get(app_name) or app
+                        content = await current_app.document_store.load_bytes(app.name, doc_path)
+                    except Exception as exc:
+                        await system_store.update_task(
+                            task_id, status="failed", completed_at=_now(),
+                            error=f"Failed to load document bytes: {exc}",
+                        )
+                        return
+
                     try:
                         markdown_text = parse_to_markdown(content, filename)
                     except Exception as exc:
@@ -471,7 +499,7 @@ async def upload_documents(
                         logger.exception("upload_bg failed app=%s doc_id=%s", app_name, doc_id)
                         await system_store.update_task(task_id, status="failed", completed_at=_now(), error=str(exc))
 
-            await asyncio.gather(*(_ingest_one(tid, did, fn, cnt, meta) for tid, did, fn, cnt, meta in pending))
+            await asyncio.gather(*(_ingest_one(tid) for tid in pending_task_ids))
 
         asyncio.create_task(_run_upload_bg())
 
