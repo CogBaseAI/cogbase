@@ -28,6 +28,8 @@ from api.models import (
     ApplicationResponse,
     ChunkResponse,
     CollectionsResponse,
+    DocListResponse,
+    DocResponse,
     FilterRequest,
     IngestDocumentsAcceptedResponse,
     IngestDocumentsRequest,
@@ -39,10 +41,11 @@ from api.models import (
     CollectionQueryResponse,
     TaskListResponse,
     TaskResponse,
+    WorkflowDocListResponse,
     WorkflowListResponse,
     WorkflowRunRequest,
 )
-from api.system_store import AppRecord, SystemStore, TaskRecord
+from api.system_store import AppRecord, DocRecord, SystemStore, TaskRecord
 from cogbase.core.models import Document
 from cogbase.pipeline.document_parser import parse_to_markdown
 from cogbase.stores.filters import Filter, Op
@@ -52,6 +55,21 @@ router = APIRouter(prefix="/applications", tags=["applications"])
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _doc_to_response(record: DocRecord) -> DocResponse:
+    import json as _json
+    try:
+        meta = _json.loads(record.metadata) if record.metadata else {}
+    except Exception:
+        meta = {}
+    return DocResponse(
+        doc_id=record.doc_id,
+        app_name=record.app_name,
+        status=record.status,
+        ingested_at=record.ingested_at,
+        metadata=meta,
+    )
 
 
 def _to_response(record: AppRecord) -> ApplicationResponse:
@@ -389,6 +407,13 @@ async def ingest_documents(
                     result = results[0]
                     if result.success:
                         await system_store.update_task(task_id, status="done", completed_at=_now())
+                        await system_store.save_doc(DocRecord(
+                            app_name=app_name,
+                            doc_id=doc.doc_id,
+                            status="active",
+                            ingested_at=_now(),
+                            metadata=json.dumps(doc.metadata) if doc.metadata else None,
+                        ))
                     else:
                         await system_store.update_task(
                             task_id, status="failed", completed_at=_now(),
@@ -510,6 +535,13 @@ async def upload_documents(
                     result = results[0]
                     if result.success:
                         await system_store.update_task(task_id, status="done", completed_at=_now())
+                        await system_store.save_doc(DocRecord(
+                            app_name=app_name,
+                            doc_id=doc.doc_id,
+                            status="active",
+                            ingested_at=_now(),
+                            metadata=json.dumps(doc.metadata) if doc.metadata else None,
+                        ))
                     else:
                         await system_store.update_task(
                             task_id, status="failed", completed_at=_now(),
@@ -741,6 +773,65 @@ async def query_collection(
 
 
 # ---------------------------------------------------------------------------
+# Doc registry endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{app_name}/docs", response_model=DocListResponse)
+async def list_docs(
+    app_name: str,
+    system_store: SystemStoreDep,
+    status: str | None = None,
+) -> DocListResponse:
+    """List all documents ingested into an application.
+
+    Filter by status: 'active', 'failed', or 'deleted'.
+    """
+    record = await system_store.get_app(app_name)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
+    docs = await system_store.list_docs(app_name, status=status)
+    items = [_doc_to_response(d) for d in docs]
+    return DocListResponse(docs=items, total=len(items))
+
+
+@router.get("/{app_name}/docs/{doc_id}", response_model=DocResponse)
+async def get_doc(
+    app_name: str,
+    doc_id: str,
+    system_store: SystemStoreDep,
+) -> DocResponse:
+    """Return the registry record for a single ingested document."""
+    record = await system_store.get_app(app_name)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
+    doc = await system_store.get_doc(app_name, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"Document '{doc_id}' not found")
+    return _doc_to_response(doc)
+
+
+@router.delete("/{app_name}/docs/{doc_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_doc(
+    app_name: str,
+    doc_id: str,
+    system_store: SystemStoreDep,
+) -> None:
+    """Remove a document from the registry and cascade-delete its workflow tasks.
+
+    Note: this does not yet remove data from vector or structured stores.
+    """
+    record = await system_store.get_app(app_name)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
+    doc = await system_store.get_doc(app_name, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"Document '{doc_id}' not found")
+    await system_store.delete_doc(app_name, doc_id)
+    logger.info("Document '%s' deleted from app '%s'", doc_id, app_name)
+
+
+# ---------------------------------------------------------------------------
 # Task endpoints
 # ---------------------------------------------------------------------------
 
@@ -798,6 +889,49 @@ async def list_workflows(
     app = await _get_active_app(app_name, app_cache, system_store, system_resources)
     return WorkflowListResponse(app_name=app_name, workflows=app.workflows)
 
+
+
+@router.get("/{app_name}/workflows/{workflow_name}/docs", response_model=WorkflowDocListResponse)
+async def list_workflow_docs(
+    app_name: str,
+    workflow_name: str,
+    system_store: SystemStoreDep,
+    doc_status: str | None = None,
+) -> WorkflowDocListResponse:
+    """List documents relative to a workflow.
+
+    doc_status options:
+    - 'unprocessed': docs with no completed workflow task for this workflow
+    - 'done': docs that have a completed workflow task
+    - 'failed': docs whose last workflow task failed
+    - omit to return all docs with any workflow task record
+    """
+    record = await system_store.get_app(app_name)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
+
+    if doc_status == "unprocessed":
+        all_docs = await system_store.list_docs(app_name, status="active")
+        done_tasks = await system_store.list_tasks(
+            app_name, task_type="workflow", task_name=workflow_name, status="done"
+        )
+        processed_ids = {t.doc_id for t in done_tasks if t.doc_id}
+        docs = [d for d in all_docs if d.doc_id not in processed_ids]
+    else:
+        all_docs = await system_store.list_docs(app_name, status="active")
+        workflow_tasks = await system_store.list_tasks(
+            app_name, task_type="workflow", task_name=workflow_name, status=doc_status
+        )
+        matched_ids = {t.doc_id for t in workflow_tasks if t.doc_id}
+        docs = [d for d in all_docs if d.doc_id in matched_ids]
+
+    items = [_doc_to_response(d) for d in docs]
+    return WorkflowDocListResponse(
+        app_name=app_name,
+        workflow_name=workflow_name,
+        docs=items,
+        total=len(items),
+    )
 
 
 @router.post("/{app_name}/workflows/{workflow_name}/stream")

@@ -9,6 +9,20 @@ from pydantic import BaseModel
 
 from cogbase.stores import Col, CollectionSchema, FieldSchema, FieldType, StructuredStoreBase
 
+DOC_REGISTRY_SCHEMA = CollectionSchema(
+    name="doc_registry",
+    description="Document registry: one record per successfully ingested document per application.",
+    primary_fields=["app_name", "doc_id"],
+    fields={
+        "app_name":    FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "doc_id":      FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "status":      FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "ingested_at": FieldSchema(type=FieldType.STRING, nullable=False),
+        "metadata":    FieldSchema(type=FieldType.STRING, nullable=True),  # JSON blob
+    },
+)
+
+
 APP_RECORDS_SCHEMA = CollectionSchema(
     name="app_records",
     description="CogBase application registry: configuration, status, and error state per named application.",
@@ -55,6 +69,14 @@ TASKS_SCHEMA = CollectionSchema(
 )
 
 
+class DocRecord(BaseModel):
+    app_name: str
+    doc_id: str
+    status: str        # "active" | "failed" | "deleted"
+    ingested_at: str   # ISO-8601 UTC
+    metadata: str | None = None  # JSON blob
+
+
 class TaskRecord(BaseModel):
     task_id: str
     app_name: str
@@ -98,6 +120,7 @@ class SystemStore:
 
     async def setup(self) -> None:
         """Create managed collections if they do not exist. Idempotent."""
+        await self._store.create_collection(DOC_REGISTRY_SCHEMA)
         await self._store.create_collection(APP_RECORDS_SCHEMA)
         await self._store.create_collection(SYSTEM_CONFIG_OVERRIDES_SCHEMA)
         await self._store.create_collection(TASKS_SCHEMA)
@@ -120,6 +143,47 @@ class SystemStore:
         await self._store.delete_records(
             "app_records",
             filters=[Col("name") == name],
+        )
+
+    # ------------------------------------------------------------------
+    # Doc registry
+    # ------------------------------------------------------------------
+
+    async def save_doc(self, record: DocRecord) -> None:
+        await self._store.save("doc_registry", [record.model_dump()])
+
+    async def get_doc(self, app_name: str, doc_id: str) -> DocRecord | None:
+        rows = await self._store.query_as(
+            "doc_registry",
+            filters=[Col("app_name") == app_name, Col("doc_id") == doc_id],
+            model=DocRecord,
+        )
+        return rows[0] if rows else None
+
+    async def list_docs(
+        self,
+        app_name: str,
+        *,
+        status: str | None = None,
+    ) -> list[DocRecord]:
+        filters = [Col("app_name") == app_name]
+        if status is not None:
+            filters.append(Col("status") == status)
+        return await self._store.query_as("doc_registry", filters=filters, model=DocRecord)
+
+    async def delete_doc(self, app_name: str, doc_id: str) -> None:
+        await self._store.delete_records(
+            "doc_registry",
+            filters=[Col("app_name") == app_name, Col("doc_id") == doc_id],
+        )
+        # Cascade: remove all workflow tasks for this doc.
+        await self._store.delete_records(
+            "tasks",
+            filters=[
+                Col("app_name") == app_name,
+                Col("doc_id") == doc_id,
+                Col("task_type") == "workflow",
+            ],
         )
 
     async def save_system_config_override(self, key: str, value_json: str) -> None:

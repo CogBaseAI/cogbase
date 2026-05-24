@@ -22,6 +22,24 @@ class ApplicationListResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Doc registry models
+# ---------------------------------------------------------------------------
+
+
+class DocResponse(BaseModel):
+    doc_id: str
+    app_name: str
+    status: str   # "active" | "failed" | "deleted"
+    ingested_at: str
+    metadata: dict[str, Any] = {}
+
+
+class DocListResponse(BaseModel):
+    docs: list[DocResponse]
+    total: int
+
+
+# ---------------------------------------------------------------------------
 # Ingest models
 # ---------------------------------------------------------------------------
 
@@ -164,8 +182,15 @@ class WorkflowListResponse(BaseModel):
     workflows: list[str]
 
 
+class WorkflowDocListResponse(BaseModel):
+    app_name: str
+    workflow_name: str
+    docs: list[DocResponse]
+    total: int
+
+
 class WorkflowRunRequest(BaseModel):
-    doc_id: str
+    doc_id: str | None = None
 
 
 
