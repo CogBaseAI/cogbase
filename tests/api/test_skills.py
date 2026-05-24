@@ -66,6 +66,7 @@ _BASE_CONFIG = textwrap.dedent("""\
     llm:
       provider: openai
       model: gpt-4o-mini
+      api_key: sk-test
 """)
 
 _BASE_BUNDLE = _make_bundle(_BASE_CONFIG)

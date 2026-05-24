@@ -413,9 +413,11 @@ class TestVectorCollectionConfig:
             llm:
               provider: openai
               model: gpt-4o-mini
+              api_key: sk-test
             embedding:
               provider: openai
               model: text-embedding-3-small
+              api_key: sk-test
             vector_collections:
               - name: document_summary
                 description: One summary vector per document for topic-level search.
@@ -441,6 +443,7 @@ class TestVectorCollectionConfig:
             name: bad-app
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             vector_collections:
               - name: document_summary
                 description: One summary vector per document for topic-level search.
@@ -457,9 +460,11 @@ class TestVectorCollectionConfig:
             name: bad-app
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             embedding:
               provider: openai
               model: text-embedding-3-small
+              api_key: sk-test
             vector_collections:
               - name: document_summary
                 description: One summary vector per document for topic-level search.

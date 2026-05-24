@@ -27,27 +27,8 @@ from cogbase.config.config import (
 # ---------------------------------------------------------------------------
 
 class TestLLMConfig:
-    def test_resolved_api_key_explicit(self):
-        cfg = LLMConfig(model="gpt-4o-mini", api_key="sk-explicit")
-        assert cfg.resolved_api_key() == "sk-explicit"
-
-    def test_resolved_api_key_env_var(self, monkeypatch):
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
-        cfg = LLMConfig(model="gpt-4o-mini")
-        assert cfg.resolved_api_key() == "sk-from-env"
-
-    def test_resolved_api_key_explicit_beats_env(self, monkeypatch):
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
-        cfg = LLMConfig(model="gpt-4o-mini", api_key="sk-explicit")
-        assert cfg.resolved_api_key() == "sk-explicit"
-
-    def test_resolved_api_key_none_when_absent(self, monkeypatch):
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        cfg = LLMConfig(model="gpt-4o-mini")
-        assert cfg.resolved_api_key() is None
-
     def test_default_provider_is_openai(self):
-        cfg = LLMConfig(model="gpt-4o-mini")
+        cfg = LLMConfig(model="gpt-4o-mini", api_key="sk-test")
         assert cfg.provider == "openai"
 
 
@@ -127,13 +108,13 @@ class TestChunkerConfig:
 
 class TestEmbeddingConfig:
     def test_defaults(self):
-        cfg = EmbeddingConfig()
+        cfg = EmbeddingConfig(api_key="EMPTY")
         assert cfg.provider == "openai"
         assert cfg.model == "text-embedding-3-small"
-        assert cfg.dimensions is None
+        assert cfg.dimensions == 1536
 
     def test_custom_dimensions(self):
-        cfg = EmbeddingConfig(dimensions=512)
+        cfg = EmbeddingConfig(api_key="EMPTY", dimensions=512)
         assert cfg.dimensions == 512
 
 
@@ -146,6 +127,7 @@ _MINIMAL_YAML = textwrap.dedent("""\
     llm:
       provider: openai
       model: gpt-4o-mini
+      api_key: sk-test
 """)
 
 _FULL_YAML = textwrap.dedent("""\
@@ -153,9 +135,11 @@ _FULL_YAML = textwrap.dedent("""\
     llm:
       provider: openai
       model: gpt-4o-mini
+      api_key: sk-test
     embedding:
       provider: openai
       model: text-embedding-3-small
+      api_key: sk-test
     vector_collections:
       - name: doc_chunks
         description: Full-text document chunks for detailed retrieval.
@@ -196,6 +180,7 @@ class TestAppConfig:
             name: my-app
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             structured_store:
               type: sqlite
               path: ./data/my.db
@@ -204,6 +189,7 @@ class TestAppConfig:
             embedding:
               provider: openai
               model: text-embedding-3-small
+              api_key: sk-test
             vector_collections:
               - name: doc_chunks
                 description: Full-text document chunks for detailed retrieval.
@@ -218,9 +204,11 @@ class TestAppConfig:
             name: bad-app
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             embedding:
               provider: openai
               model: text-embedding-3-small
+              api_key: sk-test
             vector_collections:
               - name: doc_chunks
         """)
@@ -232,9 +220,11 @@ class TestAppConfig:
             name: ok-app
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             embedding:
               provider: openai
               model: text-embedding-3-small
+              api_key: sk-test
         """)
         cfg = AppConfig.from_yaml(yaml_text)
         assert cfg.embedding is not None
@@ -249,9 +239,11 @@ class TestAppConfig:
             name: ok-app
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             embedding:
               provider: openai
               model: text-embedding-3-small
+              api_key: sk-test
             vector_collections:
               - name: doc_summary
                 description: One summary vector per document for topic-level search.
@@ -275,9 +267,11 @@ class TestAppConfig:
             name: bad-app
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             embedding:
               provider: openai
               model: text-embedding-3-small
+              api_key: sk-test
             vector_collections:
               - name: doc_summary
                 description: One summary vector per document for topic-level search.
@@ -298,9 +292,11 @@ class TestAppConfig:
             name: contracts
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             embedding:
               provider: openai
               model: text-embedding-3-small
+              api_key: sk-test
             vector_collections:
               - name: document_chunks
                 description: Full-text document chunks for detailed retrieval.
@@ -379,7 +375,7 @@ class TestAppConfig:
 
         llm_prompt = LLMConfig.config_format_prompt()
         assert "LLM provider." in llm_prompt
-        assert "Explicit API key." in llm_prompt
+        assert "api_key:" in llm_prompt
 
     def test_config_format_prompt_respects_prompt_skip_flag(self):
         from pydantic import BaseModel, Field
@@ -407,6 +403,7 @@ class TestAppConfig:
             name: bad-app
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             structured_collections:
               - name: records
                 schema: '{_SCHEMA}'
@@ -424,6 +421,7 @@ _SAVE_PROPAGATION_YAML = """\
 name: save-prop
 llm:
   model: gpt-4o-mini
+  api_key: sk-test
 structured_collections:
   - name: findings
     description: Workflow output collection populated by structured-save.
@@ -489,6 +487,7 @@ class TestStructuredSavePrimaryFieldsPropagation:
             name: nested-save
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             structured_collections:
               - name: items
                 description: Source items.
@@ -559,6 +558,7 @@ class TestStructuredSavePrimaryFieldsAgainstUpstreamSchema:
             name: save-validation
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             structured_collections:
               - name: findings
                 description: Workflow output collection.
@@ -622,6 +622,7 @@ class TestStructuredSavePrimaryFieldsAgainstUpstreamSchema:
             name: passthrough-save
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             structured_collections:
               - name: items
                 description: Source items.
@@ -664,6 +665,7 @@ class TestStructuredSavePrimaryFieldsAgainstUpstreamSchema:
             name: nested-validation
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             structured_collections:
               - name: clauses
                 description: Source clauses.
@@ -839,6 +841,7 @@ class TestExtractorConfig:
             name: clauses-app
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             structured_collections:
               - name: contract_clauses
                 description: Extracted contract clauses with clause type and verbatim text.
@@ -875,6 +878,7 @@ class TestExtractorConfig:
             name: simple-app
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             structured_collections:
               - name: records
                 description: Generic structured records for exact lookup.
@@ -954,6 +958,7 @@ def _ref_yaml(*, steps_yaml: str, pfc_collection: str = "records") -> str:
         name: ref-test
         llm:
           model: gpt-4o-mini
+          api_key: sk-test
         vector_collections:
           - name: chunks
             description: Passage chunks.
@@ -1052,6 +1057,7 @@ def _multi_extractor_yaml(*, schema2: str, prompt2: str) -> str:
         name: conflict-test
         llm:
           model: gpt-4o-mini
+          api_key: sk-test
         structured_collections:
           - name: shared
             description: Shared structured collection.
@@ -1107,6 +1113,7 @@ class TestMultiExtractorConflictValidation:
             name: single-pipe
             llm:
               model: gpt-4o-mini
+              api_key: sk-test
             structured_collections:
               - name: records
                 description: Records.

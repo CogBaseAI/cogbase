@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 from cogbase.config.prompt import ConfigPromptMixin
 
@@ -36,31 +35,9 @@ class LLMConfig(ConfigPromptMixin, BaseModel):
             "'http://localhost:8000/v1' (vLLM)."
         ),
     )
-    api_key: str | None = Field(
-        default=None,
-        description="Explicit API key. Takes priority over api_key_env and the OPENAI_API_KEY fallback.",
+    api_key: str = Field(
+        description="API key. Use 'EMPTY' for local servers that require no authentication.",
     )
-    api_key_env: str | None = Field(
-        default=None,
-        description=(
-            "Name of the environment variable holding the API key. "
-            "Checked when api_key is not set. "
-            "Example: 'DASHSCOPE_API_KEY' for Alibaba DashScope."
-        ),
-    )
-
-    @model_validator(mode="after")
-    def _check_base_url(self) -> "LLMConfig":
-        if self.provider == "openai-compatible" and not self.base_url:
-            raise ValueError("base_url is required when provider is 'openai-compatible'")
-        return self
-
-    def resolved_api_key(self) -> str | None:
-        if self.api_key:
-            return self.api_key
-        if self.api_key_env:
-            return os.environ.get(self.api_key_env)
-        return os.environ.get("OPENAI_API_KEY")
 
 
 class EmbeddingConfig(ConfigPromptMixin, BaseModel):
@@ -86,32 +63,10 @@ class EmbeddingConfig(ConfigPromptMixin, BaseModel):
             "'http://localhost:8000/v1' (vLLM)."
         ),
     )
-    api_key: str | None = Field(
-        default=None,
-        description="Explicit API key. Takes priority over api_key_env and the OPENAI_API_KEY fallback.",
-    )
-    api_key_env: str | None = Field(
-        default=None,
-        description=(
-            "Name of the environment variable holding the API key. "
-            "Checked when api_key is not set. "
-            "Example: 'DASHSCOPE_API_KEY' for Alibaba DashScope."
-        ),
+    api_key: str = Field(
+        description="API key. Use 'EMPTY' for local servers that require no authentication.",
     )
     dimensions: int = Field(
         default=1536,
         description="Optional output vector dimension override.",
     )
-
-    @model_validator(mode="after")
-    def _check_base_url(self) -> "EmbeddingConfig":
-        if self.provider == "openai-compatible" and not self.base_url:
-            raise ValueError("base_url is required when provider is 'openai-compatible'")
-        return self
-
-    def resolved_api_key(self) -> str | None:
-        if self.api_key:
-            return self.api_key
-        if self.api_key_env:
-            return os.environ.get(self.api_key_env)
-        return os.environ.get("OPENAI_API_KEY")

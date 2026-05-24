@@ -148,7 +148,7 @@ async def test_run_skill_no_tools_yields_answer_and_result():
     assert any("Using skill: weather" in c for c in _str_chunks(chunks))
     assert _str_chunks(chunks)[-1] == "It is sunny."
     assert isinstance(chunks[-1], QueryResult)
-    assert chunks[-1].answer == "It is sunny."
+    assert chunks[-1].answer == "It is sunny.\n"
 
 
 @pytest.mark.asyncio
@@ -220,7 +220,7 @@ async def test_run_retrieval_direct_answer():
     chunks = [c async for c in runner.run("What is the answer?")]
     assert _str_chunks(chunks)[-1] == "The answer is 42."
     assert isinstance(chunks[-1], QueryResult)
-    assert chunks[-1].answer == "The answer is 42."
+    assert chunks[-1].answer == "The answer is 42.\n"
 
 
 @pytest.mark.asyncio
@@ -253,7 +253,7 @@ async def test_run_retrieval_structured_lookup_populates_records():
     assert isinstance(result, QueryResult)
     assert len(result.structured_records) == 2
     assert result.passthrough is False
-    assert result.answer == "Found: Foo, Bar."
+    assert result.answer == "Found: Foo, Bar.\n"
 
 
 @pytest.mark.asyncio

@@ -225,6 +225,7 @@ name: test_app
 llm:
   provider: openai
   model: gpt-4o-mini
+  api_key: sk-test
 structured_collections:
   - name: contract_extraction
     description: Extracted contract facts and entities for exact lookup.
@@ -247,9 +248,11 @@ name: test_app
 llm:
   provider: openai
   model: gpt-4o-mini
+  api_key: sk-test
 embedding:
   provider: openai
   model: text-embedding-3-small
+  api_key: sk-test
 vector_collections:
   - name: document_chunks
     description: Full-text document chunks for detailed retrieval.
@@ -475,9 +478,11 @@ name: test_app
 llm:
   provider: openai
   model: gpt-4o-mini
+  api_key: sk-test
 embedding:
   provider: openai
   model: text-embedding-3-small
+  api_key: sk-test
 vector_collections:
   - name: document_summary
     description: One summary vector per document for topic-level search.
@@ -495,9 +500,11 @@ name: test_app
 llm:
   provider: openai
   model: gpt-4o-mini
+  api_key: sk-test
 embedding:
   provider: openai
   model: text-embedding-3-small
+  api_key: sk-test
 vector_collections:
   - name: document_chunks
     description: Full-text document chunks for detailed retrieval.
@@ -641,6 +648,7 @@ name: test_app
 llm:
   provider: openai
   model: gpt-4o-mini
+  api_key: sk-test
 structured_collections:
   - name: contract_clauses
     description: Extracted contract clauses with clause type and verbatim text.
@@ -667,6 +675,7 @@ name: test_app
 llm:
   provider: openai
   model: gpt-4o-mini
+  api_key: sk-test
 structured_collections:
   - name: contract_clauses
     description: Extracted contract clauses with clause type and verbatim text.
@@ -693,6 +702,7 @@ name: test_app
 llm:
   provider: openai
   model: gpt-4o-mini
+  api_key: sk-test
 structured_collections:
   - name: contract_metadata
     description: Extracted contract facts and entities for exact lookup.
@@ -827,6 +837,7 @@ name: test_app
 llm:
   provider: openai
   model: gpt-4o-mini
+  api_key: sk-test
 """)
         sys_doc = LocalFSDocumentStore(tmp_path / "docs")
         app = await build_app(
@@ -845,6 +856,7 @@ name: test_app
 llm:
   provider: openai
   model: gpt-4o-mini
+  api_key: sk-test
 document_store:
   type: local
   path: {tmp_path / "app-docs"}
@@ -869,9 +881,11 @@ name: test_app
 llm:
   provider: openai
   model: gpt-4o-mini
+  api_key: sk-test
 embedding:
   provider: openai
   model: text-embedding-3-small
+  api_key: sk-test
 vector_collections:
   - name: contract_chunks
     description: Contract text chunks.

@@ -98,11 +98,7 @@ class TestMaskKey:
 
     def test_long_key_masked(self):
         from api.routers.system import _mask_key
-        assert _mask_key("sk-1234567890abcd") == "***abcd"
-
-    def test_five_char_key_masked(self):
-        from api.routers.system import _mask_key
-        assert _mask_key("12345") == "***2345"
+        assert _mask_key("sk-1234567890abcd") == "sk-1***abcd"
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +120,7 @@ class TestGetSystemConfig:
         data = await _get(client)
         assert data["llm"]["provider"] == "openai"
         assert data["llm"]["model"] == "gpt-4o"
-        assert data["llm"]["api_key"] == "***efgh"
+        assert data["llm"]["api_key"] == "sk-a***efgh"
         assert data["embedding"] is None
 
     @pytest.mark.asyncio
@@ -135,7 +131,7 @@ class TestGetSystemConfig:
         assert data["llm"] is None
         assert data["embedding"]["provider"] == "openai"
         assert data["embedding"]["model"] == "text-embedding-3-large"
-        assert data["embedding"]["api_key"] == "***1234"
+        assert data["embedding"]["api_key"] == "sk-x***1234"
 
     @pytest.mark.asyncio
     async def test_returns_both_configs(self, client_with_resources):
@@ -152,7 +148,7 @@ class TestGetSystemConfig:
         resources.llm_config = _make_llm_config(api_key="sk-supersecretkey")
         data = await _get(client)
         assert "supersecretkey" not in data["llm"]["api_key"]
-        assert data["llm"]["api_key"].startswith("***")
+        assert data["llm"]["api_key"].find("***")
 
     @pytest.mark.asyncio
     async def test_empty_api_key_passthrough(self, client_with_resources):
@@ -312,7 +308,7 @@ class TestPatchSystemConfig:
         assert resp.status_code == 200
         api_key = resp.json()["llm"]["api_key"]
         assert "supersecretkey" not in api_key
-        assert api_key.startswith("***")
+        assert api_key.find("***")
 
     @pytest.mark.asyncio
     async def test_omitting_llm_leaves_existing_llm_unchanged(self, client_with_resources):

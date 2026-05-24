@@ -46,7 +46,7 @@ def make_llm():
         return build_llm(_system_cfg.llm)
     if os.environ.get("OPENAI_API_KEY"):
         from cogbase.config.models import LLMConfig
-        return build_llm(LLMConfig(model="gpt-5.4-mini", mini_model="gpt-5.4-mini"))
+        return build_llm(LLMConfig(model="gpt-5.4-mini", mini_model="gpt-5.4-mini", api_key=os.environ["OPENAI_API_KEY"]))
     return None
 
 
@@ -60,7 +60,7 @@ def make_embedding(*, dimensions: int | None = None):
         cfg = _system_cfg.embedding
     elif os.environ.get("OPENAI_API_KEY"):
         from cogbase.config.models import EmbeddingConfig
-        cfg = EmbeddingConfig(model="text-embedding-3-small")
+        cfg = EmbeddingConfig(model="text-embedding-3-small", api_key=os.environ["OPENAI_API_KEY"])
     else:
         return None
     if dimensions is not None:

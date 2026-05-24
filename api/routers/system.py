@@ -35,7 +35,7 @@ def _llm_response(cfg: LLMConfig) -> SystemLLMConfigResponse:
         model=cfg.model,
         mini_model=cfg.mini_model,
         base_url=cfg.base_url,
-        api_key=_mask_key(cfg.resolved_api_key()),
+        api_key=_mask_key(cfg.api_key),
     )
 
 
@@ -44,7 +44,7 @@ def _embedding_response(cfg: EmbeddingConfig) -> SystemEmbeddingConfigResponse:
         provider=cfg.provider,
         model=cfg.model,
         base_url=cfg.base_url,
-        api_key=_mask_key(cfg.resolved_api_key()),
+        api_key=_mask_key(cfg.api_key),
         dimensions=cfg.dimensions,
     )
 

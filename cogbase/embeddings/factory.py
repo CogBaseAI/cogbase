@@ -18,14 +18,8 @@ def build_embedding(cfg: EmbeddingConfig) -> EmbeddingBase:
         except ImportError as exc:
             raise ImportError("openai package required: pip install openai") from exc
         from cogbase.embeddings.openai import OpenAIEmbedding
-        client_kwargs: dict = {"api_key": cfg.resolved_api_key()}
-        if cfg.base_url:
-            client_kwargs["base_url"] = cfg.base_url
-        client = openai.AsyncOpenAI(**client_kwargs)
-        embed_kwargs = {}
-        if cfg.dimensions is not None:
-            embed_kwargs["dimensions"] = cfg.dimensions
-        return OpenAIEmbedding(client, model=cfg.model, **embed_kwargs)
+        client = openai.AsyncOpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
+        return OpenAIEmbedding(client, model=cfg.model, dimensions=cfg.dimensions)
     if cfg.provider == "sentence-transformers":
         from cogbase.embeddings.huggingface import SentenceTransformersEmbedding
         return SentenceTransformersEmbedding(model_name=cfg.model)

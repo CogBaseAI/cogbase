@@ -48,23 +48,26 @@ llm:
   provider: openai           # "openai" | "openai-compatible"
   model: gpt-5.4-mini
   mini_model: gpt-5.4-mini
-  # api_key: sk-...          # omit to use api_key_env or OPENAI_API_KEY
+  api_key: sk-xxx
 
   # OpenAI-compatible providers (vLLM, Alibaba DashScope, etc.):
   # provider: openai-compatible
+  # model: gpt-5.4-mini
+  # mini_model: gpt-5.4-mini
   # base_url: http://localhost:8000/v1          # vLLM
   # base_url: https://dashscope.aliyuncs.com/compatible-mode/v1  # Alibaba
-  # api_key_env: DASHSCOPE_API_KEY             # env var holding the key
+  # api_key: sk-xxx
 
 embedding:                   # shared across all vector and summarize collections
   provider: openai           # "openai" | "openai-compatible" | "sentence-transformers"
   model: text-embedding-3-small
-  # dimensions: 1536         # optional
-  # api_key_env: OPENAI_API_KEY  # env var holding the key (default)
+  # dimensions: 1536         # optional, default 1536
+  api_key: sk-xxx
 
   # OpenAI-compatible embedding providers (vLLM, Alibaba DashScope, etc.):
   # provider: openai-compatible
+  # model: text-embedding-v3
+  # dimensions: 1536
   # base_url: http://localhost:8000/v1                              # vLLM
   # base_url: https://dashscope.aliyuncs.com/compatible-mode/v1   # Alibaba
-  # model: text-embedding-v3
-  # api_key_env: DASHSCOPE_API_KEY
+  # api_key: sk-xxx

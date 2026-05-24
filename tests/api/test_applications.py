@@ -69,6 +69,7 @@ _VALID_CONFIG_YAML = textwrap.dedent("""\
     llm:
       provider: openai
       model: gpt-4o-mini
+      api_key: sk-test
 """).encode()
 
 _VALID_BUNDLE = _make_bundle(_VALID_CONFIG_YAML)
@@ -118,6 +119,7 @@ class TestSerializeConfig:
             llm:
               provider: openai
               model: gpt-4o-mini
+              api_key: sk-test
             structured_collections:
               - name: facts
                 description: Extracted facts.
@@ -150,6 +152,7 @@ class TestSerializeConfig:
             llm:
               provider: openai
               model: gpt-4o-mini
+              api_key: sk-test
             structured_collections:
               - name: facts
                 description: Extracted facts.
@@ -284,6 +287,7 @@ class TestCreateApplication:
             llm:
               provider: openai
               model: gpt-4o-mini
+              api_key: sk-test
             structured_collections:
               - name: contract_extraction
                 description: Extracted contract facts and entities for exact lookup.
@@ -342,8 +346,8 @@ class TestListApplications:
 
     @pytest.mark.asyncio
     async def test_list_returns_created_apps(self, client):
-        bundle_a = _make_bundle(b"name: app-a\nllm:\n  model: gpt-4o-mini\n")
-        bundle_b = _make_bundle(b"name: app-b\nllm:\n  model: gpt-4o-mini\n")
+        bundle_a = _make_bundle(b"name: app-a\nllm:\n  model: gpt-4o-mini\n  api_key: sk-test\n")
+        bundle_b = _make_bundle(b"name: app-b\nllm:\n  model: gpt-4o-mini\n  api_key: sk-test\n")
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post("/applications", files={"bundle": ("a.zip", bundle_a, "application/zip")})
             await client.post("/applications", files={"bundle": ("b.zip", bundle_b, "application/zip")})
@@ -411,8 +415,8 @@ class TestUpdateApplication:
 
     @pytest.mark.asyncio
     async def test_update_name_conflict_returns_409(self, client):
-        bundle_a = _make_bundle(b"name: app-a\nllm:\n  model: gpt-4o-mini\n")
-        bundle_b = _make_bundle(b"name: app-b\nllm:\n  model: gpt-4o-mini\n")
+        bundle_a = _make_bundle(b"name: app-a\nllm:\n  model: gpt-4o-mini\n  api_key: sk-test\n")
+        bundle_b = _make_bundle(b"name: app-b\nllm:\n  model: gpt-4o-mini\n  api_key: sk-test\n")
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post("/applications", files={"bundle": ("a.zip", bundle_a, "application/zip")})
             await client.post("/applications", files={"bundle": ("b.zip", bundle_b, "application/zip")})
@@ -1239,7 +1243,7 @@ def _make_collections_bundle(
     structured_collections: list[str] | None = None,
     vector_collections: list[str] | None = None,
 ) -> bytes:
-    lines = ["name: my-contract-analyzer", "llm:", "  provider: openai", "  model: gpt-4o-mini"]
+    lines = ["name: my-contract-analyzer", "llm:", "  provider: openai", "  model: gpt-4o-mini", "  api_key: sk-test"]
     if vector_collections:
         lines.append("vector_collections:")
         for vc in vector_collections:
