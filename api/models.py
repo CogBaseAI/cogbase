@@ -202,13 +202,11 @@ class SystemConfigResponse(BaseModel):
     embedding: SystemEmbeddingConfigResponse | None = None
 
 
-_DEFAULT_OPENAI_API_URL = 'https://api.openai.com/v1'
-
 class UpdateLLMConfig(BaseModel):
     provider: Literal["openai", "openai-compatible"] = "openai"
     model: str
     mini_model: str | None = None
-    base_url: str = _DEFAULT_OPENAI_API_URL
+    base_url: str = 'https://api.openai.com/v1'
     api_key: str = Field(
         description="API key. Use 'EMPTY' for local openai-compatible servers that require no auth (e.g. vLLM).",
     )
@@ -217,7 +215,7 @@ class UpdateLLMConfig(BaseModel):
 class UpdateEmbeddingConfig(BaseModel):
     provider: Literal["openai", "openai-compatible"] = "openai"
     model: str
-    base_url: str = _DEFAULT_OPENAI_API_URL
+    base_url: str = 'https://api.openai.com/v1'
     api_key: str = Field(
         description="API key. Use 'EMPTY' for local openai-compatible servers that require no auth (e.g. vLLM).",
     )

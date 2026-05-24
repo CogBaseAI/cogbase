@@ -26,7 +26,7 @@ def _mask_key(key: str | None) -> str | None:
         return None
     if key == "EMPTY" or len(key) <= 4:
         return key
-    return f"***{key[-4:]}"
+    return f"{key[:4]}***{key[-4:]}"
 
 
 def _llm_response(cfg: LLMConfig) -> SystemLLMConfigResponse:

@@ -27,8 +27,8 @@ class LLMConfig(ConfigPromptMixin, BaseModel):
             "Callers request it via model='mini'; falls back to 'model' when unset."
         ),
     )
-    base_url: str | None = Field(
-        default=None,
+    base_url: str = Field(
+        default='https://api.openai.com/v1',
         description=(
             "Base URL for the API endpoint. Required when provider is "
             "'openai-compatible'. Examples: "
@@ -77,8 +77,8 @@ class EmbeddingConfig(ConfigPromptMixin, BaseModel):
         default="text-embedding-3-small",
         description="Embedding model name."
     )
-    base_url: str | None = Field(
-        default=None,
+    base_url: str = Field(
+        default='https://api.openai.com/v1',
         description=(
             "Base URL for the API endpoint. Required when provider is "
             "'openai-compatible'. Examples: "
@@ -98,8 +98,8 @@ class EmbeddingConfig(ConfigPromptMixin, BaseModel):
             "Example: 'DASHSCOPE_API_KEY' for Alibaba DashScope."
         ),
     )
-    dimensions: int | None = Field(
-        default=None,
+    dimensions: int = Field(
+        default=1536,
         description="Optional output vector dimension override.",
     )
 
