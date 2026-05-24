@@ -375,8 +375,10 @@ async def upload_documents(
 ) -> IngestDocumentsAcceptedResponse:
     """Upload files and queue them for background ingestion.
 
-    Files are parsed to markdown synchronously; ingestion runs in the background.
-    Returns task IDs immediately (HTTP 202). Poll GET /{app_name}/tasks?task_type=ingest.
+    Each file is saved to the document store immediately, then an ingestion task
+    is created (pending).  The background task parses the file to markdown and
+    runs the ingestion pipeline.  Returns task IDs immediately (HTTP 202).
+    Poll GET /{app_name}/tasks?task_type=ingest.
     """
     import json as _json_mod
     import pathlib
@@ -396,9 +398,8 @@ async def upload_documents(
         return re.sub(r"[^\w\-]", "_", stem)
 
     now = _now()
-    task_doc_pairs: list[tuple[str, Document]] = []
-    original_saves: list[tuple[str, bytes, str]] = []
     all_task_ids: list[str] = []
+    pending: list[tuple[str, str, str, bytes, dict]] = []  # task_id, doc_id, filename, content, doc_metadata
 
     for upload in files:
         filename = upload.filename or "upload"
@@ -406,24 +407,18 @@ async def upload_documents(
         doc_id = _safe_doc_id(filename)
         task_id = str(uuid.uuid4())
         all_task_ids.append(task_id)
-
         content = await upload.read()
-        try:
-            markdown_text = parse_to_markdown(content, filename)
-        except Exception as exc:
-            await system_store.create_task(TaskRecord(
-                task_id=task_id,
-                app_name=app_name,
-                task_type="ingest",
-                task_name="ingest",
-                doc_id=doc_id,
-                status="failed",
-                started_at=now,
-                completed_at=now,
-                error=f"Failed to parse {filename!r}: {exc}",
-            ))
-            continue
+        doc_metadata = {"source_filename": filename, "source_format": suffix.lstrip("."), **extra_metadata}
 
+        # 1. Save document to document store.
+        try:
+            await app.document_store.save_bytes(app.name, f"originals/{doc_id}{suffix}", content)
+        except NotImplementedError:
+            logger.warning("upload_documents: save_bytes not supported, skipping raw save doc_id=%s", doc_id)
+        except Exception:
+            logger.exception("upload_documents: failed to save original doc_id=%s", doc_id)
+
+        # 2. Create ingestion task.
         await system_store.create_task(TaskRecord(
             task_id=task_id,
             app_name=app_name,
@@ -433,54 +428,50 @@ async def upload_documents(
             status="pending",
             started_at=now,
         ))
-        original_saves.append((doc_id, content, suffix))
-        task_doc_pairs.append((task_id, Document(
-            doc_id=doc_id,
-            text=markdown_text,
-            metadata={"source_filename": filename, "source_format": suffix.lstrip("."), **extra_metadata},
-        )))
+        pending.append((task_id, doc_id, filename, content, doc_metadata))
 
-    # Save original binary files to document store if configured.
-    if app._document_store is not None:
-        for doc_id, content, suffix in original_saves:
-            try:
-                await app._document_store.save_bytes(
-                    app.name, f"originals/{doc_id}{suffix}", content
-                )
-            except Exception:
-                logger.exception(
-                    "upload_documents: failed to save original file doc_id=%s", doc_id
-                )
-
-    if task_doc_pairs:
+    # 3. Background: parse_to_markdown then ingest_documents for each task.
+    if pending:
         async def _run_upload_bg() -> None:
-            async def _ingest_one(task_id: str, doc: Document) -> None:
-                await system_store.update_task(task_id, status="running", started_at=_now())
-                try:
-                    current_app = app_cache.get(app_name) or app
-                    results = await current_app.ingest_documents([doc], concurrency=1)
-                    result = results[0]
-                    if result.success:
-                        await system_store.update_task(task_id, status="done", completed_at=_now())
-                        await system_store.save_doc(DocRecord(
-                            app_name=app_name,
-                            doc_id=doc.doc_id,
-                            status="active",
-                            ingested_at=_now(),
-                            metadata=json.dumps(doc.metadata) if doc.metadata else None,
-                        ))
-                    else:
+            # TODO make 5 configurable
+            semaphore = asyncio.Semaphore(5)
+
+            async def _ingest_one(task_id: str, doc_id: str, filename: str, content: bytes, doc_metadata: dict) -> None:
+                async with semaphore:
+                    try:
+                        markdown_text = parse_to_markdown(content, filename)
+                    except Exception as exc:
                         await system_store.update_task(
                             task_id, status="failed", completed_at=_now(),
-                            error=str(result.error) if result.error else "ingest failed",
+                            error=f"Failed to parse {filename!r}: {exc}",
                         )
-                except Exception as exc:
-                    logger.exception("upload_bg failed app=%s doc_id=%s", app_name, doc.doc_id)
-                    await system_store.update_task(
-                        task_id, status="failed", completed_at=_now(), error=str(exc)
-                    )
+                        return
 
-            await asyncio.gather(*(_ingest_one(tid, doc) for tid, doc in task_doc_pairs))
+                    doc = Document(doc_id=doc_id, text=markdown_text, metadata=doc_metadata)
+                    await system_store.update_task(task_id, status="running", started_at=_now())
+                    try:
+                        current_app = app_cache.get(app_name) or app
+                        results = await current_app.ingest_documents([doc])
+                        result = results[0]
+                        if result.success:
+                            await system_store.update_task(task_id, status="done", completed_at=_now())
+                            await system_store.save_doc(DocRecord(
+                                app_name=app_name,
+                                doc_id=doc.doc_id,
+                                status="active",
+                                ingested_at=_now(),
+                                metadata=json.dumps(doc.metadata) if doc.metadata else None,
+                            ))
+                        else:
+                            await system_store.update_task(
+                                task_id, status="failed", completed_at=_now(),
+                                error=str(result.error) if result.error else "ingest failed",
+                            )
+                    except Exception as exc:
+                        logger.exception("upload_bg failed app=%s doc_id=%s", app_name, doc_id)
+                        await system_store.update_task(task_id, status="failed", completed_at=_now(), error=str(exc))
+
+            await asyncio.gather(*(_ingest_one(tid, did, fn, cnt, meta) for tid, did, fn, cnt, meta in pending))
 
         asyncio.create_task(_run_upload_bg())
 

@@ -399,7 +399,7 @@ IN WITNESS WHEREOF, the parties have executed this Agreement as of the Effective
         app = await build_app(config, system=system, app_status="new")
 
         results = await app.ingest_documents(
-            RULES_DOCUMENTS + CONTRACTS_DOCUMENTS, concurrency=3
+            RULES_DOCUMENTS + CONTRACTS_DOCUMENTS
         )
         failed = [r for r in results if not r.success]
         assert not failed, (
@@ -716,7 +716,7 @@ This Agreement is governed by the laws of the State of Texas.
             Document(doc_id=doc_id, text=contract_text)
             for doc_id, contract_text in CONTRACTS.items()
         ]
-        results = await app.ingest_documents(documents, concurrency=3)
+        results = await app.ingest_documents(documents)
         failed = [r for r in results if not r.success]
         assert not failed, (
             f"{len(failed)} document(s) failed ingestion: "

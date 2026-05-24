@@ -116,10 +116,8 @@ class CogBaseApp:
     async def ingest_documents(
         self,
         documents: Sequence[Document],
-        *,
-        concurrency: int = 5,
     ) -> list[IngestResult]:
-        """Ingest a batch of documents, running up to *concurrency* at a time.
+        """Ingest a batch of documents.
 
         When a document store is configured, each document is saved there first.
         A store save failure is captured as a failed ``IngestResult`` and that
@@ -127,13 +125,10 @@ class CogBaseApp:
         does not abort the others.  Results are returned in the same order as
         *documents*.
         """
-        if concurrency < 1:
-            raise ValueError(f"concurrency must be at least 1, got {concurrency}")
         logger.info(
-            "app.ingest_documents.start app=%s documents=%d concurrency=%d",
+            "app.ingest_documents.start app=%s documents=%d",
             self.name,
             len(documents),
-            concurrency,
         )
 
         store_failures: dict[str, Exception] = {}
@@ -159,7 +154,7 @@ class CogBaseApp:
                 pipeline_groups[pid][1].append(doc)
 
         group_results_lists = await asyncio.gather(
-            *(p.ingest_documents(docs, concurrency=concurrency) for p, docs in pipeline_groups.values())
+            *(p.ingest_documents(docs) for p, docs in pipeline_groups.values())
         )
         results_by_id: dict[str, IngestResult] = {}
         for group_results in group_results_lists:

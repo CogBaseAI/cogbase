@@ -249,7 +249,7 @@ class TestIngestionPipelineIngestMany:
         app, _ = await self._make_app()
         doc_ids = [f"d-{i:03d}" for i in range(8)]
         docs = [Document(doc_id=d, text=f"text for {d}") for d in doc_ids]
-        results = await app.ingest_documents(docs, concurrency=3)
+        results = await app.ingest_documents(docs)
         assert [r.doc_id for r in results] == doc_ids
 
     @pytest.mark.asyncio
@@ -270,7 +270,6 @@ class TestIngestionPipelineIngestMany:
                 Document(doc_id="d-001", text="first"),
                 Document(doc_id="d-002", text="second"),
             ],
-            concurrency=1,
         )
         assert results[0].records_extracted == 1
         assert results[1].records_extracted == 1
@@ -315,7 +314,6 @@ class TestIngestionPipelineIngestMany:
                 Document(doc_id="d-fail", text="will fail"),
                 Document(doc_id="d-ok",   text="will succeed"),
             ],
-            concurrency=1,
         )
 
         failed    = [r for r in results if not r.success]
@@ -331,8 +329,4 @@ class TestIngestionPipelineIngestMany:
         app, _ = await self._make_app()
         assert await app.ingest_documents([]) == []
 
-    @pytest.mark.asyncio
-    async def test_invalid_concurrency_raises(self):
-        app, _ = await self._make_app()
-        with pytest.raises(ValueError, match="concurrency"):
-            await app.ingest_documents([], concurrency=0)
+

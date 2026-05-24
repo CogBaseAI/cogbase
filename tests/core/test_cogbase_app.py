@@ -539,7 +539,7 @@ class TestIngestMany:
 
         doc_ids = [f"c-{i:03d}" for i in range(8)]
         documents = [Document(doc_id=d, text=f"text for {d}") for d in doc_ids]
-        results = await app.ingest_documents(documents, concurrency=3)
+        results = await app.ingest_documents(documents)
 
         assert [r.doc_id for r in results] == doc_ids
 
@@ -590,7 +590,6 @@ class TestIngestMany:
                 Document(doc_id="c-fail", text="will fail"),
                 Document(doc_id="c-ok",   text="will succeed"),
             ],
-            concurrency=1,
         )
 
         failed = [r for r in results if not r.success]
@@ -682,48 +681,6 @@ class TestIngestMany:
         assert results[1].success is False
         assert results[2].success is True
 
-    @pytest.mark.asyncio
-    async def test_invalid_concurrency_raises(self):
-        store = InMemoryStructuredStore()
-        app = await _make_app(_make_llm("{}"), store)
-
-        with pytest.raises(ValueError, match="concurrency"):
-            await app.ingest_documents([], concurrency=0)
-
-    @pytest.mark.asyncio
-    async def test_concurrency_limit_respected(self):
-        store = InMemoryStructuredStore()
-        active = 0
-        peak = 0
-        lock = asyncio.Lock()
-
-        llm = MagicMock(spec=LLMBase)
-
-        async def _complete(messages, **kwargs):
-            nonlocal active, peak
-            async with lock:
-                active += 1
-                if active > peak:
-                    peak = active
-            await asyncio.sleep(0)
-            async with lock:
-                active -= 1
-            return "{}"
-
-        llm.complete = AsyncMock(side_effect=_complete)
-
-        async def _stream(*args, **kwargs):
-            yield ""
-
-        llm.complete_stream = _stream
-
-        app = await _make_app(llm, store)
-
-        documents = [Document(doc_id=f"c-{i}", text="text") for i in range(10)]
-        await app.ingest_documents(documents, concurrency=3)
-
-        assert peak <= 3
-
 
 # ---------------------------------------------------------------------------
 # RoutingStrategy.AUTO — metadata back-fill after LLM fallback
@@ -739,7 +696,7 @@ class TestRoutingStrategyAuto:
         p.match = match
         p.description = name
 
-        async def _ingest(docs, *, concurrency=5):
+        async def _ingest(docs):
             return [IngestResult(doc_id=d.doc_id, success=True) for d in docs]
 
         p.ingest_documents = AsyncMock(side_effect=_ingest)

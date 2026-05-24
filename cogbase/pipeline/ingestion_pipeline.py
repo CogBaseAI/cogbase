@@ -342,31 +342,14 @@ class IngestionPipeline:
     async def ingest_documents(
         self,
         documents: Sequence[Document],
-        *,
-        concurrency: int = 5,
     ) -> list[IngestResult]:
-        """Ingest a sequence of documents, running up to *concurrency* at a time.
+        """Ingest a sequence of documents concurrently.
 
         Each document is processed independently.  A failure on one document does
         not abort the others — the error is captured in the corresponding
         ``IngestResult`` and ingestion continues for the remaining documents.
         Results are returned in the same order as *documents*.
-
-        Args:
-            documents:   Sequence of ``Document`` objects to ingest.
-            concurrency: Maximum number of documents ingested simultaneously.
-                         Defaults to ``5`` — a safe limit for LLM API rate caps.
-                         Set to ``1`` for strictly sequential ingestion.
-
-        Returns:
-            ``list[IngestResult]`` in input order, one entry per document.
-
-        Raises:
-            ValueError: If *concurrency* is less than 1.
         """
-        if concurrency < 1:
-            raise ValueError(f"concurrency must be at least 1, got {concurrency}")
-
         async def _ingest_one(doc: Document) -> IngestResult:
             try:
                 records_extracted, extraction_failed = await self._ingest(doc)
@@ -384,13 +367,8 @@ class IngestionPipeline:
                 )
                 return IngestResult(doc_id=doc.doc_id, success=False, error=exc)
 
+        if not documents:
+            return []
         if len(documents) == 1:
             return [await _ingest_one(documents[0])]
-
-        semaphore = asyncio.Semaphore(concurrency)
-
-        async def _ingest_one_gated(doc: Document) -> IngestResult:
-            async with semaphore:
-                return await _ingest_one(doc)
-
-        return list(await asyncio.gather(*(_ingest_one_gated(d) for d in documents)))
+        return list(await asyncio.gather(*(_ingest_one(d) for d in documents)))

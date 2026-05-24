@@ -519,7 +519,7 @@ def _mock_upload_app(
     fake_results = [_FakeIngestResult(**r) for r in results]
     inst = MagicMock()
     inst.ingest_documents = AsyncMock(return_value=fake_results)
-    inst._document_store = document_store
+    inst.document_store = document_store
     inst.name = "my-contract-analyzer"
     return inst
 
