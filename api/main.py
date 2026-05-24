@@ -71,14 +71,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("system document_store type=%s", system_cfg.document_store.type)
 
     if system_cfg.llm is not None:
-        system_resources.llm = build_llm(system_cfg.llm)
-        system_resources.llm_config = system_cfg.llm
-        logger.info("system llm provider=%s model=%s", system_cfg.llm.provider, system_cfg.llm.model)
+        try:
+            system_resources.llm = build_llm(system_cfg.llm)
+            system_resources.llm_config = system_cfg.llm
+            logger.info("system llm provider=%s model=%s", system_cfg.llm.provider, system_cfg.llm.model)
+        except Exception as exc:
+            logger.warning("system llm not initialized (configure via Settings): %s", exc)
 
     if system_cfg.embedding is not None:
-        system_resources.embedder = build_embedding(system_cfg.embedding)
-        system_resources.embedding_config = system_cfg.embedding
-        logger.info("system embedding provider=%s model=%s", system_cfg.embedding.provider, system_cfg.embedding.model)
+        try:
+            system_resources.embedder = build_embedding(system_cfg.embedding)
+            system_resources.embedding_config = system_cfg.embedding
+            logger.info("system embedding provider=%s model=%s", system_cfg.embedding.provider, system_cfg.embedding.model)
+        except Exception as exc:
+            logger.warning("system embedding not initialized (configure via Settings): %s", exc)
 
     # Apply runtime overrides persisted via PATCH /system/config — these win over YAML.
     from cogbase.config.models import EmbeddingConfig, LLMConfig

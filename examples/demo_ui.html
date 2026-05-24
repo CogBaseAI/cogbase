@@ -1023,6 +1023,7 @@ tr:hover td { background: var(--bg3); }
 
   <!-- ════════════════ SETTINGS TAB ════════════════ -->
   <div class="panel" id="panel-settings">
+    <div class="warn-bar" id="settingsWarn">⚠ LLM and embedding providers are not configured — fill in the fields below to enable queries and ingestion.</div>
     <div class="page" style="overflow-y:auto">
       <div style="max-width:680px;margin:0 auto;padding:24px">
 
@@ -1033,7 +1034,7 @@ tr:hover td { background: var(--bg3); }
           <div class="settings-grid">
             <div class="settings-field">
               <label>Provider</label>
-              <select id="sLlmProvider">
+              <select id="sLlmProvider" onchange="applyLlmProviderDefaults(this.value)">
                 <option value="openai">openai</option>
                 <option value="openai-compatible">openai-compatible</option>
               </select>
@@ -1068,7 +1069,7 @@ tr:hover td { background: var(--bg3); }
           <div class="settings-grid">
             <div class="settings-field">
               <label>Provider</label>
-              <select id="sEmbProvider">
+              <select id="sEmbProvider" onchange="applyEmbProviderDefaults(this.value)">
                 <option value="openai">openai</option>
                 <option value="openai-compatible">openai-compatible</option>
               </select>
@@ -1166,6 +1167,11 @@ function refreshWarnings() {
   toggle('ingestWarn', !has);
   toggle('dataWarn', !has);
   toggle('queryWarn', !has);
+  const missing = (!llmConfigured ? 'LLM' : '') + (!llmConfigured && !embConfigured ? ' and ' : '') + (!embConfigured ? 'embedding' : '');
+  if (missing) {
+    document.getElementById('settingsWarn').textContent = `⚠ ${missing.charAt(0).toUpperCase() + missing.slice(1)} provider${!llmConfigured && !embConfigured ? 's are' : ' is'} not configured — fill in the fields below to enable queries and ingestion.`;
+  }
+  toggle('settingsWarn', !!missing);
   document.getElementById('uploadBtn').disabled = !has || pickedFiles.length === 0;
   document.getElementById('querySendBtn').disabled = !has || querying;
   document.querySelectorAll('.demo-wf-btn').forEach(b => { b.disabled = !has; });
@@ -2332,12 +2338,39 @@ if (_SAMPLE_CONFIG_YAML.trim()) {
   document.getElementById('deployBtn').disabled = false;
 }
 
-refreshWarnings();
-
 // ════════════════════════════════════════════════════════════
 // SETTINGS TAB
 // ════════════════════════════════════════════════════════════
-async function loadSystemConfig() {
+let llmConfigured = false;
+let embConfigured = false;
+let systemConfigured = false;
+
+const LLM_PROVIDER_DEFAULTS = {
+  openai: { model: 'gpt-5.4', mini_model: 'gpt-5.4-mini', base_url: 'https://api.openai.com/v1' },
+  'openai-compatible': { model: '', mini_model: '', base_url: '' },
+};
+const EMB_PROVIDER_DEFAULTS = {
+  openai: { model: 'text-embedding-3-small', dimensions: '1536', base_url: 'https://api.openai.com/v1' },
+  'openai-compatible': { model: '', dimensions: '', base_url: '' },
+};
+
+function applyLlmProviderDefaults(provider) {
+  const d = LLM_PROVIDER_DEFAULTS[provider] || LLM_PROVIDER_DEFAULTS['openai-compatible'];
+  document.getElementById('sLlmModel').value     = d.model;
+  document.getElementById('sLlmMiniModel').value = d.mini_model;
+  document.getElementById('sLlmBaseUrl').value   = d.base_url;
+}
+
+function applyEmbProviderDefaults(provider) {
+  const d = EMB_PROVIDER_DEFAULTS[provider] || EMB_PROVIDER_DEFAULTS['openai-compatible'];
+  document.getElementById('sEmbModel').value      = d.model;
+  document.getElementById('sEmbDimensions').value = d.dimensions;
+  document.getElementById('sEmbBaseUrl').value    = d.base_url;
+}
+
+refreshWarnings();
+
+async function loadSystemConfig(autoSwitch = false) {
   try {
     const r = await fetch(api() + '/system/config');
     if (!r.ok) return;
@@ -2347,17 +2380,32 @@ async function loadSystemConfig() {
       document.getElementById('sLlmModel').value     = d.llm.model      || '';
       document.getElementById('sLlmMiniModel').value = d.llm.mini_model || '';
       document.getElementById('sLlmBaseUrl').value   = d.llm.base_url   || '';
-      document.getElementById('sLlmApiKey').value    = d.llm.api_key || '';
+      document.getElementById('sLlmApiKey').value    = d.llm.api_key    || '';
+    } else {
+      document.getElementById('sLlmProvider').value = 'openai';
+      applyLlmProviderDefaults('openai');
     }
     if (d.embedding) {
       document.getElementById('sEmbProvider').value   = d.embedding.provider   || 'openai';
       document.getElementById('sEmbModel').value      = d.embedding.model      || '';
       document.getElementById('sEmbDimensions').value = d.embedding.dimensions || '';
       document.getElementById('sEmbBaseUrl').value    = d.embedding.base_url   || '';
-      document.getElementById('sEmbApiKey').value     = d.embedding.api_key || '';
+      document.getElementById('sEmbApiKey').value     = d.embedding.api_key    || '';
+    } else {
+      document.getElementById('sEmbProvider').value = 'openai';
+      applyEmbProviderDefaults('openai');
     }
+    llmConfigured = !!d.llm;
+    embConfigured = !!d.embedding;
+    systemConfigured = llmConfigured && embConfigured;
+    if (autoSwitch && !systemConfigured) {
+      switchTab('settings');
+    }
+    refreshWarnings();
   } catch (_) {}
 }
+
+loadSystemConfig(true);
 
 async function saveSystemConfig(which) {
   const msgEl = document.getElementById(which === 'llm' ? 'sLlmMsg' : 'sEmbMsg');
