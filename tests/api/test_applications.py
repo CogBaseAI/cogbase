@@ -31,7 +31,7 @@ from cogbase.skills.registry import SkillRegistry
 from api.main import app
 from api.app_cache import AppCache
 
-from api.system_store import SystemStore
+from api.system_store import DocRecord, SystemStore
 from cogbase.config.config import AppConfig, RecordMode
 from cogbase.core.models import Chunk
 from cogbase.core.query_runner import QueryResult
@@ -97,6 +97,26 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+    app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def app_overrides():
+    """Like ``client`` but also exposes the underlying SystemStore for seeding test data."""
+    system_store = _make_system_store()
+    await system_store.setup()
+    app_cache = _make_app_cache()
+    system_resources = SystemResources(structured_store=InMemoryStructuredStore())
+
+    app.dependency_overrides[get_system_store] = lambda: system_store
+    app.dependency_overrides[get_app_cache] = lambda: app_cache
+    app.dependency_overrides[get_system_resources] = lambda: system_resources
+    app.dependency_overrides[get_skill_registry] = lambda: SkillRegistry()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield {"client": ac, "system_store": system_store}
 
     app.dependency_overrides.clear()
 
@@ -1364,3 +1384,107 @@ class TestQueryCollection:
             json={},
         )
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /applications/{app_name}/workflows/{workflow_name}/docs
+# ---------------------------------------------------------------------------
+
+
+def _make_doc_record(app_name: str, doc_id: str, status: str = "active") -> DocRecord:
+    return DocRecord(
+        app_name=app_name,
+        doc_id=doc_id,
+        status=status,
+        ingested_at="2024-01-01T00:00:00+00:00",
+        metadata='{"source_filename": "' + doc_id + '.pdf"}',
+    )
+
+
+class TestListWorkflowDocs:
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_when_no_workflow_records(self, app_overrides):
+        client = app_overrides["client"]
+        await _create_app(client, _mock_app_instance())
+
+        resp = await client.get(
+            "/applications/my-contract-analyzer/workflows/summarize/docs"
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["app_name"] == "my-contract-analyzer"
+        assert body["workflow_name"] == "summarize"
+        assert body["docs"] == []
+        assert body["total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_returns_docs_with_workflow_status(self, app_overrides):
+        client = app_overrides["client"]
+        system_store: SystemStore = app_overrides["system_store"]
+        await system_store.save_doc(_make_doc_record("my-contract-analyzer", "doc-1"))
+        await system_store.upsert_doc_workflow_status(
+            "my-contract-analyzer", "doc-1", "summarize", "done"
+        )
+        await _create_app(client, _mock_app_instance())
+
+        resp = await client.get(
+            "/applications/my-contract-analyzer/workflows/summarize/docs"
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["docs"][0]["doc_id"] == "doc-1"
+        assert body["docs"][0]["workflow_status"] == "done"
+
+    @pytest.mark.asyncio
+    async def test_filters_by_status_query_param(self, app_overrides):
+        client = app_overrides["client"]
+        system_store: SystemStore = app_overrides["system_store"]
+        for doc_id, wf_status in [("doc-1", "done"), ("doc-2", "pending"), ("doc-3", "done")]:
+            await system_store.save_doc(_make_doc_record("my-contract-analyzer", doc_id))
+            await system_store.upsert_doc_workflow_status(
+                "my-contract-analyzer", doc_id, "summarize", wf_status
+            )
+        await _create_app(client, _mock_app_instance())
+
+        resp = await client.get(
+            "/applications/my-contract-analyzer/workflows/summarize/docs?status=done"
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 2
+        returned_ids = {d["doc_id"] for d in body["docs"]}
+        assert returned_ids == {"doc-1", "doc-3"}
+
+    @pytest.mark.asyncio
+    async def test_excludes_docs_not_in_active_doc_registry(self, app_overrides):
+        client = app_overrides["client"]
+        system_store: SystemStore = app_overrides["system_store"]
+        # doc-1 is active; doc-2 has a workflow record but no entry in the doc registry
+        await system_store.save_doc(_make_doc_record("my-contract-analyzer", "doc-1"))
+        for doc_id in ["doc-1", "doc-2"]:
+            await system_store.upsert_doc_workflow_status(
+                "my-contract-analyzer", doc_id, "summarize", "done"
+            )
+        await _create_app(client, _mock_app_instance())
+
+        resp = await client.get(
+            "/applications/my-contract-analyzer/workflows/summarize/docs"
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["docs"][0]["doc_id"] == "doc-1"
+
+    @pytest.mark.asyncio
+    async def test_returns_404_when_app_not_found(self, app_overrides):
+        client = app_overrides["client"]
+        resp = await client.get(
+            "/applications/nonexistent/workflows/summarize/docs"
+        )
+        assert resp.status_code == 404
+        assert "nonexistent" in resp.json()["detail"]

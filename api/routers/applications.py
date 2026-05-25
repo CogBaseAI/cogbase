@@ -30,6 +30,7 @@ from api.models import (
     CollectionsResponse,
     DocListResponse,
     DocResponse,
+    DocWorkflowResponse,
     FilterRequest,
     IngestDocumentsAcceptedResponse,
     QueryRequest,
@@ -42,7 +43,7 @@ from api.models import (
     WorkflowListResponse,
     WorkflowRunRequest,
 )
-from api.system_store import AppRecord, DocRecord, SystemStore, TaskRecord
+from api.system_store import AppRecord, DocRecord, DocWorkflowRecord, SystemStore, TaskRecord
 from cogbase.core.models import Document
 from cogbase.pipeline.document_parser import parse_to_markdown
 from cogbase.stores.filters import Filter, Op
@@ -66,6 +67,22 @@ def _doc_to_response(record: DocRecord) -> DocResponse:
         status=record.status,
         ingested_at=record.ingested_at,
         metadata=meta,
+    )
+
+
+def _doc_workflow_to_response(record: DocRecord, workflow_status: str) -> DocWorkflowResponse:
+    import json as _json
+    try:
+        meta = _json.loads(record.metadata) if record.metadata else {}
+    except Exception:
+        meta = {}
+    return DocWorkflowResponse(
+        doc_id=record.doc_id,
+        app_name=record.app_name,
+        status=record.status,
+        ingested_at=record.ingested_at,
+        metadata=meta,
+        workflow_status=workflow_status,
     )
 
 
@@ -842,36 +859,31 @@ async def list_workflow_docs(
     app_name: str,
     workflow_name: str,
     system_store: SystemStoreDep,
-    doc_status: str | None = None,
+    status: str | None = None,
 ) -> WorkflowDocListResponse:
-    """List documents relative to a workflow.
+    """List documents and their workflow processing status.
 
-    doc_status options:
-    - 'unprocessed': docs with no completed workflow task for this workflow
-    - 'done': docs that have a completed workflow task
-    - 'failed': docs whose last workflow task failed
-    - omit to return all docs with any workflow task record
+    status options: 'pending', 'running', 'done', 'failed' — omit to return all.
     """
     record = await system_store.get_app(app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
-    if doc_status == "unprocessed":
-        all_docs = await system_store.list_docs(app_name, status="active")
-        done_tasks = await system_store.list_tasks(
-            app_name, task_type="workflow", task_name=workflow_name, status="done"
-        )
-        processed_ids = {t.doc_id for t in done_tasks if t.doc_id}
-        docs = [d for d in all_docs if d.doc_id not in processed_ids]
-    else:
-        all_docs = await system_store.list_docs(app_name, status="active")
-        workflow_tasks = await system_store.list_tasks(
-            app_name, task_type="workflow", task_name=workflow_name, status=doc_status
-        )
-        matched_ids = {t.doc_id for t in workflow_tasks if t.doc_id}
-        docs = [d for d in all_docs if d.doc_id in matched_ids]
+    wf_records = await system_store.list_doc_workflows(
+        app_name, workflow_name=workflow_name, status=status
+    )
+    if not wf_records:
+        return WorkflowDocListResponse(app_name=app_name, workflow_name=workflow_name, docs=[], total=0)
 
-    items = [_doc_to_response(d) for d in docs]
+    doc_ids = {wr.doc_id for wr in wf_records}
+    all_docs = await system_store.list_docs(app_name, status="active")
+    docs_by_id = {d.doc_id: d for d in all_docs if d.doc_id in doc_ids}
+
+    items = [
+        _doc_workflow_to_response(docs_by_id[wr.doc_id], wr.status)
+        for wr in wf_records
+        if wr.doc_id in docs_by_id
+    ]
     return WorkflowDocListResponse(
         app_name=app_name,
         workflow_name=workflow_name,
@@ -913,6 +925,7 @@ async def stream_workflow(
         ]
 
     async def event_stream():
+        all_ok = True
         for task in pending:
             params = json.loads(task.params_json) if task.params_json else {}
             await system_store.update_task(task.task_id, status="running", started_at=_now())
@@ -921,9 +934,16 @@ async def stream_workflow(
                     yield f"data: {json.dumps({'record': record})}\n\n"
                 await system_store.complete_workflow_task(task.task_id, success=True)
             except Exception as exc:
+                all_ok = False
                 logger.exception("stream_workflow failed app=%s workflow=%s task=%s", app_name, workflow_name, task.task_id)
                 await system_store.complete_workflow_task(task.task_id, success=False, error=str(exc))
                 yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+        if body.doc_id:
+            # TODO if failed, some items such as some clauses in a contract may be successfully processed,
+            #      need to clean up the partial results.
+            await system_store.upsert_doc_workflow_status(
+                app_name, body.doc_id, workflow_name, "done" if all_ok else "failed"
+            )
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

@@ -245,7 +245,7 @@ class TestAfterIngestTrigger:
 
 
 # ---------------------------------------------------------------------------
-# _run_workflow_bg
+# _run_workflow_tasks_bg
 # ---------------------------------------------------------------------------
 
 class TestRunWorkflowBg:
@@ -265,7 +265,7 @@ class TestRunWorkflowBg:
 
         app = _minimal_app()
         # Should complete without raising
-        await app._run_workflow_bg(wf_runner, {"doc_id": "d-001"})
+        await app._run_workflow_tasks_bg(wf_runner, "d-001", [({"doc_id": "d-001"}, None)])
 
     async def test_bg_logs_exception_and_does_not_raise(self):
         wf_runner = _make_wf_runner("wf")
@@ -278,4 +278,4 @@ class TestRunWorkflowBg:
 
         app = _minimal_app()
         # Must not propagate the exception
-        await app._run_workflow_bg(wf_runner, {"doc_id": "d-001"})
+        await app._run_workflow_tasks_bg(wf_runner, "d-001", [({"doc_id": "d-001"}, None)])

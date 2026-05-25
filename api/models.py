@@ -160,10 +160,14 @@ class WorkflowListResponse(BaseModel):
     workflows: list[str]
 
 
+class DocWorkflowResponse(DocResponse):
+    workflow_status: str  # "pending" | "running" | "done" | "failed"
+
+
 class WorkflowDocListResponse(BaseModel):
     app_name: str
     workflow_name: str
-    docs: list[DocResponse]
+    docs: list[DocWorkflowResponse]
     total: int
 
 

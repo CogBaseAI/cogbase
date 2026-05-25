@@ -70,6 +70,20 @@ TASKS_SCHEMA = CollectionSchema(
 )
 
 
+DOC_WORKFLOW_REGISTRY_SCHEMA = CollectionSchema(
+    name="doc_workflow_registry",
+    description="Workflow processing status per document per workflow. One record per (app, doc, workflow).",
+    primary_fields=["app_name", "doc_id", "workflow_name"],
+    fields={
+        "app_name":      FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "doc_id":        FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "workflow_name": FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "status":        FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "updated_at":    FieldSchema(type=FieldType.STRING, nullable=False),
+    },
+)
+
+
 class DocRecord(BaseModel):
     app_name: str
     doc_id: str
@@ -90,6 +104,14 @@ class TaskRecord(BaseModel):
     started_at: str | None = None   # ISO-8601 UTC — when execution began
     completed_at: str | None = None
     error: str | None = None
+
+
+class DocWorkflowRecord(BaseModel):
+    app_name: str
+    doc_id: str
+    workflow_name: str
+    status: str      # "pending" | "running" | "done" | "failed"
+    updated_at: str  # ISO-8601 UTC
 
 
 class SystemConfigOverride(BaseModel):
@@ -126,6 +148,7 @@ class SystemStore:
         await self._store.create_collection(APP_RECORDS_SCHEMA)
         await self._store.create_collection(SYSTEM_CONFIG_OVERRIDES_SCHEMA)
         await self._store.create_collection(TASKS_SCHEMA)
+        await self._store.create_collection(DOC_WORKFLOW_REGISTRY_SCHEMA)
 
     async def save_app(self, record: AppRecord) -> None:
         await self._store.save("app_records", [record.model_dump()])
@@ -178,7 +201,6 @@ class SystemStore:
             "doc_registry",
             filters=[Col("app_name") == app_name, Col("doc_id") == doc_id],
         )
-        # Cascade: remove all workflow tasks for this doc.
         await self._store.delete_records(
             "tasks",
             filters=[
@@ -186,6 +208,10 @@ class SystemStore:
                 Col("doc_id") == doc_id,
                 Col("task_type") == "workflow",
             ],
+        )
+        await self._store.delete_records(
+            "doc_workflow_registry",
+            filters=[Col("app_name") == app_name, Col("doc_id") == doc_id],
         )
 
     async def save_system_config_override(self, key: str, value_json: str) -> None:
@@ -203,6 +229,61 @@ class SystemStore:
             model=SystemConfigOverride,
         )
         return {r.key: r.value_json for r in rows}
+
+    # ------------------------------------------------------------------
+    # Doc workflow registry
+    # ------------------------------------------------------------------
+
+    async def upsert_doc_workflow_status(
+        self,
+        app_name: str,
+        doc_id: str,
+        workflow_name: str,
+        status: str,
+    ) -> None:
+        """Create or overwrite the workflow processing status for a document."""
+        record = DocWorkflowRecord(
+            app_name=app_name,
+            doc_id=doc_id,
+            workflow_name=workflow_name,
+            status=status,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        await self._store.save("doc_workflow_registry", [record.model_dump()])
+
+    async def get_doc_workflow(
+        self,
+        app_name: str,
+        doc_id: str,
+        workflow_name: str,
+    ) -> DocWorkflowRecord | None:
+        rows = await self._store.query_as(
+            "doc_workflow_registry",
+            filters=[
+                Col("app_name") == app_name,
+                Col("doc_id") == doc_id,
+                Col("workflow_name") == workflow_name,
+            ],
+            model=DocWorkflowRecord,
+        )
+        return rows[0] if rows else None
+
+    async def list_doc_workflows(
+        self,
+        app_name: str,
+        *,
+        workflow_name: str | None = None,
+        doc_id: str | None = None,
+        status: str | None = None,
+    ) -> list[DocWorkflowRecord]:
+        filters = [Col("app_name") == app_name]
+        if workflow_name is not None:
+            filters.append(Col("workflow_name") == workflow_name)
+        if doc_id is not None:
+            filters.append(Col("doc_id") == doc_id)
+        if status is not None:
+            filters.append(Col("status") == status)
+        return await self._store.query_as("doc_workflow_registry", filters=filters, model=DocWorkflowRecord)
 
     # ------------------------------------------------------------------
     # Task tracking

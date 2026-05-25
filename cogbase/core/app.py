@@ -181,7 +181,10 @@ class CogBaseApp:
         failures = sum(1 for r in results if not r.success)
         logger.info("app.ingest_documents.done documents=%d failures=%d", len(results), failures)
 
-        # Fire after_ingest workflows for successfully ingested documents.
+        import json as _json
+
+        # For each successfully ingested document, determine which workflows apply
+        # and mark them pending. Fire after_ingest workflows immediately.
         for result in results:
             if not result.success:
                 continue
@@ -190,8 +193,6 @@ class CogBaseApp:
                 continue
             for wf_runner in self._workflows.values():
                 trigger = wf_runner.workflow.trigger
-                if trigger.type != "after_ingest":
-                    continue
                 when_meta = trigger.when.metadata if trigger.when else {}
                 if not all(doc.metadata.get(k) == v for k, v in when_meta.items()):
                     continue
@@ -199,12 +200,26 @@ class CogBaseApp:
                     workflow_params = await self.resolve_workflow_params(wf_runner, doc.doc_id)
                 except Exception:
                     logger.exception(
-                        "app.after_ingest_workflow.params_failed workflow=%s doc_id=%s",
-                        wf_runner.workflow.name,
-                        doc.doc_id,
+                        "app.workflow.params_failed workflow=%s doc_id=%s",
+                        wf_runner.workflow.name, doc.doc_id,
                     )
                     continue
-                import json as _json
+                if not workflow_params:
+                    continue
+                try:
+                    await self._task_store.upsert_doc_workflow_status(
+                        self.name, doc.doc_id, wf_runner.workflow.name, "pending"
+                    )
+                except Exception:
+                    logger.exception(
+                        "app.doc_workflow.upsert_failed workflow=%s doc_id=%s",
+                        wf_runner.workflow.name, doc.doc_id,
+                    )
+                if trigger.type != "after_ingest":
+                    continue
+
+                # TODO create_workflow_task in batch
+                task_params: list[tuple[dict, str | None]] = []
                 for params in workflow_params:
                     task_id: str | None = None
                     try:
@@ -216,7 +231,10 @@ class CogBaseApp:
                             "app.task_store.create_workflow_task.failed workflow=%s doc_id=%s",
                             wf_runner.workflow.name, doc.doc_id,
                         )
-                    asyncio.create_task(self._run_workflow_bg(wf_runner, params, task_id=task_id))
+                    task_params.append((params, task_id))
+                asyncio.create_task(
+                    self._run_workflow_tasks_bg(wf_runner, doc.doc_id, task_params)
+                )
 
         return results
 
@@ -249,29 +267,38 @@ class CogBaseApp:
             params_list.append(params)
         return params_list
 
-    async def _run_workflow_bg(
+    async def _run_workflow_tasks_bg(
         self,
         wf_runner: "WorkflowRunner",
-        params: dict[str, Any],
-        *,
-        task_id: str | None = None,
+        doc_id: str,
+        task_params: list[tuple[dict[str, Any], str | None]],
     ) -> None:
+        """Run all param sets for a doc+workflow; update DocWorkflowRecord when all finish."""
+        wf_name = wf_runner.workflow.name
+        all_ok = True
+        for params, task_id in task_params:
+            try:
+                async for _ in wf_runner.run(params):
+                    pass
+                if task_id is not None:
+                    await self._task_store.complete_workflow_task(task_id, success=True)
+            except Exception as exc:
+                all_ok = False
+                logger.exception(
+                    "app.workflow.task_failed workflow=%s doc_id=%s", wf_name, doc_id
+                )
+                if task_id is not None:
+                    await self._task_store.complete_workflow_task(task_id, success=False, error=str(exc))
         try:
-            async for _ in wf_runner.run(params):
-                pass
-            logger.info(
-                "app.after_ingest_workflow.done workflow=%s params=%s",
-                wf_runner.workflow.name, params,
+            # TODO if failed, some items such as some clauses in a contract may be successfully processed,
+            #      need to clean up the partial results.
+            await self._task_store.upsert_doc_workflow_status(
+                self.name, doc_id, wf_name, "done" if all_ok else "failed"
             )
-            if task_id is not None:
-                await self._task_store.complete_workflow_task(task_id, success=True)
-        except Exception as exc:
+        except Exception:
             logger.exception(
-                "app.after_ingest_workflow.failed workflow=%s params=%s",
-                wf_runner.workflow.name, params,
+                "app.doc_workflow.upsert_failed workflow=%s doc_id=%s", wf_name, doc_id
             )
-            if task_id is not None:
-                await self._task_store.complete_workflow_task(task_id, success=False, error=str(exc))
 
     async def query_stream(self, text: str, history: list[dict] | None = None):
         """Stream the answer token-by-token, then yield a final QueryResult.
