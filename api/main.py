@@ -6,6 +6,7 @@ import logging
 import pathlib
 import sys
 from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError, version
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -142,6 +143,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await _close_store(system_resources.document_store)
 
 
+def _get_version() -> str:
+    try:
+        return version("cogbase")
+    except PackageNotFoundError:
+        return "latest"
+
+
 app = FastAPI(
     title="CogBase API",
     description=(
@@ -149,7 +157,7 @@ app = FastAPI(
         "Each application is backed by an LLM provider, embedding model, "
         "structured store, and optional vector store, all configured via YAML."
     ),
-    version="0.1.0",
+    version=_get_version(),
     lifespan=lifespan,
 )
 
