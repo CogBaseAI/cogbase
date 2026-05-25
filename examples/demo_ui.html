@@ -632,6 +632,12 @@ tr:hover td { background: var(--bg3); }
 .ingest-status.running { background: rgba(99,102,241,.12); color: var(--accent); }
 .ingest-status.done    { background: rgba(52,211,153,.15); color: var(--green); }
 .ingest-status.none    { color: var(--muted); }
+.ingest-run-btn {
+  margin-left: 5px; padding: 1px 6px; font-size: 10px; vertical-align: middle;
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  border-radius: 3px; cursor: pointer; white-space: nowrap;
+}
+.ingest-run-btn:hover { color: var(--text); border-color: var(--accent); }
 
 /* ── Warnings ── */
 .warn-bar {
@@ -1601,22 +1607,30 @@ async function openWfModal(demoKey, wfIndex, overrideValues) {
   let allDone = false;
 
   // When opened directly (no overrideValues) and the matching app is selected,
-  // query pending workflow tasks to show which doc_ids still need processing.
+  // query pending tasks and already-done docs to show only unprocessed doc_ids.
   if (!overrideValues && currentApp === demo.name) {
     try {
-      const tasksResp = await fetch(
-        api() + '/applications/' + encodeURIComponent(currentApp) + '/tasks?task_type=workflow&task_name=' + encodeURIComponent(wf.name) + '&status=pending'
-      );
-      if (tasksResp.ok) {
-        const { tasks = [] } = await tasksResp.json();
-        const pendingIds = [...new Set(tasks.map(t => t.doc_id).filter(Boolean))];
-        if (pendingIds.length) {
-          values = pendingIds;
-          desc = pendingIds.length + ' ' + wf.param_label.toLowerCase() +
-            (pendingIds.length === 1 ? ' has' : 's have') +
-            ' pending tasks. Select one and run the workflow.';
-        } else if (tasks.length === 0) {
-          // No pending tasks — either all done or ingest not yet run
+      const [tasksResp, doneResp] = await Promise.all([
+        fetch(api() + '/applications/' + encodeURIComponent(currentApp) + '/tasks?task_type=workflow&task_name=' + encodeURIComponent(wf.name) + '&status=pending'),
+        fetch(api() + '/applications/' + encodeURIComponent(currentApp) + '/workflows/' + encodeURIComponent(wf.name) + '/docs?status=done'),
+      ]);
+      const pendingIds = tasksResp.ok
+        ? [...new Set(((await tasksResp.json()).tasks || []).map(t => t.doc_id).filter(Boolean))]
+        : [];
+      const doneIds = doneResp.ok
+        ? new Set(((await doneResp.json()).docs || []).map(d => d.doc_id).filter(Boolean))
+        : new Set();
+
+      if (pendingIds.length) {
+        values = pendingIds;
+        desc = pendingIds.length + ' ' + wf.param_label.toLowerCase() +
+          (pendingIds.length === 1 ? ' has' : 's have') +
+          ' pending tasks. Select one and run the workflow.';
+      } else if (doneIds.size > 0) {
+        values = (wf.param_values || []).filter(v => !doneIds.has(v));
+        if (values.length === 0) {
+          allDone = true;
+          desc = 'All documents have already been processed.';
         }
       }
     } catch { /* fall through to static values */ }
@@ -1642,10 +1656,28 @@ async function openWfModal(demoKey, wfIndex, overrideValues) {
 }
 
 function closeWfModal() {
+  const fromIngest = wfModalState && wfModalState.fromIngest;
   document.getElementById('wfModal').classList.remove('show');
   document.getElementById('wfModalSelect').disabled = false;
   document.getElementById('wfModalRunBtn').disabled = false;
   wfModalState = null;
+  if (fromIngest) loadIngestDocs();
+}
+
+function openWfModalDirect(appName, workflowName, docId) {
+  wfModalState = { appName, workflowName, paramKey: 'doc_id', label: workflowName, fromIngest: true };
+  document.getElementById('wfModalTitle').textContent = workflowName;
+  document.getElementById('wfModalDesc').textContent = 'Run workflow for document: ' + docId;
+  document.getElementById('wfModalParamLabel').textContent = 'Document:';
+  const sel = document.getElementById('wfModalSelect');
+  sel.innerHTML = `<option value="${esc(docId)}">${esc(docId)}</option>`;
+  sel.disabled = false;
+  document.getElementById('wfModalRunBtn').textContent = 'Run';
+  document.getElementById('wfModalRunBtn').disabled = false;
+  const out = document.getElementById('wfModalOutput');
+  out.innerHTML = '';
+  out.style.display = 'none';
+  document.getElementById('wfModal').classList.add('show');
 }
 
 async function runWfModal() {
@@ -2006,7 +2038,13 @@ async function loadIngestDocs() {
       const metaStr = Object.keys(meta).length
         ? Object.entries(meta).map(([k,v]) => `${k}: ${v}`).join(', ')
         : '';
-      const wfCells = wfNames.map(wf => `<td>${statusBadge(wfMaps[wf][doc.doc_id])}</td>`).join('');
+      const wfCells = wfNames.map(wf => {
+        const wfStatus = wfMaps[wf][doc.doc_id];
+        const runBtn = wfStatus != null && wfStatus !== 'done'
+          ? `<button class="ingest-run-btn" onclick="openWfModalDirect('${esc(currentApp)}','${esc(wf)}','${esc(doc.doc_id)}')">▶ Run</button>`
+          : '';
+        return `<td>${statusBadge(wfStatus)}${runBtn}</td>`;
+      }).join('');
       return `<tr>
         <td class="doc-id-cell" title="${esc(doc.doc_id)}">${esc(doc.doc_id)}</td>
         <td title="${esc(metaStr)}">${esc(metaStr)}</td>

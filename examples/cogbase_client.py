@@ -360,6 +360,13 @@ class CogBaseClient:
             for t in tasks
         ]
 
+    async def query_structured(
+        self,
+        collection: str,
+        filters: list[dict] | None = None,
+    ) -> list[dict]:
+        return await self.query_structured_collection(collection, filters)
+
     async def query_structured_collection(
         self,
         collection: str,
