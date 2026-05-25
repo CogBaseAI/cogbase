@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from api.system_store import DocWorkflowStatus, TaskStatus
+
 
 class ApplicationResponse(BaseModel):
     name: str
@@ -162,7 +164,7 @@ class WorkflowListResponse(BaseModel):
 
 
 class DocWorkflowResponse(DocResponse):
-    workflow_status: str  # "pending" | "running" | "done" | "failed"
+    workflow_status: DocWorkflowStatus
 
 
 class WorkflowDocListResponse(BaseModel):

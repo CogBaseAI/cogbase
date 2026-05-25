@@ -1,6 +1,23 @@
 """Shared data primitives used across all layers of CogBase."""
 
+from enum import Enum
+
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class TaskStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE    = "done"
+    FAILED  = "failed"
+
+
+class DocWorkflowStatus(str, Enum):
+    READY   = "ready"    # manual trigger — applicable but no task created yet
+    PENDING = "pending"  # task queued (after_ingest trigger)
+    RUNNING = "running"
+    DONE    = "done"
+    FAILED  = "failed"
 
 _CHUNK_CORE_FIELDS = frozenset({"chunk_id", "doc_id", "text", "embedding", "metadata"})
 

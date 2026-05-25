@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel
 
+from cogbase.core.models import DocWorkflowStatus, TaskStatus
 from cogbase.stores import Col, CollectionSchema, FieldSchema, FieldType, StructuredStoreBase
 
 DOC_REGISTRY_SCHEMA = CollectionSchema(
@@ -99,7 +100,7 @@ class TaskRecord(BaseModel):
     task_name: str      # "ingest" for ingest tasks; workflow name for workflow tasks
     doc_id: str | None = None
     params_json: str | None = None  # JSON-serialized params
-    status: str         # "pending" | "running" | "done" | "failed"
+    status: TaskStatus
     created_at: str     # ISO-8601 UTC — when the task was enqueued
     started_at: str | None = None   # ISO-8601 UTC — when execution began
     completed_at: str | None = None
@@ -110,7 +111,7 @@ class DocWorkflowRecord(BaseModel):
     app_name: str
     doc_id: str
     workflow_name: str
-    status: str      # "pending" | "running" | "done" | "failed"
+    status: DocWorkflowStatus
     updated_at: str  # ISO-8601 UTC
 
 
@@ -239,7 +240,7 @@ class SystemStore:
         app_name: str,
         doc_id: str,
         workflow_name: str,
-        status: str,
+        status: DocWorkflowStatus,
     ) -> None:
         """Create or overwrite the workflow processing status for a document."""
         record = DocWorkflowRecord(
@@ -274,7 +275,7 @@ class SystemStore:
         *,
         workflow_name: str | None = None,
         doc_id: str | None = None,
-        status: str | None = None,
+        status: DocWorkflowStatus | None = None,
     ) -> list[DocWorkflowRecord]:
         filters = [Col("app_name") == app_name]
         if workflow_name is not None:
@@ -311,7 +312,7 @@ class SystemStore:
         task_type: str | None = None,
         task_name: str | None = None,
         doc_id: str | None = None,
-        status: str | None = None,
+        status: TaskStatus | None = None,
     ) -> list[TaskRecord]:
         filters = [Col("app_name") == app_name]
         if task_type is not None:
@@ -341,7 +342,7 @@ class SystemStore:
             task_name=workflow_name,
             doc_id=doc_id,
             params_json=params_json,
-            status="pending",
+            status=TaskStatus.PENDING,
             created_at=now,
         ))
         return task_id
@@ -356,7 +357,7 @@ class SystemStore:
         """Mark a workflow task as done or failed."""
         await self.update_task(
             task_id,
-            status="done" if success else "failed",
+            status=TaskStatus.DONE if success else TaskStatus.FAILED,
             completed_at=datetime.now(timezone.utc).isoformat(),
             error=error,
         )

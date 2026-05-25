@@ -13,7 +13,7 @@ from typing import Any, Sequence, TYPE_CHECKING
 
 from cogbase.config.config import RoutingStrategy
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
-from cogbase.core.models import Document
+from cogbase.core.models import DocWorkflowStatus, Document
 from cogbase.core.query_runner import QueryResult, QueryRunner
 from cogbase.llms.base import ChatMessage, LLMBase
 from cogbase.stores import DocumentStoreBase, StructuredStoreBase
@@ -206,9 +206,13 @@ class CogBaseApp:
                     continue
                 if not workflow_params:
                     continue
+                initial_status = (
+                    DocWorkflowStatus.PENDING if trigger.type == "after_ingest"
+                    else DocWorkflowStatus.READY
+                )
                 try:
                     await self._task_store.upsert_doc_workflow_status(
-                        self.name, doc.doc_id, wf_runner.workflow.name, "pending"
+                        self.name, doc.doc_id, wf_runner.workflow.name, initial_status
                     )
                 except Exception:
                     logger.exception(
@@ -293,7 +297,8 @@ class CogBaseApp:
             # TODO if failed, some items such as some clauses in a contract may be successfully processed,
             #      need to clean up the partial results.
             await self._task_store.upsert_doc_workflow_status(
-                self.name, doc_id, wf_name, "done" if all_ok else "failed"
+                self.name, doc_id, wf_name,
+                DocWorkflowStatus.DONE if all_ok else DocWorkflowStatus.FAILED,
             )
         except Exception:
             logger.exception(

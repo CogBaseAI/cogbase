@@ -43,7 +43,10 @@ from api.models import (
     WorkflowListResponse,
     WorkflowRunRequest,
 )
-from api.system_store import AppRecord, DocRecord, DocWorkflowRecord, SystemStore, TaskRecord
+from api.system_store import (
+    AppRecord, DocRecord, DocWorkflowRecord, DocWorkflowStatus,
+    SystemStore, TaskRecord, TaskStatus,
+)
 from cogbase.core.models import Document
 from cogbase.pipeline.document_parser import parse_to_markdown
 from cogbase.stores.filters import Filter, Op
@@ -446,7 +449,7 @@ async def upload_documents(
             task_name="ingest",
             doc_id=doc_id,
             params_json=json.dumps({"doc_path": doc_path, "doc_metadata": doc_metadata}),
-            status="pending",
+            status=TaskStatus.PENDING,
             created_at=now,
         ))
         pending_task_ids.append(task_id)
@@ -478,7 +481,7 @@ async def upload_documents(
                         content = await current_app.document_store.load_bytes(app.name, doc_path)
                     except Exception as exc:
                         await system_store.update_task(
-                            task_id, status="failed", completed_at=_now(),
+                            task_id, status=TaskStatus.FAILED, completed_at=_now(),
                             error=f"Failed to load document bytes: {exc}",
                         )
                         return
@@ -487,19 +490,19 @@ async def upload_documents(
                         markdown_text = parse_to_markdown(content, filename)
                     except Exception as exc:
                         await system_store.update_task(
-                            task_id, status="failed", completed_at=_now(),
+                            task_id, status=TaskStatus.FAILED, completed_at=_now(),
                             error=f"Failed to parse {filename!r}: {exc}",
                         )
                         return
 
                     doc = Document(doc_id=doc_id, text=markdown_text, metadata=doc_metadata)
-                    await system_store.update_task(task_id, status="running", started_at=_now())
+                    await system_store.update_task(task_id, status=TaskStatus.RUNNING, started_at=_now())
                     try:
                         current_app = app_cache.get(app_name) or app
                         results = await current_app.ingest_documents([doc])
                         result = results[0]
                         if result.success:
-                            await system_store.update_task(task_id, status="done", completed_at=_now())
+                            await system_store.update_task(task_id, status=TaskStatus.DONE, completed_at=_now())
                             await system_store.save_doc(DocRecord(
                                 app_name=app_name,
                                 doc_id=doc.doc_id,
@@ -509,12 +512,12 @@ async def upload_documents(
                             ))
                         else:
                             await system_store.update_task(
-                                task_id, status="failed", completed_at=_now(),
+                                task_id, status=TaskStatus.FAILED, completed_at=_now(),
                                 error=str(result.error) if result.error else "ingest failed",
                             )
                     except Exception as exc:
                         logger.exception("upload_bg failed app=%s doc_id=%s", app_name, doc_id)
-                        await system_store.update_task(task_id, status="failed", completed_at=_now(), error=str(exc))
+                        await system_store.update_task(task_id, status=TaskStatus.FAILED, completed_at=_now(), error=str(exc))
 
             await asyncio.gather(*(_ingest_one(tid) for tid in pending_task_ids))
 
@@ -806,7 +809,7 @@ async def list_tasks(
     task_type: str | None = None,
     task_name: str | None = None,
     doc_id: str | None = None,
-    status: str | None = None,
+    status: TaskStatus | None = None,
 ) -> TaskListResponse:
     """List background tasks for an application.
 
@@ -859,11 +862,11 @@ async def list_workflow_docs(
     app_name: str,
     workflow_name: str,
     system_store: SystemStoreDep,
-    status: str | None = None,
+    status: DocWorkflowStatus | None = None,
 ) -> WorkflowDocListResponse:
     """List documents and their workflow processing status.
 
-    status options: 'pending', 'running', 'done', 'failed' — omit to return all.
+    status options: 'ready', 'pending', 'running', 'done', 'failed' — omit to return all.
     """
     record = await system_store.get_app(app_name)
     if record is None:
@@ -913,7 +916,7 @@ async def stream_workflow(
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
     pending = await system_store.list_tasks(
-        app_name, task_type="workflow", task_name=workflow_name, doc_id=body.doc_id, status="pending"
+        app_name, task_type="workflow", task_name=workflow_name, doc_id=body.doc_id, status=TaskStatus.PENDING
     )
     if not pending:
         params_list = await app.resolve_workflow_params(wf_runner, body.doc_id)
@@ -928,7 +931,7 @@ async def stream_workflow(
         all_ok = True
         for task in pending:
             params = json.loads(task.params_json) if task.params_json else {}
-            await system_store.update_task(task.task_id, status="running", started_at=_now())
+            await system_store.update_task(task.task_id, status=TaskStatus.RUNNING, started_at=_now())
             try:
                 async for record in wf_runner.run(params):
                     yield f"data: {json.dumps({'record': record})}\n\n"
@@ -942,7 +945,8 @@ async def stream_workflow(
             # TODO if failed, some items such as some clauses in a contract may be successfully processed,
             #      need to clean up the partial results.
             await system_store.upsert_doc_workflow_status(
-                app_name, body.doc_id, workflow_name, "done" if all_ok else "failed"
+                app_name, body.doc_id, workflow_name,
+                DocWorkflowStatus.DONE if all_ok else DocWorkflowStatus.FAILED,
             )
         yield "data: [DONE]\n\n"
 
