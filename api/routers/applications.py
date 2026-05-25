@@ -430,7 +430,7 @@ async def upload_documents(
             doc_id=doc_id,
             params_json=json.dumps({"doc_path": doc_path, "doc_metadata": doc_metadata}),
             status="pending",
-            started_at=now,
+            created_at=now,
         ))
         pending_task_ids.append(task_id)
 
@@ -915,7 +915,7 @@ async def stream_workflow(
     async def event_stream():
         for task in pending:
             params = json.loads(task.params_json) if task.params_json else {}
-            await system_store.update_task(task.task_id, status="running")
+            await system_store.update_task(task.task_id, status="running", started_at=_now())
             try:
                 async for record in wf_runner.run(params):
                     yield f"data: {json.dumps({'record': record})}\n\n"

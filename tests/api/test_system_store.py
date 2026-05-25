@@ -119,7 +119,7 @@ def _make_task(
         task_name=task_name,
         doc_id=doc_id,
         status=status,
-        started_at="2026-01-01T00:00:00+00:00",
+        created_at="2026-01-01T00:00:00+00:00",
     )
 
 

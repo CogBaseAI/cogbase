@@ -62,7 +62,8 @@ TASKS_SCHEMA = CollectionSchema(
         "doc_id":       FieldSchema(type=FieldType.STRING, nullable=True, index=True),
         "params_json":  FieldSchema(type=FieldType.STRING, nullable=True),
         "status":       FieldSchema(type=FieldType.STRING, nullable=False, index=True),
-        "started_at":   FieldSchema(type=FieldType.STRING, nullable=False),
+        "created_at":   FieldSchema(type=FieldType.STRING, nullable=False),
+        "started_at":   FieldSchema(type=FieldType.STRING, nullable=True),
         "completed_at": FieldSchema(type=FieldType.STRING, nullable=True),
         "error":        FieldSchema(type=FieldType.STRING, nullable=True),
     },
@@ -85,7 +86,8 @@ class TaskRecord(BaseModel):
     doc_id: str | None = None
     params_json: str | None = None  # JSON-serialized params
     status: str         # "pending" | "running" | "done" | "failed"
-    started_at: str     # ISO-8601 UTC
+    created_at: str     # ISO-8601 UTC — when the task was enqueued
+    started_at: str | None = None   # ISO-8601 UTC — when execution began
     completed_at: str | None = None
     error: str | None = None
 
@@ -259,7 +261,7 @@ class SystemStore:
             doc_id=doc_id,
             params_json=params_json,
             status="pending",
-            started_at=now,
+            created_at=now,
         ))
         return task_id
 
