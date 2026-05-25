@@ -55,14 +55,51 @@ class SQLiteStructuredStore(StructuredStoreBase):
             f'CREATE TABLE IF NOT EXISTS "{schema.name}" ({", ".join(_col_defs(schema))})'
         )
 
-        # 2. Add any columns present in the desired schema but missing from the
+        # 2. Inspect existing columns.  Build two sets:
+        #    - existing_cols: names of columns already in the table
+        #    - constraint_mismatch: names of columns whose NOT NULL constraint
+        #      disagrees with the current schema (e.g. nullable changed after
+        #      the table was first created).
+        col_info = {
+            row[1]: row  # name → (cid, name, type, notnull, dflt_value, pk)
+            for row in self._conn.execute(f'PRAGMA table_info("{schema.name}")')
+        }
+        existing_cols = set(col_info)
+
+        constraint_mismatch: set[str] = set()
+        for field_name, field in schema.fields.items():
+            if field_name not in col_info:
+                continue
+            is_primary = field_name in schema.primary_fields
+            want_notnull = 1 if (is_primary or not field.nullable) else 0
+            if col_info[field_name][3] != want_notnull:
+                constraint_mismatch.add(field_name)
+
+        if constraint_mismatch:
+            # Rebuild via a temp table — the only portable way to change column
+            # constraints in SQLite (ALTER COLUMN is not supported).
+            tmp = f"_{schema.name}_cc_tmp"
+            carry = sorted(existing_cols & set(schema.fields))
+            carry_sql = ", ".join(f'"{c}"' for c in carry)
+            with self._conn:
+                self._conn.execute(f'CREATE TABLE "{tmp}" ({", ".join(_col_defs(schema))})')
+                self._conn.execute(
+                    f'INSERT INTO "{tmp}" ({carry_sql}) '
+                    f'SELECT {carry_sql} FROM "{schema.name}"'
+                )
+                self._conn.execute(f'DROP TABLE "{schema.name}"')
+                self._conn.execute(f'ALTER TABLE "{tmp}" RENAME TO "{schema.name}"')
+            # Refresh col_info and existing_cols after rebuild.
+            col_info = {
+                row[1]: row
+                for row in self._conn.execute(f'PRAGMA table_info("{schema.name}")')
+            }
+            existing_cols = set(col_info)
+
+        # 3. Add any columns present in the desired schema but missing from the
         #    table (handles fields added after the initial create).  Columns
         #    removed from the schema are left in the table but silently ignored
         #    by the row helpers — no data is lost, and DROP COLUMN is not needed.
-        existing_cols = {
-            row[1]
-            for row in self._conn.execute(f'PRAGMA table_info("{schema.name}")')
-        }
         for field_name, field in schema.fields.items():
             if field_name not in existing_cols:
                 sql_type = _SQL_TYPE[field.type]
@@ -70,7 +107,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
                     f'ALTER TABLE "{schema.name}" ADD COLUMN "{field_name}" {sql_type}'
                 )
 
-        # 3. Ensure indexes exist (idempotent).
+        # 4. Ensure indexes exist (idempotent).
         for field_name, field in schema.fields.items():
             if field_name in schema.primary_fields:
                 continue
