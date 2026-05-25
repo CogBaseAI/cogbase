@@ -190,7 +190,7 @@ async def main() -> None:
                     async with client._http.stream(
                         "POST",
                         f"{client.api_base}/applications/{client.app_name}/workflows/check-contract-compliance/stream",
-                        json={"params": {"doc_id": doc_id}},
+                        json={"doc_id": doc_id},
                         timeout=300,
                     ) as resp:
                         resp.raise_for_status()

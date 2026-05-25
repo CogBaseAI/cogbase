@@ -129,6 +129,9 @@ _BUILTIN_COMMANDS = [
     "/clear_query_history",
     "/list_collections",
     "/query_structured_collection",
+    "/list_workflows",
+    "/list_docs",
+    "/list_workflow_docs",
     "/q", "/quit", "/exit",
 ]
 
@@ -155,6 +158,7 @@ _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s
 
 def configure_logging() -> None:
     logging.basicConfig(stream=sys.stdout, level=logging.INFO, format=_LOG_FORMAT)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 class CogBaseClient:
@@ -369,6 +373,45 @@ class CogBaseClient:
         resp.raise_for_status()
         return resp.json()["records"]
 
+    async def list_workflows(self) -> list[str]:
+        """Return workflow names registered for the current app."""
+        resp = await self._http.get(
+            f"{self.api_base}/applications/{self.app_name}/workflows",
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()["workflows"]
+
+    async def list_docs(self, status: str | None = None) -> list[dict]:
+        """Return all doc registry records for the current app."""
+        params = {}
+        if status:
+            params["status"] = status
+        resp = await self._http.get(
+            f"{self.api_base}/applications/{self.app_name}/docs",
+            params=params,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()["docs"]
+
+    async def list_workflow_docs(
+        self,
+        workflow_name: str,
+        status: str | None = None,
+    ) -> list[dict]:
+        """Return docs with their workflow processing status."""
+        params = {}
+        if status:
+            params["status"] = status
+        resp = await self._http.get(
+            f"{self.api_base}/applications/{self.app_name}/workflows/{workflow_name}/docs",
+            params=params,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()["docs"]
+
 
 # ---------------------------------------------------------------------------
 # Interactive-loop command helpers
@@ -461,6 +504,55 @@ async def cmd_query_structured_collection(
         print("  No records found.")
     else:
         print(json.dumps(records, indent=2))
+
+
+async def cmd_list_workflows(client: CogBaseClient) -> None:
+    try:
+        names = await client.list_workflows()
+    except httpx.HTTPStatusError as exc:
+        print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+        return
+    if not names:
+        print("  No workflows found.")
+    else:
+        for name in names:
+            print(f"  {name}")
+
+
+async def cmd_list_docs(client: CogBaseClient, status: str | None = None) -> None:
+    try:
+        docs = await client.list_docs(status=status)
+    except httpx.HTTPStatusError as exc:
+        print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+        return
+    if not docs:
+        print("  No documents found.")
+        return
+    print(f"  {'DOC ID':<36}  {'INGESTED':<20}  STATUS")
+    for d in docs:
+        ingested = d.get("ingested_at", "")[:19].replace("T", " ")
+        print(f"  {d['doc_id']:<36}  {ingested:<20}  {d['status']}")
+
+
+async def cmd_list_workflow_docs(
+    client: CogBaseClient,
+    workflow_name: str,
+    status: str | None = None,
+) -> None:
+    try:
+        docs = await client.list_workflow_docs(workflow_name, status=status)
+    except httpx.HTTPStatusError as exc:
+        print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+        return
+    if not docs:
+        print(f"  No documents found for workflow '{workflow_name}'.")
+        return
+    print(f"  {'DOC ID':<36}  {'INGESTED':<20}  INGEST    WORKFLOW")
+    for d in docs:
+        ingested = d.get("ingested_at", "")[:19].replace("T", " ")
+        print(
+            f"  {d['doc_id']:<36}  {ingested:<20}  {d['status']:<9}  {d['workflow_status']}"
+        )
 
 
 def cmd_select(client: CogBaseClient, name: str) -> None:
@@ -603,6 +695,25 @@ async def run_interactive_loop(
                 await client.query_stream(text)
             except httpx.HTTPStatusError as exc:
                 print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+            continue
+
+        if lower == "/list_workflows":
+            await cmd_list_workflows(client)
+            continue
+
+        if lower == "/list_docs" or lower.startswith("/list_docs "):
+            rest = raw[len("/list_docs"):].strip()
+            await cmd_list_docs(client, status=rest or None)
+            continue
+
+        if lower == "/list_workflow_docs" or lower.startswith("/list_workflow_docs "):
+            parts = raw[len("/list_workflow_docs"):].strip().split()
+            if not parts:
+                print("  Usage: /list_workflow_docs <workflow_name> [status]")
+                continue
+            wf_name = parts[0]
+            wf_status = parts[1] if len(parts) > 1 else None
+            await cmd_list_workflow_docs(client, wf_name, status=wf_status)
             continue
 
         if handler is not None and await handler(raw, lower):

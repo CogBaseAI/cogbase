@@ -604,6 +604,35 @@ tr:hover td { background: var(--bg3); }
   padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 12px;
 }
 
+/* ── Ingest doc list ── */
+.ingest-docs-hd {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 28px 0 10px;
+}
+.ingest-docs-hd h3 { font-size: 14px; font-weight: 600; }
+.ingest-docs-wrap { overflow-x: auto; }
+.ingest-docs-wrap table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ingest-docs-wrap th {
+  text-align: left; padding: 5px 10px; background: var(--bg3);
+  border-bottom: 1px solid var(--border); color: var(--muted); font-weight: 500;
+  white-space: nowrap;
+}
+.ingest-docs-wrap td {
+  padding: 6px 10px; border-bottom: 1px solid var(--border);
+  vertical-align: middle; max-width: 220px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.ingest-docs-wrap tr:last-child td { border-bottom: none; }
+.ingest-docs-wrap .doc-id-cell { font-family: monospace; font-size: 11px; }
+.ingest-status { display: inline-block; border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 500; }
+.ingest-status.active  { background: rgba(52,211,153,.15); color: var(--green); }
+.ingest-status.failed  { background: rgba(239,68,68,.12);  color: var(--red);   }
+.ingest-status.deleted { background: var(--bg3); color: var(--muted); }
+.ingest-status.pending { background: rgba(245,158,11,.12); color: var(--yellow); }
+.ingest-status.running { background: rgba(99,102,241,.12); color: var(--accent); }
+.ingest-status.done    { background: rgba(52,211,153,.15); color: var(--green); }
+.ingest-status.none    { color: var(--muted); }
+
 /* ── Warnings ── */
 .warn-bar {
   display: none; align-items: center; gap: 8px;
@@ -951,6 +980,14 @@ tr:hover td { background: var(--bg3); }
       </div>
 
       <div id="ingestLog" style="margin-top:20px"></div>
+
+      <div id="ingestDocs" style="display:none">
+        <div class="ingest-docs-hd">
+          <h3>Ingested Documents</h3>
+          <button class="btn btn-ghost btn-sm" onclick="loadIngestDocs()">↺ Refresh</button>
+        </div>
+        <div class="ingest-docs-wrap" id="ingestDocsTable"></div>
+      </div>
     </div>
   </div>
 
@@ -1137,6 +1174,7 @@ function switchTab(name, btn) {
   if (name === 'apps') loadApps();
   if (name === 'demos') loadDemos();
   if (name === 'data') loadData();
+  if (name === 'ingest') loadIngestDocs();
   if (name === 'settings') loadSystemConfig();
   refreshWarnings();
 }
@@ -1902,11 +1940,88 @@ async function uploadFiles() {
     pickedFiles = [];
     document.getElementById('fileChips').innerHTML = '';
     document.getElementById('fileInput').value = '';
+    loadIngestDocs();
   } catch (e) {
     log.innerHTML = `<p style="color:var(--red)">Network error: ${esc(e.message)}</p>`;
   } finally {
     btn.textContent = 'Upload & Ingest';
     refreshWarnings();
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// INGEST — doc list with workflow status
+// ════════════════════════════════════════════════════════════
+async function loadIngestDocs() {
+  const sec = document.getElementById('ingestDocs');
+  const wrap = document.getElementById('ingestDocsTable');
+  if (!currentApp) { sec.style.display = 'none'; return; }
+  sec.style.display = 'block';
+  wrap.innerHTML = '<p style="color:var(--muted);font-size:12px">Loading…</p>';
+
+  try {
+    const [docsResp, wfResp] = await Promise.all([
+      fetch(api() + '/applications/' + encodeURIComponent(currentApp) + '/docs'),
+      fetch(api() + '/applications/' + encodeURIComponent(currentApp) + '/workflows'),
+    ]);
+    if (!docsResp.ok) { wrap.innerHTML = `<p style="color:var(--red)">Failed to load docs (${docsResp.status})</p>`; return; }
+    const docsData = await docsResp.json();
+    const docs = docsData.docs || [];
+
+    // Collect workflow names
+    let wfNames = [];
+    if (wfResp.ok) {
+      const wfData = await wfResp.json();
+      wfNames = wfData.workflows || [];
+    }
+
+    // Fetch workflow-doc status for each workflow in parallel
+    const wfMaps = {};  // workflow_name -> { doc_id -> workflow_status }
+    if (wfNames.length > 0) {
+      const wfResults = await Promise.all(
+        wfNames.map(wf =>
+          fetch(api() + '/applications/' + encodeURIComponent(currentApp) + '/workflows/' + encodeURIComponent(wf) + '/docs')
+            .then(r => r.ok ? r.json() : { docs: [] })
+        )
+      );
+      wfNames.forEach((wf, i) => {
+        wfMaps[wf] = {};
+        (wfResults[i].docs || []).forEach(d => { wfMaps[wf][d.doc_id] = d.workflow_status; });
+      });
+    }
+
+    if (docs.length === 0) {
+      wrap.innerHTML = '<p style="color:var(--muted);font-size:12px">No documents ingested yet.</p>';
+      return;
+    }
+
+    const statusBadge = (s, fallback = '') => {
+      const label = s || fallback;
+      return label ? `<span class="ingest-status ${label}">${label}</span>` : `<span class="ingest-status none">—</span>`;
+    };
+
+    const wfCols = wfNames.map(wf => `<th>${esc(wf)}</th>`).join('');
+    const rows = docs.map(doc => {
+      const meta = doc.metadata || {};
+      const metaStr = Object.keys(meta).length
+        ? Object.entries(meta).map(([k,v]) => `${k}: ${v}`).join(', ')
+        : '';
+      const wfCells = wfNames.map(wf => `<td>${statusBadge(wfMaps[wf][doc.doc_id])}</td>`).join('');
+      return `<tr>
+        <td class="doc-id-cell" title="${esc(doc.doc_id)}">${esc(doc.doc_id)}</td>
+        <td title="${esc(metaStr)}">${esc(metaStr)}</td>
+        <td>${esc(doc.ingested_at ? doc.ingested_at.replace('T',' ').slice(0,16) : '')}</td>
+        <td>${statusBadge(doc.status)}</td>
+        ${wfCells}
+      </tr>`;
+    }).join('');
+
+    wrap.innerHTML = `<table>
+      <thead><tr><th>Doc ID</th><th>Metadata</th><th>Ingested at</th><th>Ingest</th>${wfCols}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } catch (e) {
+    wrap.innerHTML = `<p style="color:var(--red)">Error: ${esc(e.message)}</p>`;
   }
 }
 
