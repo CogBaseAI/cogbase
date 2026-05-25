@@ -26,6 +26,7 @@ def _mock_task_store():
     m = MagicMock()
     m.create_workflow_task = AsyncMock(return_value=None)
     m.complete_workflow_task = AsyncMock()
+    m.upsert_doc_workflow_status = AsyncMock()
     return m
 
 
@@ -243,6 +244,69 @@ class TestAfterIngestTrigger:
         await app.ingest_documents([Document(doc_id="d-001", text="text")])
         assert app._structured_store.query.call_count == 2
 
+    async def test_upsert_doc_workflow_status_pending_called_on_ingest(self):
+        runner = _make_wf_runner(
+            "check",
+            trigger_type="after_ingest",
+            params_from_collection=_after_ingest_source(),
+        )
+        app = _minimal_app(workflow_runners={"check": runner})
+        app._structured_store.query = AsyncMock(return_value=[{"doc_id": "d-001", "issue": "late_delivery"}])
+
+        with patch(self._PATCH, side_effect=self._discard_task):
+            await app.ingest_documents([Document(doc_id="d-001", text="some text")])
+
+        app._task_store.upsert_doc_workflow_status.assert_awaited_once_with(
+            "test-app", "d-001", "check", "pending"
+        )
+
+    async def test_create_workflow_task_called_for_after_ingest(self):
+        runner = _make_wf_runner(
+            "check",
+            trigger_type="after_ingest",
+            params_from_collection=_after_ingest_source(),
+        )
+        app = _minimal_app(workflow_runners={"check": runner})
+        app._task_store.create_workflow_task = AsyncMock(return_value="task-001")
+        app._structured_store.query = AsyncMock(return_value=[{"doc_id": "d-001", "issue": "late_delivery"}])
+
+        with patch(self._PATCH, side_effect=self._discard_task):
+            await app.ingest_documents([Document(doc_id="d-001", text="some text")])
+
+        import json
+        app._task_store.create_workflow_task.assert_awaited_once_with(
+            "test-app", "check", "d-001", json.dumps({"issue": "late_delivery"})
+        )
+
+    async def test_pending_not_marked_when_params_empty(self):
+        runner = _make_wf_runner(
+            "check",
+            trigger_type="after_ingest",
+            params_from_collection=_after_ingest_source(),
+        )
+        app = _minimal_app(workflow_runners={"check": runner})
+        app._structured_store.query = AsyncMock(return_value=[])
+
+        await app.ingest_documents([Document(doc_id="d-001", text="some text")])
+
+        app._task_store.upsert_doc_workflow_status.assert_not_awaited()
+
+    async def test_manual_trigger_marks_pending_but_no_task_created(self):
+        runner = _make_wf_runner(
+            "check",
+            trigger_type="manual",
+            params_from_collection=_after_ingest_source(),
+        )
+        app = _minimal_app(workflow_runners={"check": runner})
+        app._structured_store.query = AsyncMock(return_value=[{"doc_id": "d-001", "issue": "x"}])
+
+        await app.ingest_documents([Document(doc_id="d-001", text="some text")])
+
+        app._task_store.upsert_doc_workflow_status.assert_awaited_once_with(
+            "test-app", "d-001", "check", "pending"
+        )
+        app._task_store.create_workflow_task.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # _run_workflow_tasks_bg
@@ -279,3 +343,61 @@ class TestRunWorkflowBg:
         app = _minimal_app()
         # Must not propagate the exception
         await app._run_workflow_tasks_bg(wf_runner, "d-001", [({"doc_id": "d-001"}, None)])
+
+    async def test_bg_marks_done_after_all_tasks_succeed(self):
+        wf_runner = _make_wf_runner("wf")
+        app = _minimal_app()
+
+        await app._run_workflow_tasks_bg(wf_runner, "d-001", [({"doc_id": "d-001"}, None)])
+
+        app._task_store.upsert_doc_workflow_status.assert_awaited_once_with(
+            "test-app", "d-001", "wf", "done"
+        )
+
+    async def test_bg_marks_failed_after_task_exception(self):
+        wf_runner = _make_wf_runner("wf")
+
+        async def _failing_run(params):
+            raise RuntimeError("boom")
+            yield
+
+        wf_runner.run = _failing_run
+        app = _minimal_app()
+
+        await app._run_workflow_tasks_bg(wf_runner, "d-001", [({"doc_id": "d-001"}, None)])
+
+        app._task_store.upsert_doc_workflow_status.assert_awaited_once_with(
+            "test-app", "d-001", "wf", "failed"
+        )
+
+    async def test_bg_completes_task_success_when_task_id_present(self):
+        wf_runner = _make_wf_runner("wf")
+        app = _minimal_app()
+
+        await app._run_workflow_tasks_bg(wf_runner, "d-001", [({"doc_id": "d-001"}, "task-42")])
+
+        app._task_store.complete_workflow_task.assert_awaited_once_with("task-42", success=True)
+
+    async def test_bg_completes_task_failure_when_task_id_present(self):
+        wf_runner = _make_wf_runner("wf")
+
+        async def _failing_run(params):
+            raise RuntimeError("workflow error")
+            yield
+
+        wf_runner.run = _failing_run
+        app = _minimal_app()
+
+        await app._run_workflow_tasks_bg(wf_runner, "d-001", [({"doc_id": "d-001"}, "task-99")])
+
+        app._task_store.complete_workflow_task.assert_awaited_once_with(
+            "task-99", success=False, error="workflow error"
+        )
+
+    async def test_bg_no_complete_task_when_task_id_none(self):
+        wf_runner = _make_wf_runner("wf")
+        app = _minimal_app()
+
+        await app._run_workflow_tasks_bg(wf_runner, "d-001", [({"doc_id": "d-001"}, None)])
+
+        app._task_store.complete_workflow_task.assert_not_awaited()

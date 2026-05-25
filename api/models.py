@@ -57,7 +57,8 @@ class TaskResponse(BaseModel):
     doc_id: str | None
     params_json: str | None
     status: str
-    started_at: str
+    created_at: str
+    started_at: str | None
     completed_at: str | None
     error: str | None
 
