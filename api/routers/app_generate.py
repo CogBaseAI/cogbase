@@ -253,7 +253,7 @@ async def deploy(
     await system_store.save_app(record)
 
     try:
-        app = await build_app(config, system=system_resources, app_status=record.status)
+        app = await build_app(config, system=system_resources, app_status=record.status, task_store=system_store)
         app_cache.add(config.name, app)
         record = record.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("deployed app name=%s", config.name)

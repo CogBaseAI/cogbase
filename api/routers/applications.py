@@ -242,7 +242,7 @@ async def create_application(
     logger.info("Creating application '%s'", config.name)
 
     try:
-        app = await build_app(config, system=system_resources, app_status=record.status)
+        app = await build_app(config, system=system_resources, app_status=record.status, task_store=system_store)
         app_cache.add(config.name, app)
         record = record.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("Application '%s' created successfully", config.name)
@@ -325,7 +325,7 @@ async def update_application(
     logger.info("Updating application '%s'", app_name)
 
     try:
-        app = await build_app(config, system=system_resources, app_status=updated.status)
+        app = await build_app(config, system=system_resources, app_status=updated.status, task_store=system_store)
         app_cache.add(config.name, app)
         updated = updated.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("Application '%s' updated successfully", config.name)
