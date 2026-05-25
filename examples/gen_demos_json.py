@@ -238,7 +238,7 @@ def build_catalog() -> dict:
             {
                 "key": "legal-case-prep",
                 "name": "legal-case-prep",
-                "title": "Legal Case Preparation",
+                "title": "Legal Case Preparation - Workflow Demo",
                 "description": (
                     "Upload a litigation case bundle — correspondence, contracts, witness "
                     "statements, expert reports, and pleadings — and let the system build "

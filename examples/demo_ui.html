@@ -212,6 +212,20 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
   color: var(--muted);
   font-size: 12px;
 }
+.demo-progress {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.demo-step { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--muted); line-height: 1.4; }
+.demo-step-icon { flex-shrink: 0; width: 14px; text-align: center; font-size: 12px; margin-top: 1px; }
+.demo-step.done   .demo-step-icon { color: var(--green); }
+.demo-step.error  .demo-step-icon { color: var(--red); }
+.demo-step.running .demo-step-icon { color: var(--accent); }
+.demo-step.done   .demo-step-text { color: var(--text); }
+.demo-step.error  .demo-step-text { color: var(--red); }
 .demo-docs { display: flex; flex-direction: column; gap: 8px; }
 .demo-doc {
   background: var(--bg);
@@ -568,7 +582,7 @@ tr:hover td { background: var(--bg3); }
 .b-init   { background: rgba(245,158,11,.15); color: var(--yellow); }
 
 /* ── Ingest tab ── */
-.ingest-wrap { flex: 1; overflow-y: auto; padding: 20px; max-width: 680px; }
+.ingest-wrap { flex: 1; overflow-y: auto; padding: 20px; }
 .ingest-wrap h2 { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
 .sub { font-size: 13px; color: var(--muted); margin-bottom: 22px; }
 
@@ -628,6 +642,7 @@ tr:hover td { background: var(--bg3); }
 .ingest-status.active  { background: rgba(52,211,153,.15); color: var(--green); }
 .ingest-status.failed  { background: rgba(239,68,68,.12);  color: var(--red);   }
 .ingest-status.deleted { background: var(--bg3); color: var(--muted); }
+.ingest-status.ready   { background: rgba(99,102,241,.08); color: var(--muted); }
 .ingest-status.pending { background: rgba(245,158,11,.12); color: var(--yellow); }
 .ingest-status.running { background: rgba(99,102,241,.12); color: var(--accent); }
 .ingest-status.done    { background: rgba(52,211,153,.15); color: var(--green); }
@@ -638,6 +653,44 @@ tr:hover td { background: var(--bg3); }
   border-radius: 3px; cursor: pointer; white-space: nowrap;
 }
 .ingest-run-btn:hover { color: var(--text); border-color: var(--accent); }
+.ingest-wf-alert {
+  display: none; align-items: center; gap: 8px;
+  margin: 16px 0 6px; padding: 9px 13px;
+  background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.3);
+  border-radius: 8px; font-size: 12px; color: var(--yellow);
+}
+.ingest-wf-alert.show { display: flex; }
+.ingest-docs-wrap tr.wf-pending { cursor: pointer; }
+.ingest-docs-wrap tr.wf-pending:hover td { background: rgba(245,158,11,.05); }
+
+/* ── Task progress modal ── */
+.task-progress-modal {
+  display: none; position: fixed; inset: 0; z-index: 1100;
+  background: rgba(0,0,0,.55); align-items: center; justify-content: center;
+}
+.task-progress-modal.show { display: flex; }
+.task-progress-panel {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
+  width: 420px; max-width: 95vw; padding: 20px;
+}
+.task-progress-hd {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.task-progress-hd h3 { font-size: 14px; font-weight: 600; }
+.task-progress-close {
+  background: none; border: none; color: var(--muted); font-size: 16px;
+  cursor: pointer; padding: 0 4px; line-height: 1;
+}
+.task-progress-close:hover { color: var(--text); }
+.task-progress-row { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.task-progress-row strong { color: var(--text); }
+.task-progress-spinner {
+  display: inline-block; width: 10px; height: 10px;
+  border: 2px solid rgba(245,158,11,.3); border-top-color: var(--yellow);
+  border-radius: 50%; animation: spin .7s linear infinite; margin-right: 5px;
+  vertical-align: middle;
+}
 
 /* ── Warnings ── */
 .warn-bar {
@@ -860,6 +913,16 @@ tr:hover td { background: var(--bg3); }
     </div>
   </div>
 
+  <div class="task-progress-modal" id="taskProgressModal" onclick="if(event.target===this)closeTaskProgress()">
+    <div class="task-progress-panel" role="dialog" aria-modal="true">
+      <div class="task-progress-hd">
+        <h3 id="taskProgressTitle">Workflow Task</h3>
+        <button class="task-progress-close" onclick="closeTaskProgress()" aria-label="Close">✕</button>
+      </div>
+      <div id="taskProgressBody"></div>
+    </div>
+  </div>
+
   <!-- ════════════════ APPS TAB ════════════════ -->
   <div class="panel" id="panel-apps">
     <div class="page">
@@ -991,6 +1054,9 @@ tr:hover td { background: var(--bg3); }
         <div class="ingest-docs-hd">
           <h3>Ingested Documents</h3>
           <button class="btn btn-ghost btn-sm" onclick="loadIngestDocs()">↺ Refresh</button>
+        </div>
+        <div class="ingest-wf-alert" id="ingestWfAlert">
+          ⏳ Workflow tasks are in progress — wait for them to finish before querying. Click a row to view progress.
         </div>
         <div class="ingest-docs-wrap" id="ingestDocsTable"></div>
       </div>
@@ -1466,8 +1532,6 @@ function renderDemoCard(demo) {
   const examples = (demo.query_examples || []).map(q => `<span class="demo-badge">${esc(q)}</span>`).join('');
   const configPreview = previewText(demo.config_yaml || '', 18, 1600);
 
-  const hasWorkflows = (demo.workflow_actions || []).length > 0;
-
   return `
     <div class="demo-card" data-demo-key="${esc(demo.key)}">
       <div>
@@ -1484,8 +1548,8 @@ function renderDemoCard(demo) {
         <div style="display:flex;flex-wrap:wrap;gap:8px">
           <button class="btn btn-green" id="demoDeployBtn-${esc(demo.key)}" onclick="deployDemo('${esc(demo.key)}')">Deploy &amp; Ingest</button>
           <button class="btn btn-ghost" onclick="openConfigModalByRef('${esc(demo.key)}')">View full config</button>
-          ${(demo.workflow_actions || []).map((wf, i) => `<span class="demo-wf-wrap" data-tip="Select this app under Apps, or click Deploy &amp; Ingest first"><button class="btn btn-ghost demo-wf-btn" onclick="openWfModal('${esc(demo.key)}',${i})" ${currentApp ? '' : 'disabled'}>▶ ${esc(wf.label||'Run Workflow')}</button></span>`).join('')}
         </div>
+        <div id="demo-progress-${esc(demo.key)}" class="demo-progress" style="display:none"></div>
       </div>
       <div class="demo-block">
         <h4>Query ideas</h4>
@@ -1664,6 +1728,67 @@ function closeWfModal() {
   if (fromIngest) loadIngestDocs();
 }
 
+// ── Task progress modal ──────────────────────────────────────────────────
+let _taskProgressTimer = null;
+
+async function openTaskProgress(appName, workflowName, docId) {
+  document.getElementById('taskProgressTitle').textContent = workflowName;
+  const body = document.getElementById('taskProgressBody');
+  body.innerHTML = '<p style="color:var(--muted);font-size:12px">Loading…</p>';
+  document.getElementById('taskProgressModal').classList.add('show');
+
+  clearInterval(_taskProgressTimer);
+
+  async function poll() {
+    try {
+      const resp = await fetch(
+        api() + '/applications/' + encodeURIComponent(appName) +
+        '/tasks?task_type=workflow&task_name=' + encodeURIComponent(workflowName) +
+        '&doc_id=' + encodeURIComponent(docId)
+      );
+      if (!resp.ok) {
+        body.innerHTML = `<p style="color:var(--red)">Failed to load task (${resp.status}).</p>`;
+        clearInterval(_taskProgressTimer);
+        return;
+      }
+      const data = await resp.json();
+      const tasks = (data.tasks || []).slice().sort((a, b) => a.created_at < b.created_at ? -1 : 1);
+      if (!tasks.length) {
+        body.innerHTML = '<p style="color:var(--muted);font-size:12px">No task found for this document.</p>';
+        clearInterval(_taskProgressTimer);
+        return;
+      }
+      const task = tasks[tasks.length - 1];
+      const active = task.status === 'pending' || task.status === 'running';
+      const spinner = active ? '<span class="task-progress-spinner"></span>' : '';
+      body.innerHTML = `
+        <div class="task-progress-row"><strong>Document:</strong> ${esc(docId)}</div>
+        <div class="task-progress-row" style="margin-bottom:12px">
+          ${spinner}<span class="ingest-status ${task.status}">${task.status}</span>
+          ${task.error ? `<span style="color:var(--red);font-size:11px;margin-left:6px">${esc(task.error)}</span>` : ''}
+        </div>
+        ${task.started_at ? `<div class="task-progress-row"><strong>Started:</strong> ${esc(task.started_at.replace('T',' ').slice(0,16))}</div>` : ''}
+        ${task.completed_at ? `<div class="task-progress-row"><strong>Completed:</strong> ${esc(task.completed_at.replace('T',' ').slice(0,16))}</div>` : ''}
+      `;
+      if (!active) {
+        clearInterval(_taskProgressTimer);
+        if (task.status === 'done') loadIngestDocs();
+      }
+    } catch (e) {
+      body.innerHTML = `<p style="color:var(--red);font-size:12px">Error: ${esc(e.message)}</p>`;
+      clearInterval(_taskProgressTimer);
+    }
+  }
+
+  await poll();
+  _taskProgressTimer = setInterval(poll, 2000);
+}
+
+function closeTaskProgress() {
+  clearInterval(_taskProgressTimer);
+  document.getElementById('taskProgressModal').classList.remove('show');
+}
+
 function openWfModalDirect(appName, workflowName, docId) {
   wfModalState = { appName, workflowName, paramKey: 'doc_id', label: workflowName, fromIngest: true };
   document.getElementById('wfModalTitle').textContent = workflowName;
@@ -1700,6 +1825,35 @@ function setDemoStatus(text, error = false) {
   if (!el) return;
   el.style.color = error ? 'var(--red)' : 'var(--muted)';
   el.textContent = text;
+}
+
+let _demoStepSeq = 0;
+let _demoStepKey = null;
+
+function clearDemoSteps(demoKey) {
+  _demoStepSeq = 0;
+  _demoStepKey = demoKey;
+  const el = document.getElementById('demo-progress-' + demoKey);
+  if (el) { el.innerHTML = ''; el.style.display = 'flex'; }
+}
+
+function addDemoStep(text, state = 'running') {
+  const id = 'demo-step-' + (++_demoStepSeq);
+  const el = document.getElementById('demo-progress-' + _demoStepKey);
+  if (el) el.insertAdjacentHTML('beforeend', _demoStepHtml(id, text, state));
+  return id;
+}
+
+function updateDemoStep(id, text, state) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.outerHTML = _demoStepHtml(id, text, state);
+}
+
+function _demoStepHtml(id, text, state) {
+  const icons = { running: '<span class="spinning demo-step-icon">⟳</span>', done: '<span class="demo-step-icon">✓</span>', error: '<span class="demo-step-icon">✗</span>' };
+  const icon = icons[state] || '<span class="demo-step-icon">·</span>';
+  return `<div class="demo-step ${state}" id="${id}">${icon}<span class="demo-step-text">${esc(text)}</span></div>`;
 }
 
 function openDocModal(doc) {
@@ -1816,7 +1970,7 @@ async function loadDemos() {
   }
 }
 
-async function waitForTasks(appName, taskIds, { pollInterval = 2000, timeout = 300000 } = {}) {
+async function waitForTasks(appName, taskIds, { pollInterval = 2000, timeout = 300000, onProgress } = {}) {
   const deadline = Date.now() + timeout;
   const pending = new Set(taskIds);
   const results = {};
@@ -1831,7 +1985,11 @@ async function waitForTasks(appName, taskIds, { pollInterval = 2000, timeout = 3
         const resp = await fetch(api() + '/applications/' + encodeURIComponent(appName) + '/tasks/' + encodeURIComponent(tid));
         if (resp.ok) {
           const task = await resp.json();
-          if (task.status === 'done' || task.status === 'failed') { results[tid] = task; pending.delete(tid); }
+          if (task.status === 'done' || task.status === 'failed') {
+            results[tid] = task;
+            pending.delete(tid);
+            if (onProgress) onProgress(taskIds.length - pending.size, taskIds.length);
+          }
         }
       } catch { /* network blip — retry next interval */ }
     }
@@ -1848,18 +2006,24 @@ async function deployDemo(key) {
   if (btn) btn.disabled = true;
   if (btn) btn.textContent = 'Working…';
 
-  setDemoStatus('Deploying "' + demo.title + '"...');
+  clearDemoSteps(key);
 
   try {
+    // Step 1: Check / create app
+    const appStepId = addDemoStep('Checking for app "' + demo.name + '"…');
     const appResp = await fetch(api() + '/applications/' + encodeURIComponent(demo.name));
     if (appResp.ok) {
       const app = await appResp.json();
       if (app.status !== 'active') {
+        updateDemoStep(appStepId, 'App "' + demo.name + '" exists but is not active.', 'error');
         throw new Error('Existing app "' + demo.name + '" is not active.');
       }
+      updateDemoStep(appStepId, 'App "' + demo.name + '" already exists.', 'done');
     } else if (appResp.status !== 404) {
+      updateDemoStep(appStepId, 'Failed to check app: HTTP ' + appResp.status, 'error');
       throw new Error('Failed to check app state: ' + appResp.status + ' ' + appResp.statusText);
     } else {
+      updateDemoStep(appStepId, 'Creating app "' + demo.name + '"…', 'running');
       const deployResp = await fetch(api() + '/generate/deploy', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -1867,24 +2031,31 @@ async function deployDemo(key) {
       });
       const deployData = await deployResp.json();
       if (!deployResp.ok) {
+        updateDemoStep(appStepId, 'Create failed: ' + (deployData.detail || deployResp.statusText), 'error');
         throw new Error(deployData.detail || deployResp.statusText);
       }
       if (deployData.status !== 'active') {
-        throw new Error('Deploy status: ' + deployData.status + (deployData.error ? ' — ' + deployData.error : ''));
+        const msg = 'Deploy status: ' + deployData.status + (deployData.error ? ' — ' + deployData.error : '');
+        updateDemoStep(appStepId, msg, 'error');
+        throw new Error(msg);
       }
+      updateDemoStep(appStepId, 'App "' + demo.name + '" created.', 'done');
     }
 
+    // Step 2: Upload documents
+    const docs = demo.docs || [];
+    const uploadStepId = addDemoStep('Uploading ' + docs.length + ' document(s)…');
     // Group docs by metadata so each upload call carries a uniform metadata batch.
     const metaGroups = {};
-    for (const doc of (demo.docs || [])) {
-      const key = JSON.stringify(doc.metadata || {});
-      if (!metaGroups[key]) metaGroups[key] = [];
-      metaGroups[key].push(doc);
+    for (const doc of docs) {
+      const mk = JSON.stringify(doc.metadata || {});
+      if (!metaGroups[mk]) metaGroups[mk] = [];
+      metaGroups[mk].push(doc);
     }
     const allIngestTaskIds = [];
-    for (const [metaJson, docs] of Object.entries(metaGroups)) {
+    for (const [metaJson, batchDocs] of Object.entries(metaGroups)) {
       const formData = new FormData();
-      for (const doc of docs) {
+      for (const doc of batchDocs) {
         const blob = new Blob([doc.text || ''], { type: 'text/plain' });
         formData.append('files', blob, doc.doc_id + '.txt');
       }
@@ -1895,24 +2066,35 @@ async function deployDemo(key) {
       });
       const ingestData = await ingestResp.json();
       if (!ingestResp.ok) {
+        updateDemoStep(uploadStepId, 'Upload failed: ' + (ingestData.detail || ingestResp.statusText), 'error');
         throw new Error(ingestData.detail || ingestResp.statusText);
       }
       allIngestTaskIds.push(...ingestData.task_ids);
     }
+    updateDemoStep(uploadStepId, docs.length + ' document(s) uploaded.', 'done');
 
-    const ingestTasks = await waitForTasks(demo.name, allIngestTaskIds, { timeout: 600000 });
+    // Step 3: Wait for ingest tasks
+    const total = allIngestTaskIds.length;
+    const ingestStepId = addDemoStep('Ingesting 0 / ' + total + ' document(s)…');
+    const ingestTasks = await waitForTasks(demo.name, allIngestTaskIds, {
+      timeout: 600000,
+      onProgress: (done, n) => updateDemoStep(ingestStepId, 'Ingesting ' + done + ' / ' + n + ' document(s)…', 'running'),
+    });
     const okCount = ingestTasks.filter(t => t && t.status === 'done').length;
-    setDemoStatus('✓ "' + demo.title + '" is deployed and ' + okCount + ' document batch(es) were ingested.');
+    const failCount = total - okCount;
+    if (failCount > 0) {
+      updateDemoStep(ingestStepId, okCount + ' / ' + total + ' ingested (' + failCount + ' failed).', failCount === total ? 'error' : 'done');
+    } else {
+      updateDemoStep(ingestStepId, okCount + ' document(s) ingested.', 'done');
+    }
+
+    addDemoStep('"' + demo.title + '" is ready — switching to Ingest tab.', 'done');
     setApp(demo.name);
     loadApps();
     loadData();
-    if (demo.workflow_actions && demo.workflow_actions.length > 0) {
-      openWfModal(key, 0);
-    } else {
-      switchTab('query');
-    }
+    switchTab('ingest');
   } catch (e) {
-    setDemoStatus('Demo failed: ' + e.message, true);
+    addDemoStep('Failed: ' + e.message, 'error');
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -2024,6 +2206,7 @@ async function loadIngestDocs() {
 
     if (docs.length === 0) {
       wrap.innerHTML = '<p style="color:var(--muted);font-size:12px">No documents ingested yet.</p>';
+      document.getElementById('ingestWfAlert').classList.remove('show');
       return;
     }
 
@@ -2032,20 +2215,30 @@ async function loadIngestDocs() {
       return label ? `<span class="ingest-status ${label}">${label}</span>` : `<span class="ingest-status none">—</span>`;
     };
 
+    const ACTIVE_WF_STATUSES = new Set(['pending', 'running']);
+
+    let anyPendingWf = false;
     const wfCols = wfNames.map(wf => `<th>${esc(wf)}</th>`).join('');
     const rows = docs.map(doc => {
       const meta = doc.metadata || {};
       const metaStr = Object.keys(meta).length
         ? Object.entries(meta).map(([k,v]) => `${k}: ${v}`).join(', ')
         : '';
+      // Find the first workflow with an active (pending/running) status for this doc
+      const pendingWf = wfNames.find(wf => ACTIVE_WF_STATUSES.has(wfMaps[wf][doc.doc_id]));
+      if (pendingWf) anyPendingWf = true;
+      const rowClass = pendingWf ? ' class="wf-pending"' : '';
+      const rowClick = pendingWf
+        ? ` onclick="openTaskProgress('${esc(currentApp)}','${esc(pendingWf)}','${esc(doc.doc_id)}')"`
+        : '';
       const wfCells = wfNames.map(wf => {
         const wfStatus = wfMaps[wf][doc.doc_id];
-        const runBtn = wfStatus != null && wfStatus !== 'done'
-          ? `<button class="ingest-run-btn" onclick="openWfModalDirect('${esc(currentApp)}','${esc(wf)}','${esc(doc.doc_id)}')">▶ Run</button>`
+        const runBtn = wfStatus != null && wfStatus !== 'done' && !ACTIVE_WF_STATUSES.has(wfStatus)
+          ? `<button class="ingest-run-btn" onclick="event.stopPropagation();openWfModalDirect('${esc(currentApp)}','${esc(wf)}','${esc(doc.doc_id)}')">▶ Run</button>`
           : '';
         return `<td>${statusBadge(wfStatus)}${runBtn}</td>`;
       }).join('');
-      return `<tr>
+      return `<tr${rowClass}${rowClick}>
         <td class="doc-id-cell" title="${esc(doc.doc_id)}">${esc(doc.doc_id)}</td>
         <td title="${esc(metaStr)}">${esc(metaStr)}</td>
         <td>${esc(doc.ingested_at ? doc.ingested_at.replace('T',' ').slice(0,16) : '')}</td>
@@ -2053,6 +2246,9 @@ async function loadIngestDocs() {
         ${wfCells}
       </tr>`;
     }).join('');
+
+    const alertEl = document.getElementById('ingestWfAlert');
+    alertEl.classList.toggle('show', anyPendingWf);
 
     wrap.innerHTML = `<table>
       <thead><tr><th>Doc ID</th><th>Metadata</th><th>Ingested at</th><th>Ingest</th>${wfCols}</tr></thead>
