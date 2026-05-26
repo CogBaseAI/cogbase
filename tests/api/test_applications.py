@@ -34,7 +34,7 @@ from api.app_cache import AppCache
 from api.system_store import DocRecord, SystemStore
 from cogbase.config.config import AppConfig, RecordMode
 from cogbase.core.models import Chunk
-from cogbase.core.query_runner import QueryResult
+from cogbase.core.query_runner import DocumentSlice, QueryResult
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 
 
@@ -880,11 +880,13 @@ def _make_query_result(
     answer: str = "The notice period is 60 days.",
     structured_records: list[dict] | None = None,
     chunks: list[Chunk] | None = None,
+    document_slices: list[DocumentSlice] | None = None,
 ) -> QueryResult:
     return QueryResult(
         answer=answer,
         structured_records=structured_records or [],
         chunks=chunks or [],
+        document_slices=document_slices or [],
     )
 
 
@@ -978,6 +980,25 @@ class TestQueryApplication:
         assert data["chunks"][0]["chunk_id"] == "doc_0_0"
         assert data["chunks"][0]["doc_id"] == "doc_0"
         assert data["chunks"][0]["text"] == "Payment terms are net 30."
+
+    @pytest.mark.asyncio
+    async def test_includes_document_slices(self, client):
+        doc_slice = DocumentSlice(doc_id="doc_0", offset=100, length=42, text="Relevant excerpt.")
+        result = _make_query_result(answer="See the excerpt.", document_slices=[doc_slice])
+        await _create_app(client, _mock_query_app(result))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query",
+            json={"text": "show me the excerpt", "history": []},
+        )
+
+        data = resp.json()
+        assert len(data["document_slices"]) == 1
+        s = data["document_slices"][0]
+        assert s["doc_id"] == "doc_0"
+        assert s["offset"] == 100
+        assert s["length"] == 42
+        assert s["text"] == "Relevant excerpt."
 
     @pytest.mark.asyncio
     async def test_404_when_app_not_found(self, client):

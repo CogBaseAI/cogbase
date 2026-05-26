@@ -94,10 +94,18 @@ class ChunkResponse(BaseModel):
     char_length: int | None = None
 
 
+class DocumentSliceResponse(BaseModel):
+    doc_id: str
+    offset: int
+    length: int
+    text: str
+
+
 class QueryResponse(BaseModel):
     answer: str
     structured_records: list[dict] = []
     chunks: list[ChunkResponse] = []
+    document_slices: list[DocumentSliceResponse] = []
 
 
 # ---------------------------------------------------------------------------

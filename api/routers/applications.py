@@ -27,6 +27,7 @@ from api.models import (
     ApplicationListResponse,
     ApplicationResponse,
     ChunkResponse,
+    DocumentSliceResponse,
     CollectionsResponse,
     DocListResponse,
     DocResponse,
@@ -562,6 +563,7 @@ async def query_application(
         answer=result.answer,
         structured_records=result.structured_records,
         chunks=[ChunkResponse(**c.model_dump(exclude={"embedding"})) for c in result.chunks],
+        document_slices=[DocumentSliceResponse(**s.model_dump()) for s in result.document_slices],
     )
 
 
