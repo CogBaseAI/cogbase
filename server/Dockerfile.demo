@@ -1,3 +1,7 @@
+# For production services, common pattern is nginx in front:
+# nginx serves ui/dist/ directly as static files and reverse-proxies,
+# /api/ (or similar prefix) to the Python process.
+
 FROM node:20-slim AS ui-builder
 
 WORKDIR /ui
