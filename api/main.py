@@ -11,7 +11,7 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from cogbase.config.config import AppConfig
 from api.factory import build_app
@@ -173,16 +173,17 @@ app.include_router(generate_router)
 app.include_router(skills_router)
 app.include_router(system_router)
 
-_EXAMPLES_DIR = pathlib.Path(__file__).parent.parent / "examples"
-_DEMO_UI = _EXAMPLES_DIR / "demo_ui.html"
 
-
-@app.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def demo_ui() -> HTMLResponse:
-    return HTMLResponse(content=_DEMO_UI.read_text())
-
-
+# For production services, common pattern is nginx in front:
+# nginx serves ui/dist/ directly as static files and reverse-proxies,
+# /api/ (or similar prefix) to the Python process.
 @app.get("/examples/demos", include_in_schema=False)
 async def demo_catalog() -> dict:
     from examples.gen_demos_json import build_catalog
     return build_catalog()
+
+
+_UI_DIST = pathlib.Path(__file__).parent.parent / "ui" / "dist"
+
+if _UI_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=_UI_DIST, html=True), name="ui")
