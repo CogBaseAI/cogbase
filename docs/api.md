@@ -25,7 +25,8 @@ Applications are created and managed through the REST API. Configuration lives i
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/applications/{name}/ingest_documents` | Ingest a batch of documents |
+| `POST` | `/applications/{name}/upload_documents` | Upload documents; each is saved to the document store and then ingested asynchronously via a background task |
+| `GET` | `/applications/{name}/documents` | List all documents for an application with their workflow status (`PENDING`, `READY`, `RUNNING`, `DONE`, `FAILED`) |
 | `POST` | `/applications/{name}/query` | Answer a query (blocking) |
 | `POST` | `/applications/{name}/query/stream` | Stream query response as Server-Sent Events |
 
@@ -46,6 +47,12 @@ Applications are created and managed through the REST API. Configuration lives i
 | `DELETE` | `/applications/{name}/skills/{skill}` | Remove a skill from an application |
 | `GET` | `/skills` | List all skills in the system registry |
 
+## System configuration
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/system/config` | Configure LLM and embedding providers at runtime; changes are persisted in the system database and take effect immediately without a restart |
+
 ## Adaptive evolution
 
 | Method | Endpoint | Description |
@@ -62,3 +69,4 @@ For working config examples, see:
 - [`examples/contract_analyst_demo/config.yaml`](../examples/contract_analyst_demo/config.yaml)
 - [`examples/contract_compliance_demo/config.yaml`](../examples/contract_compliance_demo/config.yaml)
 - [`examples/vc_portfolio_demo/config.yaml`](../examples/vc_portfolio_demo/config.yaml)
+- [`examples/legal_case_prep_demo/config.yaml`](../examples/legal_case_prep_demo/config.yaml)

@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-CogBase is in active early development. The knowledge pipeline, workflow engine, query runner, skills registry, REST API, and store adapters are implemented. The app generator, adaptive evolution engine, and memory layer (short-term, episodic, long-term) are planned but not yet implemented.
+CogBase is in active early development. The knowledge pipeline, workflow engine, query runner, skills registry, REST API, store adapters, app generator, document registry, and background task tracking are implemented. The adaptive evolution engine and memory layer (short-term, episodic, long-term) are planned but not yet implemented.
 
 ## Architecture
 
 CogBase is a framework for building AI applications that need to understand, cross-reference, and reason over large volumes of documents. The five key components are: a knowledge pipeline (ingest + structured extraction), composable workflows, a skill registry, a multi-tier memory system, and an adaptive evolution engine. It has six layers with clean boundaries:
 
-**App Generator** (conversational, planned)
+**App Generator** (conversational)
 - User describes document types, facts that matter, and example questions in natural language
 - LLM generates a complete draft `config.yaml`: pipeline steps, vector/structured collections, extraction schemas, prompts, and workflows
 - Draft is revised conversationally then deployed via `POST /generate/{session_id}/deploy`
@@ -27,6 +27,7 @@ CogBase is a framework for building AI applications that need to understand, cro
 - YAML-declared sequential pipelines over already-ingested collections
 - Four built-in tools: `structured-query`, `vector-search`, `llm-structured`, `structured-save`; support `foreach` loops
 - Step parameters are Jinja2 templates with `input`, `steps.<id>`, and `item` namespaces
+- Manual triggers use `params_from_collection`: accept `doc_id` and auto-derive params the same way `after_ingest` does
 - Can be triggered manually via API or automatically after a successful ingest (`trigger.type: after_ingest`)
 - Results streamed as SSE; sit between the pipeline (document-time) and skills (query-time)
 
@@ -54,14 +55,14 @@ CogBase is a framework for building AI applications that need to understand, cro
 ```
 cogbase/
 ├── cogbase/
-│   ├── pipeline/             # ingestion/, extraction/, ingestion_pipeline.py
-│   ├── stores/               # base.py, schema.py, filters.py, structured/, vector/
+│   ├── pipeline/             # chunking/, extraction/, ingestion_pipeline.py
+│   ├── stores/               # base.py, schema.py, filters.py, structured/, vector/, document/
 │   ├── skills/               # skill.py, registry.py
 │   ├── embeddings/           # base.py, openai.py, huggingface.py
 │   ├── llms/                 # base.py, openai.py
 │   ├── tools/                # builtin/ (chunk_embed_upsert, extract)
 │   ├── workflows/            # runner.py, context.py, tools/ (structured-query, vector-search, llm-structured, structured-save)
-│   └── core/                 # app.py, runner.py, session.py, models.py
+│   └── core/                 # app.py, app_generator.py, runner.py, session.py, models.py
 ├── api/                      # FastAPI REST API
 │   ├── routers/              # applications.py, skills.py, workflows.py
 │   ├── config.py             # AppConfig (YAML schema)
@@ -70,6 +71,7 @@ cogbase/
 ├── examples/
 │   ├── contract_analyst_demo/
 │   ├── contract_compliance_demo/
+│   ├── legal_case_prep_demo/
 │   └── vc_portfolio_demo/
 └── docker-compose.yml
 ```
@@ -80,7 +82,7 @@ cogbase/
 ```python
 class StructuredStoreBase:
     async def create_collection(self, schema: CollectionSchema) -> None: ...
-    async def save(self, collection: str, records: list[BaseModel]) -> None: ...
+    async def save(self, collection: str, records: list[dict]) -> None: ...
     async def query(self, collection: str, filters: list[Filter] | None = None, fields: list[str] | None = None) -> list[dict]: ...
     async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None: ...
 
@@ -130,20 +132,24 @@ Domain-specific applications are in `examples/`, not in a `packs/` directory. Ea
 
 Applications are created and managed through `POST /applications` (ZIP bundle upload). Key endpoints:
 
-App generator (planned):
+App generator:
 - `POST /generate` — start a generation session from a natural-language description
 - `POST /generate/{session_id}/revise` — revise the draft conversationally
 - `POST /generate/{session_id}/deploy` — deploy the draft as a new application
 
 Application lifecycle:
 - `POST /applications` — create from ZIP bundle (config.yaml + referenced files)
-- `POST /applications/{name}/ingest_documents` — ingest a batch of documents
+- `POST /applications/{name}/upload_documents` — upload documents (saved to doc store; ingestion task handles the rest)
+- `GET /applications/{name}/documents` — list all documents with workflow status
 - `POST /applications/{name}/query` — blocking query
 - `POST /applications/{name}/query/stream` — streaming query (SSE)
 - `GET/POST/DELETE /applications/{name}/skills` — manage skills per application
 
 Workflows:
 - `POST /applications/{name}/workflows/{workflow_name}/stream` — run a workflow (SSE)
+
+System:
+- `POST /system/config` — configure LLM and embedding providers at runtime (no restart required)
 
 Adaptive evolution (planned):
 - `GET /applications/{name}/suggestions` — list pending suggestions with supporting evidence

@@ -16,6 +16,10 @@ The Knowledge Pipeline runs asynchronously at ingest time. Three step types can 
 
 Both stores are pluggable — swap backends without changing application code.
 
+## Document Registry
+
+The Document Registry tracks every document ingested into an application — its path, status, and timestamps. When a document needs to pass through a workflow after ingestion, a `DocWorkflowRecord` is created at ingest time and updated as the workflow progresses (`PENDING` → `READY` → `RUNNING` → `DONE` / `FAILED`). Ingest and workflow runs are tracked as idempotent `TaskRecord` entries: a task can be re-run at any time without side effects. The document store is uploaded before ingest begins so the task owns the full pipeline and can be retried independently of the upload.
+
 ## Workflows
 
 Workflows run on-demand (via API call) or automatically after a successful ingest (`after_ingest` trigger). They are YAML-declared sequential pipelines over already-ingested collections — reading from structured and vector stores, calling an LLM to judge or classify, and writing derived records back to output collections. They stream results as SSE. Workflows sit between the pipeline (document-time) and skills (query-time, LLM-callable), handling analytical computations that need to fan out over many records but don't belong in the ingest step itself.

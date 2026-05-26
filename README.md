@@ -140,13 +140,13 @@ See [docs/architecture.md](docs/architecture.md) for a detailed walkthrough of e
 ```
 cogbase/
 ├── cogbase/
-│   ├── pipeline/     # ingestion, chunking, LLM extraction
-│   ├── stores/       # structured + vector store adapters
+│   ├── pipeline/     # chunking, LLM extraction, ingestion pipeline
+│   ├── stores/       # structured + vector + document store adapters
 │   ├── skills/       # skill interface + registry
 │   ├── workflows/    # workflow engine
-│   └── core/         # CogBaseApp, Runner, Session
+│   └── core/         # CogBaseApp, Runner, Session, AppGenerator
 ├── api/              # FastAPI REST API + config schema
-└── examples/         # demo applications (contract, compliance, VC)
+└── examples/         # demo applications (contract, compliance, VC, legal case)
 ```
 
 ---
@@ -195,6 +195,7 @@ Open the **Demos** tab, select an example, and click **Deploy & Ingest** to depl
 - [`examples/contract_analyst_demo/`](examples/contract_analyst_demo/) — Legal contract extraction + Q&A
 - [`examples/contract_compliance_demo/`](examples/contract_compliance_demo/) — Compliance-rule checking across contracts
 - [`examples/vc_portfolio_demo/`](examples/vc_portfolio_demo/) — VC portfolio company analysis
+- [`examples/legal_case_prep_demo/`](examples/legal_case_prep_demo/) — Case bundle ingestion (pleadings, evidence, depositions) with structured fact extraction
 
 Each is a starting point — copy, adapt, and redeploy via the REST API.
 
@@ -228,7 +229,7 @@ About 90% of the codebase — the ingestion pipeline, workflow engine, query run
 
 ## Roadmap
 
-**Implemented (v0.1)**
+**Implemented**
 - [x] Core ingestion pipeline (chunk-embed-upsert, extract-structured, document-embed-upsert)
 - [x] Typed fact extraction with configurable JSON schema
 - [x] Store adapter interfaces (StructuredStoreBase, VectorStoreBase)
@@ -241,7 +242,14 @@ About 90% of the codebase — the ingestion pipeline, workflow engine, query run
 - [x] Native document parsing (PDF, DOCX, HTML ingestion)
 - [x] App generator (conversational config generation from description + example questions, with iterative revision)
 - [x] Docker Compose quickstart (SQLite + FAISS, see `server/`)
-- [x] Contract analyst, contract compliance, and VC portfolio examples
+- [x] Contract analyst, contract compliance, VC portfolio, and legal case prep examples
+- [x] Document registry — per-app document tracking with status (`PENDING`, `RUNNING`, `DONE`, `FAILED`)
+- [x] Background task tracking — ingest and workflow runs tracked as idempotent `TaskRecord` entries
+- [x] Runtime LLM and embedding configuration — configure providers via `POST /system/config`; no restart required
+- [x] OpenAI-compatible provider support — any base URL works for LLM and embeddings
+- [x] Workflow `params_from_collection` — manual triggers accept `doc_id` and auto-derive params like `after_ingest`
+- [x] SQLite schema evolution — detects and repairs constraint mismatches; no manual migration needed
+- [x] Demo UI: per-document workflow status, deploy/ingest progress, Settings tab for provider configuration
 
 **Improvements**
 
