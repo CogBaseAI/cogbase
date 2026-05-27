@@ -166,10 +166,10 @@ class SystemStore:
         return await self._store.query_as("app_records", filters=None, model=AppRecord)
 
     async def delete_app(self, name: str) -> None:
-        await self._store.delete_records(
-            "app_records",
-            filters=[Col("name") == name],
-        )
+        await self._store.delete_records("app_records", filters=[Col("name") == name])
+        await self._store.delete_records("doc_registry", filters=[Col("app_name") == name])
+        await self._store.delete_records("doc_workflow_registry", filters=[Col("app_name") == name])
+        await self._store.delete_records("tasks", filters=[Col("app_name") == name])
 
     # ------------------------------------------------------------------
     # Doc registry

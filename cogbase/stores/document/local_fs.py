@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
+import shutil
 
 from cogbase.stores.document.base import DocumentStoreBase
 from cogbase.stores.scope import AppScope
@@ -51,6 +52,13 @@ class LocalFSDocumentStore(DocumentStoreBase):
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._unlink, path)
 
+    async def delete_collection(self, collection: str) -> None:
+        col_dir = (self._root / self._c(collection)).resolve()
+        if not str(col_dir).startswith(str(self._root)):
+            raise ValueError(f"collection {collection!r} escapes the store root")
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._rmtree, col_dir)
+
     async def exists(self, collection: str, doc_id: str) -> bool:
         path = self._path(collection, doc_id)
         loop = asyncio.get_event_loop()
@@ -87,3 +95,8 @@ class LocalFSDocumentStore(DocumentStoreBase):
             path.unlink()
         except FileNotFoundError:
             pass
+
+    @staticmethod
+    def _rmtree(path: pathlib.Path) -> None:
+        if path.exists():
+            shutil.rmtree(path)

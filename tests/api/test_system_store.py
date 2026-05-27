@@ -98,6 +98,54 @@ class TestSystemStoreDeleteApp:
         # Must not raise
         await store.delete_app("ghost")
 
+    @pytest.mark.asyncio
+    async def test_delete_cascades_doc_records(self, store):
+        await store.save_app(_make_record(name="my-app"))
+        await store.save_doc(DocRecord(
+            app_name="my-app", doc_id="doc-1", status="active",
+            ingested_at="2026-01-01T00:00:00+00:00",
+        ))
+        await store.save_doc(DocRecord(
+            app_name="my-app", doc_id="doc-2", status="active",
+            ingested_at="2026-01-01T00:00:00+00:00",
+        ))
+        await store.delete_app("my-app")
+        assert await store.list_docs("my-app") == []
+
+    @pytest.mark.asyncio
+    async def test_delete_cascades_task_records(self, store):
+        await store.save_app(_make_record(name="my-app"))
+        await store.create_task(_make_task(task_id="t-1", app_name="my-app"))
+        await store.create_task(_make_task(task_id="t-2", app_name="my-app", doc_id="doc-2"))
+        await store.delete_app("my-app")
+        assert await store.list_tasks("my-app") == []
+
+    @pytest.mark.asyncio
+    async def test_delete_cascades_doc_workflow_records(self, store):
+        await store.save_app(_make_record(name="my-app"))
+        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "done")
+        await store.upsert_doc_workflow_status("my-app", "doc-2", "summarize", "pending")
+        await store.delete_app("my-app")
+        assert await store.list_doc_workflows("my-app") == []
+
+    @pytest.mark.asyncio
+    async def test_delete_does_not_affect_other_apps(self, store):
+        for name in ("app-a", "app-b"):
+            await store.save_app(_make_record(name=name))
+            await store.save_doc(DocRecord(
+                app_name=name, doc_id="doc-1", status="active",
+                ingested_at="2026-01-01T00:00:00+00:00",
+            ))
+            await store.create_task(_make_task(task_id=f"t-{name}", app_name=name))
+            await store.upsert_doc_workflow_status(name, "doc-1", "analyze", "done")
+
+        await store.delete_app("app-a")
+
+        assert await store.get_app("app-b") is not None
+        assert len(await store.list_docs("app-b")) == 1
+        assert len(await store.list_tasks("app-b")) == 1
+        assert len(await store.list_doc_workflows("app-b")) == 1
+
 
 # ---------------------------------------------------------------------------
 # Task helpers

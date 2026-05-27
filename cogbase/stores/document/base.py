@@ -54,6 +54,10 @@ class DocumentStoreBase(abc.ABC):
         """Delete the stored document.  No-op if it does not exist."""
 
     @abc.abstractmethod
+    async def delete_collection(self, collection: str) -> None:
+        """Delete all documents in *collection*.  No-op if the collection does not exist."""
+
+    @abc.abstractmethod
     async def exists(self, collection: str, doc_id: str) -> bool:
         """Return ``True`` if *doc_id* is present in *collection*."""
 

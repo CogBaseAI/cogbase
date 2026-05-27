@@ -84,6 +84,19 @@ class S3DocumentStore(DocumentStoreBase):
             lambda: self._s3.delete_object(Bucket=self._bucket, Key=key),
         )
 
+    async def delete_collection(self, collection: str) -> None:
+        scoped = self._c(collection)
+        prefix = f"{self._prefix}/{scoped}/" if self._prefix else f"{scoped}/"
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(self._executor, self._delete_prefix, prefix)
+
+    def _delete_prefix(self, prefix: str) -> None:
+        paginator = self._s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+            objects = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+            if objects:
+                self._s3.delete_objects(Bucket=self._bucket, Delete={"Objects": objects})
+
     async def save_bytes(self, collection: str, doc_id: str, content: bytes) -> None:
         key = self._key(collection, doc_id)
         loop = asyncio.get_event_loop()

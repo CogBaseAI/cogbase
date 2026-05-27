@@ -19,5 +19,10 @@ class InMemoryDocumentStore(DocumentStoreBase):
     async def delete(self, collection: str, doc_id: str) -> None:
         self._store.pop((self._c(collection), doc_id), None)
 
+    async def delete_collection(self, collection: str) -> None:
+        scoped = self._c(collection)
+        for key in [k for k in self._store if k[0] == scoped]:
+            del self._store[key]
+
     async def exists(self, collection: str, doc_id: str) -> bool:
         return (self._c(collection), doc_id) in self._store

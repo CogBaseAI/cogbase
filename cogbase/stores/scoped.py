@@ -118,6 +118,9 @@ class ScopedDocumentStore(DocumentStoreBase):
     async def exists(self, collection: str, doc_id: str) -> bool:
         return await self._inner.exists(self._c(collection), doc_id)
 
+    async def delete_collection(self, collection: str) -> None:
+        await self._inner.delete_collection(self._c(collection))
+
     async def save_bytes(self, collection: str, doc_id: str, content: bytes) -> None:
         await self._inner.save_bytes(self._c(collection), doc_id, content)
 

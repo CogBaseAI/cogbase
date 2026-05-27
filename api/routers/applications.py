@@ -17,7 +17,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from cogbase.config.config import AppConfig
-from cogbase.stores import AppScope, build_structured_store, build_vector_store
+from cogbase.stores import AppScope, build_document_store, build_structured_store, build_vector_store
 from api.dependencies import AppCacheDep, SkillRegistryDep, SystemResourcesDep, SystemStoreDep
 from api.system_resources import SystemResources
 from api.factory import build_app
@@ -390,6 +390,21 @@ async def delete_application(
                     "Failed to delete structured collection '%s' for app '%s'",
                     sc_cfg.name, app_name, exc_info=True,
                 )
+
+    document_store = (
+        build_document_store(config.document_store, scope=app_scope)
+        if config.document_store
+        else (system_resources.document_store.with_scope(app_scope) if system_resources.document_store else None)
+    )
+    if document_store:
+        try:
+            await document_store.delete_collection(app_name)
+            logger.info("Deleted document store collection for app '%s'", app_name)
+        except Exception:
+            logger.warning(
+                "Failed to delete document store collection for app '%s'",
+                app_name, exc_info=True,
+            )
 
     app_cache.remove(app_name)
     await system_store.delete_app(app_name)
