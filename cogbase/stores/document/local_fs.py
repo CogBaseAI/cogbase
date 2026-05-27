@@ -6,25 +6,29 @@ import asyncio
 import pathlib
 
 from cogbase.stores.document.base import DocumentStoreBase
+from cogbase.stores.scope import AppScope
 
 
 class LocalFSDocumentStore(DocumentStoreBase):
     """Stores document text as UTF-8 files under a root directory.
 
-    Each document is written to ``<root>/<doc_id>`` (intermediate directories
-    are created automatically).  Hierarchical doc_ids (e.g. ``"2024/q1/doc-1"``)
-    produce a matching directory tree.
+    Each document is written to ``<root>/<collection>/<doc_id>`` (intermediate
+    directories are created automatically).  Hierarchical doc_ids (e.g.
+    ``"2024/q1/doc-1"``) produce a matching directory tree.
 
     Args:
-        root: Directory that will hold all document files.  Created on first
-              ``save`` if it does not exist.
+        root:  Directory that will hold all document files.  Created on first
+               ``save`` if it does not exist.
+        scope: Optional scope that prefixes collection names, preventing collisions
+               when multiple applications share the same root directory.
     """
 
-    def __init__(self, root: str | pathlib.Path) -> None:
+    def __init__(self, root: str | pathlib.Path, scope: AppScope | None = None) -> None:
+        super().__init__(scope)
         self._root = pathlib.Path(root).resolve()
 
     def _path(self, collection: str, doc_id: str) -> pathlib.Path:
-        candidate = (self._root / collection / doc_id).resolve()
+        candidate = (self._root / self._c(collection) / doc_id).resolve()
         if not str(candidate).startswith(str(self._root)):
             raise ValueError(f"collection/doc_id {collection!r}/{doc_id!r} escapes the store root")
         return candidate

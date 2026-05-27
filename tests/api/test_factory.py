@@ -309,6 +309,7 @@ class TestBuildAppStructuredStoreResolution:
 
     @patch("api.factory._build_llm")
     async def test_uses_system_store_when_no_app_store(self, mock_build_llm):
+        from cogbase.stores.scoped import ScopedStructuredStore
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         system_store = InMemoryStructuredStore()
@@ -319,7 +320,8 @@ class TestBuildAppStructuredStoreResolution:
             task_store=_mock_task_store(),
         )
         structured_store = next(iter(app._pipelines[0]._structured_by_name.values())).store
-        assert structured_store is system_store
+        assert isinstance(structured_store, ScopedStructuredStore)
+        assert structured_store._inner is system_store
 
     @patch("api.factory._build_llm")
     async def test_app_config_store_overrides_system_store(self, mock_build_llm, tmp_path):
@@ -348,8 +350,10 @@ class TestBuildAppCollectionCreation:
         cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
         vector_store = MagicMock()
         vector_store.create_collection = AsyncMock()
+        vector_store.with_scope.return_value = vector_store
         structured_store = MagicMock()
         structured_store.create_collection = AsyncMock()
+        structured_store.with_scope.return_value = structured_store
 
         await build_app(
             cfg,
@@ -369,8 +373,10 @@ class TestBuildAppCollectionCreation:
         cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
         vector_store = MagicMock()
         vector_store.create_collection = AsyncMock()
+        vector_store.with_scope.return_value = vector_store
         structured_store = MagicMock()
         structured_store.create_collection = AsyncMock()
+        structured_store.with_scope.return_value = structured_store
 
         await build_app(
             cfg,
@@ -391,8 +397,10 @@ class TestBuildAppCollectionCreation:
         cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
         vector_store = MagicMock()
         vector_store.create_collection = AsyncMock()
+        vector_store.with_scope.return_value = vector_store
         structured_store = MagicMock()
         structured_store.create_collection = AsyncMock()
+        structured_store.with_scope.return_value = structured_store
 
         await build_app(
             cfg,
@@ -426,10 +434,11 @@ class TestBuildAppCollectionCreation:
         store._schemas.clear()
 
         # Second pass — active: must register schemas so query doesn't raise KeyError.
-        await build_app(cfg, system=SystemResources(structured_store=store, document_store=doc_store), app_status="active", task_store=ts)
+        app2 = await build_app(cfg, system=SystemResources(structured_store=store, document_store=doc_store), app_status="active", task_store=ts)
 
-        # Query must succeed (empty result, no KeyError).
-        results = await store.query("contract_extraction")
+        # Query through the scoped store (handles the name prefix); must succeed.
+        scoped_store = next(iter(app2._pipelines[0]._structured_by_name.values())).store
+        results = await scoped_store.query("contract_extraction")
         assert results == []
 
 
@@ -861,6 +870,7 @@ class TestBuildAppListExtractor:
 class TestBuildAppDocumentStoreResolution:
     @patch("api.factory._build_llm")
     async def test_uses_system_document_store_when_no_app_document_store(self, mock_build_llm, tmp_path):
+        from cogbase.stores.scoped import ScopedDocumentStore
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml("""\
 name: test_app
@@ -877,7 +887,8 @@ llm:
             task_store=_mock_task_store(),
         )
 
-        assert app.document_store is sys_doc
+        assert isinstance(app.document_store, ScopedDocumentStore)
+        assert app.document_store._inner is sys_doc
 
     @patch("api.factory._build_llm")
     async def test_app_document_store_overrides_system_document_store(self, mock_build_llm, tmp_path):

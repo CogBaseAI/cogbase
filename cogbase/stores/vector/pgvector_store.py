@@ -36,6 +36,7 @@ from cogbase.core.models import Chunk
 from cogbase.stores.vector.base import VectorCollectionSchema, VectorStoreBase
 from cogbase.stores.vector.chunk_codec import FILTERABLE_COLUMNS, from_store_record, to_store_record
 from cogbase.stores.filters import Filter, Op
+from cogbase.stores.scope import AppScope
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,9 @@ class PGVectorStore(VectorStoreBase):
         self,
         dsn: str | None = None,
         pool: "asyncpg.Pool | None" = None,
+        scope: AppScope | None = None,
     ) -> None:
+        super().__init__(scope)
         if dsn is None and pool is None:
             raise ValueError("Provide either dsn or pool.")
         if dsn is not None and pool is not None:
@@ -131,12 +134,13 @@ class PGVectorStore(VectorStoreBase):
 
     async def create_collection(self, schema: VectorCollectionSchema) -> None:
         """Create the table and indexes for ``schema.name``.  Idempotent."""
+        tbl = self._c(schema.name)
         pool = self._get_pool()
         async with pool.acquire() as conn:
             await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
             await conn.execute(
                 f"""
-                CREATE TABLE IF NOT EXISTS "{schema.name}" (
+                CREATE TABLE IF NOT EXISTS "{tbl}" (
                     chunk_id  TEXT PRIMARY KEY,
                     doc_id    TEXT NOT NULL,
                     text      TEXT NOT NULL,
@@ -147,14 +151,14 @@ class PGVectorStore(VectorStoreBase):
             )
             await conn.execute(
                 f"""
-                CREATE INDEX IF NOT EXISTS "{schema.name}_embedding_hnsw_idx"
-                ON "{schema.name}"
+                CREATE INDEX IF NOT EXISTS "{tbl}_embedding_hnsw_idx"
+                ON "{tbl}"
                 USING hnsw (embedding vector_cosine_ops)
                 """
             )
             await conn.execute(
-                f'CREATE INDEX IF NOT EXISTS "{schema.name}_doc_id_idx" '
-                f'ON "{schema.name}" (doc_id)'
+                f'CREATE INDEX IF NOT EXISTS "{tbl}_doc_id_idx" '
+                f'ON "{tbl}" (doc_id)'
             )
         self._collection_names.add(schema.name)
 
@@ -162,7 +166,7 @@ class PGVectorStore(VectorStoreBase):
         """Drop the table for ``collection``.  Idempotent — no-op if absent."""
         pool = self._get_pool()
         async with pool.acquire() as conn:
-            await conn.execute(f'DROP TABLE IF EXISTS "{collection}"')
+            await conn.execute(f'DROP TABLE IF EXISTS "{self._c(collection)}"')
         self._collection_names.discard(collection)
 
     async def upsert(self, collection: str, chunks: list[Chunk]) -> None:
@@ -174,10 +178,11 @@ class PGVectorStore(VectorStoreBase):
         if not incoming:
             return
 
+        tbl = self._c(collection)
         pool = self._get_pool()
         rows = [_to_row(c) for c in incoming]
         sql = (
-            f'INSERT INTO "{collection}" (chunk_id, doc_id, text, embedding, metadata) '
+            f'INSERT INTO "{tbl}" (chunk_id, doc_id, text, embedding, metadata) '
             f"VALUES ($1, $2, $3, $4, $5) "
             f"ON CONFLICT (chunk_id) DO UPDATE SET "
             f"  doc_id    = EXCLUDED.doc_id, "
@@ -200,6 +205,7 @@ class PGVectorStore(VectorStoreBase):
         """Return up to ``top_k`` chunks from ``collection`` ordered by cosine similarity."""
         import numpy as np
 
+        tbl = self._c(collection)
         pool = self._get_pool()
         vec = np.array(query_embedding, dtype=np.float32)
 
@@ -222,7 +228,7 @@ class PGVectorStore(VectorStoreBase):
 
         sql = (
             f"SELECT {select_cols} "
-            f'FROM "{collection}" '
+            f'FROM "{tbl}" '
             f"{where_sql} "
             f"ORDER BY embedding <=> $1 "
             f"LIMIT ${len(params)}"
@@ -236,7 +242,7 @@ class PGVectorStore(VectorStoreBase):
         pool = self._get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
-                f'DELETE FROM "{collection}" WHERE doc_id = $1',
+                f'DELETE FROM "{self._c(collection)}" WHERE doc_id = $1',
                 doc_id,
             )
 

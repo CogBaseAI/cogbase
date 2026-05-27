@@ -17,6 +17,7 @@ from cogbase.config.stores import StructuredStoreConfig
 from cogbase.embeddings import build_embedding as _build_embedder
 from cogbase.llms import build_llm as _build_llm
 from cogbase.stores import (
+    AppScope,
     CollectionSchema,
     DocumentStoreBase,
     StructuredStoreBase,
@@ -107,6 +108,7 @@ async def build_app(
     3. No fallback — raises ``ValueError`` when a required resource is absent.
     """
     sys = system or SystemResources()
+    app_scope = AppScope(app=config.name)
 
     # --- Top-level resources (independent of pipeline) ---
     llm = _build_llm(config.llm) if config.llm else sys.llm
@@ -118,15 +120,21 @@ async def build_app(
     embedder = _build_embedder(config.embedding) if config.embedding else sys.embedder
 
     vector_store: VectorStoreBase | None = (
-        _build_vector_store(config.vector_store) if config.vector_store else sys.vector_store
+        _build_vector_store(config.vector_store, scope=app_scope)
+        if config.vector_store
+        else (sys.vector_store.with_scope(app_scope) if sys.vector_store else None)
     )
 
     structured_store: StructuredStoreBase | None = (
-        _build_structured_store(config.structured_store) if config.structured_store else sys.structured_store
+        _build_structured_store(config.structured_store, scope=app_scope)
+        if config.structured_store
+        else (sys.structured_store.with_scope(app_scope) if sys.structured_store else None)
     )
 
     document_store = (
-        _build_document_store(config.document_store) if config.document_store else sys.document_store
+        _build_document_store(config.document_store, scope=app_scope)
+        if config.document_store
+        else (sys.document_store.with_scope(app_scope) if sys.document_store else None)
     )
 
     # --- Vector collections ---

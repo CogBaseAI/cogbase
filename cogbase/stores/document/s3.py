@@ -6,6 +6,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from cogbase.stores.document.base import DocumentStoreBase
+from cogbase.stores.scope import AppScope
 
 
 class S3DocumentStore(DocumentStoreBase):
@@ -28,7 +29,9 @@ class S3DocumentStore(DocumentStoreBase):
         prefix: str = "",
         region: str | None = None,
         max_workers: int = 8,
+        scope: AppScope | None = None,
     ) -> None:
+        super().__init__(scope)
         try:
             import boto3
         except ImportError as exc:
@@ -40,7 +43,8 @@ class S3DocumentStore(DocumentStoreBase):
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
     def _key(self, collection: str, doc_id: str) -> str:
-        parts = [self._prefix, collection, doc_id] if self._prefix else [collection, doc_id]
+        scoped = self._c(collection)
+        parts = [self._prefix, scoped, doc_id] if self._prefix else [scoped, doc_id]
         return "/".join(parts)
 
     async def save(self, collection: str, doc_id: str, content: str) -> None:

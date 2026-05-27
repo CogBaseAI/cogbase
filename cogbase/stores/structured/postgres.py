@@ -14,6 +14,7 @@ from typing import Any
 from cogbase.stores.structured.base import StructuredStoreBase
 from cogbase.stores.filters import Filter, Op
 from cogbase.stores.schema import CollectionSchema, FieldType
+from cogbase.stores.scope import AppScope
 
 try:
     import asyncpg
@@ -61,8 +62,9 @@ class PostgresStructuredStore(StructuredStoreBase):
         self,
         dsn: str | None = None,
         pool: "asyncpg.Pool | None" = None,  # type: ignore[name-defined]
+        scope: AppScope | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(scope)
         if dsn is None and pool is None:
             raise ValueError("Provide either dsn or pool.")
         if dsn is not None and pool is not None:
@@ -97,26 +99,27 @@ class PostgresStructuredStore(StructuredStoreBase):
     # ------------------------------------------------------------------
 
     async def create_collection(self, schema: CollectionSchema) -> None:
+        tbl = self._c(schema.name)
         pool = self._get_pool()
         async with pool.acquire() as conn:
             # Create table if it does not exist.
             col_defs = _col_defs(schema)
             await conn.execute(
-                f'CREATE TABLE IF NOT EXISTS "{schema.name}" ({", ".join(col_defs)})'
+                f'CREATE TABLE IF NOT EXISTS "{tbl}" ({", ".join(col_defs)})'
             )
 
             # Add any columns that are in the schema but missing from the table.
             rows = await conn.fetch(
                 "SELECT column_name FROM information_schema.columns "
                 "WHERE table_name = $1",
-                schema.name,
+                tbl,
             )
             existing_cols: set[str] = {row["column_name"] for row in rows}
             for field_name, field in schema.fields.items():
                 if field_name not in existing_cols:
                     pg_type = _PG_TYPE[field.type]
                     await conn.execute(
-                        f'ALTER TABLE "{schema.name}" ADD COLUMN "{field_name}" {pg_type}'
+                        f'ALTER TABLE "{tbl}" ADD COLUMN "{field_name}" {pg_type}'
                     )
 
             # Ensure indexes exist (idempotent via IF NOT EXISTS).
@@ -124,22 +127,23 @@ class PostgresStructuredStore(StructuredStoreBase):
                 if field_name in schema.primary_fields:
                     continue
                 if field.unique:
-                    idx_name = f"uq_{schema.name}_{field_name}"
+                    idx_name = f"uq_{tbl}_{field_name}"
                     await conn.execute(
                         f'CREATE UNIQUE INDEX IF NOT EXISTS "{idx_name}" '
-                        f'ON "{schema.name}" ("{field_name}")'
+                        f'ON "{tbl}" ("{field_name}")'
                     )
                 elif field.index:
-                    idx_name = f"idx_{schema.name}_{field_name}"
+                    idx_name = f"idx_{tbl}_{field_name}"
                     await conn.execute(
                         f'CREATE INDEX IF NOT EXISTS "{idx_name}" '
-                        f'ON "{schema.name}" ("{field_name}")'
+                        f'ON "{tbl}" ("{field_name}")'
                     )
 
         self._schemas[schema.name] = schema
 
     async def _save(self, collection: str, records: list[dict]) -> None:
         schema = self._get_schema(collection)
+        tbl = self._c(collection)
         pool = self._get_pool()
         cols = list(schema.fields.keys())
         col_list = ", ".join(f'"{c}"' for c in cols)
@@ -158,7 +162,7 @@ class PostgresStructuredStore(StructuredStoreBase):
 
         placeholders = ", ".join(f"${i + 1}" for i in range(len(cols)))
         sql = (
-            f'INSERT INTO "{collection}" ({col_list}) VALUES ({placeholders}) '
+            f'INSERT INTO "{tbl}" ({col_list}) VALUES ({placeholders}) '
             f"{conflict_clause}"
         )
 
@@ -173,6 +177,7 @@ class PostgresStructuredStore(StructuredStoreBase):
         fields: list[str] | None = None,
     ) -> list[dict]:
         schema = self._get_schema(collection)
+        tbl = self._c(collection)
         pool = self._get_pool()
         where, params = _to_pg_where(filters or [], schema)
 
@@ -182,7 +187,7 @@ class PostgresStructuredStore(StructuredStoreBase):
         else:
             col_list = "*"
 
-        sql = f'SELECT {col_list} FROM "{collection}"'
+        sql = f'SELECT {col_list} FROM "{tbl}"'
         if where:
             sql += f" WHERE {where}"
 
@@ -200,6 +205,7 @@ class PostgresStructuredStore(StructuredStoreBase):
                 "primary-key migration"
             )
 
+        tbl = self._c(schema.name)
         pool = self._get_pool()
         old_fields = set(old_schema.fields)
         new_fields = set(schema.fields)
@@ -211,11 +217,11 @@ class PostgresStructuredStore(StructuredStoreBase):
                 for field_name in added:
                     pg_type = _PG_TYPE[schema.fields[field_name].type]
                     await conn.execute(
-                        f'ALTER TABLE "{schema.name}" ADD COLUMN "{field_name}" {pg_type}'
+                        f'ALTER TABLE "{tbl}" ADD COLUMN "{field_name}" {pg_type}'
                     )
                 for field_name in removed:
                     await conn.execute(
-                        f'ALTER TABLE "{schema.name}" DROP COLUMN "{field_name}"'
+                        f'ALTER TABLE "{tbl}" DROP COLUMN "{field_name}"'
                     )
 
                 # Ensure indexes exist for all indexed fields.
@@ -223,16 +229,16 @@ class PostgresStructuredStore(StructuredStoreBase):
                     if field_name in schema.primary_fields:
                         continue
                     if field.unique:
-                        idx_name = f"uq_{schema.name}_{field_name}"
+                        idx_name = f"uq_{tbl}_{field_name}"
                         await conn.execute(
                             f'CREATE UNIQUE INDEX IF NOT EXISTS "{idx_name}" '
-                            f'ON "{schema.name}" ("{field_name}")'
+                            f'ON "{tbl}" ("{field_name}")'
                         )
                     elif field.index:
-                        idx_name = f"idx_{schema.name}_{field_name}"
+                        idx_name = f"idx_{tbl}_{field_name}"
                         await conn.execute(
                             f'CREATE INDEX IF NOT EXISTS "{idx_name}" '
-                            f'ON "{schema.name}" ("{field_name}")'
+                            f'ON "{tbl}" ("{field_name}")'
                         )
 
         self._schemas[schema.name] = schema
@@ -241,14 +247,15 @@ class PostgresStructuredStore(StructuredStoreBase):
         self._get_schema(collection)  # raises KeyError if unknown
         pool = self._get_pool()
         async with pool.acquire() as conn:
-            await conn.execute(f'DROP TABLE "{collection}"')
+            await conn.execute(f'DROP TABLE "{self._c(collection)}"')
         del self._schemas[collection]
 
     async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         schema = self._get_schema(collection)
+        tbl = self._c(collection)
         pool = self._get_pool()
         where, params = _to_pg_where(filters or [], schema)
-        sql = f'DELETE FROM "{collection}"'
+        sql = f'DELETE FROM "{tbl}"'
         if where:
             sql += f" WHERE {where}"
         async with pool.acquire() as conn:

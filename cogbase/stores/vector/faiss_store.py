@@ -25,6 +25,7 @@ from cogbase.core.models import Chunk
 from cogbase.stores.vector.base import VectorCollectionSchema, VectorStoreBase
 from cogbase.stores.vector.chunk_codec import project_chunk
 from cogbase.stores.filters import Filter, matches
+from cogbase.stores.scope import AppScope
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,8 @@ class FAISSMemoryVectorStore(VectorStoreBase):
     ``delete`` — operations on an undeclared collection raise ``KeyError``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, scope: AppScope | None = None) -> None:
+        super().__init__(scope)
         self._collections: dict[str, _CollectionState] = {}
 
     # ------------------------------------------------------------------
@@ -67,8 +69,9 @@ class FAISSMemoryVectorStore(VectorStoreBase):
 
     async def create_collection(self, schema: VectorCollectionSchema) -> None:
         """Register a collection. Idempotent — a second call with the same name is a no-op."""
-        if schema.name not in self._collections:
-            self._collections[schema.name] = _CollectionState(
+        key = self._c(schema.name)
+        if key not in self._collections:
+            self._collections[key] = _CollectionState(
                 schema=schema,
                 index=_make_index(schema.dimensions),
             )
@@ -76,7 +79,7 @@ class FAISSMemoryVectorStore(VectorStoreBase):
 
     async def delete_collection(self, collection: str) -> None:
         """Remove a collection and all its chunks from memory."""
-        if self._collections.pop(collection, None) is not None:
+        if self._collections.pop(self._c(collection), None) is not None:
             await self._after_mutation()
 
     async def upsert(self, collection: str, chunks: list[Chunk]) -> None:
@@ -186,7 +189,7 @@ class FAISSMemoryVectorStore(VectorStoreBase):
 
     def ntotal(self, collection: str) -> int:
         """Number of vectors in *collection*. Returns 0 if the collection does not exist."""
-        state = self._collections.get(collection)
+        state = self._collections.get(self._c(collection))
         return state.index.ntotal if state is not None else 0
 
     # ------------------------------------------------------------------
@@ -194,7 +197,7 @@ class FAISSMemoryVectorStore(VectorStoreBase):
     # ------------------------------------------------------------------
 
     def _get_collection(self, collection: str) -> _CollectionState:
-        state = self._collections.get(collection)
+        state = self._collections.get(self._c(collection))
         if state is None:
             raise KeyError(
                 f"Collection '{collection}' not found. Call create_collection first."
@@ -216,8 +219,14 @@ class FAISSVectorStore(FAISSMemoryVectorStore):
     need to call ``load`` explicitly.
     """
 
-    def __init__(self, path: str | Path | None = None, *, dim: int | None = None) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        dim: int | None = None,
+        scope: AppScope | None = None,
+    ) -> None:
+        super().__init__(scope=scope)
         # Kept for older callers that passed a default FAISS dimension. Per-collection
         # dimensions now come from VectorCollectionSchema.
         _ = dim
@@ -314,7 +323,7 @@ class FAISSVectorStore(FAISSMemoryVectorStore):
         if not self._loaded and (self.path / "meta.json").exists():
             self._load_sync(self.path)
             self._loaded = True
-        return super().ntotal(collection)
+        return super().ntotal(collection)  # parent already calls self._c()
 
     async def _after_mutation(self) -> None:
         if self._persisting:

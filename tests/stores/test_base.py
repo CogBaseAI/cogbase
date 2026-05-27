@@ -2,7 +2,7 @@ import pytest
 from pydantic import BaseModel
 
 from cogbase.core.models import Chunk
-from cogbase.stores import CollectionSchema, Filter, StructuredStoreBase, VectorStoreBase
+from cogbase.stores import AppScope, CollectionSchema, Filter, StructuredStoreBase, VectorStoreBase
 
 
 def test_structured_store_cannot_be_instantiated():
@@ -36,6 +36,34 @@ def test_complete_structured_subclass_ok():
         async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None: ...
 
     assert Minimal() is not None
+
+
+def test_structured_store_scope_stored():
+    class Minimal(StructuredStoreBase):
+        async def create_collection(self, schema: CollectionSchema) -> None: ...
+        async def update_collection(self, schema: CollectionSchema) -> None: ...
+        async def delete_collection(self, collection: str) -> None: ...
+        async def _save(self, collection: str, records: list[dict]) -> None: ...
+        async def query(self, collection: str, filters: list[Filter] | None = None, fields: list[str] | None = None) -> list[dict]: return []
+        async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None: ...
+
+    scope = AppScope(app="myapp")
+    store = Minimal(scope=scope)
+    assert store._scope is scope
+    assert store._c("col") == "myapp__col"
+
+
+def test_structured_store_no_scope_bare_name():
+    class Minimal(StructuredStoreBase):
+        async def create_collection(self, schema: CollectionSchema) -> None: ...
+        async def update_collection(self, schema: CollectionSchema) -> None: ...
+        async def delete_collection(self, collection: str) -> None: ...
+        async def _save(self, collection: str, records: list[dict]) -> None: ...
+        async def query(self, collection: str, filters: list[Filter] | None = None, fields: list[str] | None = None) -> list[dict]: return []
+        async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None: ...
+
+    store = Minimal()
+    assert store._c("col") == "col"
 
 
 async def test_query_as_uses_query():

@@ -1,11 +1,14 @@
 """Abstract adapter contracts for vector stores."""
 
+from __future__ import annotations
+
 import abc
 
 from pydantic import BaseModel, field_validator
 
 from cogbase.core.models import Chunk
 from cogbase.stores.filters import Filter
+from cogbase.stores.scope import AppScope
 
 
 class VectorCollectionSchema(BaseModel):
@@ -68,6 +71,19 @@ class VectorStoreBase(abc.ABC):
         results = await store.search("legal_chunks", "notice period", query_embedding, top_k=5)
         await store.delete("legal_chunks", doc_id="doc-42")
     """
+
+    def __init__(self, scope: AppScope | None = None) -> None:
+        self._scope = scope
+
+    def _c(self, collection: str) -> str:
+        """Return the backend-internal name for *collection* (bare name → scoped name)."""
+        prefix = self._scope.prefix() if self._scope else None
+        return f"{prefix}__{collection}" if prefix else collection
+
+    def with_scope(self, scope: AppScope) -> "VectorStoreBase":
+        """Return a scoped proxy that prefixes all collection names with *scope*."""
+        from cogbase.stores.scoped import ScopedVectorStore
+        return ScopedVectorStore(self, scope)
 
     @abc.abstractmethod
     async def create_collection(self, schema: VectorCollectionSchema) -> None:

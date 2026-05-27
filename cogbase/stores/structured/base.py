@@ -1,5 +1,7 @@
 """Abstract adapter contract for structured stores."""
 
+from __future__ import annotations
+
 import abc
 from typing import TypeVar
 
@@ -7,6 +9,7 @@ from pydantic import BaseModel
 
 from cogbase.stores.filters import Filter
 from cogbase.stores.schema import CollectionSchema
+from cogbase.stores.scope import AppScope
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -34,8 +37,19 @@ class StructuredStoreBase(abc.ABC):
     filters to the engine; others may evaluate them in Python after the fetch.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, scope: AppScope | None = None) -> None:
         self._schemas: dict[str, CollectionSchema] = {}
+        self._scope = scope
+
+    def _c(self, collection: str) -> str:
+        """Return the backend-internal name for *collection* (bare name → scoped name)."""
+        prefix = self._scope.prefix() if self._scope else None
+        return f"{prefix}__{collection}" if prefix else collection
+
+    def with_scope(self, scope: AppScope) -> "StructuredStoreBase":
+        """Return a scoped proxy that prefixes all collection names with *scope*."""
+        from cogbase.stores.scoped import ScopedStructuredStore
+        return ScopedStructuredStore(self, scope)
 
     def register_schema(self, schema: CollectionSchema) -> None:
         """Register a schema in the in-memory registry without running any DDL.

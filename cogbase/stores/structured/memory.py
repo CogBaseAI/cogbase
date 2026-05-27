@@ -13,6 +13,7 @@ import pandas as pd
 from cogbase.stores.structured.base import StructuredStoreBase
 from cogbase.stores.filters import Filter, Op, _like
 from cogbase.stores.schema import CollectionSchema, FieldType
+from cogbase.stores.scope import AppScope
 
 _PANDAS_DTYPE: dict[FieldType, str] = {
     FieldType.STRING:  "object",
@@ -31,14 +32,15 @@ class InMemoryStructuredStore(StructuredStoreBase):
     since pandas has no native understanding of the filter DSL over object columns.
     """
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, scope: AppScope | None = None) -> None:
+        super().__init__(scope)
         self._frames: dict[str, pd.DataFrame] = {}
 
     async def create_collection(self, schema: CollectionSchema) -> None:
+        key = self._c(schema.name)
         if schema.name not in self._schemas:
             self._schemas[schema.name] = schema
-            self._frames[schema.name] = _empty_frame(schema)
+            self._frames[key] = _empty_frame(schema)
             return
 
         # Collection already exists — add columns for any fields that are new
@@ -46,11 +48,11 @@ class InMemoryStructuredStore(StructuredStoreBase):
         # the same session).  Removed fields are silently ignored: the DataFrame
         # retains the old column but the row helpers only read/write schema fields.
         old_fields = self._schemas[schema.name].fields
-        df = self._frames[schema.name]
+        df = self._frames[key]
         for field_name, field in schema.fields.items():
             if field_name not in old_fields:
                 df[field_name] = pd.Series(dtype=_PANDAS_DTYPE[field.type])
-        self._frames[schema.name] = df
+        self._frames[key] = df
         self._schemas[schema.name] = schema
 
     async def update_collection(self, schema: CollectionSchema) -> None:
@@ -62,9 +64,10 @@ class InMemoryStructuredStore(StructuredStoreBase):
                 "update_collection does not support primary-key migration"
             )
 
+        key = self._c(schema.name)
         old_fields = set(old_schema.fields)
         new_fields = set(schema.fields)
-        df = self._frames[schema.name]
+        df = self._frames[key]
 
         # Add columns for new fields.
         for field_name in new_fields - old_fields:
@@ -75,14 +78,15 @@ class InMemoryStructuredStore(StructuredStoreBase):
         if removed:
             df = df.drop(columns=[c for c in removed if c in df.columns])
 
-        self._frames[schema.name] = df
+        self._frames[key] = df
         self._schemas[schema.name] = schema
 
     async def _save(self, collection: str, records: list[dict]) -> None:
         schema = self._get_schema(collection)
         rows = [_serialize(r, schema) for r in records]
         new_df = _to_frame(rows, schema)
-        df = self._frames[collection]
+        key = self._c(collection)
+        df = self._frames[key]
         # Compute surviving rows: drop those whose PK appears in the incoming batch.
         if not df.empty and not new_df.empty:
             existing_keys = pd.Series(list(df[schema.primary_fields].itertuples(index=False, name=None)))
@@ -106,7 +110,7 @@ class InMemoryStructuredStore(StructuredStoreBase):
                     f"Unique constraint violation on '{collection}.{field_name}': "
                     f"value {conflict_val!r} already exists"
                 )
-        self._frames[collection] = pd.concat([surviving, new_df], ignore_index=True)
+        self._frames[key] = pd.concat([surviving, new_df], ignore_index=True)
 
     async def query(
         self,
@@ -115,7 +119,7 @@ class InMemoryStructuredStore(StructuredStoreBase):
         fields: list[str] | None = None,
     ) -> list[dict]:
         schema = self._get_schema(collection)
-        df = self._frames[collection]
+        df = self._frames[self._c(collection)]
         if filters:
             mask = _build_mask(df, filters)
             df = df[mask]
@@ -131,16 +135,17 @@ class InMemoryStructuredStore(StructuredStoreBase):
         if collection not in self._schemas:
             raise KeyError(f"Collection '{collection}' not found.")
         del self._schemas[collection]
-        del self._frames[collection]
+        del self._frames[self._c(collection)]
 
     async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         schema = self._get_schema(collection)
+        key = self._c(collection)
         if not filters:
-            self._frames[collection] = _empty_frame(schema)
+            self._frames[key] = _empty_frame(schema)
             return
-        df = self._frames[collection]
+        df = self._frames[key]
         mask = _build_mask(df, filters)
-        self._frames[collection] = df[~mask].reset_index(drop=True)
+        self._frames[key] = df[~mask].reset_index(drop=True)
 
     # ------------------------------------------------------------------
     # Persistence
@@ -179,12 +184,13 @@ class InMemoryStructuredStore(StructuredStoreBase):
         self._schemas = {name: CollectionSchema(**data) for name, data in schemas_data.items()}
         self._frames = {}
         for name, schema in self._schemas.items():
-            pkl_path = path / f"{name}.pkl"
+            key = self._c(name)
+            pkl_path = path / f"{key}.pkl"
             if pkl_path.exists():
                 with open(pkl_path, "rb") as fh:
-                    self._frames[name] = pickle.load(fh)
+                    self._frames[key] = pickle.load(fh)
             else:
-                self._frames[name] = _empty_frame(schema)
+                self._frames[key] = _empty_frame(schema)
 
 
 # ---------------------------------------------------------------------------

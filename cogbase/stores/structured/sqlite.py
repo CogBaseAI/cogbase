@@ -7,6 +7,7 @@ from pathlib import Path
 from cogbase.stores.structured.base import StructuredStoreBase
 from cogbase.stores.filters import Filter, matches, to_sql_where
 from cogbase.stores.schema import CollectionSchema, FieldType
+from cogbase.stores.scope import AppScope
 
 _SQL_TYPE: dict[FieldType, str] = {
     FieldType.STRING:  "TEXT",
@@ -28,8 +29,8 @@ class SQLiteStructuredStore(StructuredStoreBase):
         path: Path to the SQLite file, or ``":memory:"`` for an in-process db.
     """
 
-    def __init__(self, path: str | Path = ":memory:") -> None:
-        super().__init__()
+    def __init__(self, path: str | Path = ":memory:", scope: AppScope | None = None) -> None:
+        super().__init__(scope)
         p = Path(path)
         if str(path) != ":memory:" and p.parent != Path("."):
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -50,9 +51,10 @@ class SQLiteStructuredStore(StructuredStoreBase):
     # ------------------------------------------------------------------
 
     async def create_collection(self, schema: CollectionSchema) -> None:
+        tbl = self._c(schema.name)
         # 1. Create the table if it does not exist yet.
         self._conn.execute(
-            f'CREATE TABLE IF NOT EXISTS "{schema.name}" ({", ".join(_col_defs(schema))})'
+            f'CREATE TABLE IF NOT EXISTS "{tbl}" ({", ".join(_col_defs(schema))})'
         )
 
         # 2. Inspect existing columns.  Build two sets:
@@ -62,7 +64,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
         #      the table was first created).
         col_info = {
             row[1]: row  # name → (cid, name, type, notnull, dflt_value, pk)
-            for row in self._conn.execute(f'PRAGMA table_info("{schema.name}")')
+            for row in self._conn.execute(f'PRAGMA table_info("{tbl}")')
         }
         existing_cols = set(col_info)
 
@@ -78,21 +80,21 @@ class SQLiteStructuredStore(StructuredStoreBase):
         if constraint_mismatch:
             # Rebuild via a temp table — the only portable way to change column
             # constraints in SQLite (ALTER COLUMN is not supported).
-            tmp = f"_{schema.name}_cc_tmp"
+            tmp = f"_{tbl}_cc_tmp"
             carry = sorted(existing_cols & set(schema.fields))
             carry_sql = ", ".join(f'"{c}"' for c in carry)
             with self._conn:
                 self._conn.execute(f'CREATE TABLE "{tmp}" ({", ".join(_col_defs(schema))})')
                 self._conn.execute(
                     f'INSERT INTO "{tmp}" ({carry_sql}) '
-                    f'SELECT {carry_sql} FROM "{schema.name}"'
+                    f'SELECT {carry_sql} FROM "{tbl}"'
                 )
-                self._conn.execute(f'DROP TABLE "{schema.name}"')
-                self._conn.execute(f'ALTER TABLE "{tmp}" RENAME TO "{schema.name}"')
+                self._conn.execute(f'DROP TABLE "{tbl}"')
+                self._conn.execute(f'ALTER TABLE "{tmp}" RENAME TO "{tbl}"')
             # Refresh col_info and existing_cols after rebuild.
             col_info = {
                 row[1]: row
-                for row in self._conn.execute(f'PRAGMA table_info("{schema.name}")')
+                for row in self._conn.execute(f'PRAGMA table_info("{tbl}")')
             }
             existing_cols = set(col_info)
 
@@ -104,7 +106,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
             if field_name not in existing_cols:
                 sql_type = _SQL_TYPE[field.type]
                 self._conn.execute(
-                    f'ALTER TABLE "{schema.name}" ADD COLUMN "{field_name}" {sql_type}'
+                    f'ALTER TABLE "{tbl}" ADD COLUMN "{field_name}" {sql_type}'
                 )
 
         # 4. Ensure indexes exist (idempotent).
@@ -113,13 +115,13 @@ class SQLiteStructuredStore(StructuredStoreBase):
                 continue
             if field.unique:
                 self._conn.execute(
-                    f'CREATE UNIQUE INDEX IF NOT EXISTS "uq_{schema.name}_{field_name}" '
-                    f'ON "{schema.name}" ("{field_name}")'
+                    f'CREATE UNIQUE INDEX IF NOT EXISTS "uq_{tbl}_{field_name}" '
+                    f'ON "{tbl}" ("{field_name}")'
                 )
             elif field.index:
                 self._conn.execute(
-                    f'CREATE INDEX IF NOT EXISTS "idx_{schema.name}_{field_name}" '
-                    f'ON "{schema.name}" ("{field_name}")'
+                    f'CREATE INDEX IF NOT EXISTS "idx_{tbl}_{field_name}" '
+                    f'ON "{tbl}" ("{field_name}")'
                 )
 
         self._conn.commit()
@@ -127,6 +129,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
 
     async def _save(self, collection: str, records: list[dict]) -> None:
         schema = self._get_schema(collection)
+        tbl = self._c(collection)
         cols = list(schema.fields.keys())
         col_list = ", ".join(f'"{c}"' for c in cols)
         placeholders = ", ".join(["?"] * len(cols))
@@ -137,7 +140,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
             conflict_clause = f"ON CONFLICT ({conflict_target}) DO UPDATE SET {update_set}"
         else:
             conflict_clause = f"ON CONFLICT ({conflict_target}) DO NOTHING"
-        sql = f'INSERT INTO "{collection}" ({col_list}) VALUES ({placeholders}) {conflict_clause}'
+        sql = f'INSERT INTO "{tbl}" ({col_list}) VALUES ({placeholders}) {conflict_clause}'
         self._conn.executemany(sql, [_to_sql_row(r, schema) for r in records])
         self._conn.commit()
 
@@ -148,6 +151,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
         fields: list[str] | None = None,
     ) -> list[dict]:
         schema = self._get_schema(collection)
+        tbl = self._c(collection)
         fs = filters or []
         json_fields = _json_fields(schema)
 
@@ -167,7 +171,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
             extra_fetch = set()
 
         col_list = ", ".join(f'"{c}"' for c in fetch_cols)
-        sql = f'SELECT {col_list} FROM "{collection}"'
+        sql = f'SELECT {col_list} FROM "{tbl}"'
         if where:
             sql += f" WHERE {where}"
 
@@ -193,6 +197,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
                 "update_collection does not support primary-key migration"
             )
 
+        tbl = self._c(schema.name)
         old_fields = set(old_schema.fields)
         new_fields = set(schema.fields)
         added = new_fields - old_fields
@@ -202,7 +207,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
             # Table rebuild: create a temp table with the new schema, copy the
             # surviving columns, swap the tables.  This is the only portable way
             # to drop columns in SQLite (DROP COLUMN requires ≥ 3.35).
-            tmp = f"_{schema.name}_upd_tmp"
+            tmp = f"_{tbl}_upd_tmp"
             col_defs = _col_defs(schema)
             carry = sorted(old_fields & new_fields)  # preserve column order determinism
             carry_sql = ", ".join(f'"{c}"' for c in carry)
@@ -210,17 +215,17 @@ class SQLiteStructuredStore(StructuredStoreBase):
                 self._conn.execute(f'CREATE TABLE "{tmp}" ({", ".join(col_defs)})')
                 self._conn.execute(
                     f'INSERT INTO "{tmp}" ({carry_sql}) '
-                    f'SELECT {carry_sql} FROM "{schema.name}"'
+                    f'SELECT {carry_sql} FROM "{tbl}"'
                 )
-                self._conn.execute(f'DROP TABLE "{schema.name}"')
-                self._conn.execute(f'ALTER TABLE "{tmp}" RENAME TO "{schema.name}"')
+                self._conn.execute(f'DROP TABLE "{tbl}"')
+                self._conn.execute(f'ALTER TABLE "{tmp}" RENAME TO "{tbl}"')
         elif added:
             # Additions only — cheaper path: just ALTER TABLE ADD COLUMN.
             for field_name in added:
                 field = schema.fields[field_name]
                 sql_type = _SQL_TYPE[field.type]
                 self._conn.execute(
-                    f'ALTER TABLE "{schema.name}" ADD COLUMN "{field_name}" {sql_type}'
+                    f'ALTER TABLE "{tbl}" ADD COLUMN "{field_name}" {sql_type}'
                 )
 
         # Ensure indexes exist for all indexed fields (idempotent).
@@ -229,13 +234,13 @@ class SQLiteStructuredStore(StructuredStoreBase):
                 continue
             if field.unique:
                 self._conn.execute(
-                    f'CREATE UNIQUE INDEX IF NOT EXISTS "uq_{schema.name}_{field_name}" '
-                    f'ON "{schema.name}" ("{field_name}")'
+                    f'CREATE UNIQUE INDEX IF NOT EXISTS "uq_{tbl}_{field_name}" '
+                    f'ON "{tbl}" ("{field_name}")'
                 )
             elif field.index:
                 self._conn.execute(
-                    f'CREATE INDEX IF NOT EXISTS "idx_{schema.name}_{field_name}" '
-                    f'ON "{schema.name}" ("{field_name}")'
+                    f'CREATE INDEX IF NOT EXISTS "idx_{tbl}_{field_name}" '
+                    f'ON "{tbl}" ("{field_name}")'
                 )
 
         self._conn.commit()
@@ -243,16 +248,17 @@ class SQLiteStructuredStore(StructuredStoreBase):
 
     async def delete_collection(self, collection: str) -> None:
         self._get_schema(collection)  # raises KeyError if unknown
-        self._conn.execute(f'DROP TABLE "{collection}"')
+        self._conn.execute(f'DROP TABLE "{self._c(collection)}"')
         self._conn.commit()
         del self._schemas[collection]
 
     async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         schema = self._get_schema(collection)
+        tbl = self._c(collection)
         fs = filters or []
 
         if not fs:
-            self._conn.execute(f'DELETE FROM "{collection}"')
+            self._conn.execute(f'DELETE FROM "{tbl}"')
             self._conn.commit()
             return
 
@@ -269,7 +275,7 @@ class SQLiteStructuredStore(StructuredStoreBase):
             )
             params.extend(row[field] for field in schema.primary_fields)
         self._conn.execute(
-            f'DELETE FROM "{collection}" WHERE ' + " OR ".join(key_clauses),
+            f'DELETE FROM "{tbl}" WHERE ' + " OR ".join(key_clauses),
             params,
         )
         self._conn.commit()

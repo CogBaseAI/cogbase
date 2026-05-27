@@ -1,6 +1,10 @@
 """Abstract contract for object-based document stores."""
 
+from __future__ import annotations
+
 import abc
+
+from cogbase.stores.scope import AppScope
 
 
 class DocumentStoreBase(abc.ABC):
@@ -20,6 +24,19 @@ class DocumentStoreBase(abc.ABC):
         text = await store.load("legal", "contract-001")
         await store.delete("legal", "contract-001")
     """
+
+    def __init__(self, scope: AppScope | None = None) -> None:
+        self._scope = scope
+
+    def _c(self, collection: str) -> str:
+        """Return the backend-internal name for *collection* (bare name → scoped name)."""
+        prefix = self._scope.prefix() if self._scope else None
+        return f"{prefix}__{collection}" if prefix else collection
+
+    def with_scope(self, scope: AppScope) -> "DocumentStoreBase":
+        """Return a scoped proxy that prefixes all collection names with *scope*."""
+        from cogbase.stores.scoped import ScopedDocumentStore
+        return ScopedDocumentStore(self, scope)
 
     @abc.abstractmethod
     async def save(self, collection: str, doc_id: str, content: str) -> None:
