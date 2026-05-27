@@ -520,7 +520,7 @@ async def test_run_read_document_slice_content_correct():
     assert len(captured_tool_outputs) == 1
     doc_slice, tool_text = captured_tool_outputs[0]
     assert isinstance(doc_slice, DocumentSlice)
-    assert "hello hello " in tool_text
+    assert "hello hello" in tool_text
     assert "chars 0–12 of 300" in tool_text
 
 
@@ -638,9 +638,20 @@ def test_format_chunks_includes_chunk_id():
 
     chunk = Chunk(chunk_id="contract_001_0", doc_id="contract_001", text="Payment terms are net 30.")
     output = _format_chunks([chunk])
-    assert "id=contract_001_0" in output
+    assert "[contract_001_0]" in output
     assert "doc: contract_001" in output
     assert "Payment terms are net 30." in output
+
+
+def test_format_chunks_chunk_id_is_bracket_key():
+    from cogbase.core.query_runner import _format_chunks
+    from cogbase.core.models import Chunk
+
+    chunk = Chunk(chunk_id="c_42", doc_id="d1", text="x")
+    output = _format_chunks([chunk])
+    # The bracket key must be the chunk_id, not a numeric counter.
+    assert "[c_42]" in output
+    assert "[1]" not in output
 
 
 def test_format_chunks_includes_char_offsets_when_present():
@@ -649,8 +660,7 @@ def test_format_chunks_includes_char_offsets_when_present():
 
     chunk = Chunk(chunk_id="doc_0_0", doc_id="doc_0", text="text", char_offset=100, char_length=50)
     output = _format_chunks([chunk])
-    assert "char_offset: 100" in output
-    assert "char_length: 50" in output
+    assert "chars 100–150" in output
 
 
 def test_format_chunks_empty_returns_placeholder():
@@ -794,3 +804,149 @@ async def test_run_vector_search_fallback_all_chunks_when_llm_cites_none():
     result = output[-1]
     assert isinstance(result, QueryResult)
     assert len(result.chunks) == 2
+
+
+# ---------------------------------------------------------------------------
+# DocumentSlice.slice_id
+# ---------------------------------------------------------------------------
+
+def test_document_slice_slice_id():
+    s = DocumentSlice(doc_id="report.pdf", offset=100, length=500, text="x")
+    assert s.slice_id == "report.pdf:100:500"
+
+
+def test_document_slice_slice_id_zero_offset():
+    s = DocumentSlice(doc_id="doc", offset=0, length=2000, text="y")
+    assert s.slice_id == "doc:0:2000"
+
+
+# ---------------------------------------------------------------------------
+# _filter_cited_slices()
+# ---------------------------------------------------------------------------
+
+def test_filter_cited_slices_returns_cited_subset():
+    from cogbase.core.query_runner import _filter_cited_slices
+
+    s1 = DocumentSlice(doc_id="a.pdf", offset=0,   length=100, text="alpha")
+    s2 = DocumentSlice(doc_id="a.pdf", offset=100, length=100, text="beta")
+    s3 = DocumentSlice(doc_id="b.pdf", offset=0,   length=200, text="gamma")
+
+    result = _filter_cited_slices(
+        f"Based on [{s1.slice_id}] and [{s3.slice_id}], the answer is clear.",
+        [s1, s2, s3],
+    )
+    assert result == [s1, s3]
+
+
+def test_filter_cited_slices_fallback_when_no_citations():
+    from cogbase.core.query_runner import _filter_cited_slices
+
+    s1 = DocumentSlice(doc_id="x.pdf", offset=0, length=50, text="alpha")
+    s2 = DocumentSlice(doc_id="x.pdf", offset=50, length=50, text="beta")
+
+    result = _filter_cited_slices("Based on the documents, here is the answer.", [s1, s2])
+    assert result == [s1, s2]
+
+
+def test_filter_cited_slices_ignores_unknown_bracket_patterns():
+    from cogbase.core.query_runner import _filter_cited_slices
+
+    s1 = DocumentSlice(doc_id="x.pdf", offset=0, length=50, text="alpha")
+
+    # Brackets that don't match any slice_id trigger fallback.
+    result = _filter_cited_slices("See [1] and [some-chunk-id] for details.", [s1])
+    assert result == [s1]
+
+
+def test_filter_cited_slices_empty_input_returns_empty():
+    from cogbase.core.query_runner import _filter_cited_slices
+
+    assert _filter_cited_slices("anything [x.pdf:0:100]", []) == []
+
+
+def test_filter_cited_slices_preserves_all_slices_order():
+    from cogbase.core.query_runner import _filter_cited_slices
+
+    s1 = DocumentSlice(doc_id="d.pdf", offset=0,   length=100, text="first")
+    s2 = DocumentSlice(doc_id="d.pdf", offset=100, length=100, text="second")
+    s3 = DocumentSlice(doc_id="d.pdf", offset=200, length=100, text="third")
+
+    # LLM cited in reverse order — result should follow all_slices order.
+    result = _filter_cited_slices(f"See [{s3.slice_id}] and [{s1.slice_id}].", [s1, s2, s3])
+    assert result == [s1, s3]
+
+
+# ---------------------------------------------------------------------------
+# _run_read_document output format
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_run_read_document_output_uses_passage_header_and_slice_id():
+    """Tool output uses 'Passage:' header with [slice_id] as the citable bracket key."""
+    text = "hello world " * 20  # 240 chars
+    store = _make_document_store({"doc.pdf": text})
+
+    captured: list = []
+    original = Runner._run_read_document
+
+    async def _cap(self, inputs):
+        result = await original(self, inputs)
+        captured.append(result)
+        return result
+
+    llm = _make_llm(
+        _tool_result("read_document", {"doc_id": "doc.pdf", "offset": 0, "length": 24}),
+        _text_result("Done."),
+    )
+    runner = Runner(llm, document_store=store, app_name="myapp")
+    with patch.object(Runner, "_run_read_document", _cap):
+        [c async for c in runner.run("read doc")]
+
+    doc_slice, tool_text = captured[0]
+    expected_id = doc_slice.slice_id  # "doc.pdf:0:24"
+    assert tool_text.startswith("Passage:")
+    assert f"[{expected_id}]" in tool_text
+    assert "doc: doc.pdf" in tool_text
+    assert "chars 0–24" in tool_text
+
+
+# ---------------------------------------------------------------------------
+# run() — cited-slice filtering integration
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_run_read_document_result_contains_only_cited_slices():
+    """QueryResult.document_slices is filtered to slices cited by [slice_id] in the answer."""
+    text = "A" * 500
+    store = _make_document_store({"report.pdf": text})
+
+    # Two sequential read_document calls; LLM cites only the first.
+    llm = _make_llm(
+        _tool_result("read_document", {"doc_id": "report.pdf", "offset": 0,   "length": 100}, call_id="c1"),
+        _tool_result("read_document", {"doc_id": "report.pdf", "offset": 100, "length": 100}, call_id="c2"),
+        _text_result("Based on [report.pdf:0:100], the answer is A."),
+    )
+    runner = Runner(llm, document_store=store, app_name="myapp")
+    output = [c async for c in runner.run("read report")]
+    result = output[-1]
+    assert isinstance(result, QueryResult)
+    assert len(result.document_slices) == 1
+    assert result.document_slices[0].slice_id == "report.pdf:0:100"
+
+
+@pytest.mark.asyncio
+async def test_run_read_document_fallback_all_slices_when_llm_cites_none():
+    """QueryResult.document_slices falls back to all slices when the LLM uses no [slice_id] citations."""
+    text = "B" * 500
+    store = _make_document_store({"report.pdf": text})
+
+    llm = _make_llm(
+        _tool_result("read_document", {"doc_id": "report.pdf", "offset": 0,   "length": 100}, call_id="c1"),
+        _tool_result("read_document", {"doc_id": "report.pdf", "offset": 100, "length": 100}, call_id="c2"),
+        _text_result("Based on the retrieved content, the answer is B."),
+    )
+    runner = Runner(llm, document_store=store, app_name="myapp")
+    output = [c async for c in runner.run("read report")]
+    result = output[-1]
+    assert isinstance(result, QueryResult)
+    assert len(result.document_slices) == 2

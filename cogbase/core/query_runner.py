@@ -82,6 +82,10 @@ class DocumentSlice(BaseModel):
     length: int
     text: str
 
+    @property
+    def slice_id(self) -> str:
+        return f"{self.doc_id}:{self.offset}:{self.length}"
+
 
 class QueryResult(BaseModel):
     """Final result of a QueryRunner invocation.
@@ -313,11 +317,11 @@ def _format_chunks(chunks: list[Chunk]) -> str:
     if not chunks:
         return "(no passages found)"
     lines = ["Passages:"]
-    for i, chunk in enumerate(chunks, 1):
-        location = f"id={chunk.chunk_id}, doc: {chunk.doc_id}"
+    for chunk in chunks:
+        location = f"doc: {chunk.doc_id}"
         if chunk.char_offset is not None and chunk.char_length is not None:
-            location += f", char_offset: {chunk.char_offset}, char_length: {chunk.char_length}"
-        lines.append(f"  [{i}] ({location})\n  {chunk.text.strip()}")
+            location += f", chars {chunk.char_offset}–{chunk.char_offset + chunk.char_length}"
+        lines.append(f"  [{chunk.chunk_id}] ({location})\n  {chunk.text.strip()}")
     return "\n".join(lines)
 
 
@@ -332,6 +336,18 @@ def _filter_cited_chunks(answer: str, all_chunks: list[Chunk]) -> list[Chunk]:
     if not cited_ids:
         return all_chunks
     return [c for c in all_chunks if c.chunk_id in cited_ids]
+
+
+def _filter_cited_slices(answer: str, all_slices: list[DocumentSlice]) -> list[DocumentSlice]:
+    """Return only document slices whose slice_id the LLM cited in *answer*.
+
+    Falls back to all slices when none are cited.
+    """
+    slice_map = {s.slice_id: s for s in all_slices}
+    cited_ids = {m for m in re.findall(r"\[([^\]]+)\]", answer) if m in slice_map}
+    if not cited_ids:
+        return all_slices
+    return [s for s in all_slices if s.slice_id in cited_ids]
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +573,7 @@ class QueryRunner:
                     answer=answer,
                     structured_records=all_records,
                     chunks=_filter_cited_chunks(answer, all_chunks),
-                    document_slices=all_slices,
+                    document_slices=_filter_cited_slices(answer, all_slices),
                 )
                 return
 
@@ -748,7 +764,8 @@ class QueryRunner:
         total = len(text)
         logger.info("[runner] read_document doc_id=%s offset=%d length=%d total=%d", doc_id, offset, length, total)
         doc_slice = DocumentSlice(doc_id=doc_id, offset=offset, length=len(slice_text), text=slice_text)
-        return doc_slice, f"Document '{doc_id}' (chars {offset}–{offset + len(slice_text)} of {total}):\n\n{slice_text}"
+        location = f"doc: {doc_id}, chars {offset}–{offset + len(slice_text)} of {total}"
+        return doc_slice, f"Passage:\n  [{doc_slice.slice_id}] ({location})\n  {slice_text.strip()}"
 
     async def _run_python(self, code: str, env: dict) -> str:
         try:
