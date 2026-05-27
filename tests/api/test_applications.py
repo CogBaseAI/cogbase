@@ -514,6 +514,74 @@ class TestDeleteApplication:
         await client.delete("/applications/my-contract-analyzer")
         assert app_cache.get("my-contract-analyzer") is None
 
+    @pytest.mark.asyncio
+    async def test_delete_cleans_up_vector_collections(self, client):
+        """DELETE calls delete_collection on the scoped vector store for each declared collection."""
+        mock_scoped_vs = MagicMock()
+        mock_scoped_vs.delete_collection = AsyncMock()
+        mock_vs = MagicMock()
+        mock_vs.with_scope.return_value = mock_scoped_vs
+
+        app.dependency_overrides[get_system_resources] = lambda: SystemResources(
+            structured_store=InMemoryStructuredStore(),
+            vector_store=mock_vs,
+        )
+
+        bundle = _make_collections_bundle(vector_collections=["doc_chunks", "doc_summaries"])
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
+            await client.post("/applications", files={"bundle": ("bundle.zip", bundle, "application/zip")})
+
+        resp = await client.delete("/applications/my-contract-analyzer")
+        assert resp.status_code == 204
+
+        deleted = {call.args[0] for call in mock_scoped_vs.delete_collection.call_args_list}
+        assert deleted == {"doc_chunks", "doc_summaries"}
+
+    @pytest.mark.asyncio
+    async def test_delete_cleans_up_structured_collections(self, client):
+        """DELETE calls delete_collection on the scoped structured store for each declared collection."""
+        mock_scoped_ss = MagicMock()
+        mock_scoped_ss.delete_collection = AsyncMock()
+        mock_ss = MagicMock()
+        mock_ss.with_scope.return_value = mock_scoped_ss
+
+        app.dependency_overrides[get_system_resources] = lambda: SystemResources(
+            structured_store=mock_ss,
+        )
+
+        bundle = _make_collections_bundle(structured_collections=["contracts", "parties"])
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
+            await client.post("/applications", files={"bundle": ("bundle.zip", bundle, "application/zip")})
+
+        resp = await client.delete("/applications/my-contract-analyzer")
+        assert resp.status_code == 204
+
+        deleted = {call.args[0] for call in mock_scoped_ss.delete_collection.call_args_list}
+        assert deleted == {"contracts", "parties"}
+
+    @pytest.mark.asyncio
+    async def test_delete_store_error_does_not_prevent_metadata_removal(self, client):
+        """A store failure during collection cleanup is swallowed; the app record is still deleted."""
+        mock_scoped_vs = MagicMock()
+        mock_scoped_vs.delete_collection = AsyncMock(side_effect=RuntimeError("store unavailable"))
+        mock_vs = MagicMock()
+        mock_vs.with_scope.return_value = mock_scoped_vs
+
+        app.dependency_overrides[get_system_resources] = lambda: SystemResources(
+            structured_store=InMemoryStructuredStore(),
+            vector_store=mock_vs,
+        )
+
+        bundle = _make_collections_bundle(vector_collections=["doc_chunks"])
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
+            await client.post("/applications", files={"bundle": ("bundle.zip", bundle, "application/zip")})
+
+        resp = await client.delete("/applications/my-contract-analyzer")
+        assert resp.status_code == 204
+
+        list_resp = await client.get("/applications")
+        assert list_resp.json()["total"] == 0
+
 
 # ---------------------------------------------------------------------------
 # POST /applications/{app_name}/upload_documents

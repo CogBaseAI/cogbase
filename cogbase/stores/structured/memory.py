@@ -132,10 +132,8 @@ class InMemoryStructuredStore(StructuredStoreBase):
         return _to_records(df[schema_cols])
 
     async def delete_collection(self, collection: str) -> None:
-        if collection not in self._schemas:
-            raise KeyError(f"Collection '{collection}' not found.")
-        del self._schemas[collection]
-        del self._frames[self._c(collection)]
+        self._schemas.pop(collection, None)
+        self._frames.pop(self._c(collection), None)
 
     async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None:
         schema = self._get_schema(collection)

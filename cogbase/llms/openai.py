@@ -178,4 +178,6 @@ class OpenAILLM(LLMBase):
         effective_reasoning_effort = reasoning_effort or self._reasoning_effort
         if effective_reasoning_effort is not None:
             kwargs["reasoning_effort"] = effective_reasoning_effort
+        # for benchmarks, manually set service_tier to "flex" (half model price) for openai
+        # kwargs["service_tier"] = "flex"
         return kwargs

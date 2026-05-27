@@ -17,6 +17,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from cogbase.config.config import AppConfig
+from cogbase.stores import AppScope, build_structured_store, build_vector_store
 from api.dependencies import AppCacheDep, SkillRegistryDep, SystemResourcesDep, SystemStoreDep
 from api.system_resources import SystemResources
 from api.factory import build_app
@@ -348,12 +349,48 @@ async def delete_application(
     app_name: str,
     system_store: SystemStoreDep,
     app_cache: AppCacheDep,
+    system_resources: SystemResourcesDep,
 ) -> None:
     """Permanently remove an application and its metadata."""
     record = await system_store.get_app(app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
-    # TODO delete actual data from document/vector/structured stores.
+
+    config = AppConfig.from_yaml(record.config_yaml)
+    app_scope = AppScope(app=app_name)
+
+    vector_store = (
+        build_vector_store(config.vector_store, scope=app_scope)
+        if config.vector_store
+        else (system_resources.vector_store.with_scope(app_scope) if system_resources.vector_store else None)
+    )
+    if vector_store:
+        for vc_cfg in config.vector_collections:
+            try:
+                await vector_store.delete_collection(vc_cfg.name)
+                logger.info("Deleted vector collection '%s' for app '%s'", vc_cfg.name, app_name)
+            except Exception:
+                logger.warning(
+                    "Failed to delete vector collection '%s' for app '%s'",
+                    vc_cfg.name, app_name, exc_info=True,
+                )
+
+    structured_store = (
+        build_structured_store(config.structured_store, scope=app_scope)
+        if config.structured_store
+        else (system_resources.structured_store.with_scope(app_scope) if system_resources.structured_store else None)
+    )
+    if structured_store:
+        for sc_cfg in config.structured_collections:
+            try:
+                await structured_store.delete_collection(sc_cfg.name)
+                logger.info("Deleted structured collection '%s' for app '%s'", sc_cfg.name, app_name)
+            except Exception:
+                logger.warning(
+                    "Failed to delete structured collection '%s' for app '%s'",
+                    sc_cfg.name, app_name, exc_info=True,
+                )
+
     app_cache.remove(app_name)
     await system_store.delete_app(app_name)
     logger.info("Application '%s' deleted", app_name)

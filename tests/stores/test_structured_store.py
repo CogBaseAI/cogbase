@@ -414,9 +414,8 @@ async def test_delete_collection_removes_collection_and_data(structured_store):
         await structured_store.query("facts")
 
 
-async def test_delete_collection_unknown_raises(structured_store):
-    with pytest.raises(KeyError):
-        await structured_store.delete_collection("nonexistent")
+async def test_delete_collection_unknown_is_noop(structured_store):
+    await structured_store.delete_collection("nonexistent")  # idempotent — must not raise
 
 
 async def test_delete_collection_leaves_other_collections_intact(structured_store):
