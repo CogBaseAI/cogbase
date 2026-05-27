@@ -527,9 +527,11 @@ async def upload_documents(
     return IngestDocumentsAcceptedResponse(task_ids=all_task_ids, total=len(all_task_ids))
 
 
-async def _drain_query(app, text: str, history: list[dict] | None = None):
+async def _drain_query(
+    app, text: str, history: list[dict] | None = None, system_prompt: str | None = None
+):
     """Drain app.query_stream and return the final result."""
-    async for item in app.query_stream(text, history=history):
+    async for item in app.query_stream(text, history=history, system_prompt=system_prompt):
         if not isinstance(item, str):
             return item
     raise RuntimeError("query_stream did not yield a result")
@@ -552,13 +554,13 @@ async def query_application(
     app = await _get_active_app(app_name, app_cache, system_store, system_resources)
     history = [{"role": m.role, "content": m.content} for m in body.history] or None
     try:
-        result = await _drain_query(app, body.text, history=history)
+        result = await _drain_query(app, body.text, history=history, system_prompt=body.system_prompt)
     except Exception:
         logger.exception("query failed for app '%s', retrying with fresh app", app_name)
         app = await _get_active_app(
             app_name, app_cache, system_store, system_resources, force_refresh=True
         )
-        result = await _drain_query(app, body.text, history=history)
+        result = await _drain_query(app, body.text, history=history, system_prompt=body.system_prompt)
     return QueryResponse(
         answer=result.answer,
         structured_records=result.structured_records,
@@ -586,7 +588,7 @@ async def query_application_stream(
 
     async def event_stream():
         try:
-            async for item in app.query_stream(body.text, history=history):
+            async for item in app.query_stream(body.text, history=history, system_prompt=body.system_prompt):
                 if isinstance(item, str):
                     yield f"data: {json.dumps({'token': item})}\n\n"
                 else:

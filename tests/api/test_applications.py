@@ -894,14 +894,36 @@ def _mock_query_app(result: QueryResult) -> MagicMock:
     """Build a mock CogBaseApp whose query_stream yields tokens then a QueryResult."""
     inst = MagicMock()
 
-    async def _query_stream(text: str, history: list[dict] | None = None):
-        _ = history
+    async def _query_stream(
+        text: str,
+        history: list[dict] | None = None,
+        system_prompt: str | None = None,
+    ):
         for token in result.answer.split():
             yield token + " "
         yield result
 
     inst.query_stream = _query_stream
     return inst
+
+
+def _mock_capturing_query_app(result: QueryResult) -> tuple[MagicMock, list[dict]]:
+    """Like _mock_query_app but also records every query_stream call's kwargs."""
+    inst = MagicMock()
+    calls: list[dict] = []
+
+    async def _query_stream(
+        text: str,
+        history: list[dict] | None = None,
+        system_prompt: str | None = None,
+    ):
+        calls.append({"text": text, "history": history, "system_prompt": system_prompt})
+        for token in result.answer.split():
+            yield token + " "
+        yield result
+
+    inst.query_stream = _query_stream
+    return inst, calls
 
 
 def _parse_sse(body: str) -> list[str]:
@@ -1028,8 +1050,11 @@ class TestQueryApplication:
 
         call_count = 0
 
-        async def _flaky_stream(text: str, history: list[dict] | None = None):
-            _ = history
+        async def _flaky_stream(
+            text: str,
+            history: list[dict] | None = None,
+            system_prompt: str | None = None,
+        ):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -1050,6 +1075,34 @@ class TestQueryApplication:
 
         assert resp.status_code == 200
         assert resp.json()["answer"] == "Retry worked."
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_forwarded_to_query_stream(self, client):
+        result = _make_query_result("Answer.")
+        mock_app, calls = _mock_capturing_query_app(result)
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query",
+            json={"text": "q?", "system_prompt": "Answer in one sentence."},
+        )
+
+        assert resp.status_code == 200
+        assert calls[0]["system_prompt"] == "Answer in one sentence."
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_absent_passes_none(self, client):
+        result = _make_query_result("Answer.")
+        mock_app, calls = _mock_capturing_query_app(result)
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query",
+            json={"text": "q?"},
+        )
+
+        assert resp.status_code == 200
+        assert calls[0]["system_prompt"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -1169,8 +1222,11 @@ class TestQueryApplicationStream:
     async def test_error_event_on_stream_failure(self, client):
         inst = MagicMock()
 
-        async def _failing_stream(text: str, history: list[dict] | None = None):
-            _ = history
+        async def _failing_stream(
+            text: str,
+            history: list[dict] | None = None,
+            system_prompt: str | None = None,
+        ):
             raise RuntimeError("boom")
             yield  # make it an async generator
 
@@ -1187,6 +1243,34 @@ class TestQueryApplicationStream:
         error_events = [json.loads(e) for e in events if e != "[DONE]" and "error" in json.loads(e)]
         assert len(error_events) == 1
         assert events[-1] == "[DONE]"
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_forwarded_to_query_stream(self, client):
+        result = _make_query_result("Answer.")
+        mock_app, calls = _mock_capturing_query_app(result)
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query/stream",
+            json={"text": "q?", "system_prompt": "Answer in one sentence."},
+        )
+
+        assert resp.status_code == 200
+        assert calls[0]["system_prompt"] == "Answer in one sentence."
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_absent_passes_none(self, client):
+        result = _make_query_result("Answer.")
+        mock_app, calls = _mock_capturing_query_app(result)
+        await _create_app(client, mock_app)
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query/stream",
+            json={"text": "q?"},
+        )
+
+        assert resp.status_code == 200
+        assert calls[0]["system_prompt"] is None
 
 
 # ---------------------------------------------------------------------------

@@ -64,6 +64,15 @@ async def _drain_query(app: CogBaseApp, text: str) -> QueryResult:
     raise AssertionError("query_stream did not yield a QueryResult")
 
 
+async def _drain_query_with_prompt(
+    app: CogBaseApp, text: str, system_prompt: str | None = None
+) -> QueryResult:
+    async for item in app.query_stream(text, system_prompt=system_prompt):
+        if not isinstance(item, str):
+            return item
+    raise AssertionError("query_stream did not yield a QueryResult")
+
+
 def _contract_payload(**overrides) -> str:
     data = {
         "contract_type": "NDA",
@@ -924,3 +933,69 @@ class TestQueryPrompt:
             pass
         assert calls[0].get("base_prompt") == "Be precise."
         assert calls[0].get("history") == history
+
+    @pytest.mark.asyncio
+    async def test_request_system_prompt_overrides_config_query_prompt(self):
+        calls: list[dict] = []
+        runner = MagicMock(spec=QueryRunner)
+
+        async def _run(text, **kwargs):
+            calls.append(kwargs)
+            yield QueryResult(answer="ok")
+
+        runner.run = _run
+        app = CogBaseApp(
+            "test", [], runner,
+            document_store=InMemoryDocumentStore(),
+            structured_store=InMemoryStructuredStore(),
+            workflow_runners={},
+            llm=_make_llm(""),
+            task_store=_mock_task_store(),
+            query_prompt="Config prompt.",
+        )
+        await _drain_query_with_prompt(app, "q?", system_prompt="Request prompt.")
+        assert calls[0].get("base_prompt") == "Request prompt."
+
+    @pytest.mark.asyncio
+    async def test_config_prompt_used_when_no_request_prompt(self):
+        calls: list[dict] = []
+        runner = MagicMock(spec=QueryRunner)
+
+        async def _run(text, **kwargs):
+            calls.append(kwargs)
+            yield QueryResult(answer="ok")
+
+        runner.run = _run
+        app = CogBaseApp(
+            "test", [], runner,
+            document_store=InMemoryDocumentStore(),
+            structured_store=InMemoryStructuredStore(),
+            workflow_runners={},
+            llm=_make_llm(""),
+            task_store=_mock_task_store(),
+            query_prompt="Config prompt.",
+        )
+        await _drain_query_with_prompt(app, "q?", system_prompt=None)
+        assert calls[0].get("base_prompt") == "Config prompt."
+
+    @pytest.mark.asyncio
+    async def test_no_base_prompt_when_both_absent(self):
+        calls: list[dict] = []
+        runner = MagicMock(spec=QueryRunner)
+
+        async def _run(text, **kwargs):
+            calls.append(kwargs)
+            yield QueryResult(answer="ok")
+
+        runner.run = _run
+        app = CogBaseApp(
+            "test", [], runner,
+            document_store=InMemoryDocumentStore(),
+            structured_store=InMemoryStructuredStore(),
+            workflow_runners={},
+            llm=_make_llm(""),
+            task_store=_mock_task_store(),
+            query_prompt=None,
+        )
+        await _drain_query_with_prompt(app, "q?", system_prompt=None)
+        assert "base_prompt" not in calls[0]

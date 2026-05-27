@@ -83,6 +83,15 @@ class ChatMessage(BaseModel):
 class QueryRequest(BaseModel):
     text: str
     history: list[ChatMessage] = []
+    system_prompt: str | None = Field(
+        default=None,
+        description=(
+            "Optional system prompt for this request. "
+            "When set, overrides the app-level query_prompt configured in the application's "
+            "config.yaml. Useful for prompt experimentation. You can expirement prompts and "
+            "and set the final prompt into the app config for production."
+        ),
+    )
 
 
 class ChunkResponse(BaseModel):

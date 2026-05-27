@@ -307,17 +307,27 @@ class CogBaseApp:
                 "app.doc_workflow.upsert_failed workflow=%s doc_id=%s", wf_name, doc_id
             )
 
-    async def query_stream(self, text: str, history: list[dict] | None = None):
+    async def query_stream(
+        self,
+        text: str,
+        history: list[dict] | None = None,
+        system_prompt: str | None = None,
+    ):
         """Stream the answer token-by-token, then yield a final QueryResult.
 
         The retrieval loop runs until the LLM has enough evidence to answer or
         ``query_max_rounds`` is exhausted.  Large structured result sets are
         returned directly as formatted text (passthrough rule).
+
+        Args:
+            system_prompt: When set, overrides the app-level ``query_prompt``
+                           from the application config for this request only.
         """
         logger.info("app.query_stream.start query=%s", text[:200])
+        effective_prompt = system_prompt or self._query_prompt
         kwargs = {"history": history}
-        if self._query_prompt:
-            kwargs["base_prompt"] = self._query_prompt
+        if effective_prompt:
+            kwargs["base_prompt"] = effective_prompt
         async for chunk in self._runner.run(text, **kwargs):
             yield chunk
 
