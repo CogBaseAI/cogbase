@@ -230,6 +230,35 @@ class TestAppConfig:
         assert cfg.embedding is not None
         assert cfg.vector_collections == []
 
+    def test_query_prompt_defaults_to_none(self):
+        cfg = AppConfig.from_yaml(_MINIMAL_YAML)
+        assert cfg.query_prompt is None
+
+    def test_query_prompt_parses_single_line(self):
+        yaml_text = textwrap.dedent("""\
+            name: qa-app
+            llm:
+              model: gpt-4o-mini
+              api_key: sk-test
+            query_prompt: "You are a precise Q&A assistant."
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert cfg.query_prompt == "You are a precise Q&A assistant."
+
+    def test_query_prompt_parses_multiline_block(self):
+        yaml_text = textwrap.dedent("""\
+            name: qa-app
+            llm:
+              model: gpt-4o-mini
+              api_key: sk-test
+            query_prompt: |
+              Answer directly.
+              One sentence only.
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert "Answer directly." in cfg.query_prompt
+        assert "One sentence only." in cfg.query_prompt
+
     def test_from_yaml_non_mapping_raises(self):
         with pytest.raises(ValueError, match="mapping"):
             AppConfig.from_yaml("- item1\n- item2\n")

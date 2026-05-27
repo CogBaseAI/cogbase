@@ -568,6 +568,10 @@ class AppConfig(ConfigPromptMixin, BaseModel):
         default_factory=list,
         description="Configured ingestion pipelines.",
     )
+    query_prompt: str | None = Field(
+        default=None,
+        description="System prompt used by the query runner when answering user questions. Replaces the default 'You are a helpful assistant.' base prompt.",
+    )
     skills: list[str] = Field(
         default_factory=list,
         description="Additional skill names to load.",

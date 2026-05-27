@@ -313,4 +313,5 @@ async def build_app(
         llm=llm,
         routing_strategy=config.pipeline_routing.strategy,
         task_store=task_store,
+        query_prompt=config.query_prompt,
     )

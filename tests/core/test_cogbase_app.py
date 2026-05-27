@@ -817,3 +817,110 @@ class TestRoutingStrategyAuto:
         assert "d-001" in msg
         assert "legal" in msg and "finance" in msg
         assert "routing_description" in msg
+
+
+# ---------------------------------------------------------------------------
+# query_prompt — stored and forwarded to runner.run as base_prompt
+# ---------------------------------------------------------------------------
+
+class TestQueryPrompt:
+    def _make_tracking_runner(self) -> tuple[MagicMock, list[dict]]:
+        """Return a runner mock that records every run() call's kwargs."""
+        calls: list[dict] = []
+        runner = MagicMock(spec=QueryRunner)
+
+        async def _run(text, **kwargs):
+            calls.append(kwargs)
+            yield QueryResult(answer="ok")
+
+        runner.run = _run
+        return runner, calls
+
+    def _make_app_with_prompt(self, query_prompt: str | None) -> CogBaseApp:
+        runner, _ = self._make_tracking_runner()
+        return CogBaseApp(
+            "test", [], runner,
+            document_store=InMemoryDocumentStore(),
+            structured_store=InMemoryStructuredStore(),
+            workflow_runners={},
+            llm=_make_llm(""),
+            task_store=_mock_task_store(),
+            query_prompt=query_prompt,
+        )
+
+    def test_query_prompt_stored_on_app(self):
+        app = self._make_app_with_prompt("Be concise.")
+        assert app._query_prompt == "Be concise."
+
+    def test_no_query_prompt_stored_as_none(self):
+        app = self._make_app_with_prompt(None)
+        assert app._query_prompt is None
+
+    @pytest.mark.asyncio
+    async def test_custom_prompt_passed_as_base_prompt(self):
+        calls: list[dict] = []
+        runner = MagicMock(spec=QueryRunner)
+
+        async def _run(text, **kwargs):
+            calls.append(kwargs)
+            yield QueryResult(answer="ok")
+
+        runner.run = _run
+        app = CogBaseApp(
+            "test", [], runner,
+            document_store=InMemoryDocumentStore(),
+            structured_store=InMemoryStructuredStore(),
+            workflow_runners={},
+            llm=_make_llm(""),
+            task_store=_mock_task_store(),
+            query_prompt="Answer in one sentence.",
+        )
+        await _drain_query(app, "what is X?")
+        assert calls[0].get("base_prompt") == "Answer in one sentence."
+
+    @pytest.mark.asyncio
+    async def test_no_prompt_omits_base_prompt_kwarg(self):
+        calls: list[dict] = []
+        runner = MagicMock(spec=QueryRunner)
+
+        async def _run(text, **kwargs):
+            calls.append(kwargs)
+            yield QueryResult(answer="ok")
+
+        runner.run = _run
+        app = CogBaseApp(
+            "test", [], runner,
+            document_store=InMemoryDocumentStore(),
+            structured_store=InMemoryStructuredStore(),
+            workflow_runners={},
+            llm=_make_llm(""),
+            task_store=_mock_task_store(),
+            query_prompt=None,
+        )
+        await _drain_query(app, "what is X?")
+        assert "base_prompt" not in calls[0]
+
+    @pytest.mark.asyncio
+    async def test_history_forwarded_alongside_custom_prompt(self):
+        calls: list[dict] = []
+        runner = MagicMock(spec=QueryRunner)
+
+        async def _run(text, **kwargs):
+            calls.append(kwargs)
+            yield QueryResult(answer="ok")
+
+        runner.run = _run
+        app = CogBaseApp(
+            "test", [], runner,
+            document_store=InMemoryDocumentStore(),
+            structured_store=InMemoryStructuredStore(),
+            workflow_runners={},
+            llm=_make_llm(""),
+            task_store=_mock_task_store(),
+            query_prompt="Be precise.",
+        )
+        history = [{"role": "user", "content": "prior turn"}]
+        async for _ in app.query_stream("follow-up?", history=history):
+            pass
+        assert calls[0].get("base_prompt") == "Be precise."
+        assert calls[0].get("history") == history

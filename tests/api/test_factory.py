@@ -1009,3 +1009,36 @@ class TestBuildAppMatchMetadataFields:
         )
         vc = app._pipelines[0]._vector_by_name["document_chunks"]
         assert vc.schema.metadata_fields == []
+
+
+# ---------------------------------------------------------------------------
+# build_app — query_prompt forwarded to CogBaseApp
+# ---------------------------------------------------------------------------
+
+class TestBuildAppQueryPrompt:
+    @patch("api.factory._build_llm")
+    async def test_query_prompt_forwarded_when_set(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(
+            _EXTRACT_ONLY_CONFIG_YAML
+            + 'query_prompt: "Answer in one sentence."\n'
+        )
+        app = await build_app(
+            cfg,
+            system=SystemResources(structured_store=InMemoryStructuredStore(), document_store=InMemoryDocumentStore()),
+            app_status="initializing",
+            task_store=_mock_task_store(),
+        )
+        assert app._query_prompt == "Answer in one sentence."
+
+    @patch("api.factory._build_llm")
+    async def test_query_prompt_none_when_absent(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
+        app = await build_app(
+            cfg,
+            system=SystemResources(structured_store=InMemoryStructuredStore(), document_store=InMemoryDocumentStore()),
+            app_status="initializing",
+            task_store=_mock_task_store(),
+        )
+        assert app._query_prompt is None

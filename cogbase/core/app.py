@@ -58,6 +58,7 @@ class CogBaseApp:
         llm: LLMBase,
         routing_strategy: RoutingStrategy = RoutingStrategy.AUTO,
         task_store: Any,
+        query_prompt: str | None = None,
     ) -> None:
         self.name = name
         self._pipelines = pipelines
@@ -68,6 +69,7 @@ class CogBaseApp:
         self._llm = llm
         self._routing_strategy = routing_strategy
         self._task_store = task_store
+        self._query_prompt = query_prompt
 
     def _find_pipeline_by_metadata(self, doc: Document) -> IngestionPipeline | None:
         for p in self._pipelines:
@@ -313,7 +315,10 @@ class CogBaseApp:
         returned directly as formatted text (passthrough rule).
         """
         logger.info("app.query_stream.start query=%s", text[:200])
-        async for chunk in self._runner.run(text, history=history):
+        kwargs = {"history": history}
+        if self._query_prompt:
+            kwargs["base_prompt"] = self._query_prompt
+        async for chunk in self._runner.run(text, **kwargs):
             yield chunk
 
     # ------------------------------------------------------------------
