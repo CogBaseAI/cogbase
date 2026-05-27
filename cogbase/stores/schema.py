@@ -1,8 +1,23 @@
 """Schema types for defining structured store collections."""
 
+import re
 from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+_NAME_RE = re.compile(r"[a-zA-Z_][a-zA-Z0-9_-]*")
+_NAME_RULE = "must start with a letter or underscore, followed by letters, digits, underscores, or hyphens"
+
+
+def validate_resource_name(v: str) -> str:
+    """Validate a collection or application name.
+
+    Raises ValueError if the name does not match ``[a-zA-Z_][a-zA-Z0-9_-]*``.
+    Returns the name unchanged when valid.
+    """
+    if not _NAME_RE.fullmatch(v):
+        raise ValueError(f"Name '{v}' is invalid — {_NAME_RULE}")
+    return v
 
 
 class FieldType(str, Enum):
@@ -31,8 +46,9 @@ class CollectionSchema(BaseModel):
     """Schema for a structured store collection (table).
 
     Args:
-        name:           Collection name — must be a valid identifier
-                        (``[a-zA-Z_][a-zA-Z0-9_]*``).
+        name:           Collection name — must start with a letter or underscore,
+                        followed by letters, digits, underscores, or hyphens
+                        (``[a-zA-Z_][a-zA-Z0-9_-]*``).
         primary_fields: Ordered list of primary-key field names; each must be
                         present in ``fields``.
         fields:         Ordered mapping of field name → field schema.
@@ -51,12 +67,7 @@ class CollectionSchema(BaseModel):
     @field_validator("name")
     @classmethod
     def _valid_name(cls, v: str) -> str:
-        import re
-        if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", v):
-            raise ValueError(
-                f"Collection name '{v}' is invalid — use letters, digits, and underscores only"
-            )
-        return v
+        return validate_resource_name(v)
 
     @field_validator("primary_fields")
     @classmethod

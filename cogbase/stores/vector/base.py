@@ -8,6 +8,7 @@ from pydantic import BaseModel, field_validator
 
 from cogbase.core.models import Chunk
 from cogbase.stores.filters import Filter
+from cogbase.stores.schema import validate_resource_name
 from cogbase.stores.scope import AppScope
 
 
@@ -15,8 +16,9 @@ class VectorCollectionSchema(BaseModel):
     """Schema for a vector store collection (namespace/index).
 
     Args:
-        name:        Collection name - must be a valid identifier
-                     (``[a-zA-Z_][a-zA-Z0-9_]*``).
+        name:        Collection name — must start with a letter or underscore,
+                     followed by letters, digits, underscores, or hyphens
+                     (``[a-zA-Z_][a-zA-Z0-9_-]*``).
         dimensions:  Embedding vector dimensionality. All chunks upserted into
                      this collection must carry embeddings of exactly this length.
         description: Short description shown to the LLM to help it choose the
@@ -41,12 +43,7 @@ class VectorCollectionSchema(BaseModel):
     @field_validator("name")
     @classmethod
     def _valid_name(cls, v: str) -> str:
-        import re
-        if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", v):
-            raise ValueError(
-                f"Collection name '{v}' is invalid - use letters, digits, and underscores only"
-            )
-        return v
+        return validate_resource_name(v)
 
     @field_validator("dimensions")
     @classmethod

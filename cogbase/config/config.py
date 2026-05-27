@@ -36,11 +36,12 @@ from enum import Enum
 from typing import Any, Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
 from cogbase.config.models import LLMConfig, EmbeddingConfig
 from cogbase.config.prompt import ConfigPromptMixin, render_config_template
+from cogbase.stores.schema import validate_resource_name
 
 
 class RecordMode(str, Enum):
@@ -576,6 +577,11 @@ class AppConfig(ConfigPromptMixin, BaseModel):
         default_factory=list,
         description="Configured workflows.",
     )
+
+    @field_validator("name")
+    @classmethod
+    def _valid_name(cls, v: str) -> str:
+        return validate_resource_name(v)
 
     @model_validator(mode="after")
     def _validate(self) -> "AppConfig":
