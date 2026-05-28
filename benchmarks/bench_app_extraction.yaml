@@ -1,0 +1,68 @@
+name: PLACEHOLDER
+
+query_prompt: |
+  You are a document Q&A assistant. Answer each question using retrieved evidence.
+
+  Entity-relation triples are available as a structured index over the corpus.
+  Use them to orient your search — identify relevant entities and relationships —
+  then retrieve the supporting passage or summary context before answering.
+  Do not answer from triples alone.
+
+  Answer style:
+  - One direct sentence stating the fact plainly.
+  - Mirror the phrasing of the retrieved evidence where possible.
+  - No preamble ("Based on the documents…", "According to the text…").
+  - Do not invent facts not found in the retrieved evidence.
+
+vector_collections:
+  - name: bench_chunks
+    description: >
+      Passage chunks from the corpus. Use for detailed fact retrieval,
+      complex reasoning, and questions requiring specific textual evidence.
+
+  - name: bench_summaries
+    description: >
+      One summary per document. Use for broad contextual questions
+      and creative generation tasks.
+
+structured_collections:
+  - name: entity_relations
+    description: >
+      Factual entity-relation-entity triples extracted from the corpus.
+      Use for precise fact lookup: geographic locations, organizational
+      affiliations, personal relationships, and historical events.
+    schema: '{"type":"object","properties":{"doc_id":{"type":"string"},"triple_id":{"type":"string"},"subject":{"type":"string"},"predicate":{"type":"string"},"object":{"type":"string"}},"required":["doc_id","triple_id","subject","predicate","object"]}'
+    primary_fields: [doc_id, triple_id]
+
+pipelines:
+  - name: default
+    routing_description: General corpus documents for benchmark evaluation.
+    steps:
+      - tool: chunk-embed-upsert
+        collection: bench_chunks
+
+      - tool: extract-structured
+        collection: entity_relations
+        extractor:
+          type: llm
+          record_mode: many
+          response_field: items
+          id_field: triple_id
+          id_template: "{doc_id}__{index:04d}"
+          extraction_schema: '{"type":"object","properties":{"subject":{"type":"string"},"predicate":{"type":"string"},"object":{"type":"string"}},"required":["subject","predicate","object"]}'
+          prompt: |
+            Extract all factual relationships between named entities in this text.
+            For each relationship identify:
+            - subject: the entity or concept acting or being described
+            - predicate: the relationship or action (concise verb phrase)
+            - object: the related entity, place, concept, or value
+            Focus on geographic facts, organizational affiliations, personal
+            relationships, historical events, cultural comparisons, and any
+            concrete facts that could answer specific questions about the text.
+
+      - tool: document-embed-upsert
+        collection: bench_summaries
+        doc_prompt: >
+          Summarise this document comprehensively. Cover the main themes,
+          key characters or concepts, important events or findings, and
+          any notable details. Be thorough and factual.

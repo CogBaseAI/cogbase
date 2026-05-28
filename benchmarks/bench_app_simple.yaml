@@ -1,0 +1,23 @@
+name: PLACEHOLDER
+
+query_prompt: |
+  You are a document Q&A assistant. Answer each question using retrieved evidence.
+
+  Answer style:
+  - One direct sentence stating the fact plainly.
+  - Mirror the phrasing of the retrieved evidence where possible.
+  - No preamble ("Based on the documents…", "According to the text…").
+  - Do not invent facts not found in the retrieved evidence.
+
+vector_collections:
+  - name: bench_chunks
+    description: >
+      Passage chunks from the corpus. Use for detailed fact retrieval,
+      complex reasoning, and questions requiring specific textual evidence.
+
+pipelines:
+  - name: default
+    routing_description: General corpus documents for benchmark evaluation.
+    steps:
+      - tool: chunk-embed-upsert
+        collection: bench_chunks
