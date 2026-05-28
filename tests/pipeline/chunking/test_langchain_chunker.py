@@ -1,12 +1,55 @@
-"""Tests for LangChainChunker."""
+"""Tests for LangChainChunker and build_recursive_chunker."""
+
+import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_text_splitters import CharacterTextSplitter, RecursiveCharacterTextSplitter
 
 from cogbase.core.models import Document
 from cogbase.pipeline.chunking.base import ChunkerBase
-from cogbase.pipeline.chunking.langchain import LangChainChunker
+from cogbase.pipeline.chunking.langchain import LangChainChunker, build_recursive_chunker
 from tests.pipeline.chunking.test_chunkers import assert_chunker_contract
+
+
+class TestBuildRecursiveChunker:
+    def test_returns_langchain_chunker(self):
+        assert isinstance(build_recursive_chunker(chunk_size=200, overlap=20), LangChainChunker)
+
+    def test_contract(self):
+        assert_chunker_contract(build_recursive_chunker(200, 20), "hello world " * 50, "doc-1")
+
+    def test_import_error(self):
+        with patch.dict(sys.modules, {"langchain_text_splitters": None}):
+            with pytest.raises(ImportError, match="langchain-text-splitters"):
+                build_recursive_chunker(200, 20)
+
+    def test_splits_at_separator_not_mid_word(self):
+        # chunk_size=40 forces a split on 47-char text. The ". " separator is preferred
+        # over a raw character cut. keep_separator puts ". " at the start of chunk[1].
+        # FixedSizeChunker(40) would produce "...Sentence two end" / "nd here." instead.
+        text = "Sentence one ends here. Sentence two ends here."
+        chunker = build_recursive_chunker(chunk_size=40, overlap=0)
+        chunks = chunker.chunk(Document(doc_id="doc-1", text=text))
+        assert len(chunks) == 2
+        assert chunks[0].text == "Sentence one ends here"
+        assert chunks[1].text == ". Sentence two ends here."
+
+    def test_no_chunk_exceeds_chunk_size(self):
+        chunker = build_recursive_chunker(chunk_size=50, overlap=0)
+        text = "Word. " * 30
+        chunks = chunker.chunk(Document(doc_id="doc-1", text=text))
+        assert all(len(c.text) <= 50 for c in chunks)
+
+    def test_overlap_propagated(self):
+        # With overlap=10, consecutive chunks should share a suffix/prefix substring.
+        chunker = build_recursive_chunker(chunk_size=30, overlap=10)
+        text = "abcde fghij klmno pqrst uvwxy " * 5
+        chunks = chunker.chunk(Document(doc_id="doc-1", text=text))
+        assert len(chunks) > 1
+        # The tail of chunk[i] must appear at the start of chunk[i+1].
+        for a, b in zip(chunks, chunks[1:]):
+            assert b.text.startswith(a.text[-10:]) or a.text[-5:] in b.text
 
 
 class TestLangChainChunkerContract:

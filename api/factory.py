@@ -78,17 +78,8 @@ def _build_chunker(cfg: ChunkerConfig) -> Any:
         from cogbase.pipeline.chunking.fixed import FixedSizeChunker
         return FixedSizeChunker(chunk_size=cfg.chunk_size, overlap=cfg.overlap)
     if cfg.type == "langchain":
-        try:
-            from langchain_text_splitters import RecursiveCharacterTextSplitter
-        except ImportError as exc:
-            raise ImportError(
-                "langchain-text-splitters required: pip install langchain-text-splitters"
-            ) from exc
-        from cogbase.pipeline.chunking.langchain import LangChainChunker
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=cfg.chunk_size, chunk_overlap=cfg.overlap
-        )
-        return LangChainChunker(splitter)
+        from cogbase.pipeline.chunking.langchain import build_recursive_chunker
+        return build_recursive_chunker(cfg.chunk_size, cfg.overlap)
     raise ValueError(f"Unknown chunker type: {cfg.type!r}")
 
 

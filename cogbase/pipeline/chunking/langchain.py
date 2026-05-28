@@ -22,6 +22,27 @@ from langchain_text_splitters import TextSplitter
 from cogbase.core.models import Document
 from cogbase.pipeline.chunking.base import ChunkerBase
 
+_SENTENCE_SEPARATORS = ["\n\n", "\n", ". ", "! ", "? ", "; ", ", ", " ", ""]
+
+
+def build_recursive_chunker(chunk_size: int, overlap: int) -> "LangChainChunker":
+    """Build a LangChainChunker backed by RecursiveCharacterTextSplitter.
+
+    Separators are ordered so splits prefer sentence boundaries over mid-sentence cuts.
+    """
+    try:
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+    except ImportError as exc:
+        raise ImportError(
+            "langchain-text-splitters required: pip install langchain-text-splitters"
+        ) from exc
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+        separators=_SENTENCE_SEPARATORS,
+    )
+    return LangChainChunker(splitter)
+
 
 class LangChainChunker(ChunkerBase):
     """Adapts any LangChain ``TextSplitter`` to the ``ChunkerBase`` interface.
