@@ -2,6 +2,11 @@
 
 Ingests each corpus into a dedicated CogBase application, runs all QA questions through the query endpoint, and writes results in the format expected by the benchmark's `generation_eval` and `retrieval_eval` scripts.
 
+These results are promising and align with the discussion in [docs/knowledge-graph-decision.md](docs/knowledge-graph-decision.md).
+Using only simple chunking (bench_app_simple) and LLM-driven inference, CogBase achieves an average answer correctness of 61.79, placing 2nd on the GraphRAG-Bench (Novel) Leaderboard (https://graphrag-bench.github.io/), just below the current leader at 63.72.
+
+> Note: this score used gpt-5.4-mini across 5 corpora only. A stronger model (e.g. gpt-5.4) would push the score higher. Full corpora testing is planned.
+
 ## Setup
 
 Start CogBase first:
@@ -73,3 +78,5 @@ Results:
 
 Average Answer Correctness: 0.6179
 ```
+
+Note: bench_app_extraction scores slightly lower on average than bench_app_simple (0.5990 vs 0.6179), which is worth investigating further.
