@@ -193,7 +193,11 @@ _READ_DOCUMENT_DEF: ToolDefinition = {
         "Read a slice of a document's original text by character offset. "
         "Use after vector_search to get broader context around a relevant passage. "
         "Chunks returned by vector_search include char_offset and char_length showing "
-        "where they appear in the source document — use those to target the right slice."
+        "where they appear in the source document. "
+        "To read context before a chunk, set offset to an earlier integer; for example, "
+        "if char_offset is 1200, use offset=700 to read 500 characters before it. "
+        "To read context after a chunk, set offset to char_offset and length to an integer "
+        "large enough to cover beyond char_length."
     ),
     "parameters": {
         "type": "object",
@@ -316,12 +320,26 @@ def _format_records_as_text(records: list[dict]) -> str:
 def _format_chunks(chunks: list[Chunk]) -> str:
     if not chunks:
         return "(no passages found)"
+
+    # Group by doc_id, preserving first-occurrence (relevance) order across docs.
+    doc_order: list[str] = []
+    by_doc: dict[str, list[Chunk]] = {}
+    for c in chunks:
+        if c.doc_id not in by_doc:
+            doc_order.append(c.doc_id)
+            by_doc[c.doc_id] = []
+        by_doc[c.doc_id].append(c)
+
+    def _seq_key(c: Chunk) -> tuple:
+        return (0, c.char_offset) if c.char_offset is not None else (1, c.chunk_id)
+
     lines = ["Passages:"]
-    for chunk in chunks:
-        location = f"doc: {chunk.doc_id}"
-        if chunk.char_offset is not None and chunk.char_length is not None:
-            location += f", chars {chunk.char_offset}–{chunk.char_offset + chunk.char_length}"
-        lines.append(f"  [{chunk.chunk_id}] ({location})\n  {chunk.text.strip()}")
+    for doc_id in doc_order:
+        for chunk in sorted(by_doc[doc_id], key=_seq_key):
+            location = f"doc: {chunk.doc_id}"
+            if chunk.char_offset is not None and chunk.char_length is not None:
+                location += f", chars {chunk.char_offset}–{chunk.char_offset + chunk.char_length}"
+            lines.append(f"  [{chunk.chunk_id}] ({location})\n  {chunk.text.strip()}")
     return "\n".join(lines)
 
 
@@ -619,7 +637,8 @@ class QueryRunner:
                         )
                         return
                 elif name == "vector_search":
-                    chunks, tool_output = await self._run_vector_search(inputs)
+                    seen_chunk_ids = {c.chunk_id for c in all_chunks}
+                    chunks, tool_output = await self._run_vector_search(inputs, exclude_ids=seen_chunk_ids)
                     all_chunks.extend(chunks)
                 elif name == "read_document":
                     doc_slice, tool_output = await self._run_read_document(inputs)
@@ -640,11 +659,12 @@ class QueryRunner:
             "I was unable to complete your request within the allowed number of steps. "
             "Please try a simpler or more specific request."
         )
+        # limit the number of references to avoid large context
         yield QueryResult(
             answer=answer,
-            structured_records=all_records,
-            chunks=all_chunks,
-            document_slices=all_slices,
+            structured_records=all_records[:2],
+            chunks=all_chunks[:2],
+            document_slices=all_slices[:2],
         )
 
     # ------------------------------------------------------------------
@@ -720,25 +740,33 @@ class QueryRunner:
 
         return records, json_str, False
 
-    async def _run_vector_search(self, inputs: dict) -> tuple[list[Chunk], str]:
+    async def _run_vector_search(self, inputs: dict, exclude_ids: set[str] | None = None) -> tuple[list[Chunk], str]:
         if self._vector_store is None or self._embedder is None:
             return [], "vector_search is unavailable (no vector store configured)"
 
         collection = str(inputs.get("collection") or "")
         query_text = str(inputs.get("query", ""))
         top_k = min(int(inputs.get("top_k") or 5), 20)
+        search_top_k = top_k + len(exclude_ids or ())
 
         if not collection:
             return [], "vector_search error: no collection specified"
 
         try:
             (query_embedding,) = await self._embedder.embed([query_text])
-            chunks = await self._vector_store.search(collection, query_text, query_embedding, top_k)
+            chunks = await self._vector_store.search(collection, query_text, query_embedding, search_top_k)
         except Exception as exc:
             logger.exception("[runner] vector_search.error collection=%s", collection)
             return [], f"vector_search error: {exc}"
 
-        logger.info("[runner] vector_search.result collection=%s chunks=%d", collection, len(chunks))
+        if exclude_ids:
+            chunks = [c for c in chunks if c.chunk_id not in exclude_ids]
+        chunks = chunks[:top_k]
+
+        chunk_summary = ", ".join(
+            f"{c.chunk_id}[{c.char_offset}:{c.char_length}]" for c in chunks
+        )
+        logger.info("[runner] vector_search.result collection=%s chunks=%d ids=[%s]", collection, len(chunks), chunk_summary)
         return chunks, _format_chunks(chunks)
 
     async def _run_read_document(self, inputs: dict) -> tuple[DocumentSlice | None, str]:
