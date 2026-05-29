@@ -10,8 +10,8 @@ The demo setup uses SQLite + FAISS + local file storage — no external database
 ./server/docker_hub_demo.sh run
 
 # Pull and run a specific version with a local data directory for persistence
-./server/docker_hub_demo.sh pull 0.1.0
-./server/docker_hub_demo.sh run 0.1.0 /path/to/local/data
+./server/docker_hub_demo.sh pull 0.2.0
+./server/docker_hub_demo.sh run 0.2.0 /path/to/local/data
 ```
 
 The API is available at `http://localhost:8000`. API docs are at `http://localhost:8000/docs`.

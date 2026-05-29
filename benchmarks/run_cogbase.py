@@ -5,12 +5,12 @@ through the query endpoint, and writes results in the format expected by the
 benchmark's generation_eval and retrieval_eval scripts.
 
 Usage:
-    python benchmarks/run_cogbase.py \\
-        --config benchmarks/bench_app_simple.yaml \\
-        --subset novel \\
-        --base_url http://localhost:8000 \\
-        --dataset_dir ./GraphRAG-Benchmark/Datasets \\
-        --output_dir ./benchmarks/results \\
+    python benchmarks/run_cogbase.py \
+        --config benchmarks/bench_app_simple.yaml \
+        --subset novel \
+        --base_url http://localhost:8000 \
+        --dataset_dir ./GraphRAG-Benchmark/Datasets \
+        --output_dir ./benchmarks/results \
         [--sample 20]
 
 Output: benchmarks/results/{config_stem}/{subset}/{corpus_name}/predictions_{corpus_name}.json
@@ -22,35 +22,7 @@ How it works:
   4. Queries each QA pair via POST /applications/{name}/query
   5. Writes results/{subset}/{corpus_name}/predictions_{corpus_name}.json in the benchmark's required format
 
-To run:
-  # Start CogBase first, then:
-  python benchmarks/run_cogbase.py --config benchmarks/bench_app_simple.yaml --subset novel --corpora 1 --sample 5
-  python benchmarks/run_cogbase.py --config benchmarks/bench_app_extraction.yaml --subset novel
-
-  # Score with the benchmark's eval scripts:
-  python -m Evaluation.generation_eval --data_file benchmarks/results/{config_stem}/novel/Novel-30752/predictions_Novel-30752.json ...
-
-
-Cross-corpus final score:
-  The eval script takes one flat merged JSON file, not per-corpus files. The intended flow is:
-  
-  Step 1: Merge all per-corpus predictions into one file
-  python benchmarks/merge_results.py --app bench_app_simple --subset novel
- 
-  Step 2: Run eval once on the merged file
-  python -m Evaluation.generation_eval \
-    --mode API \
-    --model gpt-5.4-mini \
-    --data_file /your-path/benchmarks/results/bench_app_simple/novel_all.json \
-    --output_file /your-path/benchmarks/results/bench_app_simple/novel_gen_scores.json
-
-  Step 3: What the output looks like
-  {
-    "Fact Retrieval":         {"rouge_score": 0.42, "answer_correctness": 0.61},
-    "Complex Reasoning":      {"rouge_score": 0.31, "answer_correctness": 0.54},
-    "Contextual Summarize":   {"answer_correctness": 0.58, "coverage_score": 0.63},
-    "Creative Generation":    {"answer_correctness": 0.55, "coverage_score": 0.60, "faithfulness": 0.71}
-  }
+See benchmarks/README.md for the full evaluation workflow.
 """
 
 import argparse
@@ -81,31 +53,6 @@ SUBSET_FILES = {
     },
 }
 
-QUERY_PROMPT = """
-You are a document Q&A assistant. Generate concise answers based strictly on the retrieved evidence.
-No preamble ("Based on the documents…", "According to the text…").
-No inline citations or source references in the answer text.
-"""
-
-"""
-  query_prompt: |
-    You are a document Q&A assistant. Answer each question using retrieved evidence only.
-
-    Match your response to the question type:
-    - Fact retrieval / reasoning: 1–3 sentences, plain and direct.
-    - Contextual summarize: a cohesive prose paragraph (2–4 sentences); synthesize the
-      argument or evidence structure rather than listing facts; capture nuance and
-      qualifications (e.g., "although X, the text argues Y").
-    - Creative generation (diary, letter, story): write in the requested form and voice;
-      blend evidence naturally; stay focused on the specific angle the question asks for;
-      aim for a short, complete paragraph.
-
-    All answers:
-    - No preamble ("Based on the documents…", "According to the text…").
-    - Do not invent facts absent from the retrieved evidence.
-    - No inline citations or source references in the answer text.
-    - No trailing summaries or meta-commentary.
-"""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -129,6 +76,13 @@ def _build_bundle(config_path: Path, app_name: str) -> bytes:
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("config.yaml", config_yaml)
     return buf.getvalue()
+
+
+_CITATION_RE = re.compile(r"\[[A-Za-z0-9][A-Za-z0-9_\-:]*(?:,\s*[A-Za-z0-9][A-Za-z0-9_\-:]*)*\]")
+
+
+def _strip_citations(text: str) -> str:
+    return _CITATION_RE.sub("", text).strip()
 
 
 def _group_by_source(questions: list[dict]) -> dict[str, list[dict]]:
@@ -197,7 +151,7 @@ async def wait_for_ingestion(client: httpx.AsyncClient, app_name: str, poll_inte
         await asyncio.sleep(poll_interval)
 
 
-async def query(client: httpx.AsyncClient, app_name: str, question: str, system_prompt: str) -> tuple[str, list[str]]:
+async def query(client: httpx.AsyncClient, app_name: str, question: str, question_type: str, system_prompt: str) -> tuple[str, list[str]]:
     """Run a question through the CogBase query endpoint.
 
     Returns (answer, context) where context combines chunk texts, document
@@ -205,12 +159,12 @@ async def query(client: httpx.AsyncClient, app_name: str, question: str, system_
     """
     resp = await client.post(
         f"/applications/{app_name}/query",
-        json={"text": question, "system_prompt": QUERY_PROMPT},
+        json={"text": question, "system_prompt": system_prompt},
         timeout=120,
     )
     resp.raise_for_status()
     data = resp.json()
-    answer: str = data.get("answer", "")
+    answer: str = _strip_citations(data.get("answer", ""))
     context: list[str] = (
         [c["text"] for c in data.get("chunks", [])]
         + [s["text"] for s in data.get("document_slices", [])]
@@ -253,7 +207,7 @@ async def process_corpus(
     for i, q in enumerate(questions, 1):
         log.info("  [%d/%d] %s", i, len(questions), q["question"][:80])
         try:
-            answer, context = await query(client, app_name, q["question"], system_prompt)
+            answer, context = await query(client, app_name, q["question"], q["question_type"], system_prompt)
         except Exception as exc:
             log.warning("  Query failed: %s", exc)
             answer, context = "", []

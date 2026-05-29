@@ -1,7 +1,7 @@
 name: PLACEHOLDER
 
 query_prompt: |
-  You are a document Q&A assistant. Answer each question using retrieved evidence.
+  You are a document Q&A assistant. Answer each question using retrieved evidence only.
 
   Entity-relation triples are available as a structured index over the corpus.
   Use them to orient your search — identify relevant entities and relationships —
@@ -9,60 +9,44 @@ query_prompt: |
   Do not answer from triples alone.
 
   Answer style:
-  - One direct sentence stating the fact plainly.
-  - Mirror the phrasing of the retrieved evidence where possible.
+  - Provide a concise factual answer.
+  - State the answer directly and clearly.
   - No preamble ("Based on the documents…", "According to the text…").
   - Do not invent facts not found in the retrieved evidence.
 
 vector_collections:
-  - name: bench_chunks
-    description: >
-      Passage chunks from the corpus. Use for detailed fact retrieval,
-      complex reasoning, and questions requiring specific textual evidence.
-
-  - name: bench_summaries
-    description: >
-      One summary per document. Use for broad contextual questions
-      and creative generation tasks.
+- name: novel_passages
+  dimensions: 1536
+  description: Overlapping passages from a novel for semantic search and question answering.
+  metadata_fields: []
 
 structured_collections:
-  - name: entity_relations
-    description: >
-      Factual entity-relation-entity triples extracted from the corpus.
-      Use for precise fact lookup: geographic locations, organizational
-      affiliations, personal relationships, and historical events.
-    schema: '{"type":"object","properties":{"doc_id":{"type":"string"},"triple_id":{"type":"string"},"subject":{"type":"string"},"predicate":{"type":"string"},"object":{"type":"string"}},"required":["doc_id","triple_id","subject","predicate","object"]}'
-    primary_fields: [doc_id, triple_id]
+- name: novel_claims_relations
+  description: Capturing explicit and implied claims, comparisons, and relationships between entities.
+  schema: '{"type":"object","properties":{"subject_entity":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"The subject entity involved in the claim or relation"},"subject_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Type of the subject entity such as person, place, group, event, object, or concept"},"relation_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Type of relation such as related_to, lives_in, travels_to, loves, hates, works_for, belongs_to, causes, compares_to, mentions, or opposes"},"object_entity":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"The object entity involved in the claim or relation"},"object_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Type of the object entity such as person, place, group, event, object, or concept"},"claim_text":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Verbatim supporting text for the claim or relation"},"evidence_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Whether the relation is explicit, implied, or inferred from the text"},"note":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Optional clarification or context for the claim or relation"},"claim_id":{"type":"string","description":"record identifier"},"doc_id":{"type":"string","description":"document identifier"}},"required":["doc_id","claim_id"]}'
+  primary_fields:
+  - doc_id
+  - claim_id
 
 pipelines:
-  - name: default
-    routing_description: General corpus documents for benchmark evaluation.
-    steps:
-      - tool: chunk-embed-upsert
-        collection: bench_chunks
+- name: novel
+  routing_description: Novel manuscripts, published novels, and novel front matter or body text for question answering.
+  parallel: false
+  steps:
+  - collection: novel_passages
+    tool: chunk-embed-upsert
 
-      - tool: extract-structured
-        collection: entity_relations
-        extractor:
-          type: llm
-          record_mode: many
-          response_field: items
-          id_field: triple_id
-          id_template: "{doc_id}__{index:04d}"
-          extraction_schema: '{"type":"object","properties":{"subject":{"type":"string"},"predicate":{"type":"string"},"object":{"type":"string"}},"required":["subject","predicate","object"]}'
-          prompt: |
-            Extract all factual relationships between named entities in this text.
-            For each relationship identify:
-            - subject: the entity or concept acting or being described
-            - predicate: the relationship or action (concise verb phrase)
-            - object: the related entity, place, concept, or value
-            Focus on geographic facts, organizational affiliations, personal
-            relationships, historical events, cultural comparisons, and any
-            concrete facts that could answer specific questions about the text.
+  - collection: novel_claims_relations
+    tool: extract-structured
+    extractor:
+      type: llm
+      extraction_schema: '{"type":"object","properties":{"subject_entity":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"The subject entity involved in the claim or relation"},"subject_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Type of the subject entity such as person, place, group, event, object, or concept"},"relation_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Type of relation such as related_to, lives_in, travels_to, loves, hates, works_for, belongs_to, causes, compares_to, mentions, or opposes"},"object_entity":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"The object entity involved in the claim or relation"},"object_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Type of the object entity such as person, place, group, event, object, or concept"},"claim_text":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Verbatim supporting text for the claim or relation"},"evidence_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Whether the relation is explicit, implied, or inferred from the text"},"note":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Optional clarification or context for the claim or relation"}}}'
+      prompt: 'You are a literary analyst. Extract distinct claims, comparisons, and relationships from the novel.
 
-      - tool: document-embed-upsert
-        collection: bench_summaries
-        doc_prompt: >
-          Summarise this document comprehensively. Cover the main themes,
-          key characters or concepts, important events or findings, and
-          any notable details. Be thorough and factual.
+        Return ONLY the JSON object — no explanation, no markdown fences.'
+      record_mode: many
+      response_field: items
+      id_field: claim_id
+      id_template: '{doc_id}__{index:04d}'
+skills: []
+workflows: []
