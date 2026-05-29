@@ -17,7 +17,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cogbase.core.query_runner import DocumentSlice, QueryResult, QueryRunner as Runner
+from cogbase.core.query_runner import (
+    DocumentSlice,
+    QueryResult,
+    QueryRunner as Runner,
+    _extract_cited_ids,
+    _filter_cited_chunks,
+    _filter_cited_slices,
+)
 from cogbase.llms.base import ChatMessage, CompletionResult, SystemTool
 from cogbase.skills.skill import Skill
 
@@ -669,55 +676,223 @@ def test_format_chunks_empty_returns_placeholder():
     assert _format_chunks([]) == "(no passages found)"
 
 
+def test_format_chunks_same_doc_sorted_by_char_offset():
+    from cogbase.core.query_runner import _format_chunks
+    from cogbase.core.models import Chunk
+
+    # c2 is more relevant (returned first) but appears later in the document.
+    c1 = Chunk(chunk_id="d_1", doc_id="d", text="later", char_offset=500, char_length=10)
+    c2 = Chunk(chunk_id="d_0", doc_id="d", text="earlier", char_offset=100, char_length=10)
+    output = _format_chunks([c1, c2])
+    assert output.index("[d_0]") < output.index("[d_1]")
+
+
+def test_format_chunks_cross_doc_relevance_order_preserved():
+    from cogbase.core.query_runner import _format_chunks
+    from cogbase.core.models import Chunk
+
+    # doc_b is more relevant (listed first); its chunks should appear before doc_a.
+    b = Chunk(chunk_id="b_0", doc_id="doc_b", text="from b", char_offset=0, char_length=6)
+    a = Chunk(chunk_id="a_0", doc_id="doc_a", text="from a", char_offset=0, char_length=6)
+    output = _format_chunks([b, a])
+    assert output.index("[b_0]") < output.index("[a_0]")
+
+
+def test_format_chunks_no_char_offset_sorts_after_offset_chunks():
+    from cogbase.core.query_runner import _format_chunks
+    from cogbase.core.models import Chunk
+
+    with_offset = Chunk(chunk_id="d_0", doc_id="d", text="has offset", char_offset=200, char_length=10)
+    no_offset   = Chunk(chunk_id="d_1", doc_id="d", text="no offset")
+    output = _format_chunks([no_offset, with_offset])
+    assert output.index("[d_0]") < output.index("[d_1]")
+
+
+# ---------------------------------------------------------------------------
+# _run_vector_search() — exclude_ids
+# ---------------------------------------------------------------------------
+
+def _fake_vector_store_tracking(return_chunks):
+    """Returns a vector store that records the top_k it was called with."""
+    from cogbase.stores import VectorStoreBase
+
+    class _Store(VectorStoreBase):
+        called_top_k: list[int] = []
+
+        async def upsert(self, collection, chunks): pass
+
+        async def search(self, collection, query_text, embedding, top_k):
+            _Store.called_top_k.append(top_k)
+            return return_chunks[:top_k]
+
+        async def delete(self, collection, doc_id): pass
+        async def delete_collection(self, collection): pass
+        async def create_collection(self, schema): pass
+
+    return _Store()
+
+
+@pytest.mark.asyncio
+async def test_run_vector_search_exclude_ids_filters_seen_chunks():
+    """Chunks whose chunk_id is in exclude_ids are dropped from results."""
+    from cogbase.core.models import Chunk
+
+    c1 = Chunk(chunk_id="seen",  doc_id="d", text="already seen", embedding=[0.1] * 4)
+    c2 = Chunk(chunk_id="fresh", doc_id="d", text="new result",   embedding=[0.1] * 4)
+
+    store = _fake_vector_store_tracking([c1, c2])
+    embedder = _fake_embedder()
+    runner = Runner(MagicMock(), vector_store=store, embedder=embedder)
+
+    chunks, _ = await runner._run_vector_search(
+        {"query": "q", "collection": "docs", "top_k": 5},
+        exclude_ids={"seen"},
+    )
+    ids = [c.chunk_id for c in chunks]
+    assert "seen" not in ids
+    assert "fresh" in ids
+
+
+@pytest.mark.asyncio
+async def test_run_vector_search_exclude_ids_expands_search_top_k():
+    """search() is called with top_k + len(exclude_ids) to compensate for filtered results."""
+    from cogbase.core.models import Chunk
+
+    chunks = [Chunk(chunk_id=f"c{i}", doc_id="d", text=f"t{i}", embedding=[0.1] * 4) for i in range(10)]
+    store = _fake_vector_store_tracking(chunks)
+    embedder = _fake_embedder()
+    runner = Runner(MagicMock(), vector_store=store, embedder=embedder)
+    # Reset class-level tracker
+    type(store).called_top_k = []
+
+    await runner._run_vector_search(
+        {"query": "q", "collection": "docs", "top_k": 3},
+        exclude_ids={"c0", "c1"},
+    )
+    assert store.called_top_k[-1] == 5  # 3 + 2 excluded
+
+
+@pytest.mark.asyncio
+async def test_run_vector_search_no_exclude_ids_returns_full_results():
+    """Without exclude_ids, all results up to top_k are returned."""
+    from cogbase.core.models import Chunk
+
+    chunks = [Chunk(chunk_id=f"c{i}", doc_id="d", text=f"t{i}", embedding=[0.1] * 4) for i in range(5)]
+    store = _fake_vector_store_tracking(chunks)
+    embedder = _fake_embedder()
+    runner = Runner(MagicMock(), vector_store=store, embedder=embedder)
+
+    result_chunks, _ = await runner._run_vector_search(
+        {"query": "q", "collection": "docs", "top_k": 5},
+    )
+    assert len(result_chunks) == 5
+
+
+@pytest.mark.asyncio
+async def test_run_retrieval_second_vector_search_skips_first_results():
+    """Integration: a second vector_search call in one run() skips chunks from the first."""
+    from cogbase.core.models import Chunk
+
+    seen_chunk = Chunk(chunk_id="first",  doc_id="d", text="first call chunk",  embedding=[0.1] * 4)
+    new_chunk  = Chunk(chunk_id="second", doc_id="d", text="second call chunk", embedding=[0.1] * 4)
+
+    call_count = [0]
+
+    class _SequentialStore:
+        async def upsert(self, c, chunks): pass
+        async def search(self, c, qt, emb, top_k):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return [seen_chunk]
+            # Second call: return both so we can verify seen_chunk is excluded.
+            return [seen_chunk, new_chunk]
+        async def delete(self, c, d): pass
+        async def delete_collection(self, c): pass
+        async def create_collection(self, s): pass
+
+    llm = _make_llm(
+        _tool_result("vector_search", {"query": "q1", "collection": "docs"}, call_id="v1"),
+        _tool_result("vector_search", {"query": "q2", "collection": "docs"}, call_id="v2"),
+        _text_result("Done."),
+    )
+    runner = Runner(
+        llm,
+        vector_store=_SequentialStore(),
+        embedder=_fake_embedder(),
+    )
+    output = [c async for c in runner.run("search twice")]
+    result = output[-1]
+    assert isinstance(result, QueryResult)
+    chunk_ids = [c.chunk_id for c in result.chunks]
+    # "first" may appear in final result (it was cited or fallback), but "second" must appear too
+    # and "first" must not be duplicated.
+    assert chunk_ids.count("first") <= 1
+
+
+# ---------------------------------------------------------------------------
+# _extract_cited_ids()
+# ---------------------------------------------------------------------------
+
+def test_extract_cited_ids_returns_all_bracket_ids():
+    ids = _extract_cited_ids("Based on [doc_0_0] and [report.pdf:0:100], see also [doc_1_0].")
+    assert ids == {"doc_0_0", "report.pdf:0:100", "doc_1_0"}
+
+
+def test_extract_cited_ids_returns_empty_set_when_no_brackets():
+    assert _extract_cited_ids("No citations here.") == set()
+
+
+def test_extract_cited_ids_deduplicates():
+    ids = _extract_cited_ids("[doc_0_0] is important. Also see [doc_0_0] again.")
+    assert ids == {"doc_0_0"}
+
+
 # ---------------------------------------------------------------------------
 # _filter_cited_chunks()
 # ---------------------------------------------------------------------------
 
 def test_filter_cited_chunks_returns_cited_subset():
-    from cogbase.core.query_runner import _filter_cited_chunks
     from cogbase.core.models import Chunk
 
     c1 = Chunk(chunk_id="doc_0_0", doc_id="doc_0", text="alpha")
     c2 = Chunk(chunk_id="doc_0_1", doc_id="doc_0", text="beta")
     c3 = Chunk(chunk_id="doc_1_0", doc_id="doc_1", text="gamma")
 
-    result = _filter_cited_chunks(
-        "Based on [doc_0_0] and [doc_1_0], the answer is clear.",
-        [c1, c2, c3],
-    )
+    cited = _extract_cited_ids("Based on [doc_0_0] and [doc_1_0], the answer is clear.")
+    result = _filter_cited_chunks([c1, c2, c3], cited)
     assert result == [c1, c3]
 
 
 def test_filter_cited_chunks_fallback_when_no_citations():
-    from cogbase.core.query_runner import _filter_cited_chunks
     from cogbase.core.models import Chunk
 
     c1 = Chunk(chunk_id="doc_0_0", doc_id="doc_0", text="alpha")
     c2 = Chunk(chunk_id="doc_0_1", doc_id="doc_0", text="beta")
 
-    result = _filter_cited_chunks("Based on the documents, here is the answer.", [c1, c2])
+    cited = _extract_cited_ids("Based on the documents, here is the answer.")
+    result = _filter_cited_chunks([c1, c2], cited)
     assert result == [c1, c2]
 
 
-def test_filter_cited_chunks_ignores_unknown_bracket_patterns():
-    from cogbase.core.query_runner import _filter_cited_chunks
+def test_filter_cited_chunks_returns_empty_when_cited_ids_has_only_slice_ids():
+    """Bug fix: chunk filter returns [] when answer cites slice IDs, not all chunks."""
     from cogbase.core.models import Chunk
 
     c1 = Chunk(chunk_id="doc_0_0", doc_id="doc_0", text="alpha")
+    c2 = Chunk(chunk_id="doc_0_1", doc_id="doc_0", text="beta")
 
-    # Numbered refs like [1], [2] are not valid chunk_ids — should trigger fallback.
-    result = _filter_cited_chunks("See [1] for details, also [2] is relevant.", [c1])
-    assert result == [c1]
+    # cited_ids contains a slice ID, not a chunk ID
+    cited = {"report.pdf:0:100"}
+    result = _filter_cited_chunks([c1, c2], cited)
+    assert result == []
 
 
 def test_filter_cited_chunks_empty_input_returns_empty():
-    from cogbase.core.query_runner import _filter_cited_chunks
-
-    assert _filter_cited_chunks("any answer with [doc_0_0]", []) == []
+    cited = _extract_cited_ids("any answer with [doc_0_0]")
+    assert _filter_cited_chunks([], cited) == []
 
 
 def test_filter_cited_chunks_preserves_all_chunks_order():
-    from cogbase.core.query_runner import _filter_cited_chunks
     from cogbase.core.models import Chunk
 
     c1 = Chunk(chunk_id="doc_0_0", doc_id="doc_0", text="first")
@@ -725,7 +900,8 @@ def test_filter_cited_chunks_preserves_all_chunks_order():
     c3 = Chunk(chunk_id="doc_0_2", doc_id="doc_0", text="third")
 
     # LLM cited in reverse order — result should follow all_chunks order.
-    result = _filter_cited_chunks("See [doc_0_2] and [doc_0_0].", [c1, c2, c3])
+    cited = _extract_cited_ids("See [doc_0_2] and [doc_0_0].")
+    result = _filter_cited_chunks([c1, c2, c3], cited)
     assert result == [c1, c3]
 
 
@@ -825,54 +1001,48 @@ def test_document_slice_slice_id_zero_offset():
 # ---------------------------------------------------------------------------
 
 def test_filter_cited_slices_returns_cited_subset():
-    from cogbase.core.query_runner import _filter_cited_slices
-
     s1 = DocumentSlice(doc_id="a.pdf", offset=0,   length=100, text="alpha")
     s2 = DocumentSlice(doc_id="a.pdf", offset=100, length=100, text="beta")
     s3 = DocumentSlice(doc_id="b.pdf", offset=0,   length=200, text="gamma")
 
-    result = _filter_cited_slices(
-        f"Based on [{s1.slice_id}] and [{s3.slice_id}], the answer is clear.",
-        [s1, s2, s3],
-    )
+    cited = _extract_cited_ids(f"Based on [{s1.slice_id}] and [{s3.slice_id}], the answer is clear.")
+    result = _filter_cited_slices([s1, s2, s3], cited)
     assert result == [s1, s3]
 
 
 def test_filter_cited_slices_fallback_when_no_citations():
-    from cogbase.core.query_runner import _filter_cited_slices
-
     s1 = DocumentSlice(doc_id="x.pdf", offset=0, length=50, text="alpha")
     s2 = DocumentSlice(doc_id="x.pdf", offset=50, length=50, text="beta")
 
-    result = _filter_cited_slices("Based on the documents, here is the answer.", [s1, s2])
+    cited = _extract_cited_ids("Based on the documents, here is the answer.")
+    result = _filter_cited_slices([s1, s2], cited)
     assert result == [s1, s2]
 
 
-def test_filter_cited_slices_ignores_unknown_bracket_patterns():
-    from cogbase.core.query_runner import _filter_cited_slices
-
+def test_filter_cited_slices_returns_empty_when_cited_ids_has_only_chunk_ids():
+    """Bug fix: slice filter returns [] when answer cites chunk IDs, not all slices."""
     s1 = DocumentSlice(doc_id="x.pdf", offset=0, length=50, text="alpha")
+    s2 = DocumentSlice(doc_id="x.pdf", offset=50, length=50, text="beta")
 
-    # Brackets that don't match any slice_id trigger fallback.
-    result = _filter_cited_slices("See [1] and [some-chunk-id] for details.", [s1])
-    assert result == [s1]
+    # cited_ids contains chunk IDs, not slice IDs
+    cited = {"doc_0_0", "doc_1_0"}
+    result = _filter_cited_slices([s1, s2], cited)
+    assert result == []
 
 
 def test_filter_cited_slices_empty_input_returns_empty():
-    from cogbase.core.query_runner import _filter_cited_slices
-
-    assert _filter_cited_slices("anything [x.pdf:0:100]", []) == []
+    cited = _extract_cited_ids("anything [x.pdf:0:100]")
+    assert _filter_cited_slices([], cited) == []
 
 
 def test_filter_cited_slices_preserves_all_slices_order():
-    from cogbase.core.query_runner import _filter_cited_slices
-
     s1 = DocumentSlice(doc_id="d.pdf", offset=0,   length=100, text="first")
     s2 = DocumentSlice(doc_id="d.pdf", offset=100, length=100, text="second")
     s3 = DocumentSlice(doc_id="d.pdf", offset=200, length=100, text="third")
 
     # LLM cited in reverse order — result should follow all_slices order.
-    result = _filter_cited_slices(f"See [{s3.slice_id}] and [{s1.slice_id}].", [s1, s2, s3])
+    cited = _extract_cited_ids(f"See [{s3.slice_id}] and [{s1.slice_id}].")
+    result = _filter_cited_slices([s1, s2, s3], cited)
     assert result == [s1, s3]
 
 
@@ -950,3 +1120,75 @@ async def test_run_read_document_fallback_all_slices_when_llm_cites_none():
     result = output[-1]
     assert isinstance(result, QueryResult)
     assert len(result.document_slices) == 2
+
+
+# ---------------------------------------------------------------------------
+# Bug fix: cross-type citation filtering
+# When the LLM cites chunks, slices must not fall back to "all", and vice versa.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_run_citing_chunks_does_not_return_all_slices():
+    """Main bug: answer cites a chunk ID → document_slices must be [], not all slices."""
+    from cogbase.core.models import Chunk as ModelChunk
+
+    text = "A" * 500
+    doc_store = _make_document_store({"doc.pdf": text})
+    store_chunks = [
+        ModelChunk(chunk_id="doc_0_0", doc_id="doc.pdf", text="passage A", embedding=[0.1] * 4),
+    ]
+
+    llm = _make_llm(
+        _tool_result("vector_search",  {"query": "q", "collection": "docs"},                  call_id="c1"),
+        _tool_result("read_document",  {"doc_id": "doc.pdf", "offset": 0, "length": 100},     call_id="c2"),
+        # LLM cites the chunk ID, not the slice ID
+        _text_result("Based on [doc_0_0], the answer is passage A."),
+    )
+    runner = Runner(
+        llm,
+        vector_store=_fake_vector_store_with_chunks(store_chunks),
+        embedder=_fake_embedder(),
+        document_store=doc_store,
+        app_name="myapp",
+    )
+    output = [c async for c in runner.run("find passage")]
+    result = output[-1]
+    assert isinstance(result, QueryResult)
+    assert len(result.chunks) == 1
+    assert result.chunks[0].chunk_id == "doc_0_0"
+    # Slice was retrieved but not cited — must not fall back to all slices.
+    assert result.document_slices == []
+
+
+@pytest.mark.asyncio
+async def test_run_citing_slices_does_not_return_all_chunks():
+    """Symmetric bug: answer cites a slice ID → chunks must be [], not all chunks."""
+    from cogbase.core.models import Chunk as ModelChunk
+
+    text = "B" * 500
+    doc_store = _make_document_store({"doc.pdf": text})
+    store_chunks = [
+        ModelChunk(chunk_id="doc_0_0", doc_id="doc.pdf", text="passage A", embedding=[0.1] * 4),
+        ModelChunk(chunk_id="doc_0_1", doc_id="doc.pdf", text="passage B", embedding=[0.1] * 4),
+    ]
+
+    llm = _make_llm(
+        _tool_result("vector_search",  {"query": "q", "collection": "docs"},              call_id="c1"),
+        _tool_result("read_document",  {"doc_id": "doc.pdf", "offset": 0, "length": 100}, call_id="c2"),
+        # LLM cites the slice ID (doc.pdf:0:100), not any chunk ID
+        _text_result("Based on [doc.pdf:0:100], the answer is B."),
+    )
+    runner = Runner(
+        llm,
+        vector_store=_fake_vector_store_with_chunks(store_chunks),
+        embedder=_fake_embedder(),
+        document_store=doc_store,
+        app_name="myapp",
+    )
+    output = [c async for c in runner.run("find passage")]
+    result = output[-1]
+    assert isinstance(result, QueryResult)
+    assert len(result.document_slices) == 1
+    assert result.document_slices[0].slice_id == "doc.pdf:0:100"
+    # Chunks were retrieved but not cited — must not fall back to all chunks.
+    assert result.chunks == []

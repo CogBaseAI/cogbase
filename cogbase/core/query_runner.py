@@ -343,29 +343,30 @@ def _format_chunks(chunks: list[Chunk]) -> str:
     return "\n".join(lines)
 
 
-def _filter_cited_chunks(answer: str, all_chunks: list[Chunk]) -> list[Chunk]:
-    """Return only chunks whose chunk_id the LLM cited in *answer*.
+def _extract_cited_ids(answer: str) -> set[str]:
+    """Return all bracket-cited IDs from *answer*, e.g. [contract_001_0]."""
+    return set(re.findall(r"\[([^\]]+)\]", answer))
 
-    Falls back to all chunks if the LLM cited none (e.g. it paraphrased without
-    explicit citations), so the caller always gets at least something useful.
+
+def _filter_cited_chunks(all_chunks: list[Chunk], cited_ids: set[str]) -> list[Chunk]:
+    """Return chunks whose chunk_id appears in *cited_ids*.
+
+    Falls back to all chunks only when *cited_ids* is empty (LLM produced no
+    citations at all), so the caller always gets something useful.  When the LLM
+    did cite IDs but none matched chunks (e.g. it only cited slices), returns [].
     """
-    chunk_map = {c.chunk_id: c for c in all_chunks}
-    cited_ids = {m for m in re.findall(r"\[([^\]]+)\]", answer) if m in chunk_map}
-    if not cited_ids:
-        return all_chunks
-    return [c for c in all_chunks if c.chunk_id in cited_ids]
+    matched = [c for c in all_chunks if c.chunk_id in cited_ids]
+    return matched if (matched or cited_ids) else all_chunks
 
 
-def _filter_cited_slices(answer: str, all_slices: list[DocumentSlice]) -> list[DocumentSlice]:
-    """Return only document slices whose slice_id the LLM cited in *answer*.
+def _filter_cited_slices(all_slices: list[DocumentSlice], cited_ids: set[str]) -> list[DocumentSlice]:
+    """Return slices whose slice_id appears in *cited_ids*.
 
-    Falls back to all slices when none are cited.
+    Falls back to all slices only when *cited_ids* is empty.  When the LLM cited
+    IDs but none matched slices (e.g. it only cited chunks), returns [].
     """
-    slice_map = {s.slice_id: s for s in all_slices}
-    cited_ids = {m for m in re.findall(r"\[([^\]]+)\]", answer) if m in slice_map}
-    if not cited_ids:
-        return all_slices
-    return [s for s in all_slices if s.slice_id in cited_ids]
+    matched = [s for s in all_slices if s.slice_id in cited_ids]
+    return matched if (matched or cited_ids) else all_slices
 
 
 # ---------------------------------------------------------------------------
@@ -587,11 +588,12 @@ class QueryRunner:
             tool_calls = final_result.get("tool_calls") if final_result else None
             if not tool_calls:
                 answer = "".join(tokens) + "\n"
+                cited_ids = _extract_cited_ids(answer)
                 yield QueryResult(
                     answer=answer,
                     structured_records=all_records,
-                    chunks=_filter_cited_chunks(answer, all_chunks),
-                    document_slices=_filter_cited_slices(answer, all_slices),
+                    chunks=_filter_cited_chunks(all_chunks, cited_ids),
+                    document_slices=_filter_cited_slices(all_slices, cited_ids),
                 )
                 return
 
