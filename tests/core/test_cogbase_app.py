@@ -177,8 +177,11 @@ async def _make_app(
     name: str = "legal",
 ) -> CogBaseApp:
     pipeline = await _make_pipeline(llm, store, vector_store=vector_store, embedder=embedder, chunker=chunker, name=name)
+    doc_store = InMemoryDocumentStore()
     runner = QueryRunner(
+        app_name=name,
         llm=llm,
+        document_store=doc_store,
         structured_store=store,
         vector_store=vector_store,
         embedder=embedder,
@@ -187,7 +190,7 @@ async def _make_app(
     )
     return CogBaseApp(
         name, [pipeline], runner,
-        document_store=InMemoryDocumentStore(),
+        document_store=doc_store,
         structured_store=store,
         workflow_runners={},
         llm=llm,
@@ -221,7 +224,7 @@ class TestCogBaseAppConstruction:
     async def test_pipeline_wired_to_app(self):
         store = InMemoryStructuredStore()
         pipeline = await _make_pipeline(_make_llm("{}"), store)
-        runner = QueryRunner(llm=_make_llm("{}"), structured_store=store, structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None)
+        runner = QueryRunner(app_name="test", llm=_make_llm("{}"), document_store=InMemoryDocumentStore(), structured_store=store, structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None)
         llm = _make_llm("{}")
         app = CogBaseApp(
             "test", [pipeline], runner,
@@ -451,15 +454,18 @@ class TestVectorOnlyMode:
             steps=[PipelineStep(tool="chunk-embed-upsert", collection="vector_only", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
             vector_collections=[vc],
         )
+        doc_store = InMemoryDocumentStore()
         runner = QueryRunner(
+            app_name="vector-only",
             llm=llm,
+            document_store=doc_store,
             vector_store=vc_store,
             embedder=vc_embedder,
             vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None,
         )
         return CogBaseApp(
             "vector-only", [pipeline], runner,
-            document_store=InMemoryDocumentStore(),
+            document_store=doc_store,
             structured_store=InMemoryStructuredStore(),
             workflow_runners={},
             llm=llm,
@@ -500,10 +506,11 @@ class TestVectorOnlyMode:
             steps=[PipelineStep(tool="chunk-embed-upsert", collection="testapp", chunker=FixedSizeChunker(chunk_size=20, overlap=0))],
             vector_collections=[vc],
         )
-        runner = QueryRunner(llm=_make_llm("{}"), vector_store=vector_store, embedder=StubEmbedding(dim=4), vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None)
+        doc_store = InMemoryDocumentStore()
+        runner = QueryRunner(app_name="testapp", llm=_make_llm("{}"), document_store=doc_store, vector_store=vector_store, embedder=StubEmbedding(dim=4), vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None)
         app = CogBaseApp(
             "testapp", [pipeline], runner,
-            document_store=InMemoryDocumentStore(),
+            document_store=doc_store,
             structured_store=InMemoryStructuredStore(),
             workflow_runners={},
             llm=_make_llm("{}"),

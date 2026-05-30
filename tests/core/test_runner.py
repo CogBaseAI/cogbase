@@ -77,6 +77,21 @@ def _str_chunks(chunks: list) -> list[str]:
     return [c for c in chunks if isinstance(c, str)]
 
 
+def _make_document_store(docs: dict[str, str]) -> MagicMock:
+    store = MagicMock()
+    async def _load(collection, doc_id):
+        if doc_id not in docs:
+            raise KeyError(doc_id)
+        return docs[doc_id]
+    store.load = AsyncMock(side_effect=_load)
+    return store
+
+
+def _doc_store() -> MagicMock:
+    """Minimal document store mock for tests that don't exercise document reading."""
+    return _make_document_store({})
+
+
 # ---------------------------------------------------------------------------
 # select()
 # ---------------------------------------------------------------------------
@@ -85,7 +100,7 @@ def _str_chunks(chunks: list) -> list[str]:
 async def test_select_returns_matching_skill():
     skills = [_make_skill("weather"), _make_skill("model-usage")]
     llm = _make_llm(_text_result("weather"))
-    runner = Runner(llm, skills=skills)
+    runner = Runner("test", llm, _doc_store(), skills=skills)
     result = await runner.select("What's the weather?")
     assert result is skills[0]
 
@@ -94,7 +109,7 @@ async def test_select_returns_matching_skill():
 async def test_select_returns_none_for_no_match():
     skills = [_make_skill("weather")]
     llm = _make_llm(_text_result("none"))
-    runner = Runner(llm, skills=skills)
+    runner = Runner("test", llm, _doc_store(), skills=skills)
     result = await runner.select("Tell me a joke")
     assert result is None
 
@@ -103,7 +118,7 @@ async def test_select_returns_none_for_no_match():
 async def test_select_returns_none_for_unknown_skill_name():
     skills = [_make_skill("weather")]
     llm = _make_llm(_text_result("nonexistent"))
-    runner = Runner(llm, skills=skills)
+    runner = Runner("test", llm, _doc_store(), skills=skills)
     result = await runner.select("something")
     assert result is None
 
@@ -112,7 +127,7 @@ async def test_select_returns_none_for_unknown_skill_name():
 async def test_select_empty_skills_returns_none_without_llm_call():
     llm = MagicMock()
     llm.complete = AsyncMock()
-    runner = Runner(llm)
+    runner = Runner("test", llm, _doc_store())
     result = await runner.select("anything")
     assert result is None
     llm.complete.assert_not_called()
@@ -124,7 +139,7 @@ async def test_select_empty_skills_returns_none_without_llm_call():
 
 def test_build_system_prompt_includes_skill_markdown():
     skill = _make_skill("weather", markdown="# Weather\nRun curl.")
-    runner = Runner(MagicMock())
+    runner = Runner("test", MagicMock(), _doc_store())
     prompt = runner.build_system_prompt("You are helpful.", skill)
     assert "# Weather\nRun curl." in prompt
     assert "Active Skill: weather" in prompt
@@ -134,7 +149,7 @@ def test_build_system_prompt_includes_skill_markdown():
 def test_build_system_prompt_includes_metadata():
     skill = _make_skill("weather")
     skill.metadata = {"requires": {"bins": ["curl"]}}
-    runner = Runner(MagicMock())
+    runner = Runner("test", MagicMock(), _doc_store())
     prompt = runner.build_system_prompt("base", skill)
     assert "curl" in prompt
 
@@ -150,7 +165,7 @@ async def test_run_skill_no_tools_yields_answer_and_result():
         _text_result("weather"),      # select
         _text_result("It is sunny."), # answer
     )
-    runner = Runner(llm, skills=skills)
+    runner = Runner("test", llm, _doc_store(), skills=skills)
     chunks = [c async for c in runner.run("Weather?")]
     assert any("Using skill: weather" in c for c in _str_chunks(chunks))
     assert _str_chunks(chunks)[-1] == "It is sunny."
@@ -166,7 +181,7 @@ async def test_run_skill_single_tool_call_then_answer():
         _tool_result("shell", {"command": "curl wttr.in/NYC"}), # tool call
         _text_result("The weather in NYC is 72°F."),            # answer
     )
-    runner = Runner(llm, skills=skills)
+    runner = Runner("test", llm, _doc_store(), skills=skills)
     with patch.object(runner, "_execute_tool", new=AsyncMock(return_value="72°F, sunny")):
         chunks = [c async for c in runner.run("Weather in NYC?")]
     assert any("Executing: shell" in c for c in _str_chunks(chunks))
@@ -181,7 +196,7 @@ async def test_run_skill_emits_status_once():
         _tool_result("shell", {"command": "curl wttr.in"}), # tool call
         _text_result("Sunny."),                              # answer
     )
-    runner = Runner(llm, skills=skills)
+    runner = Runner("test", llm, _doc_store(), skills=skills)
     with patch.object(runner, "_execute_tool", new=AsyncMock(return_value="sunny")):
         chunks = [c async for c in runner.run("Weather?")]
     assert sum(1 for c in _str_chunks(chunks) if "Using skill" in c) == 1
@@ -194,7 +209,7 @@ async def test_run_no_skill_selected_answers_directly():
         _text_result("none"),          # select → no skill
         _text_result("I don't know."), # direct answer
     )
-    runner = Runner(llm, skills=skills)
+    runner = Runner("test", llm, _doc_store(), skills=skills)
     chunks = [c async for c in runner.run("What is 2+2?")]
     assert _str_chunks(chunks)[-1] == "I don't know."
     assert not any("Using skill" in c for c in _str_chunks(chunks))
@@ -208,7 +223,7 @@ async def test_run_max_calls_exceeded_yields_error():
     llm = _make_llm(
         _text_result("weather"), tool, tool, # select + 2 tool rounds
     )
-    runner = Runner(llm, max_calls=2, skills=skills)
+    runner = Runner("test", llm, _doc_store(), max_calls=2, skills=skills)
     with patch.object(runner, "_execute_tool", new=AsyncMock(return_value="ok")):
         chunks = [c async for c in runner.run("Weather?")]
     assert any("unable to complete" in c.answer.lower() for c in chunks if isinstance(c, QueryResult))
@@ -223,7 +238,7 @@ async def test_run_max_calls_exceeded_yields_error():
 async def test_run_retrieval_direct_answer():
     """No skills, no tool calls — LLM answers directly."""
     llm = _make_llm(_text_result("The answer is 42."))
-    runner = Runner(llm)
+    runner = Runner("test", llm, _doc_store())
     chunks = [c async for c in runner.run("What is the answer?")]
     assert _str_chunks(chunks)[-1] == "The answer is 42."
     assert isinstance(chunks[-1], QueryResult)
@@ -254,7 +269,7 @@ async def test_run_retrieval_structured_lookup_populates_records():
         _tool_result("structured_lookup", {"collection": "facts"}),
         _text_result("Found: Foo, Bar."),
     )
-    runner = Runner(llm, structured_store=store)
+    runner = Runner("test", llm, _doc_store(), structured_store=store)
     chunks = [c async for c in runner.run("list all facts")]
     result = chunks[-1]
     assert isinstance(result, QueryResult)
@@ -287,7 +302,7 @@ async def test_run_retrieval_passthrough_when_records_exceed_threshold():
     llm = _make_llm(
         _tool_result("structured_lookup", {"collection": "big"}),
     )
-    runner = Runner(llm, structured_store=store, passthrough_token_threshold=2000)
+    runner = Runner("test", llm, _doc_store(), structured_store=store, passthrough_token_threshold=2000)
     chunks = [c async for c in runner.run("dump big")]
     result = chunks[-1]
     assert isinstance(result, QueryResult)
@@ -321,7 +336,9 @@ async def test_run_retrieval_vector_search_populates_chunks():
         _text_result("Here is the relevant passage."),
     )
     runner = Runner(
+        "test",
         llm,
+        _doc_store(),
         vector_store=_FakeVectorStore(),
         embedder=_FakeEmbedder(),
     )
@@ -337,8 +354,19 @@ async def test_run_retrieval_vector_search_populates_chunks():
 # ---------------------------------------------------------------------------
 
 def test_tool_defs_structured_only():
+    from cogbase.stores import CollectionSchema, FieldSchema, FieldType
     from cogbase.stores.structured.memory import InMemoryStructuredStore
-    runner = Runner(MagicMock(), structured_store=InMemoryStructuredStore())
+    schema = CollectionSchema(
+        name="facts",
+        description="desc",
+        primary_fields=["id"],
+        fields={"id": FieldSchema(type=FieldType.STRING)},
+    )
+    runner = Runner(
+        "test", MagicMock(), _doc_store(),
+        structured_store=InMemoryStructuredStore(),
+        structured_schemas=[schema],
+    )
     names = [t["name"] for t in runner._tool_defs]
     assert "structured_lookup" in names
     assert "vector_search" not in names
@@ -346,7 +374,7 @@ def test_tool_defs_structured_only():
 
 def test_tool_defs_vector_only():
     from cogbase.embeddings.base import EmbeddingBase
-    from cogbase.stores import VectorStoreBase
+    from cogbase.stores import VectorCollectionSchema, VectorStoreBase
 
     class _V(VectorStoreBase):
         async def upsert(self, c, chunks): pass
@@ -358,15 +386,24 @@ def test_tool_defs_vector_only():
     class _E(EmbeddingBase):
         async def embed(self, texts): return [[0.0]]
 
-    runner = Runner(MagicMock(), vector_store=_V(), embedder=_E())
+    schema = VectorCollectionSchema(name="docs", dimensions=4, description="desc")
+    runner = Runner(
+        "test", MagicMock(), _doc_store(),
+        vector_store=_V(),
+        embedder=_E(),
+        vector_schemas=[schema],
+    )
     names = [t["name"] for t in runner._tool_defs]
     assert "vector_search" in names
     assert "structured_lookup" not in names
 
 
-def test_tool_defs_no_stores_empty():
-    runner = Runner(MagicMock())
-    assert runner._tool_defs == []
+def test_tool_defs_no_schemas_has_only_read_document():
+    runner = Runner("test", MagicMock(), _doc_store())
+    names = [t["name"] for t in runner._tool_defs]
+    assert "read_document" in names
+    assert "structured_lookup" not in names
+    assert "vector_search" not in names
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +435,7 @@ async def test_run_custom_system_tool_is_called():
         _tool_result("my_tool", {"arg": "hello"}),
         _text_result("Done."),
     )
-    runner = Runner(llm, system_tools=[system_tool])
+    runner = Runner("test", llm, _doc_store(), system_tools=[system_tool])
     chunks = [c async for c in runner.run("run my tool")]
     assert called_with == [{"arg": "hello"}]
     assert _str_chunks(chunks)[-1] == "Done."
@@ -410,28 +447,28 @@ async def test_run_custom_system_tool_is_called():
 
 @pytest.mark.asyncio
 async def test_execute_tool_python_returns_stdout():
-    runner = Runner(MagicMock())
+    runner = Runner("test", MagicMock(), _doc_store())
     output = await runner._execute_tool("python", {"code": "print('hello')"})
     assert output == "hello"
 
 
 @pytest.mark.asyncio
 async def test_execute_tool_shell_returns_stdout():
-    runner = Runner(MagicMock())
+    runner = Runner("test", MagicMock(), _doc_store())
     output = await runner._execute_tool("shell", {"command": "echo hi"})
     assert output == "hi"
 
 
 @pytest.mark.asyncio
 async def test_execute_tool_unknown_returns_error():
-    runner = Runner(MagicMock())
+    runner = Runner("test", MagicMock(), _doc_store())
     output = await runner._execute_tool("nonexistent", {})
     assert "Unknown tool" in output
 
 
 @pytest.mark.asyncio
 async def test_execute_tool_python_bad_code_returns_stderr():
-    runner = Runner(MagicMock())
+    runner = Runner("test", MagicMock(), _doc_store())
     output = await runner._execute_tool("python", {"code": "raise ValueError('boom')"})
     assert output  # stderr is captured, not empty
 
@@ -447,7 +484,7 @@ async def test_execute_tool_system_tool_error_returns_message():
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     }
     system_tool = SystemTool(definition=tool_def, handler=_bad_handler)
-    runner = Runner(MagicMock(), system_tools=[system_tool])
+    runner = Runner("test", MagicMock(), _doc_store(), system_tools=[system_tool])
     output = await runner._execute_tool("boom", {})
     assert "Tool error" in output
     assert "exploded" in output
@@ -457,34 +494,11 @@ async def test_execute_tool_system_tool_error_returns_message():
 # run() — read_document tool
 # ---------------------------------------------------------------------------
 
-def _make_document_store(docs: dict[str, str]) -> MagicMock:
-    store = MagicMock()
-    async def _load(collection, doc_id):
-        if doc_id not in docs:
-            raise KeyError(doc_id)
-        return docs[doc_id]
-    store.load = AsyncMock(side_effect=_load)
-    return store
-
-
 def test_tool_defs_read_document_when_document_store_and_app_name_set():
     store = _make_document_store({})
-    runner = Runner(MagicMock(), document_store=store, app_name="myapp")
+    runner = Runner("myapp", MagicMock(), store)
     names = [t["name"] for t in runner._tool_defs]
     assert "read_document" in names
-
-
-def test_tool_defs_read_document_not_added_without_app_name():
-    store = _make_document_store({})
-    runner = Runner(MagicMock(), document_store=store, app_name=None)
-    names = [t["name"] for t in runner._tool_defs]
-    assert "read_document" not in names
-
-
-def test_tool_defs_read_document_not_added_without_document_store():
-    runner = Runner(MagicMock(), app_name="myapp")
-    names = [t["name"] for t in runner._tool_defs]
-    assert "read_document" not in names
 
 
 @pytest.mark.asyncio
@@ -495,7 +509,7 @@ async def test_run_read_document_returns_slice():
         _tool_result("read_document", {"doc_id": "doc-1", "offset": 50, "length": 100}),
         _text_result("Got the slice."),
     )
-    runner = Runner(llm, document_store=store, app_name="myapp")
+    runner = Runner("myapp", llm, store)
     chunks = [c async for c in runner.run("read doc-1")]
     tool_output = [m["content"] for m in []]  # inspected via store.load call count
     store.load.assert_called_once_with("myapp", "doc-1")
@@ -520,7 +534,7 @@ async def test_run_read_document_slice_content_correct():
         _tool_result("read_document", {"doc_id": "doc-1", "offset": 0, "length": 12}),
         _text_result("Done."),
     )
-    runner = Runner(llm, document_store=store, app_name="myapp")
+    runner = Runner("myapp", llm, store)
     with patch.object(Runner, "_run_read_document", _capturing):
         [c async for c in runner.run("read doc")]
 
@@ -538,7 +552,7 @@ async def test_run_read_document_missing_doc_returns_error():
         _tool_result("read_document", {"doc_id": "missing"}),
         _text_result("Could not find it."),
     )
-    runner = Runner(llm, document_store=store, app_name="myapp")
+    runner = Runner("myapp", llm, store)
     chunks = [c async for c in runner.run("read missing")]
     # The tool error message is passed back to the LLM; loop completes normally.
     assert _str_chunks(chunks)[-1] == "Could not find it."
@@ -561,7 +575,7 @@ async def test_run_read_document_length_capped_at_10000():
         _tool_result("read_document", {"doc_id": "big", "length": 99999}),
         _text_result("Done."),
     )
-    runner = Runner(llm, document_store=store, app_name="myapp")
+    runner = Runner("myapp", llm, store)
     with patch.object(Runner, "_run_read_document", _cap):
         [c async for c in runner.run("read big")]
 
@@ -569,15 +583,6 @@ async def test_run_read_document_length_capped_at_10000():
     doc_slice, tool_text = captured[0]
     assert isinstance(doc_slice, DocumentSlice)
     assert "chars 0–10000 of 20000" in tool_text
-
-
-@pytest.mark.asyncio
-async def test_run_read_document_unavailable_without_store():
-    """read_document called without a configured store returns (None, error_string)."""
-    runner = Runner(MagicMock())
-    doc_slice, output = await runner._run_read_document({"doc_id": "doc-1"})
-    assert doc_slice is None
-    assert "unavailable" in output
 
 
 @pytest.mark.asyncio
@@ -589,7 +594,7 @@ async def test_run_read_document_populates_document_slices():
         _tool_result("read_document", {"doc_id": "doc-1", "offset": 10, "length": 50}),
         _text_result("Done."),
     )
-    runner = Runner(llm, document_store=store, app_name="myapp")
+    runner = Runner("myapp", llm, store)
     chunks = [c async for c in runner.run("read doc-1")]
     result = chunks[-1]
     assert isinstance(result, QueryResult)
@@ -610,7 +615,7 @@ async def test_run_read_document_missing_doc_has_empty_document_slices():
         _tool_result("read_document", {"doc_id": "missing"}),
         _text_result("Could not find it."),
     )
-    runner = Runner(llm, document_store=store, app_name="myapp")
+    runner = Runner("myapp", llm, store)
     chunks = [c async for c in runner.run("read missing")]
     result = chunks[-1]
     assert isinstance(result, QueryResult)
@@ -624,7 +629,7 @@ async def test_run_read_document_missing_doc_has_empty_document_slices():
 @pytest.mark.asyncio
 async def test_compact_messages_returns_two_messages():
     llm = _make_llm(_text_result("Summary: did X then Y."))
-    runner = Runner(llm)
+    runner = Runner("test", llm, _doc_store())
     history: list[ChatMessage] = [
         {"role": "user", "content": "step 1"},
         {"role": "assistant", "content": "done step 1"},
@@ -742,7 +747,7 @@ async def test_run_vector_search_exclude_ids_filters_seen_chunks():
 
     store = _fake_vector_store_tracking([c1, c2])
     embedder = _fake_embedder()
-    runner = Runner(MagicMock(), vector_store=store, embedder=embedder)
+    runner = Runner("test", MagicMock(), _doc_store(), vector_store=store, embedder=embedder)
 
     chunks, _ = await runner._run_vector_search(
         {"query": "q", "collection": "docs", "top_k": 5},
@@ -761,7 +766,7 @@ async def test_run_vector_search_exclude_ids_expands_search_top_k():
     chunks = [Chunk(chunk_id=f"c{i}", doc_id="d", text=f"t{i}", embedding=[0.1] * 4) for i in range(10)]
     store = _fake_vector_store_tracking(chunks)
     embedder = _fake_embedder()
-    runner = Runner(MagicMock(), vector_store=store, embedder=embedder)
+    runner = Runner("test", MagicMock(), _doc_store(), vector_store=store, embedder=embedder)
     # Reset class-level tracker
     type(store).called_top_k = []
 
@@ -780,7 +785,7 @@ async def test_run_vector_search_no_exclude_ids_returns_full_results():
     chunks = [Chunk(chunk_id=f"c{i}", doc_id="d", text=f"t{i}", embedding=[0.1] * 4) for i in range(5)]
     store = _fake_vector_store_tracking(chunks)
     embedder = _fake_embedder()
-    runner = Runner(MagicMock(), vector_store=store, embedder=embedder)
+    runner = Runner("test", MagicMock(), _doc_store(), vector_store=store, embedder=embedder)
 
     result_chunks, _ = await runner._run_vector_search(
         {"query": "q", "collection": "docs", "top_k": 5},
@@ -816,7 +821,9 @@ async def test_run_retrieval_second_vector_search_skips_first_results():
         _text_result("Done."),
     )
     runner = Runner(
+        "test",
         llm,
+        _doc_store(),
         vector_store=_SequentialStore(),
         embedder=_fake_embedder(),
     )
@@ -947,7 +954,9 @@ async def test_run_vector_search_result_contains_only_cited_chunks():
         _text_result("Based on [doc_0], the answer is passage A."),
     )
     runner = Runner(
+        "test",
         llm,
+        _doc_store(),
         vector_store=_fake_vector_store_with_chunks(store_chunks),
         embedder=_fake_embedder(),
     )
@@ -972,7 +981,9 @@ async def test_run_vector_search_fallback_all_chunks_when_llm_cites_none():
         _text_result("Based on the retrieved documents, passage A is relevant."),
     )
     runner = Runner(
+        "test",
         llm,
+        _doc_store(),
         vector_store=_fake_vector_store_with_chunks(store_chunks),
         embedder=_fake_embedder(),
     )
@@ -1068,7 +1079,7 @@ async def test_run_read_document_output_uses_passage_header_and_slice_id():
         _tool_result("read_document", {"doc_id": "doc.pdf", "offset": 0, "length": 24}),
         _text_result("Done."),
     )
-    runner = Runner(llm, document_store=store, app_name="myapp")
+    runner = Runner("myapp", llm, store)
     with patch.object(Runner, "_run_read_document", _cap):
         [c async for c in runner.run("read doc")]
 
@@ -1096,7 +1107,7 @@ async def test_run_read_document_result_contains_only_cited_slices():
         _tool_result("read_document", {"doc_id": "report.pdf", "offset": 100, "length": 100}, call_id="c2"),
         _text_result("Based on [report.pdf:0:100], the answer is A."),
     )
-    runner = Runner(llm, document_store=store, app_name="myapp")
+    runner = Runner("myapp", llm, store)
     output = [c async for c in runner.run("read report")]
     result = output[-1]
     assert isinstance(result, QueryResult)
@@ -1115,7 +1126,7 @@ async def test_run_read_document_fallback_all_slices_when_llm_cites_none():
         _tool_result("read_document", {"doc_id": "report.pdf", "offset": 100, "length": 100}, call_id="c2"),
         _text_result("Based on the retrieved content, the answer is B."),
     )
-    runner = Runner(llm, document_store=store, app_name="myapp")
+    runner = Runner("myapp", llm, store)
     output = [c async for c in runner.run("read report")]
     result = output[-1]
     assert isinstance(result, QueryResult)
@@ -1145,11 +1156,11 @@ async def test_run_citing_chunks_does_not_return_all_slices():
         _text_result("Based on [doc_0_0], the answer is passage A."),
     )
     runner = Runner(
+        "myapp",
         llm,
+        doc_store,
         vector_store=_fake_vector_store_with_chunks(store_chunks),
         embedder=_fake_embedder(),
-        document_store=doc_store,
-        app_name="myapp",
     )
     output = [c async for c in runner.run("find passage")]
     result = output[-1]
@@ -1179,11 +1190,11 @@ async def test_run_citing_slices_does_not_return_all_chunks():
         _text_result("Based on [doc.pdf:0:100], the answer is B."),
     )
     runner = Runner(
+        "myapp",
         llm,
+        doc_store,
         vector_store=_fake_vector_store_with_chunks(store_chunks),
         embedder=_fake_embedder(),
-        document_store=doc_store,
-        app_name="myapp",
     )
     output = [c async for c in runner.run("find passage")]
     result = output[-1]

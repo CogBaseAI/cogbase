@@ -250,14 +250,14 @@ async def build_app(
     vc_schemas = [vc.schema for vc in vector_collections]
 
     qrunner = QueryRunner(
+        app_name=config.name,
         llm=llm,
+        document_store=document_store,
         structured_store=structured_store,
         vector_store=vector_store,
         embedder=embedder,
         vector_schemas=vc_schemas or None,
         structured_schemas=structured_schemas or None,
-        document_store=document_store,
-        app_name=config.name,
     )
 
     # --- Workflows ---

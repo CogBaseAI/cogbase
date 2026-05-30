@@ -17,7 +17,7 @@ The runner drives an LLM agent loop that handles two complementary concerns:
 Either concern can be used alone:
 
   - Skills only (no stores) — code-execution assistant, multi-step automation.
-  - Stores only (no skills) — document retrieval and Q&A, replaces QueryRunner.
+  - Stores only (no skills) — document retrieval and Q&A.
   - Both — skill-driven agents that can also query structured/vector data.
 
 The loop yields ``str`` tokens during execution followed by a final
@@ -378,13 +378,9 @@ class QueryRunner:
     """Unified LLM agent loop with skill routing and retrieval tools.
 
     Args:
+        app_name:                    Application name; used to scope document store reads.
         llm:                         LLM backend.
-        max_calls:                   Maximum LLM completion rounds per run. Default 10.
-        skills:                      Skills available for routing. Pass ``None`` or ``[]``
-                                     to skip skill selection and use the retrieval system prompt.
-        system_tools:                Custom store-backed or service tools injected by the
-                                     caller. Available on every turn alongside retrieval
-                                     tools and (when skills are present) execution tools.
+        document_store:              Document store; enables the ``read_document`` tool.
         structured_store:            Structured store; enables the ``structured_lookup`` tool.
         vector_store:                Vector store; enables the ``vector_search`` tool
                                      (requires *embedder*).
@@ -394,6 +390,12 @@ class QueryRunner:
                                      prompt so the LLM can choose the right one.
         structured_schemas:          Schema list injected into the retrieval system prompt
                                      so the LLM knows available collections and field types.
+        skills:                      Skills available for routing. Pass ``None`` or ``[]``
+                                     to skip skill selection and use the retrieval system prompt.
+        system_tools:                Custom store-backed or service tools injected by the
+                                     caller. Available on every turn alongside retrieval
+                                     tools and (when skills are present) execution tools.
+        max_calls:                   Maximum LLM completion rounds per run. Default 10.
         passthrough_token_threshold: Estimated token count of ``structured_lookup`` results
                                      above which records are returned directly without LLM
                                      synthesis. None means disabled. Defaults None.
@@ -401,38 +403,38 @@ class QueryRunner:
 
     def __init__(
         self,
+        app_name: str,
         llm: LLMBase,
-        max_calls: int = 10,
-        skills: list | None = None,
-        system_tools: list[SystemTool] | None = None,
+        document_store: DocumentStoreBase,
         structured_store: StructuredStoreBase | None = None,
         vector_store: VectorStoreBase | None = None,
         embedder: EmbeddingBase | None = None,
         vector_schemas: list[VectorCollectionSchema] | None = None,
         structured_schemas: list[CollectionSchema] | None = None,
+        skills: list | None = None,
+        system_tools: list[SystemTool] | None = None,
+        max_calls: int = 10,
         passthrough_token_threshold: int | None = None,
-        document_store: DocumentStoreBase | None = None,
-        app_name: str | None = None,
     ) -> None:
+        self._app_name = app_name
         self._llm = llm
-        self._max_calls = max_calls
-        self._skills: list = skills or []
-        self._system_tools: dict[str, SystemTool] = {t.name: t for t in (system_tools or [])}
+        self._document_store = document_store
         self._structured_store = structured_store
         self._vector_store = vector_store
         self._embedder = embedder
         self._retrieval_system_prompt = _build_retrieval_prompt(
             structured_schemas, vector_schemas
         )
+        self._skills: list = skills or []
+        self._system_tools: dict[str, SystemTool] = {t.name: t for t in (system_tools or [])}
+        self._max_calls = max_calls
         self._passthrough_token_threshold = passthrough_token_threshold
-        self._document_store = document_store
-        self._app_name = app_name
 
         # Retrieval tool definitions — exposed as _tool_defs for introspection.
         self._tool_defs: list[ToolDefinition] = []
-        if structured_store is not None:
+        if structured_schemas:
             self._tool_defs.append(_STRUCTURED_LOOKUP_DEF)
-        if vector_store is not None and embedder is not None:
+        if vector_schemas:
             self._tool_defs.append(_VECTOR_SEARCH_DEF)
         if document_store is not None and app_name is not None:
             self._tool_defs.append(_READ_DOCUMENT_DEF)

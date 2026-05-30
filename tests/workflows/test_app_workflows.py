@@ -40,12 +40,13 @@ def _minimal_app(workflow_runners: dict | None = None) -> CogBaseApp:
     pipeline = IngestionPipeline(name="test")
     llm = MagicMock()
     llm.complete = AsyncMock(return_value={"content": "ok", "tool_calls": None})
-    runner = QueryRunner(llm=llm, structured_store=store)
+    doc_store = InMemoryDocumentStore()
+    runner = QueryRunner(app_name="test-app", llm=llm, document_store=doc_store, structured_store=store)
     return CogBaseApp(
         "test-app",
         [pipeline],
         runner,
-        document_store=InMemoryDocumentStore(),
+        document_store=doc_store,
         structured_store=store,
         workflow_runners=workflow_runners or {},
         llm=llm,
@@ -195,14 +196,15 @@ class TestAfterIngestTrigger:
         store = InMemoryStructuredStore()
         llm = MagicMock()
         llm.complete = AsyncMock(return_value={"content": "ok", "tool_calls": None})
-        qrunner = QueryRunner(llm=llm, structured_store=store)
+        doc_store = InMemoryDocumentStore()
+        qrunner = QueryRunner(app_name="test-app", llm=llm, document_store=doc_store, structured_store=store)
 
         runner = _make_wf_runner(
             "check",
             trigger_type="after_ingest",
             params_from_collection=_after_ingest_source(),
         )
-        app = CogBaseApp("test-app", [pipeline], qrunner, document_store=InMemoryDocumentStore(), structured_store=store, workflow_runners={"check": runner}, llm=llm, task_store=_mock_task_store())
+        app = CogBaseApp("test-app", [pipeline], qrunner, document_store=doc_store, structured_store=store, workflow_runners={"check": runner}, llm=llm, task_store=_mock_task_store())
 
         with patch(self._PATCH, side_effect=self._discard_task) as mock_ct:
             await app.ingest_documents([Document(doc_id="d-fail", text="text")])
@@ -291,7 +293,7 @@ class TestAfterIngestTrigger:
 
         app._task_store.upsert_doc_workflow_status.assert_not_awaited()
 
-    async def test_manual_trigger_marks_pending_but_no_task_created(self):
+    async def test_manual_trigger_marks_ready_but_no_task_created(self):
         runner = _make_wf_runner(
             "check",
             trigger_type="manual",
@@ -303,7 +305,7 @@ class TestAfterIngestTrigger:
         await app.ingest_documents([Document(doc_id="d-001", text="some text")])
 
         app._task_store.upsert_doc_workflow_status.assert_awaited_once_with(
-            "test-app", "d-001", "check", "pending"
+            "test-app", "d-001", "check", "ready"
         )
         app._task_store.create_workflow_task.assert_not_awaited()
 
