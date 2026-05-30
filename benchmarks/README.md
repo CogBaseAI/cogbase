@@ -1,11 +1,13 @@
 # GraphRAG-Benchmark Runner for CogBase
 
-Ingests each corpus into a dedicated CogBase application, runs all QA questions through the query endpoint, and writes results in the format expected by the benchmark's `generation_eval` and `retrieval_eval` scripts.
+Ingests each corpus into a dedicated CogBase application, runs all QA questions through the query endpoint, and writes results in the format expected by the benchmark's `generation_eval` script.
 
 These results are promising and align with the discussion in [docs/knowledge-graph-decision.md](docs/knowledge-graph-decision.md).
-Using only simple chunking (bench_app_simple) and LLM-driven inference, CogBase achieves an average answer correctness of 61.79, placing 2nd on the GraphRAG-Bench (Novel) Leaderboard (https://graphrag-bench.github.io/), just below the current leader at 63.72.
+Using only simple chunking (bench_app_simple) and LLM-driven inference, CogBase (use gpt-5.4-mini) achieves an average answer correctness of **61.79**, placing 2nd on the GraphRAG-Bench (Novel) Leaderboard (https://graphrag-bench.github.io/), just below the current leader at **63.72**.
 
-> Note: this score used gpt-5.4-mini across 5 corpora only. A stronger model (e.g. gpt-5.4) would push the score higher. Full corpora testing is planned.
+For an apple-to-apple comparison with other leaderboard entries (which use gpt-4o-mini), the gpt-4o-mini run scores **59.57** — still 2nd place. See more details below.
+
+> Note: 61.79 and 59.57 scores are results across 5 corpora only. Full corpora testing will be run later.
 
 ## Setup
 
@@ -77,6 +79,30 @@ Results:
   Complex Reasoning:  {"rouge_score": 0.255, "answer_correctness": 0.5401}
 
 Average Answer Correctness: 0.6179
+```
+
+## Test with gpt-4o-mini
+
+Most other leaderboard entries use gpt-4o-mini. To compare on equal footing, CogBase was restarted with gpt-4o-mini (no reranking support) and the evaluation was also scored with gpt-4o-mini. The average answer correctness over 5 corpora is **59.57** — still 2nd on the current leaderboard.
+
+```
+python benchmarks/print_scores.py benchmarks/example_results/bench_app_simple_gpt4omini/novel_scores.json
+Results:
+  Fact Retrieval:  {"rouge_score": 0.3052, "answer_correctness": 0.5595}
+  Complex Reasoning:  {"rouge_score": 0.1737, "answer_correctness": 0.5285}
+  Contextual Summarize:  {"answer_correctness": 0.6883, "coverage_score": 0.5821}
+  Creative Generation:  {"answer_correctness": 0.6065, "coverage_score": 0.4853, "faithfulness": 0.4286}
+
+Average Answer Correctness: 0.5957
+```
+
+**Tool-call behavior:** gpt-4o-mini issues only a single `vector_search` call per query, unlike gpt-5.4-mini which may chain multiple calls. A likely explanation is that gpt-4o-mini condenses the question into a tighter search query on the first pass and returns immediately rather than iterating. The example below illustrates this — the full question is distilled down to `"Osiris roles ancient Egypt"` in one shot:
+
+```
+2026-05-29 23:05:19,583 [INFO] 54993 MainThread app.py:326 - app.query_stream.start query=Within the narrative's discussion of ancient Egypt, what roles did Osiris fulfill?
+2026-05-29 23:05:20,090 [INFO] 54993 MainThread _client.py:1740 - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-29 23:05:20,225 [INFO] 54993 MainThread query_runner.py:614 - [runner] tool_calls (skill=none): vector_search
+2026-05-29 23:05:20,226 [INFO] 54993 MainThread query_runner.py:627 - [runner] execute_tool vector_search({"collection": "bench_chunks", "query": "Osiris roles ancient Egypt", "top_k": 5})
 ```
 
 # Future Work
