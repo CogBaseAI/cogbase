@@ -79,4 +79,44 @@ Results:
 Average Answer Correctness: 0.6179
 ```
 
-Note: bench_app_extraction scores slightly lower on average than bench_app_simple (0.5990 vs 0.6179), which is worth investigating further.
+# Future Work
+
+- **Test full corpora** - only 5 corpora are tested currently.
+- **Test full corpora in one app** — each corpus is currently tested in its own isolated app. Testing all corpora together in a single application would better reflect cross-document reasoning and reveal how CogBase handles retrieval across a larger, mixed collection.
+- **Investigate bench_app_extraction gap** — extraction-based scoring (0.5990) lags bench_app_simple (0.6179); worth understanding whether this is a prompt quality issue, schema design, or a fundamental tradeoff of structured extraction vs. chunk-level retrieval.
+- **Memory and Adaptive Engine** — once the memory layer and adaptive evolution engine are implemented, re-run benchmarks to measure the impact on answer correctness, latency, and token usage.
+- **Stronger model** — current scores use gpt-5.4-mini; running with a stronger model (e.g., gpt-5.4) would establish an upper bound and is expected to push the leaderboard score higher.
+
+# Experiments
+
+## Novel-30752: impact of the `read_document` tool
+
+Tested bench_app_simple against Novel-30752 with and without the `read_document` tool.
+
+**With `read_document`** (average correctness: 0.6246):
+```
+python benchmarks/print_scores.py benchmarks/example_results/bench_app_simple/novel_30752_scores.json
+Results:
+  Fact Retrieval:  {"rouge_score": 0.4362, "answer_correctness": 0.834}
+  Creative Generation:  {"answer_correctness": 0.6374, "coverage_score": 0.25, "faithfulness": 0.0}
+  Contextual Summarize:  {"answer_correctness": 0.5369, "coverage_score": 0.5008}
+  Complex Reasoning:  {"rouge_score": 0.2224, "answer_correctness": 0.4902}
+
+Average Answer Correctness: 0.6246
+```
+
+**Without `read_document`** (average correctness: 0.6159):
+```
+python benchmarks/print_scores.py benchmarks/example_results/bench_app_simple/novel_30752_no_readdoctool_scores.json
+Results:
+  Fact Retrieval:  {"rouge_score": 0.4462, "answer_correctness": 0.7496}
+  Creative Generation:  {"answer_correctness": 0.5687, "coverage_score": 0.3333, "faithfulness": NaN}
+  Contextual Summarize:  {"answer_correctness": 0.6002, "coverage_score": 0.6555}
+  Complex Reasoning:  {"rouge_score": 0.1666, "answer_correctness": 0.545}
+
+Average Answer Correctness: 0.6159
+```
+
+**Finding:** Disabling `read_document` has negligible impact on average correctness (0.6246 → 0.6159), suggesting vector search alone are sufficient for this corpus. Contextual summarization and complex reasoning improve slightly without it, while fact retrieval drops.
+
+We can test more corpus to check the impact.
