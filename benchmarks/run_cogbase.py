@@ -191,6 +191,20 @@ async def process_corpus(
     app_name = _app_name(config_path, corpus_name)
     log.info("=== %s → app '%s' ===", corpus_name, app_name)
 
+    out_dir = output_dir / corpus_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / f"predictions_{corpus_name}.json"
+
+    existing: list[dict] = []
+    done_ids: set = set()
+    if out_file.exists():
+        try:
+            existing = json.loads(out_file.read_text())
+            done_ids = {r["id"] for r in existing}
+            log.info("Resuming '%s': %d question(s) already answered.", corpus_name, len(done_ids))
+        except Exception:
+            log.warning("Could not parse existing %s — starting fresh.", out_file)
+
     await ensure_app(client, config_path, app_name)
     task_ids = await upload_corpus(client, app_name, corpus_name, corpus_text)
     if task_ids:
@@ -202,6 +216,14 @@ async def process_corpus(
 
     if sample:
         questions = questions[:sample]
+
+    questions = [q for q in questions if q["id"] not in done_ids]
+    log.info("%d question(s) remaining to process.", len(questions))
+
+    def _save(results: list[dict]) -> None:
+        merged = existing + results
+        out_file.write_text(json.dumps(merged, indent=2, ensure_ascii=False))
+        log.info("Checkpoint: saved %d total predictions → %s", len(merged), out_file)
 
     results = []
     for i, q in enumerate(questions, 1):
@@ -223,11 +245,10 @@ async def process_corpus(
             "ground_truth": q.get("answer", ""),
         })
 
-    out_dir = output_dir / corpus_name
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_file = out_dir / f"predictions_{corpus_name}.json"
-    out_file.write_text(json.dumps(results, indent=2, ensure_ascii=False))
-    log.info("Saved %d predictions → %s", len(results), out_file)
+        if i % 50 == 0:
+            _save(results)
+
+    _save(results)
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +271,9 @@ async def main(args: argparse.Namespace) -> None:
     questions_path = dataset_dir / files["questions"]
 
     with corpus_path.open() as f:
-        corpora: list[dict] = json.load(f)
+        # GraphRAG-Benchmark/Datasets/Corpus/medical.json has only 1 json record
+        _corpora_raw = json.load(f)
+        corpora: list[dict] = [_corpora_raw] if isinstance(_corpora_raw, dict) else _corpora_raw
     with questions_path.open() as f:
         questions_raw: list[dict] = json.load(f)
 
