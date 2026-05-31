@@ -92,6 +92,14 @@ class QueryRequest(BaseModel):
             "and set the final prompt into the app config for production."
         ),
     )
+    top_k: int = Field(
+        default=10,
+        description=(
+            "Default number of chunks returned per vector_search call. "
+            "The LLM may request fewer; this caps and defaults its top_k argument. "
+            "Hard upper limit is 20."
+        ),
+    )
 
 
 class ChunkResponse(BaseModel):

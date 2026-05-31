@@ -312,6 +312,7 @@ class CogBaseApp:
         text: str,
         history: list[dict] | None = None,
         system_prompt: str | None = None,
+        top_k: int = 10,
     ):
         """Stream the answer token-by-token, then yield a final QueryResult.
 
@@ -322,10 +323,11 @@ class CogBaseApp:
         Args:
             system_prompt: When set, overrides the app-level ``query_prompt``
                            from the application config for this request only.
+            top_k:         Default number of chunks per vector_search call.
         """
         logger.info("app.query_stream.start query=%s", text[:200])
         effective_prompt = system_prompt or self._query_prompt
-        kwargs = {"history": history}
+        kwargs = {"history": history, "top_k": top_k}
         if effective_prompt:
             kwargs["base_prompt"] = effective_prompt
         async for chunk in self._runner.run(text, **kwargs):

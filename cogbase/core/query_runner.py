@@ -239,7 +239,7 @@ _VECTOR_SEARCH_DEF: ToolDefinition = {
             },
             "top_k": {
                 "type": "integer",
-                "description": "Number of results to return (default: 5, max: 20).",
+                "description": "Number of results to return (default: 10, max: 20).",
             },
         },
         "required": ["collection", "query"],
@@ -546,6 +546,7 @@ class QueryRunner:
         user_input: str,
         history: list[ChatMessage] | None = None,
         base_prompt: str = "You are a helpful assistant.",
+        top_k: int = 10,
     ) -> AsyncGenerator[str | QueryResult, None]:
         """Drive the agent loop, yielding str tokens then a final QueryResult.
 
@@ -554,6 +555,9 @@ class QueryRunner:
             history:     Prior conversation messages.
             base_prompt: Base system prompt; merged with retrieval schema info and
                          skill instructions when those are configured.
+            top_k:       Default number of chunks returned per vector_search call.
+                         The LLM may request fewer; this value is used when the LLM
+                         omits top_k from its tool arguments. Hard-capped at 20.
         """
         skills = self._skills
         # Slot 0 is reserved for the system prompt; updated each iteration.
@@ -642,7 +646,7 @@ class QueryRunner:
                         return
                 elif name == "vector_search":
                     seen_chunk_ids = {c.chunk_id for c in all_chunks}
-                    chunks, tool_output = await self._run_vector_search(inputs, exclude_ids=seen_chunk_ids)
+                    chunks, tool_output = await self._run_vector_search(inputs, exclude_ids=seen_chunk_ids, default_top_k=top_k)
                     all_chunks.extend(chunks)
                 elif name == "read_document":
                     doc_slice, tool_output = await self._run_read_document(inputs)
@@ -744,13 +748,13 @@ class QueryRunner:
 
         return records, json_str, False
 
-    async def _run_vector_search(self, inputs: dict, exclude_ids: set[str] | None = None) -> tuple[list[Chunk], str]:
+    async def _run_vector_search(self, inputs: dict, exclude_ids: set[str] | None = None, default_top_k: int = 10) -> tuple[list[Chunk], str]:
         if self._vector_store is None or self._embedder is None:
             return [], "vector_search is unavailable (no vector store configured)"
 
         collection = str(inputs.get("collection") or "")
         query_text = str(inputs.get("query", ""))
-        top_k = min(int(inputs.get("top_k") or 5), 20)
+        top_k = min(int(inputs.get("top_k") or default_top_k), 20)
         search_top_k = top_k + len(exclude_ids or ())
 
         if not collection:
