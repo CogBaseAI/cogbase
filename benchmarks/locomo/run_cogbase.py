@@ -324,12 +324,26 @@ async def ingest_conversation(
 
 
 async def wait_for_ingestion(
-    client: httpx.AsyncClient, app_name: str, poll_interval: float = 3.0
+    client: httpx.AsyncClient, app_name: str, poll_interval: float = 3.0, max_retries: int = 5
 ) -> None:
     log.info("Waiting for ingestion of '%s'…", app_name)
+    consecutive_errors = 0
     while True:
-        resp = await client.get(f"/applications/{app_name}/tasks", params={"task_type": "ingest"})
-        resp.raise_for_status()
+        try:
+            resp = await client.get(
+                f"/applications/{app_name}/tasks",
+                params={"task_type": "ingest"},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            consecutive_errors = 0
+        except (httpx.ReadError, httpx.ConnectError, httpx.TimeoutException) as exc:
+            consecutive_errors += 1
+            if consecutive_errors > max_retries:
+                raise
+            log.warning("Transient error polling tasks (%d/%d): %s", consecutive_errors, max_retries, exc)
+            await asyncio.sleep(poll_interval * consecutive_errors)
+            continue
         tasks = resp.json().get("tasks", [])
         pending = [t for t in tasks if t["status"] in ("pending", "running")]
         failed = [t for t in tasks if t["status"] == "failed"]

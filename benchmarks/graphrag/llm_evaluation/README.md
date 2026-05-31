@@ -1,20 +1,20 @@
 # LLM Evaluation
 
-The GraphRAG-Benchmark evaluation can produce low scores for answers that are factually correct but phrased differently from the ground truth. This directory explores using an LLM judge as an alternative scoring method. Note: this is not a claim that LLM evaluation is strictly better — it is an experiment to understand the gaps between the two approaches.
+The GraphRAG-Benchmark evaluation can produce low scores for answers that are factually correct but phrased differently from the ground truth. This directory explores using an LLM judge as an alternative scoring method. **Note:** this is not a claim that LLM evaluation is strictly better — it is an experiment to understand the gaps between the two approaches.
 
 ## Running LLM Evaluation
 
 Score answers using the LLM judge:
 ```bash
-python benchmarks/llm_evaluation/llm_answer_accuracy.py scores \
-    --input benchmarks/example_results/bench_app_simple/novel_all.json \
-    --input benchmarks/example_results/bench_app_simple/novel_llm_scores.json
+python benchmarks/graphrag/llm_evaluation/llm_answer_accuracy.py scores \
+    --input benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_all.json \
+    --output benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_llm_scores.json
 ```
 
 View aggregate stats by question type:
 ```bash
-python benchmarks/llm_evaluation/llm_answer_accuracy.py stats \
-    --input benchmarks/example_results/bench_app_simple/novel_llm_scores.json
+python benchmarks/graphrag/llm_evaluation/llm_answer_accuracy.py stats \
+    --input benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_llm_scores.json
 ```
 
 Example output — LLM scores are generally higher than benchmark scores:
@@ -34,10 +34,10 @@ Question type                       avg score      n
 
 Find answers where the benchmark and LLM scores diverge significantly:
 ```bash
-python benchmarks/llm_evaluation/compare_scores.py \
-    --llm-scores   benchmarks/example_results/bench_app_simple/novel_llm_scores.json \
-    --bench-scores benchmarks/example_results/bench_app_simple/novel_scores.json \
-    --output       benchmarks/example_results/bench_app_simple/novel_scores_diff.json \
+python benchmarks/graphrag/llm_evaluation/compare_scores.py \
+    --llm-scores   benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_llm_scores.json \
+    --bench-scores benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_scores.json \
+    --output       benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_scores_diff.json \
     [--threshold 0.3]
 ```
 
@@ -81,7 +81,7 @@ The benchmark gives 0.48 and 0.22 for the two answers below. The LLM judge score
 
 The benchmark gives 0.68 (high similarity to the question text) for a factually incorrect answer. The LLM judge correctly gives 0.0.
 
-Note: CogBase runs with gpt-5.4-mini in the test. Running CogBase with a stronger model (gpt-5.4) returns the correct answer: "She visited the Deanery at Westminster Abbey on her way back from an operation call with Mrs. Garrett Anderson."
+**Note:** CogBase runs with gpt-5.4-mini in the test. Running CogBase with a stronger model (gpt-5.4) returns the correct answer: "She visited the Deanery at Westminster Abbey on her way back from an operation call with Mrs. Garrett Anderson."
 
 ```json
 {
