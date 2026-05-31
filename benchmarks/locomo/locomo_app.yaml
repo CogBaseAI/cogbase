@@ -1,0 +1,25 @@
+name: PLACEHOLDER
+
+query_prompt: |
+  You are answering questions about a long-term personal conversation between two people.
+  Answer with a concise phrase using exact words from the conversation whenever possible.
+  For temporal questions, include the date shown in the conversation.
+  If the information is not found in any retrieved conversation turn, respond with:
+  "Not mentioned in the conversation."
+  Do not invent facts not present in the retrieved context.
+
+vector_collections:
+  - name: locomo_chunks
+    description: >
+      Conversation turns from a long-term personal dialogue between two people,
+      organized by session with timestamps. Each chunk preserves turn IDs in the
+      format [DN:T] (session N, turn T) and the session date. Use for answering
+      questions about events, preferences, relationships, activities, and temporal
+      facts from the conversation history.
+
+pipelines:
+  - name: default
+    routing_description: Conversation session documents for memory retrieval.
+    steps:
+      - tool: chunk-embed-upsert
+        collection: locomo_chunks
