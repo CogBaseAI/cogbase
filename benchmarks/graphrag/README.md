@@ -2,12 +2,11 @@
 
 Ingests each corpus into a dedicated CogBase application, runs all QA questions through the query endpoint, and writes results in the format expected by the benchmark's `generation_eval` script.
 
-These results are promising and align with the discussion in [docs/knowledge-graph-decision.md](docs/knowledge-graph-decision.md).
+These results are promising and align with [docs/knowledge-graph-decision.md](docs/knowledge-graph-decision.md). Full result files are on [Google Drive](https://drive.google.com/drive/u/0/folders/1KPUk6nMQUeyPMkM5prkVLgEQJv-K6CuB) — download and place under `benchmarks/graphrag/results/`.
 
-Download the test results from [GoogleDrive](https://drive.google.com/drive/u/0/folders/1KPUk6nMQUeyPMkM5prkVLgEQJv-K6CuB), and put
-under like `benchmarks/graphrag/results/`
+## Results: GraphRAG-Bench (Novel)
 
-Using only simple chunking (bench_app_simple) and LLM-driven inference (gpt-4o-mini with vector_search and read_document tools), CogBase achieves an average answer correctness of **58.62**, placing 3rd on the [GraphRAG-Bench (Novel) Leaderboard](https://graphrag-bench.github.io/), just below the current leader at **63.72** and **58.94**. 58.62 is very close to 58.94 and could be within test deviation. Experimenting with gpt-5.4-mini on 5 corpora gets **61.79**.
+Using only simple chunking (bench_app_simple) and LLM-driven inference (gpt-4o-mini with vector_search and read_document tools), CogBase achieves an average answer correctness of **58.62**, placing 3rd on the [GraphRAG-Bench (Novel) Leaderboard](https://graphrag-bench.github.io/), just below the current leaders at **63.72** and **58.94** — close enough to be within test deviation. Experimenting with gpt-5.4-mini on 5 corpora gets **61.79**.
 
 ```
 python benchmarks/graphrag/print_scores.py benchmarks/graphrag/results/bench_app_simple_novels_gpt4omini/novel_scores.json
@@ -20,9 +19,26 @@ Results:
 Average Answer Correctness: 0.5862
 ```
 
-Experimenting with LLM-as-judge on 5 corpora gets higher correctness, **69.75**. See details in [benchmarks/graphrag/llm_evaluation/README.md](benchmarks/graphrag/llm_evaluation/README.md)
+Experimenting with LLM-as-judge on 5 corpora gets higher correctness, **69.75**. See details in [benchmarks/graphrag/llm_evaluation/README.md](benchmarks/graphrag/llm_evaluation/README.md).
 
-## Setup
+## Results: GraphRAG-Bench (Medical)
+
+CogBase achieves an average answer correctness of **72.94**, placing 2nd on the [GraphRAG-Bench (Medical) Leaderboard](https://graphrag-bench.github.io/), just 0.36 below the current leader at **73.30** — likely within test deviation.
+
+```
+python benchmarks/graphrag/print_scores.py benchmarks/graphrag/results/bench_app_simple_medical_gpt4omini/medical_scores.json
+Results:
+  Fact Retrieval:  {"rouge_score": 0.285, "answer_correctness": 0.6648}
+  Complex Reasoning:  {"rouge_score": 0.2095, "answer_correctness": 0.7263}
+  Contextual Summarize:  {"answer_correctness": 0.798, "coverage_score": 0.6394}
+  Creative Generation:  {"answer_correctness": 0.7286, "coverage_score": 0.4582, "faithfulness": 0.1605}
+
+Average Answer Correctness: 0.7294
+```
+
+## Reproducing Results
+
+### Setup
 
 Start CogBase first:
 ```
@@ -30,9 +46,9 @@ Start CogBase first:
 ```
 See `server/README.md` for details.
 
-## Run
+### Run
 
-A few samples to validate the setup:
+A few samples to validate the setup (`--corpora 1 --sample 5` limits to 1 corpus, 5 questions):
 ```
 python benchmarks/graphrag/run_cogbase.py \
     --config benchmarks/graphrag/bench_app_simple.yaml \
@@ -44,7 +60,7 @@ python benchmarks/graphrag/run_cogbase.py \
     --sample 5
 ```
 
-Full run (add `--corpora 5` to limit to 5 corpora):
+Full run (omit `--corpora` and `--sample` to run all corpora and all questions):
 ```
 python benchmarks/graphrag/run_cogbase.py \
     --config benchmarks/graphrag/bench_app_simple.yaml \
@@ -54,7 +70,7 @@ python benchmarks/graphrag/run_cogbase.py \
     --output_dir benchmarks/graphrag/results
 ```
 
-## Evaluate
+### Evaluate
 
 **Step 1: Merge per-corpus predictions into one file**
 ```
@@ -63,7 +79,7 @@ python benchmarks/graphrag/merge_results.py --dir benchmarks/graphrag/results/be
 
 **Step 2: Score with the benchmark's eval script**
 
-Add `--detailed_output` to save per-question scores (required for Step 3):
+Pass `--detailed_output` to save per-question scores (required for Step 3). Without it, aggregate scores print to stdout and Step 3 can be skipped.
 ```
 export LLM_API_KEY=sk-xxx
 
@@ -76,25 +92,21 @@ python -m Evaluation.generation_eval \
   --detailed_output
 ```
 
-Without `--detailed_output`, `generation_eval` prints aggregate scores directly to stdout and Step 3 is not needed.
-
 **Step 3: Print scores from detailed output**
-
-If you ran Step 2 with `--detailed_output`, use `print_scores.py` to summarize:
 ```
 python benchmarks/graphrag/print_scores.py benchmarks/graphrag/results/bench_app_simple/novel_scores.json
 ```
 
-# Future Work
+## Future Work
 
 - **Test full corpora in one app** — each corpus is currently tested in its own isolated app. The real world application won't be this simple. Testing all corpora together in a single application would better reflect cross-document reasoning and reveal how CogBase handles retrieval across a larger, mixed collection.
 - **Investigate bench_app_extraction gap** — extraction-based scoring (0.5990) lags bench_app_simple (0.6179); worth understanding whether this is a prompt quality issue, schema design, or a fundamental tradeoff of structured extraction vs. chunk-level retrieval.
 - **Memory and Adaptive Engine** — once the memory layer and adaptive evolution engine are implemented, re-run benchmarks to measure the impact on answer correctness, latency, and token usage.
 - **Stronger model** — current scores use gpt-4o-mini or gpt-5.4-mini; running with a stronger model such as gpt-5.4 would establish an upper bound and is expected to push the leaderboard score higher.
 
-# Experiments
+## Experiments
 
-## Novel-30752: impact of the `read_document` tool
+### Novel-30752: impact of the `read_document` tool
 
 Tested bench_app_simple against Novel-30752 with and without the `read_document` tool.
 
@@ -122,4 +134,4 @@ Results:
 Average Answer Correctness: 0.6159
 ```
 
-**Finding:** Disabling `read_document` has negligible impact on average correctness (0.6246 → 0.6159), suggesting vector search alone are sufficient for this corpus. Contextual summarization and complex reasoning improve slightly without it, while fact retrieval drops. We did see read_document being called by llm in the test. We will do more tests to understand the impact of read_document tool in the future.
+**Finding:** Disabling `read_document` has negligible impact on average correctness (0.6246 → 0.6159), suggesting vector search alone is sufficient for this corpus. Contextual summarization and complex reasoning improve slightly without it, while fact retrieval drops. We did see `read_document` being called by the LLM in the test. We will do more tests to understand its impact in the future.

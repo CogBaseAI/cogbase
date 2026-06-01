@@ -10,5 +10,12 @@ cogbase_system.yaml
 .ruff_cache
 .pytest_cache
 data/
+data.bench/
 *.swp
 tags
+ctags.sh
+grep.sh
+benchmarks/
+GraphRAG-Benchmark/
+locomo/
+mem0-memory-benchmarks/

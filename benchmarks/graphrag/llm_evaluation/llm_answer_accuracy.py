@@ -6,13 +6,13 @@ Modes:
   stats  — read scored JSON, print average score per question_type
 
 Usage:
-  python benchmarks/llm_evaluation/llm_answer_accuracy.py score \\
-      --input  benchmarks/results/bench_app_simple/novel_all.json \\
-      --output benchmarks/results/bench_app_simple/novel_llm_scores.json \\
+  python benchmarks/graphrag/llm_evaluation/llm_answer_accuracy.py score \
+      --input  benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_all.json \
+      --output benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_llm_scores.json \
       [--model gpt-5.4-mini] [--concurrency 8]
 
-  python benchmarks/score_answers.py stats \\
-      --input benchmarks/results/bench_app_simple/novel_llm_scores.json
+  python benchmarks/graphrag/llm_evaluation/llm_answer_accuracy.py stats \
+      --input benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_llm_scores.json
 """
 
 from __future__ import annotations

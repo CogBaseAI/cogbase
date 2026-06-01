@@ -4,10 +4,10 @@
 Writes items where the two scores differ by more than --threshold to an output file.
 
 Usage:
-  python benchmarks/llm_evaluation/compare_scores.py \\
-      --llm-scores  benchmarks/results/bench_app_simple/novel_llm_scores.json \\
-      --bench-scores GraphRAG-Benchmark/expirements/bench_app_simple/novel_scores.json \\
-      --output      benchmarks/results/bench_app_simple/novel_scores_diff.json \\
+  python benchmarks/graphrag/llm_evaluation/compare_scores.py \
+      --llm-scores  benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_llm_scores.json \
+      --bench-scores benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_scores.json \
+      --output      benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_scores_diff.json \
       [--threshold 0.3]
 
 Output fields per item:
