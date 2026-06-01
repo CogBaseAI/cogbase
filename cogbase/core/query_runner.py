@@ -97,6 +97,8 @@ class QueryResult(BaseModel):
         document_slices:     Document text slices fetched by read_document calls.
         passthrough:         True when records were returned directly without
                              LLM synthesis (token threshold exceeded).
+        input_tokens:        Total prompt tokens consumed across all LLM calls.
+        output_tokens:       Total completion tokens generated across all LLM calls.
     """
 
     answer: str
@@ -104,6 +106,8 @@ class QueryResult(BaseModel):
     chunks: list[Chunk] = []
     document_slices: list[DocumentSlice] = []
     passthrough: bool = False
+    input_tokens: int = 0
+    output_tokens: int = 0
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -568,6 +572,8 @@ class QueryRunner:
         all_records: list[dict] = []
         all_chunks: list[Chunk] = []
         all_slices: list[DocumentSlice] = []
+        total_input_tokens: int = 0
+        total_output_tokens: int = 0
 
         # Select skill once before the loop. Support switching skill in the for loop when needed.
         current_skill = None
@@ -591,6 +597,11 @@ class QueryRunner:
                 else:
                     final_result = chunk
 
+            if final_result is not None:
+                usage = final_result.get("usage")
+                if usage:
+                    total_input_tokens += usage.get("input_tokens", 0)
+                    total_output_tokens += usage.get("output_tokens", 0)
             tool_calls = final_result.get("tool_calls") if final_result else None
             if not tool_calls:
                 answer = "".join(tokens) + "\n"
@@ -600,6 +611,8 @@ class QueryRunner:
                     structured_records=all_records,
                     chunks=_filter_cited_chunks(all_chunks, cited_ids),
                     document_slices=_filter_cited_slices(all_slices, cited_ids),
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
                 )
                 return
 
@@ -642,6 +655,8 @@ class QueryRunner:
                             chunks=all_chunks,
                             document_slices=all_slices,
                             passthrough=True,
+                            input_tokens=total_input_tokens,
+                            output_tokens=total_output_tokens,
                         )
                         return
                 elif name == "vector_search":
@@ -673,6 +688,8 @@ class QueryRunner:
             structured_records=all_records[:2],
             chunks=all_chunks[:2],
             document_slices=all_slices[:2],
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
         )
 
     # ------------------------------------------------------------------

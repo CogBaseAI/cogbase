@@ -46,11 +46,19 @@ class SystemTool:
         return self.definition["name"]
 
 
-class CompletionResult(TypedDict):
+class TokenUsage(TypedDict, total=False):
+    """Token counts from a single LLM completion call."""
+
+    input_tokens: int
+    output_tokens: int
+
+
+class CompletionResult(TypedDict, total=False):
     """Return value of :meth:`LLMBase.complete`."""
 
     content: str | None
     tool_calls: list[ToolCall] | None
+    usage: TokenUsage | None
 
 
 class _ChatMessageRequired(TypedDict):

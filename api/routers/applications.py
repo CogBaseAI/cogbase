@@ -618,6 +618,8 @@ async def query_application(
         structured_records=result.structured_records,
         chunks=[ChunkResponse(**c.model_dump(exclude={"embedding"})) for c in result.chunks],
         document_slices=[DocumentSliceResponse(**s.model_dump()) for s in result.document_slices],
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
     )
 
 
@@ -649,6 +651,8 @@ async def query_application_stream(
                             "answer": item.answer,
                             "structured_records": item.structured_records,
                             "chunks": [c.model_dump(exclude={"embedding"}) for c in item.chunks],
+                            "input_tokens": item.input_tokens,
+                            "output_tokens": item.output_tokens,
                         }
                     }
                     yield f"data: {json.dumps(payload)}\n\n"

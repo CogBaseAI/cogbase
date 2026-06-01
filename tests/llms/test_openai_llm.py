@@ -133,7 +133,8 @@ async def test_complete_stream_yields_delta_content() -> None:
 
     out = [part async for part in llm.complete_stream([{"role": "user", "content": "hi"}])]
 
-    assert out == ["hel", "lo", "!"]
+    assert [p for p in out if isinstance(p, str)] == ["hel", "lo", "!"]
+    assert isinstance(out[-1], dict)  # final CompletionResult
     call = client.chat.completions.create.call_args.kwargs
     assert call["stream"] is True
 

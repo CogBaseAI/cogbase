@@ -14,6 +14,7 @@ from cogbase.llms.base import (
     CompletionResult,
     LLMBase,
     ReasoningEffort,
+    TokenUsage,
     ToolCall,
     ToolDefinition,
 )
@@ -91,7 +92,14 @@ class OpenAILLM(LLMBase):
 
         raw_content = choice.message.content
         content = _coerce_message_content(raw_content).strip() if raw_content else None
-        return CompletionResult(content=content, tool_calls=tool_calls)
+        usage: TokenUsage | None = None
+        raw_usage = getattr(response, "usage", None)
+        if raw_usage is not None:
+            usage = TokenUsage(
+                input_tokens=getattr(raw_usage, "prompt_tokens", 0) or 0,
+                output_tokens=getattr(raw_usage, "completion_tokens", 0) or 0,
+            )
+        return CompletionResult(content=content, tool_calls=tool_calls, usage=usage)
 
     async def complete_stream(
         self,
@@ -114,7 +122,16 @@ class OpenAILLM(LLMBase):
         )
         stream = await self._client.chat.completions.create(**kwargs)
         tool_call_accum: dict[int, dict] = {}
+        usage: TokenUsage | None = None
         async for chunk in stream:
+            if not chunk.choices:
+                raw_usage = getattr(chunk, "usage", None)
+                if raw_usage is not None:
+                    usage = TokenUsage(
+                        input_tokens=getattr(raw_usage, "prompt_tokens", 0) or 0,
+                        output_tokens=getattr(raw_usage, "completion_tokens", 0) or 0,
+                    )
+                continue
             delta = chunk.choices[0].delta
             if delta.content:
                 yield delta.content
@@ -128,14 +145,12 @@ class OpenAILLM(LLMBase):
                     tool_call_accum[idx]["name"] = tc_delta.function.name
                 if tc_delta.function and tc_delta.function.arguments:
                     tool_call_accum[idx]["arguments"] += tc_delta.function.arguments
-        if tool_call_accum:
-            yield CompletionResult(
-                content=None,
-                tool_calls=[
-                    ToolCall(id=v["id"], name=v["name"], arguments=v["arguments"])
-                    for _, v in sorted(tool_call_accum.items())
-                ],
-            )
+        tool_calls = (
+            [ToolCall(id=v["id"], name=v["name"], arguments=v["arguments"])
+             for _, v in sorted(tool_call_accum.items())]
+            if tool_call_accum else None
+        )
+        yield CompletionResult(content=None, tool_calls=tool_calls, usage=usage)
 
     def _resolve_model(self, model: str | None) -> str:
         if model == "mini":
@@ -171,6 +186,8 @@ class OpenAILLM(LLMBase):
                 }
                 for t in tools
             ]
+        if stream:
+            kwargs["stream_options"] = {"include_usage": True}
         if max_tokens is not None:
             kwargs["max_completion_tokens"] = max_tokens
         if temperature is not None and resolved_model not in _NO_TEMPERATURE_MODELS:

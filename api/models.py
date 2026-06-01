@@ -123,6 +123,8 @@ class QueryResponse(BaseModel):
     structured_records: list[dict] = []
     chunks: list[ChunkResponse] = []
     document_slices: list[DocumentSliceResponse] = []
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 # ---------------------------------------------------------------------------

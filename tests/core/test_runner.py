@@ -77,6 +77,40 @@ def _str_chunks(chunks: list) -> list[str]:
     return [c for c in chunks if isinstance(c, str)]
 
 
+def _result_with_usage(
+    content: str | None = None,
+    tool_calls=None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> CompletionResult:
+    return {
+        "content": content,
+        "tool_calls": tool_calls,
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+    }
+
+
+def _make_llm_tracking(*results: CompletionResult) -> MagicMock:
+    """Like _make_llm but always yields the final CompletionResult dict so usage is captured."""
+    llm = MagicMock()
+    queue = list(results)
+    pos = [0]
+
+    async def _stream_gen(result: CompletionResult):
+        if result.get("content"):
+            yield result["content"]
+        yield result  # always emit the dict so the runner can read usage
+
+    def _pop():
+        r = queue[pos[0]]
+        pos[0] += 1
+        return r
+
+    llm.complete = AsyncMock(side_effect=lambda *a, **kw: _pop())
+    llm.complete_stream = MagicMock(side_effect=lambda *a, **kw: _stream_gen(_pop()))
+    return llm
+
+
 def _make_document_store(docs: dict[str, str]) -> MagicMock:
     store = MagicMock()
     async def _load(collection, doc_id):
@@ -1203,3 +1237,107 @@ async def test_run_citing_slices_does_not_return_all_chunks():
     assert result.document_slices[0].slice_id == "doc.pdf:0:100"
     # Chunks were retrieved but not cited — must not fall back to all chunks.
     assert result.chunks == []
+
+
+# ---------------------------------------------------------------------------
+# run() — input_tokens / output_tokens accumulation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_query_result_has_zero_tokens_when_no_usage_reported():
+    """input_tokens and output_tokens default to 0 when the LLM reports no usage."""
+    llm = _make_llm(_text_result("Hello."))
+    runner = Runner("test", llm, _doc_store())
+    chunks = [c async for c in runner.run("Hi")]
+    result = chunks[-1]
+    assert isinstance(result, QueryResult)
+    assert result.input_tokens == 0
+    assert result.output_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_query_result_single_call_token_counts():
+    """Tokens from a single LLM round are reflected in QueryResult."""
+    llm = _make_llm_tracking(
+        _result_with_usage(content="The answer.", input_tokens=100, output_tokens=25),
+    )
+    runner = Runner("test", llm, _doc_store())
+    chunks = [c async for c in runner.run("Question?")]
+    result = chunks[-1]
+    assert isinstance(result, QueryResult)
+    assert result.input_tokens == 100
+    assert result.output_tokens == 25
+
+
+@pytest.mark.asyncio
+async def test_query_result_accumulates_tokens_across_multiple_rounds():
+    """Token counts are summed across a tool-call round and the final answer round."""
+    tool_call_result = _result_with_usage(
+        tool_calls=[{"id": "c1", "name": "shell", "arguments": '{"command": "echo hi"}'}],
+        input_tokens=80,
+        output_tokens=10,
+    )
+    answer_result = _result_with_usage(content="Done.", input_tokens=120, output_tokens=15)
+
+    llm = _make_llm_tracking(tool_call_result, answer_result)
+    runner = Runner("test", llm, _doc_store())
+    with patch.object(runner, "_execute_tool", new=AsyncMock(return_value="hi")):
+        chunks = [c async for c in runner.run("run echo")]
+    result = chunks[-1]
+    assert isinstance(result, QueryResult)
+    assert result.input_tokens == 200   # 80 + 120
+    assert result.output_tokens == 25   # 10 + 15
+
+
+@pytest.mark.asyncio
+async def test_query_result_passthrough_carries_accumulated_tokens():
+    """Token counts are present in a passthrough QueryResult."""
+    from cogbase.stores import CollectionSchema, FieldSchema, FieldType
+    from cogbase.stores.structured.memory import InMemoryStructuredStore
+    from pydantic import BaseModel as PydanticModel
+
+    class BigRecord(PydanticModel):
+        data: str
+
+    store = InMemoryStructuredStore()
+    schema = CollectionSchema(
+        name="big",
+        description="big collection",
+        primary_fields=["data"],
+        fields={"data": FieldSchema(type=FieldType.STRING)},
+    )
+    await store.create_collection(schema)
+    await store.save("big", [BigRecord(data="x" * 25) for _ in range(400)])
+
+    tool_call_result = _result_with_usage(
+        tool_calls=[{"id": "c1", "name": "structured_lookup", "arguments": '{"collection": "big"}'}],
+        input_tokens=50,
+        output_tokens=8,
+    )
+    llm = _make_llm_tracking(tool_call_result)
+    runner = Runner("test", llm, _doc_store(), structured_store=store, passthrough_token_threshold=2000)
+    chunks = [c async for c in runner.run("dump big")]
+    result = chunks[-1]
+    assert isinstance(result, QueryResult)
+    assert result.passthrough is True
+    assert result.input_tokens == 50
+    assert result.output_tokens == 8
+
+
+@pytest.mark.asyncio
+async def test_query_result_max_calls_exceeded_carries_accumulated_tokens():
+    """Token counts are present in the error QueryResult when max_calls is exceeded."""
+    tool_result = _result_with_usage(
+        tool_calls=[{"id": "c1", "name": "shell", "arguments": '{"command": "echo hi"}'}],
+        input_tokens=60,
+        output_tokens=5,
+    )
+    llm = _make_llm_tracking(tool_result, tool_result)
+    runner = Runner("test", llm, _doc_store(), max_calls=2)
+    with patch.object(runner, "_execute_tool", new=AsyncMock(return_value="ok")):
+        chunks = [c async for c in runner.run("loop forever")]
+    result = chunks[-1]
+    assert isinstance(result, QueryResult)
+    assert "unable to complete" in result.answer.lower()
+    assert result.input_tokens == 120   # 60 × 2
+    assert result.output_tokens == 10   # 5 × 2

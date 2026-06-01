@@ -1175,6 +1175,36 @@ class TestQueryApplication:
         assert resp.status_code == 200
         assert calls[0]["system_prompt"] is None
 
+    @pytest.mark.asyncio
+    async def test_includes_token_counts(self, client):
+        result = QueryResult(answer="The answer.", input_tokens=150, output_tokens=40)
+        await _create_app(client, _mock_query_app(result))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query",
+            json={"text": "q?", "history": []},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["input_tokens"] == 150
+        assert data["output_tokens"] == 40
+
+    @pytest.mark.asyncio
+    async def test_token_counts_default_to_zero(self, client):
+        result = _make_query_result("Answer.")
+        await _create_app(client, _mock_query_app(result))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query",
+            json={"text": "q?", "history": []},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["input_tokens"] == 0
+        assert data["output_tokens"] == 0
+
 
 # ---------------------------------------------------------------------------
 # POST /applications/{app_name}/query/stream
@@ -1342,6 +1372,40 @@ class TestQueryApplicationStream:
 
         assert resp.status_code == 200
         assert calls[0]["system_prompt"] is None
+
+    @pytest.mark.asyncio
+    async def test_result_includes_token_counts(self, client):
+        result = QueryResult(answer="The answer.", input_tokens=200, output_tokens=55)
+        await _create_app(client, _mock_query_app(result))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query/stream",
+            json={"text": "q?", "history": []},
+        )
+
+        events = _parse_sse(resp.text)
+        result_events = [json.loads(e) for e in events if e != "[DONE]" and "result" in json.loads(e)]
+        assert len(result_events) == 1
+        payload = result_events[0]["result"]
+        assert payload["input_tokens"] == 200
+        assert payload["output_tokens"] == 55
+
+    @pytest.mark.asyncio
+    async def test_result_token_counts_default_to_zero(self, client):
+        result = _make_query_result("Answer.")
+        await _create_app(client, _mock_query_app(result))
+
+        resp = await client.post(
+            "/applications/my-contract-analyzer/query/stream",
+            json={"text": "q?", "history": []},
+        )
+
+        events = _parse_sse(resp.text)
+        result_events = [json.loads(e) for e in events if e != "[DONE]" and "result" in json.loads(e)]
+        assert len(result_events) == 1
+        payload = result_events[0]["result"]
+        assert payload["input_tokens"] == 0
+        assert payload["output_tokens"] == 0
 
 
 # ---------------------------------------------------------------------------
