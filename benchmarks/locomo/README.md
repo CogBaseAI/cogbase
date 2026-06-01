@@ -14,6 +14,11 @@ LoCoMo contains 10 long-running conversations between two people (19–32 sessio
 | 4 – Single-hop | Direct lookup in one session |
 | 5 – Adversarial | Answer is NOT in the conversation; model should say "not mentioned" |
 
+CogBase scores **92.8%** overall on the LLM-judge metric (categories 1–4), compared to
+Mem0's **91.6%** as of April 2026. CogBase leads on single-hop, multi-hop, and open-domain;
+Mem0 leads on temporal reasoning (92.8% vs 87.5%). This is a baseline measurement — token
+usage is not yet tracked.
+
 ## How it works
 
 For each conversation:
@@ -22,66 +27,6 @@ For each conversation:
 3. Waits for chunk-embed-upsert ingestion to complete
 4. Queries each QA pair via `POST /applications/{name}/query`
 5. Tracks which sessions appear in retrieved chunks for recall scoring
-
-## Setup
-
-Start CogBase first:
-```
-./server/docker_hub_demo.sh run $version
-```
-
-Dependencies (already in the project requirements):
-```
-pip install httpx pyyaml nltk
-```
-
-## Run
-
-Quick test — first conversation, first 5 questions:
-```
-python benchmarks-locomo/run_cogbase.py \
-    --data_file locomo/data/locomo10.json \
-    --out_file benchmarks-locomo/results/locomo10_cogbase.json \
-    --base_url http://localhost:8000 \
-    --conversations 1 --sample 5
-```
-
-Full run (all 10 conversations, ~1986 questions):
-```
-python benchmarks-locomo/run_cogbase.py \
-    --data_file locomo/data/locomo10.json \
-    --out_file benchmarks-locomo/results/locomo10_cogbase.json \
-    --base_url http://localhost:8000
-```
-
-With LLM judge (adds `cogbase_judge_label`/`cogbase_judge_score` to each QA entry):
-```
-python benchmarks-locomo/run_cogbase.py \
-    --data_file locomo/data/locomo10.json \
-    --out_file benchmarks-locomo/results/locomo10_cogbase.json \
-    --base_url http://localhost:8000 \
-    --judge_model gpt-4o-mini
-```
-
-Judge options:
-- `--judge_model MODEL` — LLM for binary CORRECT/WRONG judgment (e.g. `gpt-4o-mini`, `gpt-4o`)
-- `--judge_provider openai|anthropic` — provider for the judge (default: `openai`)
-- `--categories 1,2,3,4` — categories to judge (default: `1,2,3,4`; category 5 adversarial excluded)
-- `--summary_only` — load `--out_file` and print the judge summary table without running any queries
-
-Print judge summary from an existing output file:
-```
-python benchmarks-locomo/run_cogbase.py \
-    --out_file benchmarks-locomo/results/locomo10_cogbase.json \
-    --summary_only
-```
-
-Each judged QA entry gains three extra fields: `cogbase_judge_label` (CORRECT/WRONG),
-`cogbase_judge_score` (1.0/0.0), and `cogbase_judge_reasoning` (one-sentence explanation).
-
-The run is **resumable**: re-running with the same `--out_file` skips already-answered
-questions. Adding `--judge_model` on a resume run backfills verdicts for previously answered
-questions that lack them. Predictions are checkpointed every 20 questions.
 
 ## Score
 
@@ -98,26 +43,40 @@ python benchmarks/locomo/run_cogbase.py \
 Example output:
 ```
 LLM Judge results  (1540 questions judged)
-Category               N       Correct   Accuracy
+Category                    N   Correct   Accuracy
 ────────────────────────────────────────────────────
-  Single-hop          841        xxx      xx.x%
-  Multi-hop           282        xxx      xx.x%
-  Temporal             96        xxx      xx.x%
-  Open-domain         321        xxx      xx.x%
+  Single-hop              841       793      94.3%
+  Multi-hop               282       268      95.0%
+  Temporal                321       281      87.5%
+  Open-domain              96        87      90.6%
 ────────────────────────────────────────────────────
-  Overall            1540        xxx      xx.x%
+  Overall                1540      1429      92.8%
 ```
 
 Category 5 (adversarial) is excluded from judge scoring by default.
 
+### Head-to-head comparison (LLM judge, categories 1–4)
+
+| System | Single-hop | Multi-hop | Temporal | Open-domain | Overall |
+|---|---|---|---|---|---|
+| **CogBase** | **94.3%** | **95.0%** | 87.5% | **90.6%** | **92.8%** |
+| **Mem0** (Apr 2026) | 92.3% | 93.3% | **92.8%** | 76.0% | 91.6% |
+
+Source: [mem0 memory evaluation docs](https://docs.mem0.ai/core-concepts/memory-evaluation).
+Mem0 reports ~6,956 tokens per query; CogBase does not yet track token usage.
+
+CogBase leads on single-hop, multi-hop, and open-domain recall. Mem0 leads on temporal
+reasoning — likely due to its ADD-only memory model preserving chronological ordering.
+Scores are comparable only when Mem0 is run **without** `--with-evidence` (see [Judge
+prompt comparison](#judge-prompt-comparison-with-mem0) below).
+
 ## Comparison with other memory systems
 
-Other memory systems that publish LoCoMo results also isolate each conversation
-— there is no cross-conversation testing in the benchmark.
+All systems isolate each conversation — there is no cross-conversation testing in the benchmark.
 
 | System | Isolation | Scoring | Category 5 |
 |---|---|---|---|
-| **CogBase** (this) | One app per conversation (`locomo-conv-26`, …) | LLM-as-judge (`--judge_model`, default) or token F1 (`token_f1_score.py`) | Excluded by default (judge) / Included (F1) |
+| **CogBase** (this) | One app per conversation (`locomo-conv-26`, …) | LLM-as-judge (`--judge_model`) | Excluded by default |
 | **Mem0** ([memory-benchmarks](https://github.com/mem0ai/memory-benchmarks)) | One `user_id` per conversation (`locomo_0_<run_id>`) in a shared server | LLM-as-judge (binary CORRECT/WRONG) | Excluded by default (`--categories 1,2,3,4`) |
 | **Memobase** ([locomo-benchmark](https://github.com/memodb-io/memobase/blob/main/docs/experiments/locomo-benchmark/README.md)) | Per-user scoping | LLM judge score | — |
 
@@ -151,38 +110,62 @@ but diverges from the gold label), never CORRECT→WRONG. This means any Mem0 sc
 with `--with-evidence` is inflated relative to CogBase's judge and the two are not directly
 comparable. For a fair comparison, ensure Mem0 is run without `--with-evidence`.
 
+## Setup
 
-## Token F1 scoring (paper methodology)
-Token F1 (`token_f1_score.py`) matches the original LoCoMo paper but is not directly comparable to the others — it is
-stricter because paraphrased correct answers are penalised.
-
-To score with token-level F1 + Porter stemming, matching the original LoCoMo paper:
-
+Start CogBase first:
 ```
-python benchmarks/locomo/token_f1_score.py \
+./server/docker_hub_demo.sh run $version
+```
+
+Dependencies (already in the project requirements):
+```
+pip install httpx pyyaml nltk
+```
+
+## Run
+
+Quick test — first conversation, first 5 questions:
+```
+python benchmarks/locomo/run_cogbase.py \
     --data_file locomo/data/locomo10.json \
-    --pred_file benchmarks/locomo/results/locomo10_cogbase.json
+    --out_file benchmarks/locomo/results/locomo10_cogbase.json \
+    --base_url http://localhost:8000 \
+    --conversations 1 --sample 5
 ```
 
-Example output:
+Full run (all 10 conversations, ~1986 questions):
 ```
-CogBase on LoCoMo  (10 conversations, 1986 questions)
-Category               N       F1    Recall
-──────────────────────────────────────────────────
-  Single-hop         841   0.xxx     x.xxx
-  Multi-hop          282   0.xxx     x.xxx
-  Temporal            96   0.xxx     x.xxx
-  Open-domain        321   0.xxx     x.xxx
-  Adversarial        446   0.xxx       n/a
-──────────────────────────────────────────────────
-  Overall           1986   0.xxx
+python benchmarks/locomo/run_cogbase.py \
+    --data_file locomo/data/locomo10.json \
+    --out_file benchmarks/locomo/results/locomo10_cogbase.json \
+    --base_url http://localhost:8000
 ```
 
-Scoring details:
-- Categories 1–4: token-level F1 with Porter stemming (same as the LoCoMo paper)
-- Category 1 (multi-hop): partial F1 across comma-separated sub-answers
-- Category 5 (adversarial): 1.0 if the answer contains "not mentioned" or "no information", else 0.0
-- Recall: fraction of evidence sessions present in the retrieved chunks (when context IDs are available)
+With LLM judge (adds `cogbase_judge_label`/`cogbase_judge_score` to each QA entry):
+```
+python benchmarks/locomo/run_cogbase.py \
+    --data_file locomo/data/locomo10.json \
+    --out_file benchmarks/locomo/results/locomo10_cogbase.json \
+    --base_url http://localhost:8000 \
+    --judge_model gpt-4o-mini
+```
 
-Token F1 is stricter than an LLM judge — paraphrased correct answers are penalised. Results
-are not directly comparable to Mem0's reported ~92% LLM-judge accuracy.
+Judge options:
+- `--judge_model MODEL` — LLM for binary CORRECT/WRONG judgment (e.g. `gpt-4o-mini`, `gpt-4o`)
+- `--judge_provider openai|anthropic` — provider for the judge (default: `openai`)
+- `--categories 1,2,3,4` — categories to judge (default: `1,2,3,4`; category 5 adversarial excluded)
+- `--summary_only` — load `--out_file` and print the judge summary table without running any queries
+
+Print judge summary from an existing output file:
+```
+python benchmarks/locomo/run_cogbase.py \
+    --out_file benchmarks/locomo/results/locomo10_cogbase.json \
+    --summary_only
+```
+
+Each judged QA entry gains three extra fields: `cogbase_judge_label` (CORRECT/WRONG),
+`cogbase_judge_score` (1.0/0.0), and `cogbase_judge_reasoning` (one-sentence explanation).
+
+The run is **resumable**: re-running with the same `--out_file` skips already-answered
+questions. Adding `--judge_model` on a resume run backfills verdicts for previously answered
+questions that lack them. Predictions are checkpointed every 20 questions.

@@ -112,7 +112,7 @@ Tested bench_app_simple against Novel-30752 with and without the `read_document`
 
 **With `read_document`** (average correctness: 0.6246):
 ```
-python benchmarks/print_scores.py benchmarks/example_results/bench_app_simple/novel_30752_scores.json
+python benchmarks/print_scores.py benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_30752_scores.json
 Results:
   Fact Retrieval:  {"rouge_score": 0.4362, "answer_correctness": 0.834}
   Creative Generation:  {"answer_correctness": 0.6374, "coverage_score": 0.25, "faithfulness": 0.0}
@@ -124,7 +124,7 @@ Average Answer Correctness: 0.6246
 
 **Without `read_document`** (average correctness: 0.6159):
 ```
-python benchmarks/print_scores.py benchmarks/example_results/bench_app_simple/novel_30752_no_readdoctool_scores.json
+python benchmarks/print_scores.py benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_30752_no_readdoctool_scores.json
 Results:
   Fact Retrieval:  {"rouge_score": 0.4462, "answer_correctness": 0.7496}
   Creative Generation:  {"answer_correctness": 0.5687, "coverage_score": 0.3333, "faithfulness": NaN}

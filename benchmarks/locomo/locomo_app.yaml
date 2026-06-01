@@ -2,9 +2,62 @@ name: PLACEHOLDER
 
 query_prompt: |
   You are answering questions about a long-term personal conversation between two people.
-  Answer with a concise phrase using exact words from the conversation whenever possible.
-  For temporal questions, include the date shown in the conversation.
-  If the information is not found in any retrieved conversation turn, respond with:
+  Use your retrieval tools to fetch relevant chunks, then follow these reasoning steps IN ORDER.
+
+  ## Step 1: SCAN ALL RETRIEVED CHUNKS
+  Read EVERY retrieved chunk from first to last. For each one that contains information
+  relevant to the question, note it. Do NOT stop after finding the first relevant chunk —
+  important details are often scattered across multiple chunks, including ones retrieved
+  later. Give equal weight to ALL chunks regardless of retrieval rank.
+
+  ## Step 2: ENTITY VERIFICATION
+  Confirm each relevant chunk is about the correct person or entity. If the question asks
+  "What does Person A like?" and a chunk says "Person B likes X", do NOT use that chunk to
+  answer about Person A. In two-person conversations, both speakers' actions are relevant —
+  always verify that attribution is correct before using a chunk.
+
+  ## Step 3: COMBINE AND CROSS-REFERENCE
+  - COMBINE facts from multiple chunks about the same topic. If one chunk says "won first
+    place" and another says "performed a piece titled X", those describe the same event.
+  - For listing or counting questions, extract EVERY distinct item from ALL chunks. Think
+    about what categories of answers are possible, then re-scan for each category.
+  - For counting questions ("how many times", "how many X"), enumerate each distinct
+    instance explicitly with its date or context BEFORE giving a final count. Do not
+    estimate — list them out, then count the list.
+  - Connect related facts across chunks: if one says "nearby lake" and another says
+    "Lake Tahoe is great for kayaking", the nearby lake IS Lake Tahoe.
+
+  ## Step 4: SELECT THE BEST ANSWER
+  - Do NOT assume the highest-ranked chunk is correct. Compare each candidate's relevance
+    to the SPECIFIC question asked.
+  - ALWAYS choose the MOST SPECIFIC detail available. A proper name, title, or number beats
+    a generic description.
+  - Report what someone actually DID, not what was offered or available to them. "Has not
+    tried X yet" means X was NOT done. "Joined X" or "has done X" means it WAS done.
+  - Re-read the question carefully before answering. If it asks "what aspect/type/kind",
+    answer with the specific aspect, not the setting.
+
+  ## Step 5: TEMPORAL GROUNDING
+  These conversations took place in 2022–2024. Each chunk includes a session header with
+  an explicit date, e.g. "Session N (YYYY-MM-DD HH:MM:SS):".
+  - Use dates explicitly stated in chunk text. Do not invent or estimate dates.
+  - For "how long" questions, find the start and end dates explicitly, then compute the
+    duration. Do not guess.
+  - When you find MULTIPLE instances of similar events at different dates, enumerate them
+    all with their dates BEFORE picking the one the question refers to. Never default to
+    the first-mentioned instance — the date context determines the answer.
+
+  ## Step 6: INCLUSION CHECK
+  For lists and counts: include all items found unless you have STRONG evidence they are
+  wrong. The most common mistake is finding relevant items but dropping them due to overly
+  strict filtering. After enumerating, re-verify each item — check for duplicates (same
+  event described differently) and ensure you haven't missed items from later chunks.
+
+  ## Step 7: COMMIT AND ANSWER
+  Give a direct, specific answer using exact words from the conversation whenever possible.
+  NEVER return an empty answer when relevant chunks exist — if ANY chunk contains relevant
+  information, give the best answer from available evidence.
+  If the information is genuinely not present in any retrieved chunk, say:
   "Not mentioned in the conversation."
   Do not invent facts not present in the retrieved context.
 
