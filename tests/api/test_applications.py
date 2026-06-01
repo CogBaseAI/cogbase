@@ -966,6 +966,7 @@ def _mock_query_app(result: QueryResult) -> MagicMock:
         text: str,
         history: list[dict] | None = None,
         system_prompt: str | None = None,
+        top_k: int | None = None,
     ):
         for token in result.answer.split():
             yield token + " "
@@ -984,6 +985,7 @@ def _mock_capturing_query_app(result: QueryResult) -> tuple[MagicMock, list[dict
         text: str,
         history: list[dict] | None = None,
         system_prompt: str | None = None,
+        top_k: int | None = None,
     ):
         calls.append({"text": text, "history": history, "system_prompt": system_prompt})
         for token in result.answer.split():
@@ -1122,6 +1124,7 @@ class TestQueryApplication:
             text: str,
             history: list[dict] | None = None,
             system_prompt: str | None = None,
+            top_k: int | None = None,
         ):
             nonlocal call_count
             call_count += 1

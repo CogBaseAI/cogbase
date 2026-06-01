@@ -22,7 +22,7 @@ from langchain_text_splitters import TextSplitter
 from cogbase.core.models import Document
 from cogbase.pipeline.chunking.base import ChunkerBase
 
-_SENTENCE_SEPARATORS = ["\n\n", "\n", ". ", "! ", "? ", "; ", ", ", " ", ""]
+_SENTENCE_SEPARATORS = ["\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", "; ", ", ", " ", ""]
 
 
 def build_recursive_chunker(chunk_size: int, overlap: int) -> "LangChainChunker":

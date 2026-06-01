@@ -118,3 +118,46 @@ class TestLangChainChunkerBehavior:
         for chunk in chunks:
             assert chunk.metadata == {}
 
+
+class TestChineseSeparators:
+    def test_chinese_separators_present(self):
+        from cogbase.pipeline.chunking.langchain import _SENTENCE_SEPARATORS
+
+        assert "。" in _SENTENCE_SEPARATORS
+        assert "！" in _SENTENCE_SEPARATORS
+        assert "？" in _SENTENCE_SEPARATORS
+
+    def test_chinese_separators_before_english_period(self):
+        # Chinese punctuation must be tried before ". " so mixed-script text
+        # prefers Chinese sentence boundaries.
+        from cogbase.pipeline.chunking.langchain import _SENTENCE_SEPARATORS
+
+        cn_period_idx = _SENTENCE_SEPARATORS.index("。")
+        en_period_idx = _SENTENCE_SEPARATORS.index(". ")
+        assert cn_period_idx < en_period_idx
+
+    def test_splits_on_chinese_period(self):
+        # "。" sits between two 4-char phrases; chunk_size=5 forces a split there.
+        text = "你好世界。再见朋友"
+        chunker = build_recursive_chunker(chunk_size=5, overlap=0)
+        chunks = chunker.chunk(Document(doc_id="doc-1", text=text))
+        assert len(chunks) == 2
+        assert chunks[0].text == "你好世界"
+        assert chunks[1].text == "。再见朋友"
+
+    def test_splits_on_chinese_exclamation(self):
+        text = "你好世界！再见朋友"
+        chunker = build_recursive_chunker(chunk_size=5, overlap=0)
+        chunks = chunker.chunk(Document(doc_id="doc-1", text=text))
+        assert len(chunks) == 2
+        assert chunks[0].text == "你好世界"
+        assert chunks[1].text == "！再见朋友"
+
+    def test_splits_on_chinese_question(self):
+        text = "你好世界？再见朋友"
+        chunker = build_recursive_chunker(chunk_size=5, overlap=0)
+        chunks = chunker.chunk(Document(doc_id="doc-1", text=text))
+        assert len(chunks) == 2
+        assert chunks[0].text == "你好世界"
+        assert chunks[1].text == "？再见朋友"
+
