@@ -6,18 +6,25 @@ IDs), then queries every QA pair through the CogBase query endpoint.
 
 Usage:
     # Quick test — first conversation, first 5 questions:
-    python benchmarks-locomo/run_cogbase.py \\
-        --data_file locomo/data/locomo10.json \\
-        --out_file benchmarks-locomo/results/locomo10_cogbase.json \\
-        --base_url http://localhost:8000 \\
+    python benchmarks/locomo/run_cogbase.py \
+        --data_file locomo/data/locomo10.json \
+        --out_file benchmarks/locomo/results/locomo10_cogbase.json \
+        --base_url http://localhost:8000 \
         --conversations 1 --sample 5
 
-    # Full run With LLM judge (categories 1-4, adversarial excluded):
-    python benchmarks-locomo/run_cogbase.py \\
-        --data_file locomo/data/locomo10.json \\
-        --out_file benchmarks-locomo/results/locomo10_cogbase.json \\
-        --base_url http://localhost:8000 \\
+    # Full run with LLM judge (categories 1-4, adversarial skipped by default):
+    python benchmarks/locomo/run_cogbase.py \
+        --data_file locomo/data/locomo10.json \
+        --out_file benchmarks/locomo/results/locomo10_cogbase.json \
+        --base_url http://localhost:8000 \
         --judge_model gpt-4o-mini
+
+    # Include category 5 adversarial questions (note: judge does not score them):
+    python benchmarks/locomo/run_cogbase.py \
+        --data_file locomo/data/locomo10.json \
+        --out_file benchmarks/locomo/results/locomo10_cogbase.json \
+        --base_url http://localhost:8000 \
+        --include_adversarial
 
 Resumable: re-running with the same --out_file skips already-answered questions.
 When --judge_model is added on a resume run, previously answered questions that
@@ -30,6 +37,7 @@ import io
 import json
 import logging
 import re
+import time
 import zipfile
 from collections import defaultdict
 from pathlib import Path
@@ -43,6 +51,11 @@ PREDICTION_KEY = "cogbase_prediction"
 JUDGE_LABEL_KEY = "cogbase_judge_label"
 JUDGE_SCORE_KEY = "cogbase_judge_score"
 JUDGE_REASONING_KEY = "cogbase_judge_reasoning"
+INPUT_TOKENS_KEY = "cogbase_input_tokens"
+OUTPUT_TOKENS_KEY = "cogbase_output_tokens"
+QUERY_TIME_KEY = "cogbase_query_time"
+CHUNKS_KEY = "cogbase_chunks"
+DOCUMENT_SLICES_KEY = "cogbase_document_slices"
 APP_CONFIG_PATH = Path(__file__).parent / "locomo_app.yaml"
 
 # ---------------------------------------------------------------------------
@@ -214,6 +227,15 @@ If the information is genuinely not present in any retrieved chunk, say:
 Do not invent facts not present in the retrieved context.
 """
 
+# Simple prompt like below works, but achieves lower scores.
+"""
+  You are answering questions about a long-term personal conversation between two people.
+  Answer with a concise phrase using exact words from the conversation whenever possible.
+  For temporal questions, include the date shown in the conversation.
+  If the information is not found in any retrieved conversation turn, respond with:
+  "Not mentioned in the conversation."
+  Do not invent facts not present in the retrieved context.
+"""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -358,7 +380,7 @@ async def wait_for_ingestion(
 
 async def query_cogbase(
     client: httpx.AsyncClient, app_name: str, question: str
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], list[dict], list[dict], int, int]:
     resp = await client.post(
         f"/applications/{app_name}/query",
         json={"text": question, "system_prompt": SYSTEM_PROMPT},
@@ -368,8 +390,11 @@ async def query_cogbase(
     data = resp.json()
     answer = data.get("answer", "").strip()
     chunks = data.get("chunks", [])
+    document_slices = data.get("document_slices", [])
     context_ids = _extract_session_ids(chunks)
-    return answer, context_ids
+    input_tokens = data.get("input_tokens", 0)
+    output_tokens = data.get("output_tokens", 0)
+    return answer, context_ids, chunks, document_slices, input_tokens, output_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +413,7 @@ async def process_conversation(
     sample_n: int | None,
     judge: "_JudgeClient | None" = None,
     judge_categories: set[int] | None = None,
+    include_adversarial: bool = False,
 ) -> dict:
     sample_id = sample["sample_id"]
     app_name = _app_name(sample_id)
@@ -399,6 +425,8 @@ async def process_conversation(
         await wait_for_ingestion(client, app_name)
 
     qas = sample["qa"]
+    if not include_adversarial:
+        qas = [qa for qa in qas if qa.get("category") != 5]
     if sample_n is not None:
         qas = qas[:sample_n]
 
@@ -406,7 +434,7 @@ async def process_conversation(
     prev_by_key: dict[tuple, dict] = {}
     if sample_id in all_results:
         for qa in all_results[sample_id].get("qa", []):
-            if PREDICTION_KEY in qa:
+            if qa.get(PREDICTION_KEY):
                 prev_by_key[(qa["question"], qa.get("category"))] = qa
 
     result_qas: list[dict] = []
@@ -428,15 +456,22 @@ async def process_conversation(
         if qa.get("category") == 2:
             question += " Use the date shown in the conversation to answer."
 
+        t0 = time.perf_counter()
         try:
-            answer, context_ids = await query_cogbase(client, app_name, question)
+            answer, context_ids, chunks, document_slices, input_tokens, output_tokens = await query_cogbase(client, app_name, question)
         except Exception as exc:
             log.warning("  Query failed: %s", exc)
-            answer, context_ids = "", []
+            answer, context_ids, chunks, document_slices, input_tokens, output_tokens = "", [], [], [], 0, 0
+        query_time = time.perf_counter() - t0
 
         result_qa = qa.copy()
         result_qa[PREDICTION_KEY] = answer
         result_qa[PREDICTION_KEY + "_context"] = context_ids
+        result_qa[CHUNKS_KEY] = chunks
+        result_qa[DOCUMENT_SLICES_KEY] = document_slices
+        result_qa[INPUT_TOKENS_KEY] = input_tokens
+        result_qa[OUTPUT_TOKENS_KEY] = output_tokens
+        result_qa[QUERY_TIME_KEY] = round(query_time, 3)
 
         if judge and (judge_categories is None or qa.get("category") in judge_categories):
             gt = _preprocess_answer(qa.get("category", 0), str(qa.get("answer", "")))
@@ -480,6 +515,112 @@ async def process_conversation(
 # ---------------------------------------------------------------------------
 
 _CAT_NAMES = {1: "Multi-hop", 2: "Temporal", 3: "Open-domain", 4: "Single-hop", 5: "Adversarial"}
+
+
+def _print_token_summary(all_results: dict) -> None:
+    cat_input: dict[int, list[int]] = defaultdict(list)
+    cat_output: dict[int, list[int]] = defaultdict(list)
+    for d in all_results.values():
+        for qa in d.get("qa", []):
+            if INPUT_TOKENS_KEY not in qa:
+                continue
+            cat = qa.get("category", 0)
+            cat_input[cat].append(qa[INPUT_TOKENS_KEY])
+            cat_output[cat].append(qa[OUTPUT_TOKENS_KEY])
+
+    all_input = [t for v in cat_input.values() for t in v]
+    all_output = [t for v in cat_output.values() for t in v]
+    if not all_input:
+        return
+
+    print(f"\nToken usage  ({len(all_input)} questions)")
+    print(f"{'Category':<22} {'N':>6}  {'Avg Input':>10}  {'Avg Output':>11}")
+    print("─" * 56)
+    for cat in [4, 1, 2, 3, 5]:
+        inputs = cat_input.get(cat, [])
+        if not inputs:
+            continue
+        outputs = cat_output.get(cat, [])
+        print(
+            f"  {_CAT_NAMES.get(cat, str(cat)):<20} {len(inputs):>6}"
+            f"  {sum(inputs)/len(inputs):>10.0f}  {sum(outputs)/len(outputs):>11.0f}"
+        )
+    print("─" * 56)
+    print(
+        f"  {'Overall':<20} {len(all_input):>6}"
+        f"  {sum(all_input)/len(all_input):>10.0f}  {sum(all_output)/len(all_output):>11.0f}"
+    )
+    print()
+
+
+def _print_query_time_summary(all_results: dict) -> None:
+    cat_times: dict[int, list[float]] = defaultdict(list)
+    for d in all_results.values():
+        for qa in d.get("qa", []):
+            if QUERY_TIME_KEY not in qa:
+                continue
+            cat = qa.get("category", 0)
+            cat_times[cat].append(qa[QUERY_TIME_KEY])
+
+    all_times = [t for v in cat_times.values() for t in v]
+    if not all_times:
+        return
+
+    print(f"\nQuery time  ({len(all_times)} questions)")
+    print(f"{'Category':<22} {'N':>6}  {'Total (s)':>10}  {'Avg (s)':>8}")
+    print("─" * 54)
+    for cat in [4, 1, 2, 3, 5]:
+        times = cat_times.get(cat, [])
+        if not times:
+            continue
+        print(
+            f"  {_CAT_NAMES.get(cat, str(cat)):<20} {len(times):>6}"
+            f"  {sum(times):>10.1f}  {sum(times)/len(times):>8.2f}"
+        )
+    print("─" * 54)
+    print(
+        f"  {'Overall':<20} {len(all_times):>6}"
+        f"  {sum(all_times):>10.1f}  {sum(all_times)/len(all_times):>8.2f}"
+    )
+    print()
+
+
+def _print_chunks_summary(all_results: dict) -> None:
+    cat_chunks: dict[int, list[int]] = defaultdict(list)
+    cat_slices: dict[int, list[int]] = defaultdict(list)
+    for d in all_results.values():
+        for qa in d.get("qa", []):
+            if CHUNKS_KEY not in qa:
+                continue
+            cat = qa.get("category", 0)
+            cat_chunks[cat].append(len(qa[CHUNKS_KEY]))
+            cat_slices[cat].append(len(qa.get(DOCUMENT_SLICES_KEY, [])))
+
+    all_chunks = [n for v in cat_chunks.values() for n in v]
+    if not all_chunks:
+        return
+
+    all_slices = [n for v in cat_slices.values() for n in v]
+    print(f"\nChunks & document slices  ({len(all_chunks)} questions)")
+    print(f"{'Category':<22} {'N':>6}  {'Chunks tot':>10}  {'Chunks avg':>10}  {'Slices tot':>10}  {'Slices avg':>10}")
+    print("─" * 76)
+    for cat in [4, 1, 2, 3, 5]:
+        chunks = cat_chunks.get(cat, [])
+        if not chunks:
+            continue
+        slices = cat_slices.get(cat, [])
+        print(
+            f"  {_CAT_NAMES.get(cat, str(cat)):<20} {len(chunks):>6}"
+            f"  {sum(chunks):>10}  {sum(chunks)/len(chunks):>10.1f}"
+            f"  {sum(slices):>10}  {sum(slices)/len(slices) if slices else 0:>10.1f}"
+        )
+    print("─" * 76)
+    print(
+        f"  {'Overall':<20} {len(all_chunks):>6}"
+        f"  {sum(all_chunks):>10}  {sum(all_chunks)/len(all_chunks):>10.1f}"
+        f"  {sum(all_slices):>10}  {sum(all_slices)/len(all_slices) if all_slices else 0:>10.1f}"
+    )
+    print()
 
 
 def _print_judge_summary(all_results: dict) -> None:
@@ -528,6 +669,9 @@ async def main(args: argparse.Namespace) -> None:
             log.warning("Could not parse existing output — starting fresh.")
 
     if args.summary_only:
+        _print_token_summary(all_results)
+        #_print_query_time_summary(all_results)
+        _print_chunks_summary(all_results)
         _print_judge_summary(all_results)
         return
 
@@ -556,6 +700,7 @@ async def main(args: argparse.Namespace) -> None:
                 sample_n=args.sample,
                 judge=judge,
                 judge_categories=judge_categories,
+                include_adversarial=args.include_adversarial,
             )
             all_results[result["sample_id"]] = result
             _save(out_file, all_results)
@@ -567,6 +712,9 @@ async def main(args: argparse.Namespace) -> None:
     )
     log.info("Done. %d total predictions across %d conversation(s).", answered, len(all_results))
 
+    _print_token_summary(all_results)
+    #_print_query_time_summary(all_results)
+    _print_chunks_summary(all_results)
     if judge:
         _print_judge_summary(all_results)
 
@@ -578,7 +726,7 @@ if __name__ == "__main__":
         help="Path to locomo10.json (default: locomo/data/locomo10.json)",
     )
     parser.add_argument(
-        "--out_file", default="benchmarks-locomo/results/locomo10_cogbase.json",
+        "--out_file", default="benchmarks/locomo/results/locomo10_cogbase.json",
         help="Output predictions file",
     )
     parser.add_argument(
@@ -605,6 +753,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--summary_only", action="store_true",
         help="Load --out_file and print the LLM judge summary without running any queries.",
+    )
+    parser.add_argument(
+        "--include_adversarial", action="store_true",
+        help="Include category 5 adversarial questions in queries (skipped by default "
+             "because the LLM judge does not score them).",
     )
     parser.add_argument(
         "--categories", default="1,2,3,4",

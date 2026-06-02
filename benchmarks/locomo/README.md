@@ -14,10 +14,11 @@ LoCoMo contains 10 long-running conversations between two people (19–32 sessio
 | 4 – Single-hop | Direct lookup in one session |
 | 5 – Adversarial | Answer is NOT in the conversation; model should say "not mentioned" |
 
-CogBase scores **92.8%** overall on the LLM-judge metric (categories 1–4), compared to
-Mem0's **91.6%** as of April 2026. CogBase leads on single-hop, multi-hop, and open-domain;
-Mem0 leads on temporal reasoning (92.8% vs 87.5%). This is a baseline measurement — token
-usage is not yet tracked.
+Using gpt-4o-mini as the answering model, CogBase scores **92.8%** overall on the LLM-judge
+metric (categories 1–4), compared to Mem0's **91.6%** as of April 2026. CogBase leads on
+single-hop, multi-hop, and open-domain; Mem0 leads on temporal reasoning (92.8% vs 87.5%).
+See [Token usage](#token-usage-and-model-trade-off) for the accuracy/cost trade-off across
+answering models.
 
 ## How it works
 
@@ -40,7 +41,7 @@ python benchmarks/locomo/run_cogbase.py \
     --summary_only
 ```
 
-Example output:
+Example output with gpt-4o-mini as both answering and judge models:
 ```
 LLM Judge results  (1540 questions judged)
 Category                    N   Correct   Accuracy
@@ -63,12 +64,91 @@ Category 5 (adversarial) is excluded from judge scoring by default.
 | **Mem0** (Apr 2026) | 92.3% | 93.3% | **92.8%** | 76.0% | 91.6% |
 
 Source: [mem0 memory evaluation docs](https://docs.mem0.ai/core-concepts/memory-evaluation).
-Mem0 reports ~6,956 tokens per query; CogBase does not yet track token usage.
+Mem0 reports a mean of 6,956 tokens per query. See [Token usage](#token-usage-and-model-trade-off)
+for CogBase's per-query token cost.
 
 CogBase leads on single-hop, multi-hop, and open-domain recall. Mem0 leads on temporal
 reasoning — likely due to its ADD-only memory model preserving chronological ordering.
 Scores are comparable only when Mem0 is run **without** `--with-evidence` (see [Judge
 prompt comparison](#judge-prompt-comparison-with-mem0) below).
+
+## Token usage and model trade-off
+
+The query runner counts the input and output tokens for each query and returns them in
+`QueryResponse`, so the benchmark can report per-query token cost alongside accuracy.
+
+The answering model is **not** a CLI flag — it is configured server-side via
+sytem config file or `POST /system/config` (`--judge_model` only selects the model that grades answers).
+The two runs below use the same command and the same `gpt-4o-mini` judge; only the server's answering
+model differs. Both cover the first 2 conversations (233 questions):
+
+| Answering model | Tokens / query | Accuracy | vs Mem0 (6,956 tok) |
+|---|---|---|---|
+| `gpt-4o-mini`  | 11,066 | **95.3%** | +59% tokens |
+| `gpt-5.4-mini` |  5,831 | 92.7% | −16% tokens |
+
+`gpt-4o-mini` spends more tokens — the runner pulls in extra retrieved context — and reaches
+the highest accuracy. `gpt-5.4-mini` reaches comparable accuracy at roughly half the token
+cost, coming in under Mem0's mean.
+
+```
+python benchmarks/locomo/run_cogbase.py \
+    --data_file locomo/data/locomo10.json \
+    --out_file benchmarks/locomo/results/gpt4omini_2conv_tokens.json \
+    --judge_model gpt-4o-mini --conversations 2
+```
+
+<details>
+<summary><code>gpt-4o-mini</code> — full breakdown</summary>
+
+```
+Token usage  (233 questions)
+Category                    N   Avg Input   Avg Output
+────────────────────────────────────────────────────────
+  Single-hop              114        9073          157
+  Multi-hop                43       13496          259
+  Temporal                 63       12066          127
+  Open-domain              13       15654          260
+────────────────────────────────────────────────────────
+  Overall                 233       11066          173
+
+LLM Judge results  (233 questions judged)
+Category                    N   Correct   Accuracy
+────────────────────────────────────────────────────
+  Single-hop              114       109      95.6%
+  Multi-hop                43        42      97.7%
+  Temporal                 63        58      92.1%
+  Open-domain              13        13     100.0%
+────────────────────────────────────────────────────
+  Overall                 233       222      95.3%
+```
+</details>
+
+<details>
+<summary><code>gpt-5.4-mini</code> — full breakdown</summary>
+
+```
+Token usage  (233 questions)
+Category                    N   Avg Input   Avg Output
+────────────────────────────────────────────────────────
+  Single-hop              114        5189           93
+  Multi-hop                43        5938          148
+  Temporal                 63        7011           94
+  Open-domain              13        5400          133
+────────────────────────────────────────────────────────
+  Overall                 233        5831          106
+
+LLM Judge results  (233 questions judged)
+Category                    N   Correct   Accuracy
+────────────────────────────────────────────────────
+  Single-hop              114       107      93.9%
+  Multi-hop                43        38      88.4%
+  Temporal                 63        59      93.7%
+  Open-domain              13        12      92.3%
+────────────────────────────────────────────────────
+  Overall                 233       216      92.7%
+```
+</details>
 
 ## Comparison with other memory systems
 
@@ -122,6 +202,9 @@ Dependencies (already in the project requirements):
 pip install httpx pyyaml nltk
 ```
 
+The answering model is set on the server, not by this script. Configure it at runtime via
+`POST /system/config` (no restart required) before running the benchmark.
+
 ## Run
 
 Quick test — first conversation, first 5 questions:
@@ -151,7 +234,7 @@ python benchmarks/locomo/run_cogbase.py \
 ```
 
 Judge options:
-- `--judge_model MODEL` — LLM for binary CORRECT/WRONG judgment (e.g. `gpt-4o-mini`, `gpt-4o`)
+- `--judge_model MODEL` — LLM for binary CORRECT/WRONG judgment (e.g. `gpt-4o-mini`)
 - `--judge_provider openai|anthropic` — provider for the judge (default: `openai`)
 - `--categories 1,2,3,4` — categories to judge (default: `1,2,3,4`; category 5 adversarial excluded)
 - `--summary_only` — load `--out_file` and print the judge summary table without running any queries
