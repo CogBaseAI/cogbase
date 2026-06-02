@@ -5,7 +5,7 @@ CogBase is in early development. The highest-impact contributions right now are 
 ## Setting up
 
 ```bash
-git clone https://github.com/cogbase/cogbase
+git clone https://github.com/CogBaseAI/cogbase
 cd cogbase
 pip install -e ".[dev]"
 ```

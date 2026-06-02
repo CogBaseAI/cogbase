@@ -1,0 +1,54 @@
+name: PLACEHOLDER
+
+query_prompt: |
+  You are a clinical document Q&A assistant. Answer each question using retrieved evidence only.
+
+  A structured index of medical entity-relation triples is available over the corpus
+  (diseases, risk factors, symptoms, anatomical locations, cell types, diagnostic methods,
+  treatments, and follow-up). Use the triples to orient your search — identify the relevant
+  condition and its related entities — then retrieve the supporting passage context before
+  answering. Do not answer from triples alone.
+
+  Answer style:
+  - Provide a concise factual answer.
+  - State the answer directly and clearly.
+  - No preamble ("Based on the documents…", "According to the text…").
+  - Do not invent facts not found in the retrieved evidence.
+
+vector_collections:
+- name: medical_passages
+  dimensions: 1536
+  description: Overlapping passages from clinical guideline documents for semantic search and question answering.
+  metadata_fields: []
+
+structured_collections:
+- name: medical_relations
+  description: Clinical entity-relation triples linking conditions to their risk factors, symptoms, anatomical locations, cell types, diagnostic methods, treatments, and follow-up.
+  schema: '{"type":"object","properties":{"subject_entity":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"The subject entity of the clinical relation, e.g. a disease, risk factor, symptom, treatment, or diagnostic method"},"subject_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Type of the subject entity: disease_or_condition, risk_factor, symptom_or_sign, anatomical_location, cell_type, diagnostic_method, treatment, follow_up, or complication_or_outcome"},"relation_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Type of clinical relation: subtype_of, arises_from, located_in, risk_factor_for, presents_as, diagnosed_by, treated_by, recurs_as, follow_up_includes, or associated_with"},"object_entity":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"The object entity of the clinical relation"},"object_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Type of the object entity: disease_or_condition, risk_factor, symptom_or_sign, anatomical_location, cell_type, diagnostic_method, treatment, follow_up, or complication_or_outcome"},"claim_text":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Verbatim supporting text for the relation"},"evidence_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Whether the relation is explicit, implied, or inferred from the text"},"note":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Optional clarification or context for the relation"},"claim_id":{"type":"string","description":"record identifier"},"doc_id":{"type":"string","description":"document identifier"}},"required":["doc_id","claim_id"]}'
+  primary_fields:
+  - doc_id
+  - claim_id
+
+pipelines:
+- name: medical
+  routing_description: Clinical guideline documents, patient-care guides, and medical reference text for question answering.
+  parallel: false
+  steps:
+  - collection: medical_passages
+    tool: chunk-embed-upsert
+
+  - collection: medical_relations
+    tool: extract-structured
+    extractor:
+      type: llm
+      extraction_schema: '{"type":"object","properties":{"subject_entity":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"The subject entity of the clinical relation, e.g. a disease, risk factor, symptom, treatment, or diagnostic method"},"subject_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Type of the subject entity: disease_or_condition, risk_factor, symptom_or_sign, anatomical_location, cell_type, diagnostic_method, treatment, follow_up, or complication_or_outcome"},"relation_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Type of clinical relation: subtype_of, arises_from, located_in, risk_factor_for, presents_as, diagnosed_by, treated_by, recurs_as, follow_up_includes, or associated_with"},"object_entity":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"The object entity of the clinical relation"},"object_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Type of the object entity: disease_or_condition, risk_factor, symptom_or_sign, anatomical_location, cell_type, diagnostic_method, treatment, follow_up, or complication_or_outcome"},"claim_text":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Verbatim supporting text for the relation"},"evidence_type":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Whether the relation is explicit, implied, or inferred from the text"},"note":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"Optional clarification or context for the relation"}}}'
+      prompt: 'You are a clinical information extractor. Extract distinct entity-relation triples from the medical guideline text linking conditions to their risk factors, symptoms, anatomical locations, cell types, diagnostic methods, treatments, and follow-up. Capture each relation once with verbatim supporting text.
+
+        Return ONLY the JSON object — no explanation, no markdown fences.'
+      record_mode: many
+      response_field: items
+      id_field: claim_id
+      id_template: '{doc_id}__{index:04d}'
+
+skills: []
+workflows: []

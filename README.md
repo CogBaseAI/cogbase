@@ -255,7 +255,6 @@ About 90% of the codebase — the ingestion pipeline, workflow engine, query run
 
 These are known gaps in the first-pass implementations.
 
-- [ ] App generator: support workflow generation, more complex schema inference, multi-pipeline apps, etc
 - [ ] Query runner: auto-compaction — `compact_messages` is implemented but not wired into the loop, etc
 - [ ] Skills: skill creator, pull from a registry, add a skill to an app, skill versioning, etc
 - [ ] Ingestion: long document handling (hierarchical chunking, map-reduce summarization), multi-modal inputs (image, audio, video), etc

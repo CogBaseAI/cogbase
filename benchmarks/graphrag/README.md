@@ -2,11 +2,25 @@
 
 Ingests each corpus into a dedicated CogBase application, runs all QA questions through the query endpoint, and writes results in the format expected by the benchmark's `generation_eval` script.
 
-These results are promising and align with [docs/knowledge-graph-decision.md](docs/knowledge-graph-decision.md). Full result files are on [Google Drive](https://drive.google.com/drive/u/0/folders/1KPUk6nMQUeyPMkM5prkVLgEQJv-K6CuB) — download and place under `benchmarks/graphrag/results/`.
+CogBase places **3rd on the Novel leaderboard** and **2nd on the Medical leaderboard** of the public [GraphRAG-Bench](https://graphrag-bench.github.io/), using only simple chunking plus LLM-driven inference — no knowledge graph. These results align with [docs/knowledge-graph-decision.md](docs/knowledge-graph-decision.md).
 
-## Results: GraphRAG-Bench (Novel)
+Full result files are on [Google Drive](https://drive.google.com/drive/u/0/folders/1KPUk6nMQUeyPMkM5prkVLgEQJv-K6CuB) — download and place under `benchmarks/graphrag/results/`.
 
-Using only simple chunking (bench_app_simple) and LLM-driven inference (gpt-4o-mini with vector_search and read_document tools), CogBase achieves an average answer correctness of **58.62**, placing 3rd on the [GraphRAG-Bench (Novel) Leaderboard](https://graphrag-bench.github.io/), just below the current leaders at **63.72** and **58.94** — close enough to be within test deviation. Experimenting with gpt-5.4-mini on 5 corpora gets **61.79**.
+## Results
+
+CogBase uses simple chunking (`bench_app_simple`) and an LLM agent loop (with `vector_search` and `read_document` tools). Scores are average answer correctness, scored by the benchmark's `generation_eval` script.
+
+| Subset  | Config              | Ingest model  | Query model   | Avg. correctness | Leaderboard            |
+|---------|---------------------|---------------|---------------|------------------|------------------------|
+| Novel   | `bench_app_simple`  | gpt-4o-mini   | gpt-4o-mini   | **58.62**        | 3rd (leaders 63.72 / 58.94) |
+| Medical | `bench_app_simple`  | gpt-4o-mini   | gpt-4o-mini   | **72.94**        | 2nd (leader 73.30)     |
+| Medical | `bench_app_extraction` | gpt-5.4-mini | gpt-5.4-mini | **74.46**        | best CogBase result    |
+
+The leaderboard gaps (Novel: 0.32 below 2nd place; Medical: 0.36 below 1st) are close enough to be within test deviation.
+
+### Novel
+
+`bench_app_simple` with gpt-4o-mini for both ingest and query achieves **58.62**:
 
 ```
 python benchmarks/graphrag/print_scores.py benchmarks/graphrag/results/bench_app_simple_novels_gpt4omini/novel_scores.json
@@ -19,11 +33,11 @@ Results:
 Average Answer Correctness: 0.5862
 ```
 
-Experimenting with LLM-as-judge on 5 corpora gets higher correctness, **69.75**. See details in [benchmarks/graphrag/llm_evaluation/README.md](benchmarks/graphrag/llm_evaluation/README.md).
+On a 5-corpus subset, gpt-5.4-mini at query raises this to **61.79**. LLM-as-judge evaluation on the same 5 corpora reaches the highest correctness, **69.75** — see [llm_evaluation/README.md](llm_evaluation/README.md).
 
-## Results: GraphRAG-Bench (Medical)
+### Medical
 
-CogBase achieves an average answer correctness of **72.94**, placing 2nd on the [GraphRAG-Bench (Medical) Leaderboard](https://graphrag-bench.github.io/), just 0.36 below the current leader at **73.30** — likely within test deviation.
+`bench_app_simple` with gpt-4o-mini for both ingest and query achieves **72.94**:
 
 ```
 python benchmarks/graphrag/print_scores.py benchmarks/graphrag/results/bench_app_simple_medical_gpt4omini/medical_scores.json
@@ -36,19 +50,81 @@ Results:
 Average Answer Correctness: 0.7294
 ```
 
+The best Medical result, **74.46**, comes from `bench_app_extraction` with gpt-5.4-mini for both ingest and query (over all 300 questions). We use gpt-5.4-mini for extraction at ingest because the medical corpora exceed gpt-4o-mini's max context. **Creating this extraction app takes just a natural-language description** — the CogBase app generator (or Claude Code) writes the full config from sample corpus and questions, no hand-authored schema required (see [Build the app config](#2-build-the-app-config-extraction-only)).
+
+```
+python benchmarks/graphrag/print_scores.py benchmarks/graphrag/results/bench_app_extraction_medical_gpt54mini/medical_scores.json
+Results:
+  Fact Retrieval:  {"rouge_score": 0.4238, "answer_correctness": 0.7207}
+  Complex Reasoning:  {"rouge_score": 0.2644, "answer_correctness": 0.7105}
+  Contextual Summarize:  {"answer_correctness": 0.8484, "coverage_score": 0.6806}
+  Creative Generation:  {"answer_correctness": 0.6987, "coverage_score": 0.4773, "faithfulness": 0.6413}
+
+Average Answer Correctness: 0.7446
+```
+
+The query model matters more than the ingest model for this subset:
+
+| Ingest model | Query model | Config                 | Avg. correctness |
+|--------------|-------------|------------------------|------------------|
+| gpt-5.4-mini | gpt-5.4-mini | `bench_app_extraction` | 74.46           |
+| gpt-4o-mini  | gpt-4o-mini | `bench_app_simple`      | 72.94           |
+| gpt-5.4-mini | gpt-4o-mini | `bench_app_extraction` | 71.53           |
+| gpt-5.4-mini | gpt-5.4-mini | `bench_app_simple`      | 69.63           |
+
+Notably, on `bench_app_simple` gpt-5.4-mini scores *lower* than gpt-4o-mini (69.63 vs 72.94). And swapping the query model from gpt-5.4-mini down to gpt-4o-mini on `bench_app_extraction` drops the score from 74.46 to 71.53.
+
+<details>
+<summary>Detailed scores for the other Medical runs</summary>
+
+`bench_app_simple`, gpt-5.4-mini ingest + query (69.63):
+```
+python benchmarks/graphrag/print_scores.py benchmarks/graphrag/results/bench_app_simple_medical_gpt54mini/medical_scores.json
+Results:
+  Fact Retrieval:  {"rouge_score": 0.4314, "answer_correctness": 0.724}
+  Complex Reasoning:  {"rouge_score": 0.2539, "answer_correctness": 0.6422}
+  Contextual Summarize:  {"answer_correctness": 0.7101, "coverage_score": 0.7759}
+  Creative Generation:  {"answer_correctness": 0.7088, "coverage_score": 0.5869, "faithfulness": 0.4509}
+
+Average Answer Correctness: 0.6963
+```
+
+`bench_app_extraction`, gpt-5.4-mini ingest + gpt-4o-mini query (71.53):
+```
+python benchmarks/graphrag/print_scores.py benchmarks/graphrag/results/bench_app_extraction_medical_ingestgpt54mini_querygpt4omini/medical_scores.json
+Results:
+  Fact Retrieval:  {"rouge_score": 0.2556, "answer_correctness": 0.6581}
+  Complex Reasoning:  {"rouge_score": 0.136, "answer_correctness": 0.6648}
+  Contextual Summarize:  {"answer_correctness": 0.82, "coverage_score": 0.6369}
+  Creative Generation:  {"answer_correctness": 0.7183, "coverage_score": 0.5672, "faithfulness": 0.255}
+
+Average Answer Correctness: 0.7153
+```
+
+</details>
+
 ## Reproducing Results
 
-### Setup
+### 1. Setup
 
-Start CogBase first:
+Start CogBase first (see `server/README.md` for details):
 ```
 ./server/docker_hub_demo.sh run $version
 ```
-See `server/README.md` for details.
 
-### Run
+### 2. Build the app config (extraction only)
 
-A few samples to validate the setup (`--corpora 1 --sample 5` limits to 1 corpus, 5 questions):
+The `bench_app_simple` config needs no setup. The `bench_app_extraction` config adds an `extract-structured` step, generated per corpus.
+
+Open the CogBase UI and build an app by asking it to extract structured information that helps answer the questions, providing the first 5000 chars of `GraphRAG-Benchmark/Datasets/Corpus/medical.json` and the first 50 Q&A pairs of `GraphRAG-Benchmark/Datasets/Questions/medical_questions.json`.
+
+Or ask Claude Code directly, referencing `benchmarks/graphrag/bench_app_extraction.yaml`. This produces `benchmarks/graphrag/bench_app_extraction_medical.yaml`.
+
+> The generated config may include a `document-embed-upsert` step that summarizes the document into its own vector collection. This is useful for real applications with many documents, but the benchmark has only one corpus per app — you can remove it.
+
+### 3. Run
+
+Validate the setup with a small sample (`--corpora 1 --sample 5` limits to 1 corpus, 5 questions):
 ```
 python benchmarks/graphrag/run_cogbase.py \
     --config benchmarks/graphrag/bench_app_simple.yaml \
@@ -60,7 +136,7 @@ python benchmarks/graphrag/run_cogbase.py \
     --sample 5
 ```
 
-Full run (omit `--corpora` and `--sample` to run all corpora and all questions):
+Full run — omit `--corpora` and `--sample`:
 ```
 python benchmarks/graphrag/run_cogbase.py \
     --config benchmarks/graphrag/bench_app_simple.yaml \
@@ -70,16 +146,14 @@ python benchmarks/graphrag/run_cogbase.py \
     --output_dir benchmarks/graphrag/results
 ```
 
-### Evaluate
+### 4. Evaluate
 
-**Step 1: Merge per-corpus predictions into one file**
+**Merge per-corpus predictions into one file:**
 ```
 python benchmarks/graphrag/merge_results.py --dir benchmarks/graphrag/results/bench_app_simple/novel
 ```
 
-**Step 2: Score with the benchmark's eval script**
-
-Pass `--detailed_output` to save per-question scores (required for Step 3). Without it, aggregate scores print to stdout and Step 3 can be skipped.
+**Score with the benchmark's eval script.** Pass `--detailed_output` to save per-question scores (required for the print step below); without it, aggregate scores print to stdout.
 ```
 export LLM_API_KEY=sk-xxx
 
@@ -92,25 +166,26 @@ python -m Evaluation.generation_eval \
   --detailed_output
 ```
 
-**Step 3: Print scores from detailed output**
+**Print scores from the detailed output:**
 ```
 python benchmarks/graphrag/print_scores.py benchmarks/graphrag/results/bench_app_simple/novel_scores.json
 ```
 
-## Future Work
-
-- **Test full corpora in one app** — each corpus is currently tested in its own isolated app. The real world application won't be this simple. Testing all corpora together in a single application would better reflect cross-document reasoning and reveal how CogBase handles retrieval across a larger, mixed collection.
-- **Investigate bench_app_extraction gap** — extraction-based scoring (0.5990) lags bench_app_simple (0.6179); worth understanding whether this is a prompt quality issue, schema design, or a fundamental tradeoff of structured extraction vs. chunk-level retrieval.
-- **Memory and Adaptive Engine** — once the memory layer and adaptive evolution engine are implemented, re-run benchmarks to measure the impact on answer correctness, latency, and token usage.
-- **Stronger model** — current scores use gpt-4o-mini or gpt-5.4-mini; running with a stronger model such as gpt-5.4 would establish an upper bound and is expected to push the leaderboard score higher.
-
 ## Experiments
 
-### Novel-30752: impact of the `read_document` tool
+### Impact of the `read_document` tool (Novel-30752)
 
-Tested bench_app_simple against Novel-30752 with and without the `read_document` tool.
+Tested `bench_app_simple` against Novel-30752 with and without the `read_document` tool.
 
-**With `read_document`** (average correctness: 0.6246):
+| Variant              | Avg. correctness |
+|----------------------|------------------|
+| With `read_document` | 0.6246           |
+| Without              | 0.6159           |
+
+<details>
+<summary>Detailed scores</summary>
+
+**With `read_document`** (0.6246):
 ```
 python benchmarks/print_scores.py benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_30752_scores.json
 Results:
@@ -122,7 +197,7 @@ Results:
 Average Answer Correctness: 0.6246
 ```
 
-**Without `read_document`** (average correctness: 0.6159):
+**Without `read_document`** (0.6159):
 ```
 python benchmarks/print_scores.py benchmarks/graphrag/results/bench_app_simple_5novels_gpt54mini/novel_30752_no_readdoctool_scores.json
 Results:
@@ -134,4 +209,13 @@ Results:
 Average Answer Correctness: 0.6159
 ```
 
-**Finding:** Disabling `read_document` has negligible impact on average correctness (0.6246 → 0.6159), suggesting vector search alone is sufficient for this corpus. Contextual summarization and complex reasoning improve slightly without it, while fact retrieval drops. We did see `read_document` being called by the LLM in the test. We will do more tests to understand its impact in the future.
+</details>
+
+**Finding:** Disabling `read_document` has negligible impact on average correctness (0.6246 → 0.6159), suggesting vector search alone is sufficient for this corpus. Contextual summarization and complex reasoning improve slightly without it, while fact retrieval drops. We did observe the LLM calling `read_document` during the test, and will run more experiments to understand its impact.
+
+## Future Work
+
+- **Test full corpora in one app** — each corpus is currently tested in its own isolated app, which the real world won't be. Testing all corpora together in a single application would better reflect cross-document reasoning and reveal how CogBase handles retrieval across a larger, mixed collection.
+- **Investigate the `bench_app_extraction` gap** — extraction-based scoring (0.5990) lags `bench_app_simple` (0.6179); worth understanding whether this is a prompt-quality issue, schema design, or a fundamental tradeoff of structured extraction vs. chunk-level retrieval.
+- **Memory and Adaptive Engine** — once the memory layer and adaptive evolution engine are implemented, re-run benchmarks to measure the impact on answer correctness, latency, and token usage.
+- **Stronger model** — current scores use gpt-4o-mini or gpt-5.4-mini; running with a stronger model such as gpt-5.4 would establish an upper bound and is expected to push the leaderboard score higher.

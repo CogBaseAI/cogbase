@@ -191,6 +191,45 @@ async def query(client: httpx.AsyncClient, app_name: str, question: str, questio
 # Per-corpus processing
 # ---------------------------------------------------------------------------
 
+def _stratified_sample(questions: list[dict], sample: int) -> list[dict]:
+    """Sample `sample` questions while preserving each question_type's ratio.
+
+    Picks the first questions of each category (by their order in the input,
+    i.e. questions.json order) so the selection is deterministic. Quotas are
+    allocated proportionally to each category's share, distributing rounding
+    remainders to the largest categories so the totals add up to `sample`.
+    """
+    if sample >= len(questions):
+        return questions
+
+    # Group by type, preserving input order within each group.
+    groups: dict[str, list[dict]] = {}
+    for q in questions:
+        groups.setdefault(q.get("question_type"), []).append(q)
+
+    total = len(questions)
+    # Largest-remainder method: floor quotas first, then hand out leftovers.
+    quotas: dict[str, int] = {}
+    remainders: list[tuple[float, str]] = []
+    for qtype, qs in groups.items():
+        exact = len(qs) * sample / total
+        quotas[qtype] = int(exact)
+        remainders.append((exact - int(exact), qtype))
+
+    leftover = sample - sum(quotas.values())
+    # Prefer larger fractional remainders, then larger categories, for ties.
+    remainders.sort(key=lambda r: (r[0], len(groups[r[1]])), reverse=True)
+    for _, qtype in remainders[:leftover]:
+        quotas[qtype] += 1
+
+    # Take the first N of each category, then restore original ordering.
+    selected_ids = set()
+    for qtype, qs in groups.items():
+        for q in qs[: quotas[qtype]]:
+            selected_ids.add(q["id"])
+    return [q for q in questions if q["id"] in selected_ids]
+
+
 async def process_corpus(
     client: httpx.AsyncClient,
     config_path: Path,
@@ -229,7 +268,7 @@ async def process_corpus(
         log.info("Filtered to question_type='%s': %d question(s)", question_type, len(questions))
 
     if sample:
-        questions = questions[:sample]
+        questions = _stratified_sample(questions, sample)
 
     questions = [q for q in questions if q["id"] not in done_ids]
     log.info("%d question(s) remaining to process.", len(questions))
@@ -238,6 +277,9 @@ async def process_corpus(
         merged = existing + results
         out_file.write_text(json.dumps(merged, indent=2, ensure_ascii=False))
         log.info("Checkpoint: saved %d total predictions → %s", len(merged), out_file)
+
+    if not questions:
+        return
 
     results = []
     for i, q in enumerate(questions, 1):
@@ -304,10 +346,6 @@ async def main(args: argparse.Namespace) -> None:
             if not qs:
                 log.warning("No questions for corpus '%s', skipping.", corpus_name)
                 continue
-            out_file = output_dir / corpus_name / f"predictions_{corpus_name}.json"
-            if args.skip_existing and out_file.exists():
-                log.info("Skipping '%s' — predictions already exist at %s", corpus_name, out_file)
-                continue
             await process_corpus(
                 client=client,
                 config_path=config_path,
@@ -336,8 +374,6 @@ if __name__ == "__main__":
                         help="Process only the first N corpora (e.g. --corpora 3)")
     parser.add_argument("--sample", type=int, default=None,
                         help="Process only the first N questions per corpus (for quick testing)")
-    parser.add_argument("--skip-existing", action="store_true", default=False,
-                        help="Skip a corpus if its predictions JSON already exists")
     parser.add_argument("--question_type", default=None,
                         help="Filter to a single question_type (e.g. 'Fact Retrieval'); tests all types if omitted")
     args = parser.parse_args()
