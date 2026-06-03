@@ -15,8 +15,14 @@ public methods are ``async`` for exactly that reason.
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 
+from cogbase.llms.compaction import (
+    DEFAULT_CHUNK_TOKENS,
+    estimate_tokens,
+    summarize_transcript,
+)
 from cogbase.llms.base import ChatMessage, LLMBase
 from cogbase.memory.models import (
     MemoryMessage,
@@ -32,10 +38,7 @@ DEFAULT_CONTEXT_TOKEN_BUDGET = 4000
 # Default session time-to-live.  None means sessions never expire.
 DEFAULT_TTL_SECONDS = 3600
 
-
-def estimate_tokens(text: str) -> int:
-    """Cheap token estimate (~4 chars/token), matching the query runner heuristic."""
-    return len(text) // 4
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -51,8 +54,9 @@ class ShortTermMemory:
         max_context_tokens:    Default token budget used by ``build_context`` and
                                the threshold above which compaction kicks in.
         llm:                   Optional LLM used to summarise overflow turns during
-                               compaction.  When ``None``, compaction falls back to
-                               a terse textual concatenation (no LLM call).
+                               compaction.  When ``None``, overflow turns are
+                               dropped (sliding window) and no running summary is
+                               kept — there is nothing to summarise with.
     """
 
     def __init__(
@@ -241,38 +245,28 @@ class ShortTermMemory:
         state: SessionState,
         overflow: list[MemoryMessage],
     ) -> None:
-        """Fold ``overflow`` turns into ``state.summary`` (LLM or textual fallback)."""
-        transcript = "\n".join(
-            f"[{m.role.value}] {m.content[:500]}" for m in overflow
-        )
-        prior = f"Existing summary:\n{state.summary}\n\n" if state.summary else ""
+        """Fold ``overflow`` turns into ``state.summary`` via the LLM (best-effort).
 
-        summary: str | None = None
-        if self._llm is not None:
-            try:
-                result = await self._llm.complete(
-                    [
-                        {
-                            "role": "user",
-                            "content": (
-                                "Update the running summary of a conversation so it preserves "
-                                "all key facts, decisions, retrieved evidence, and conclusions. "
-                                "Be terse; output only the updated summary.\n\n"
-                                f"{prior}New turns to fold in:\n{transcript}"
-                            ),
-                        }
-                    ]
-                )
-                summary = result.get("content") or None
-            except Exception:
-                summary = None  # fall back below
-
-        if summary is None:
-            # No LLM (or it failed): keep a bounded textual trail.
-            combined = (state.summary + "\n" if state.summary else "") + transcript
-            summary = combined[-2000:]
-
-        state.summary = summary
+        Without an LLM there is nothing to summarise with: the overflow turns are
+        simply dropped from the live transcript by the caller and no running
+        summary is kept. A transient LLM failure is logged and leaves the prior
+        summary intact rather than failing the in-flight query.
+        """
+        if self._llm is None:
+            return
+        transcript = "\n".join(f"[{m.role.value}] {m.content}" for m in overflow)
+        try:
+            summary = await summarize_transcript(
+                self._llm,
+                transcript,
+                chunk_tokens=DEFAULT_CHUNK_TOKENS,
+                prior_summary=state.summary,
+            )
+        except Exception:
+            logger.warning("[short_term] compaction failed; keeping prior summary", exc_info=True)
+            return
+        # Preserve the prior summary if summarisation produced nothing.
+        state.summary = summary or state.summary
 
     # ------------------------------------------------------------------
     # Internal helpers (assume the lock is held)

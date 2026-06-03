@@ -156,8 +156,27 @@ async def test_build_context_compacts_overflow_into_summary():
 
 
 @pytest.mark.asyncio
-async def test_build_context_compaction_falls_back_without_llm():
-    # No LLM configured → textual fallback, no crash.
+async def test_build_context_keeps_prior_summary_when_llm_fails():
+    from unittest.mock import AsyncMock, MagicMock
+
+    llm = MagicMock()
+    llm.complete = AsyncMock(side_effect=RuntimeError("boom"))
+    mem = ShortTermMemory(max_context_tokens=20, llm=llm)
+    sid = await mem.start_session()
+    big = "x" * 200
+    await mem.append_message(sid, MemoryRole.USER, big + " old")
+    await mem.append_message(sid, MemoryRole.USER, "new")
+
+    # A failed summarisation must not crash the in-flight build_context.
+    ctx = await mem.build_context(session_id=sid, token_budget=20)
+    state = await mem.get(sid)
+    assert state.summary is None  # no prior summary to keep; none fabricated
+    assert ctx[-1]["content"] == "new"
+
+
+@pytest.mark.asyncio
+async def test_build_context_drops_overflow_without_llm():
+    # No LLM configured → overflow turns are dropped (sliding window), no summary.
     mem = ShortTermMemory(max_context_tokens=20, llm=None)
     sid = await mem.start_session()
     big = "y" * 200
@@ -166,5 +185,8 @@ async def test_build_context_compaction_falls_back_without_llm():
 
     ctx = await mem.build_context(session_id=sid, token_budget=20)
     state = await mem.get(sid)
-    assert state.summary is not None
+    # Nothing to summarise with → no running summary, just the recent turn.
+    assert state.summary is None
+    assert all(s["role"] != "system" for s in ctx)
     assert ctx[-1]["content"] == "new"
+    assert all("old" not in m.content for m in state.messages)

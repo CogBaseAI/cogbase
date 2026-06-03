@@ -59,6 +59,13 @@ from collections.abc import AsyncGenerator
 
 from pydantic import BaseModel
 
+from cogbase.llms.compaction import (
+    DEFAULT_CHUNK_TOKENS,
+    estimate_messages_tokens,
+    estimate_tokens,
+    render_message,
+    summarize_transcript,
+)
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, CompletionResult, LLMBase, SystemTool, ToolDefinition
@@ -302,10 +309,6 @@ def _build_retrieval_prompt(
         for vs in vector_schemas:
             lines.append(f"  - {vs.name}: {vs.description}")
     return "\n".join(lines)
-
-
-def _estimate_tokens(text: str) -> int:
-    return len(text) // 4
 
 
 def _parse_filter(obj: dict) -> Filter:
@@ -611,6 +614,18 @@ class QueryRunner:
         messages[0] = {"role": "system", "content": self.build_system_prompt(base_prompt, current_skill)}
 
         for _ in range(self._max_calls):
+            # --- Budget guard: compact the working list if it has outgrown the
+            # context budget (tool outputs accumulated across rounds are not
+            # bounded by build_context, which only assembles the initial turn).
+            # Safe here: every assistant tool_call has been answered by its tool
+            # message, so collapsing into a summary strands no dangling call.
+            if self._context_token_budget and estimate_messages_tokens(messages) > self._context_token_budget:
+                logger.info(
+                    "[runner] in-loop compaction: working list exceeds budget %d",
+                    self._context_token_budget,
+                )
+                messages = await self.compact_messages(messages[0]["content"], messages[1:])
+
             # --- LLM completion (streaming) ---
             tools = self._all_tools(current_skill is not None)
             tokens = []
@@ -792,7 +807,7 @@ class QueryRunner:
         )
 
         if self._passthrough_token_threshold:
-            estimated_tokens = _estimate_tokens(json_str)
+            estimated_tokens = estimate_tokens(json_str)
             if estimated_tokens > self._passthrough_token_threshold:
                 logger.info(
                     "[runner] structured_lookup.passthrough estimated_tokens=%d threshold=%d",
@@ -943,22 +958,16 @@ class QueryRunner:
         system_prompt: str,
         messages: list[ChatMessage],
     ) -> list[ChatMessage]:
-        """Summarise *messages* into a minimal list to recover from context overflow."""
-        transcript = "\n".join(
-            f"[{m['role']}] {str(m.get('content', ''))[:500]}"
-            for m in messages
-        )
-        result = await self._llm.complete([
-            {
-                "role": "user",
-                "content": (
-                    "Compress the following conversation transcript into a concise bullet-point "
-                    "summary preserving all key decisions, tool outputs, and conclusions. Be terse.\n\n"
-                    + transcript
-                ),
-            }
-        ])
-        summary = result.get("content") or "(empty summary)"
+        """Summarise *messages* into a minimal list to recover from context overflow.
+
+        Delegates to ``cogbase.llms.compaction.summarize_transcript``, which preserves
+        the full transcript (no per-message truncation): long transcripts are
+        split into budget-sized chunks, summarised, and merged recursively.
+        """
+        transcript = "\n".join(render_message(m) for m in messages)
+        summary = await summarize_transcript(
+            self._llm, transcript, chunk_tokens=DEFAULT_CHUNK_TOKENS
+        ) or "(empty summary)"
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Compacted context:\n\n{summary}\n\nContinue from this point."},
