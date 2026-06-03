@@ -19,3 +19,6 @@ benchmarks/
 GraphRAG-Benchmark/
 locomo/
 mem0-memory-benchmarks/
+blogs/
+ui/node_modules/
+ui/dist/

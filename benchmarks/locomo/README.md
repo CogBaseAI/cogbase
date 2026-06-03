@@ -122,6 +122,28 @@ Category                    N   Correct   Accuracy
 ────────────────────────────────────────────────────
   Overall                 233       222      95.3%
 ```
+<summary><code>gpt-4o-mini</code> — round 2</summary>
+```
+Token usage  (233 questions)
+Category                    N   Avg Input   Avg Output
+────────────────────────────────────────────────────────
+  Single-hop              114        9231          159
+  Multi-hop                43       12053          264
+  Temporal                 63       11946          128
+  Open-domain              13       10902          202
+────────────────────────────────────────────────────────
+  Overall                 233       10579          172
+
+LLM Judge results  (233 questions judged)
+Category                    N   Correct   Accuracy
+────────────────────────────────────────────────────
+  Single-hop              114       112      98.2%
+  Multi-hop                43        40      93.0%
+  Temporal                 63        55      87.3%
+  Open-domain              13        13     100.0%
+────────────────────────────────────────────────────
+  Overall                 233       220      94.4%
+```
 </details>
 
 <details>
