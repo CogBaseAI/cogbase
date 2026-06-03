@@ -249,7 +249,13 @@ About 90% of the codebase — the ingestion pipeline, workflow engine, query run
 - [x] OpenAI-compatible provider support — any base URL works for LLM and embeddings
 - [x] Workflow `params_from_collection` — manual triggers accept `doc_id` and auto-derive params like `after_ingest`
 - [x] SQLite schema evolution — detects and repairs constraint mismatches; no manual migration needed
-- [x] Demo UI: per-document workflow status, deploy/ingest progress, Settings tab for provider configuration
+- [x] Demo UI: tabbed layout (Apps, Build, Ingest, Query, Demos, Data), per-document workflow status, deploy/ingest progress, Settings tab for provider configuration
+- [x] AppScope namespacing — all store adapters scope collections by app name, preventing conflicts between apps on a shared backend
+- [x] Full app deletion cleanup — vector/structured collections, document store entries, and system store records are all removed on `DELETE /applications/{name}`
+- [x] LLM token usage — `input_tokens` and `output_tokens` counted across all LLM calls and returned in query responses (blocking and streaming)
+- [x] Query-time and app-level `system_prompt` — override the default system prompt per request via `QueryRequest.system_prompt`, or set a default in `config.yaml`
+- [x] `top_k` configurable in `QueryRequest` for per-request result tuning
+- [x] Sentence-boundary chunking — Langchain chunker splits at sentence boundaries (`.`, `。`) instead of mid-word or mid-sentence; Chinese text supported
 
 **Improvements**
 

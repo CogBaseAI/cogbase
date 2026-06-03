@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.3.0 — 2026-06-02
+
+### Query Runner
+
+- LLM token usage (`input_tokens`, `output_tokens`) is now counted across all LLM calls in a query and returned in `QueryResult` and `QueryResponse` (both blocking and streaming)
+- Vector search deduplicates results across multiple calls — chunks already returned are excluded from subsequent `vector_search` tool calls in the same query
+- Chunks from the same document are now sorted by character offset before being presented to the LLM, giving it coherent sequential context
+- Citation-based filtering: only document slices actually cited by the LLM are included in the response; previously all fetched slices were returned
+- Fixed a bug where cited chunks and slices were returning all collected results instead of only the ones the LLM referenced in its citations
+- `structured_lookup` tool is only registered when the app has at least one structured collection — avoids a confusing no-op tool in vector-only apps
+- Custom `system_prompt` can now be set at query time via `QueryRequest.system_prompt`, overriding the app-level default for a single request
+- App-level `system_prompt` can be configured in `config.yaml` and takes effect for all queries to that app
+- `top_k` is now settable in `QueryRequest` for per-request result tuning
+- Improved `read_document` tool description: explicit guidance on how to read context before or after a retrieved chunk using `char_offset`
+
+### Store Adapters
+
+- `AppScope` scoping applied to all store adapters (structured, vector, document) — collections are now namespaced by app name, preventing conflicts between apps sharing the same backend
+- Full cleanup on app deletion: vector and structured collections are dropped, system store records are removed, and all documents in the document store are deleted
+- Allow hyphens (`-`) in collection names; resource name validation unified to a single function
+
+### Knowledge Pipeline
+
+- Langchain chunker updated to use configurable separators so splits occur at sentence boundaries rather than mid-word or mid-sentence
+- Chinese sentence separator (`。`) added to the langchain chunker, enabling correct chunking of Chinese-language documents
+
+### Demo UI
+
+- New web UI with tabbed layout: Apps, Build, Ingest, Query, Demos, and Data tabs
+- Integrated into the demo Docker image
+- Query responses now include `document_slices` alongside chunks and structured records
+- Unit tests for UI server
+
+### Benchmarks
+
+- GraphRAG benchmark: CogBase tested against novel and medical QA datasets with GPT-4o-mini; full results documented
+- LoCoMo benchmark: CogBase scores 92.8% on the LoCoMo conversational memory benchmark, vs. Mem0's 91.6%; input/output token counts tracked per query
+
+---
+
 ## v0.2.0 — 2026-05-25
 
 ### App Generator

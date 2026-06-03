@@ -79,9 +79,12 @@ The query runner drives a multi-turn LLM agent loop with configurable retrieval 
 |---|---|
 | `structured_lookup` | Exact record query against a named collection with field filters |
 | `vector_search` | Semantic search against a named vector collection (chunks or summaries) |
+| `read_document` | Fetch a slice of a document's original text by character offset; used to get broader context around a retrieved chunk |
 | `skill tools` | Custom capabilities registered with the application |
 
 The LLM calls tools as needed to gather evidence, then synthesises a grounded answer. No fixed routing pattern — the model decides. When `structured_lookup` returns a large result set (above the passthrough token threshold), records are returned directly as formatted text without an additional synthesis step.
+
+A default `system_prompt` can be set per application in `config.yaml` and overridden per request via `QueryRequest.system_prompt`. Query responses include `input_tokens` and `output_tokens` totals across all LLM calls.
 
 ---
 

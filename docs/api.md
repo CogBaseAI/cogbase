@@ -26,16 +26,30 @@ Applications are created and managed through the REST API. Configuration lives i
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/applications/{name}/upload_documents` | Upload documents; each is saved to the document store and then ingested asynchronously via a background task |
-| `GET` | `/applications/{name}/documents` | List all documents for an application with their workflow status (`PENDING`, `READY`, `RUNNING`, `DONE`, `FAILED`) |
-| `POST` | `/applications/{name}/query` | Answer a query (blocking) |
-| `POST` | `/applications/{name}/query/stream` | Stream query response as Server-Sent Events |
+| `POST` | `/applications/{name}/query` | Answer a query (blocking); accepts optional `system_prompt`, `top_k` in the request body; response includes `input_tokens` and `output_tokens` |
+| `POST` | `/applications/{name}/query/stream` | Stream query response as Server-Sent Events; same request body as blocking query |
+
+## Documents
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/applications/{name}/docs` | List all documents for an application |
+| `GET` | `/applications/{name}/docs/{doc_id}` | Get a single document record |
+| `DELETE` | `/applications/{name}/docs/{doc_id}` | Delete a document; cascades to workflow tasks and cleans up associated vector and structured store data |
+
+## Tasks
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/applications/{name}/tasks` | List ingest and workflow task records for an application |
+| `GET` | `/applications/{name}/tasks/{task_id}` | Get a single task record |
 
 ## Workflows
 
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/applications/{name}/workflows` | List registered workflow names |
-| `POST` | `/applications/{name}/workflows/{workflow_name}/run` | Run a workflow (blocking); returns `{"workflow": "...", "records": [...], "total": N}` |
+| `GET` | `/applications/{name}/workflows/{workflow_name}/docs` | List documents with their status for a given workflow (`pending`, `running`, `done`, `failed`) |
 | `POST` | `/applications/{name}/workflows/{workflow_name}/stream` | Run a workflow, stream records as SSE |
 
 ## Skills management
