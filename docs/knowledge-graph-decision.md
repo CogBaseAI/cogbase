@@ -1,44 +1,102 @@
-# Why CogBase Does Not Use a Knowledge Graph
+# Knowledge Graph Decision
 
-CogBase deliberately omits an explicit knowledge graph (KG) layer. This document explains that decision, where LLM-driven retrieval covers the same ground, and the narrow cases where a KG remains the right tool.
+## Decision
 
-## The Architecture CogBase Uses Instead
+CogBase does not include an explicit knowledge graph (KG) layer by default.
 
-Documents flow into a vector store (passage chunks and document summaries) and a structured store (LLM-extracted typed records). At query time an LLM agent loop calls three tools:
+For the target workload — enterprise document AI over legal, finance, insurance, research, and similar corpora — CogBase uses structured extraction, vector retrieval, document reading, and an LLM agent loop instead of precomputing an entity-and-edge graph.
+
+This decision can be revisited if product requirements shift toward exhaustive graph traversal, global graph analytics, or strict completeness guarantees over implicit relationships.
+
+## Context
+
+Knowledge graphs are useful when an application needs explicit entities, typed relationships, canonical identifiers, and deterministic traversal. They also introduce substantial implementation and maintenance costs:
+
+- ontology design
+- entity extraction and canonicalization
+- relationship extraction and typing
+- edge refresh as source documents change
+- graph storage, query planning, and operational maintenance
+
+CogBase optimizes for lower setup cost and practical document-grounded reasoning rather than exhaustive relationship modeling.
+
+## Architecture Used Instead
+
+Documents flow into two primary stores:
+
+- **Vector store** — passage chunks and document summaries for semantic retrieval
+- **Structured store** — LLM-extracted typed records for exact filters, comparison, and aggregation
+
+At query time, an LLM agent loop calls retrieval and inspection tools:
 
 - `structured_lookup` — exact record queries with field filters
 - `vector_search` — semantic search over any configured collection
-- `read_document` — Read a broader context of a document's original text
-- skill tools — custom capabilities registered with the application
+- `read_document` — broader context from a document's original text
+- skill tools — application-registered capabilities that extend the agent beyond built-in retrieval
 
-When the LLM retrieves chunks, it sees the entities they contain, issues follow-up searches, and iterates until it has enough evidence to answer. This pattern approximates graph traversal without a pre-computed graph.
+When the agent retrieves a chunk, it can inspect the entities and facts in that chunk, issue follow-up searches, read related documents, and iterate until it has enough evidence. This approximates short graph traversal without requiring a precomputed graph.
 
-## What KGs Actually Provide — and How the Architecture Covers It
+The structured store is intentionally separate from the vector store. Many questions that appear to require a graph are actually typed-record queries: filter contracts by renewal date, compare exposure by counterparty, aggregate policy limits, or list claims above a threshold.
 
-**Multi-hop traversal.** A KG walks A→B→C in a single query. In CogBase, the LLM issues a vector search, reads B, and issues another search for C. For 2–4 hops this works well. At 6+ hops, iterative retrieval becomes slower and probabilistically lossy.
+## Alternative Considered: Explicit KG Layer
 
-**Entity disambiguation.** KGs resolve "Apple (company)" vs "Apple (fruit)" through canonical entity nodes. The LLM handles this at inference time from context. For most enterprise document sets with consistent terminology, inference-time resolution is good enough; for extremely noisy multi-source corpora it is less reliable.
+An explicit KG would model entities and relationships during ingestion, then answer relationship queries through graph traversal.
 
-**Relationship typing.** KG edges carry explicit types: *causes*, *contradicts*, *subsumes*. Two retrieved chunks tell the LLM about a relationship, but the LLM re-derives its type every time under context pressure, with no cross-session consistency guarantee. The KG is more consistent; the LLM is more flexible.
+It provides stronger support for:
 
-**Global graph algorithms.** PageRank, community detection, and shortest-path across an entire corpus are not possible in a context window. If your product question is "what is the most central concept linking all 50,000 of our contracts?" you need a graph. For most enterprise document AI this question does not arise.
+- deterministic multi-hop traversal
+- canonical entity disambiguation
+- stable relationship typing
+- global graph algorithms
+- completeness guarantees over known edges
 
-**Completeness guarantees.** Graph traversal is exhaustive — it finds every edge matching a predicate. LLM-driven retrieval is probabilistic — it stops when it judges it has enough. For compliance audits and drug-interaction safety, a missed edge has real consequences; probabilistic retrieval is insufficient.
+CogBase does not adopt this as the default because these benefits are not required for most target document workflows, while the upfront modeling and maintenance costs are high.
 
-**Ontology and inheritance.** LLMs have internalized a large amount of general ontological structure, and domain-specific hierarchies can be injected into context. This is roughly equivalent to a KG for most enterprise verticals.
+## Coverage And Tradeoffs
 
-## How Memory and Adaptive Evolution Close the Gap
+**Multi-hop traversal.** A KG can traverse A->B->C in a single graph query. CogBase performs this through iterative search and reading. This works well for typical 2-4 hop workflows, but becomes slower and less reliable for long chains.
 
-The **memory layer** eliminates the most wasteful pattern in iterative retrieval: re-fetching the same chunks within or across sessions. Episodic memory records successful retrieval paths — "for indemnification exposure, the winning path was: vector search → read clause text → structured_lookup for counterparty history." Replaying this path on the next similar query skips the exploratory hops. This is usage-driven approximation of KG traversal, built from evidence rather than hand-crafted ontology.
+**Entity disambiguation.** A KG can resolve ambiguous entities through canonical nodes. CogBase resolves ambiguity at inference time from document context. This is usually sufficient for enterprise corpora with consistent terminology, but weaker for noisy multi-source corpora.
 
-The **adaptive evolution engine** materializes frequently-needed cross-references into the structured store. When the gap detector finds "users always issue a second structured_lookup for litigation history after querying contract terms," it proposes adding a foreign-key cross-reference between the two collections. That cross-reference *is* a KG edge — but it is derived from real queries, not upfront domain modeling. This inverts the KG construction problem: instead of building the graph an expert thinks users will need, the system builds exactly the graph users actually traverse.
+**Relationship typing.** A KG stores explicit relationship types such as `causes`, `contradicts`, or `subsumes`. CogBase lets the LLM infer relationship type from retrieved evidence at answer time. This is more flexible but less consistent across sessions.
 
-## When a KG Is Still the Right Choice
+**Global graph algorithms.** PageRank, community detection, shortest path, and similar full-corpus algorithms require a graph. CogBase does not support these as native operations.
 
-CogBase's LLM-driven architecture covers roughly 80% of what an explicit KG provides for enterprise document AI, at significantly lower engineering, model and maintenance cost. The remaining cases where a KG remains superior:
+**Completeness guarantees.** KG traversal can exhaustively return all known edges matching a predicate. CogBase retrieval is probabilistic and agent-directed. CogBase does not currently provide completeness guarantees over implicit relationships.
 
-- **Completeness-critical applications** — drug interaction safety, AML fraud detection, regulatory compliance where a missed edge has legal or safety consequences
-- **Very long chain traversal** — 6+ hops at scale across hundreds of thousands of nodes
-- **Global graph algorithms** — centrality, community detection, shortest path over a full corpus
+**Ontology and inheritance.** Domain hierarchies can be supplied through prompts, schemas, structured extraction rules, or skill tools. This covers many practical vertical workflows, but it is not a substitute for a formally maintained ontology when one is required.
 
-These are real but narrow. The trend line runs against heavyweight KGs: stronger LLM reasoning, longer context windows, and better tool-use training each expand the coverage of the retrieval-based approach. The domains where KGs hold ground share one property — exhaustive, provably complete traversal where missing an edge matters. If your application sits there, build the graph. If you are building enterprise document AI for legal, finance, insurance, or research, the LLM-driven architecture wins on almost every practical dimension.
+## Memory And Adaptive Evolution
+
+CogBase can recover some KG-like benefits through usage-driven learning.
+
+The memory layer can record successful retrieval paths. For example, an indemnification exposure query might repeatedly follow this path:
+
+`vector_search` -> `read_document` -> `structured_lookup` for counterparty litigation history
+
+When similar queries recur, memory can replay the successful path and avoid rediscovering it from scratch.
+
+The adaptive evolution engine can materialize frequently needed cross-references into the structured store. If users repeatedly query contract terms and then look up litigation history for the same counterparty, CogBase can propose a foreign-key-style relationship between those collections. That relationship functions like a graph edge, but it is derived from observed usage rather than upfront ontology design.
+
+## When To Add A KG
+
+Add or integrate an explicit KG when the application requires:
+
+- **Completeness-critical relationship queries** — drug interaction safety, AML fraud detection, regulatory compliance, or other workflows where a missed edge creates legal, financial, or safety risk
+- **Long chain traversal** — 6+ hops at scale across large node sets
+- **Global graph algorithms** — centrality, community detection, shortest path, influence analysis, or corpus-wide relationship analytics
+- **Strict canonical entity management** — noisy, multi-source corpora where inference-time disambiguation is not reliable enough
+- **Formal ontology governance** — domain rules where inheritance, relationship typing, and schema evolution must be explicitly controlled
+
+## Revisit Criteria
+
+Revisit this decision if any of the following become common product requirements:
+
+- users need exhaustive relationship queries rather than evidence-backed answers
+- retrieval paths regularly exceed 4 hops
+- repeated cross-references cannot be handled through structured-store evolution
+- global graph algorithms become part of the product surface
+- customers require auditable completeness guarantees over implicit relationships
+- entity ambiguity causes recurring answer quality failures
+
+Until those conditions appear, structured extraction plus LLM-driven retrieval is the preferred default for CogBase because it covers the common enterprise document AI workflows with lower engineering and maintenance cost.
