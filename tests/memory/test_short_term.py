@@ -111,7 +111,7 @@ async def test_append_retrievals_dedupes_by_ref_id():
 @pytest.mark.asyncio
 async def test_build_context_unknown_session_returns_empty():
     mem = ShortTermMemory()
-    assert await mem.build_context(session_id="nope", query="q") == []
+    assert await mem.build_context(session_id="nope") == []
 
 
 @pytest.mark.asyncio
@@ -122,7 +122,7 @@ async def test_build_context_returns_chronological_messages():
     await mem.append_message(sid, MemoryRole.ASSISTANT, "second")
     await mem.append_message(sid, MemoryRole.USER, "third")
 
-    ctx = await mem.build_context(session_id=sid, query="third", token_budget=1000)
+    ctx = await mem.build_context(session_id=sid, token_budget=1000)
     assert [m["content"] for m in ctx] == ["first", "second", "third"]
     assert [m["role"] for m in ctx] == ["user", "assistant", "user"]
 
@@ -138,7 +138,7 @@ async def test_build_context_compacts_overflow_into_summary():
     await mem.append_message(sid, MemoryRole.ASSISTANT, big + " two")
     await mem.append_message(sid, MemoryRole.USER, "latest question")
 
-    ctx = await mem.build_context(session_id=sid, query="latest question", token_budget=20)
+    ctx = await mem.build_context(session_id=sid, token_budget=20)
 
     # The summary is prepended as a system message and the LLM was asked to compact.
     assert ctx[0]["role"] == "system"
@@ -164,7 +164,7 @@ async def test_build_context_compaction_falls_back_without_llm():
     await mem.append_message(sid, MemoryRole.USER, big + " old")
     await mem.append_message(sid, MemoryRole.USER, "new")
 
-    ctx = await mem.build_context(session_id=sid, query="new", token_budget=20)
+    ctx = await mem.build_context(session_id=sid, token_budget=20)
     state = await mem.get(sid)
     assert state.summary is not None
     assert ctx[-1]["content"] == "new"

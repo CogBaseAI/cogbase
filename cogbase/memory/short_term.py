@@ -164,7 +164,6 @@ class ShortTermMemory:
         self,
         *,
         session_id: str,
-        query: str,
         token_budget: int | None = None,
     ) -> list[ChatMessage]:
         """Assemble the message list for the next LLM call within ``token_budget``.

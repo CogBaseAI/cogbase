@@ -584,7 +584,6 @@ class QueryRunner:
             await self._short_term.append_message(session_id, MemoryRole.USER, user_input)
             context = await self._short_term.build_context(
                 session_id=session_id,
-                query=user_input,
                 token_budget=self._context_token_budget,
             )
             messages.extend(context)
@@ -599,9 +598,12 @@ class QueryRunner:
         total_output_tokens: int = 0
 
         # Select skill once before the loop. Support switching skill in the for loop when needed.
+        # When memory is active the assembled session context is the source of truth,
+        # so route against it rather than the (ignored) caller-passed history.
         current_skill = None
         if skills:
-            current_skill = await self.select(user_input, history)
+            skill_history = context if memory_active else history
+            current_skill = await self.select(user_input, skill_history)
             if current_skill is not None:
                 logger.info("[runner] active skill → '%s'", current_skill.name)
                 yield f"Using skill: {current_skill.name}..."

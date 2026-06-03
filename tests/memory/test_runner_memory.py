@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from cogbase.core.query_runner import QueryResult, QueryRunner
 from cogbase.llms.base import CompletionResult
 from cogbase.memory import MemoryRole, ShortTermMemory
+from cogbase.skills.skill import Skill
 
 
 def _text_result(content: str) -> CompletionResult:
@@ -49,13 +50,18 @@ async def _drain(runner: QueryRunner, *args, **kwargs) -> tuple[list[str], Query
     return tokens, result
 
 
-def _runner(llm, short_term=None) -> QueryRunner:
+def _runner(llm, short_term=None, skills=None) -> QueryRunner:
     return QueryRunner(
         app_name="testapp",
         llm=llm,
         document_store=MagicMock(),
         short_term=short_term,
+        skills=skills,
     )
+
+
+def _make_skill(name: str, description: str = "A skill.") -> Skill:
+    return Skill(name=name, description=description, raw_markdown=f"# {name}\nDo stuff.")
 
 
 @pytest.mark.asyncio
@@ -104,6 +110,38 @@ async def test_second_turn_sees_prior_context_without_caller_history():
     assert any("capital of France" in (c or "") for c in contents)
     assert any("Paris" in (c or "") for c in contents)
     assert any("How many people" in (c or "") for c in contents)
+
+
+@pytest.mark.asyncio
+async def test_skill_routing_uses_assembled_memory_context():
+    # Turn 1: seed the session with a prior Q&A.
+    mem = ShortTermMemory()
+    sid = await mem.start_session(app_name="testapp")
+    llm1 = _make_llm(_text_result("Paris is the capital of France."))
+    await _drain(_runner(llm1, short_term=mem), "What is the capital of France?", session_id=sid)
+
+    # Turn 2: skills present, so select() runs. Capture the router messages.
+    captured = {}
+
+    async def _stream_gen():
+        yield "ok"
+
+    async def _capture_router(messages, *a, **kw):
+        captured["router"] = messages
+        return _text_result("none")
+
+    llm2 = MagicMock()
+    llm2.complete = AsyncMock(side_effect=_capture_router)
+    llm2.complete_stream = MagicMock(side_effect=lambda *a, **kw: _stream_gen())
+
+    runner = _runner(llm2, short_term=mem, skills=[_make_skill("weather")])
+    # No caller history passed — the assembled session context is the only source.
+    await _drain(runner, "How many people live there?", session_id=sid)
+
+    router_text = "\n".join(str(m.get("content", "")) for m in captured["router"])
+    # Prior turn (recovered from memory) reached the skill router, not an empty history.
+    assert "capital of France" in router_text
+    assert "Paris" in router_text
 
 
 @pytest.mark.asyncio

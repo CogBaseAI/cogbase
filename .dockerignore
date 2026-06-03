@@ -15,10 +15,7 @@ data.bench/
 tags
 ctags.sh
 grep.sh
-benchmarks/
-GraphRAG-Benchmark/
-locomo/
-mem0-memory-benchmarks/
-blogs/
 ui/node_modules/
 ui/dist/
+benchmarks/
+ref_projects
