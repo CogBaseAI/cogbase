@@ -29,6 +29,7 @@ from cogbase.stores import (
 )
 from cogbase.core.app import CogBaseApp
 from cogbase.core.query_runner import QueryRunner
+from cogbase.memory import ShortTermMemory
 from cogbase.stores.schema import FieldSchema, FieldType
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion_pipeline import (
@@ -249,6 +250,12 @@ async def build_app(
 
     vc_schemas = [vc.schema for vc in vector_collections]
 
+    # Short-term memory: session-local working context. In-memory for now; the
+    # interface is async so a Redis backend can replace it for multi-worker
+    # deployments without touching the runner. Engaged only when a query carries
+    # a session_id (otherwise queries stay stateless via caller-passed history).
+    short_term = ShortTermMemory(llm=llm)
+
     qrunner = QueryRunner(
         app_name=config.name,
         llm=llm,
@@ -258,6 +265,7 @@ async def build_app(
         embedder=embedder,
         vector_schemas=vc_schemas or None,
         structured_schemas=structured_schemas or None,
+        short_term=short_term,
     )
 
     # --- Workflows ---

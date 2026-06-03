@@ -100,6 +100,19 @@ class QueryRequest(BaseModel):
             "Hard upper limit is 20."
         ),
     )
+    session_id: str | None = Field(
+        default=None,
+        description=(
+            "Optional short-term memory session id. When set, the server records "
+            "this turn into the session and builds the LLM context from prior turns "
+            "in that session, so `history` need not be supplied. Reuse the same id "
+            "across requests to continue a conversation. Omit for stateless queries."
+        ),
+    )
+    user_id: str | None = Field(
+        default=None,
+        description="Optional user identifier associated with the session (memory scoping).",
+    )
 
 
 class ChunkResponse(BaseModel):
@@ -125,6 +138,10 @@ class QueryResponse(BaseModel):
     document_slices: list[DocumentSliceResponse] = []
     input_tokens: int = 0
     output_tokens: int = 0
+    session_id: str | None = Field(
+        default=None,
+        description="The short-term memory session id used for this turn, when memory was engaged.",
+    )
 
 
 # ---------------------------------------------------------------------------

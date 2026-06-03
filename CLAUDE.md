@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-CogBase is in active early development. The knowledge pipeline, workflow engine, query runner, skills registry, REST API, store adapters, app generator, document registry, and background task tracking are implemented. The adaptive evolution engine and memory layer (short-term, episodic, long-term) are planned but not yet implemented.
+CogBase is in active early development. The knowledge pipeline, workflow engine, query runner, skills registry, REST API, store adapters, app generator, document registry, and background task tracking are implemented. The short-term memory tier (session-local working context with token-budgeted assembly and compaction) is implemented in `cogbase/memory/`; the episodic and long-term tiers and the adaptive evolution engine are planned but not yet implemented.
 
 ## Architecture
 

@@ -580,10 +580,13 @@ async def upload_documents(
 
 
 async def _drain_query(
-    app, text: str, history: list[dict] | None = None, system_prompt: str | None = None, top_k: int = 10
+    app, text: str, history: list[dict] | None = None, system_prompt: str | None = None,
+    top_k: int = 10, session_id: str | None = None,
 ):
     """Drain app.query_stream and return the final result."""
-    async for item in app.query_stream(text, history=history, system_prompt=system_prompt, top_k=top_k):
+    async for item in app.query_stream(
+        text, history=history, system_prompt=system_prompt, top_k=top_k, session_id=session_id
+    ):
         if not isinstance(item, str):
             return item
     raise RuntimeError("query_stream did not yield a result")
@@ -606,13 +609,13 @@ async def query_application(
     app = await _get_active_app(app_name, app_cache, system_store, system_resources)
     history = [{"role": m.role, "content": m.content} for m in body.history] or None
     try:
-        result = await _drain_query(app, body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k)
+        result = await _drain_query(app, body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k, session_id=body.session_id)
     except Exception:
         logger.exception("query failed for app '%s', retrying with fresh app", app_name)
         app = await _get_active_app(
             app_name, app_cache, system_store, system_resources, force_refresh=True
         )
-        result = await _drain_query(app, body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k)
+        result = await _drain_query(app, body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k, session_id=body.session_id)
     return QueryResponse(
         answer=result.answer,
         structured_records=result.structured_records,
@@ -620,6 +623,7 @@ async def query_application(
         document_slices=[DocumentSliceResponse(**s.model_dump()) for s in result.document_slices],
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
+        session_id=body.session_id,
     )
 
 
@@ -642,7 +646,7 @@ async def query_application_stream(
 
     async def event_stream():
         try:
-            async for item in app.query_stream(body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k):
+            async for item in app.query_stream(body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k, session_id=body.session_id):
                 if isinstance(item, str):
                     yield f"data: {json.dumps({'token': item})}\n\n"
                 else:

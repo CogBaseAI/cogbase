@@ -62,6 +62,7 @@ from pydantic import BaseModel
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, CompletionResult, LLMBase, SystemTool, ToolDefinition
+from cogbase.memory import MemoryRole, RetrievalKind, RetrievedItem, ShortTermMemory
 from cogbase.stores import CollectionSchema, DocumentStoreBase, Filter, Op, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 
 logger = logging.getLogger(__name__)
@@ -419,6 +420,8 @@ class QueryRunner:
         system_tools: list[SystemTool] | None = None,
         max_calls: int = 10,
         passthrough_token_threshold: int | None = None,
+        short_term: ShortTermMemory | None = None,
+        context_token_budget: int | None = None,
     ) -> None:
         self._app_name = app_name
         self._llm = llm
@@ -433,6 +436,8 @@ class QueryRunner:
         self._system_tools: dict[str, SystemTool] = {t.name: t for t in (system_tools or [])}
         self._max_calls = max_calls
         self._passthrough_token_threshold = passthrough_token_threshold
+        self._short_term = short_term
+        self._context_token_budget = context_token_budget
 
         # Retrieval tool definitions — exposed as _tool_defs for introspection.
         self._tool_defs: list[ToolDefinition] = []
@@ -551,23 +556,41 @@ class QueryRunner:
         history: list[ChatMessage] | None = None,
         base_prompt: str = "You are a helpful assistant.",
         top_k: int = 10,
+        session_id: str | None = None,
     ) -> AsyncGenerator[str | QueryResult, None]:
         """Drive the agent loop, yielding str tokens then a final QueryResult.
 
         Args:
             user_input:  The user's request.
-            history:     Prior conversation messages.
+            history:     Prior conversation messages.  Ignored when short-term
+                         memory is active and ``session_id`` is supplied — the
+                         session's assembled context is the source of truth.
             base_prompt: Base system prompt; merged with retrieval schema info and
                          skill instructions when those are configured.
             top_k:       Default number of chunks returned per vector_search call.
                          The LLM may request fewer; this value is used when the LLM
                          omits top_k from its tool arguments. Hard-capped at 20.
+            session_id:  When set and short-term memory is configured, the runner
+                         records the turn into the session and builds context from
+                         it instead of ``history``.
         """
         skills = self._skills
+        memory_active = self._short_term is not None and session_id is not None
+
         # Slot 0 is reserved for the system prompt; updated each iteration.
         messages: list[ChatMessage] = [{"role": "system", "content": ""}]
-        messages.extend(history or [])
-        messages.append({"role": "user", "content": user_input})
+        if memory_active:
+            # Server-side session context replaces caller-passed history.
+            await self._short_term.append_message(session_id, MemoryRole.USER, user_input)
+            context = await self._short_term.build_context(
+                session_id=session_id,
+                query=user_input,
+                token_budget=self._context_token_budget,
+            )
+            messages.extend(context)
+        else:
+            messages.extend(history or [])
+            messages.append({"role": "user", "content": user_input})
 
         all_records: list[dict] = []
         all_chunks: list[Chunk] = []
@@ -606,6 +629,10 @@ class QueryRunner:
             if not tool_calls:
                 answer = "".join(tokens) + "\n"
                 cited_ids = _extract_cited_ids(answer)
+                if memory_active:
+                    await self._short_term.append_message(
+                        session_id, MemoryRole.ASSISTANT, answer
+                    )
                 yield QueryResult(
                     answer=answer,
                     structured_records=all_records,
@@ -648,7 +675,13 @@ class QueryRunner:
                 if name == "structured_lookup":
                     records, tool_output, passthrough = await self._run_structured_lookup(inputs)
                     all_records.extend(records)
+                    if memory_active:
+                        await self._record_record_retrievals(session_id, records)
                     if passthrough:
+                        if memory_active:
+                            await self._short_term.append_message(
+                                session_id, MemoryRole.ASSISTANT, tool_output
+                            )
                         yield QueryResult(
                             answer=tool_output,
                             structured_records=all_records,
@@ -663,6 +696,8 @@ class QueryRunner:
                     seen_chunk_ids = {c.chunk_id for c in all_chunks}
                     chunks, tool_output = await self._run_vector_search(inputs, exclude_ids=seen_chunk_ids, default_top_k=top_k)
                     all_chunks.extend(chunks)
+                    if memory_active:
+                        await self._record_chunk_retrievals(session_id, chunks)
                 elif name == "read_document":
                     doc_slice, tool_output = await self._run_read_document(inputs)
                     if doc_slice is not None:
@@ -867,6 +902,39 @@ class QueryRunner:
             existing = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = f"{skill.site_packages}:{existing}" if existing else skill.site_packages
         return env
+
+    # ------------------------------------------------------------------
+    # Short-term memory recording
+    # ------------------------------------------------------------------
+
+    async def _record_chunk_retrievals(self, session_id: str, chunks: list[Chunk]) -> None:
+        """Record vector_search chunks as session retrievals (best-effort)."""
+        if not chunks:
+            return
+        items = [
+            RetrievedItem(
+                kind=RetrievalKind.CHUNK,
+                ref_id=c.chunk_id,
+                text=c.text,
+                source="vector_search",
+            )
+            for c in chunks
+        ]
+        await self._short_term.append_retrievals(session_id, items)
+
+    async def _record_record_retrievals(self, session_id: str, records: list[dict]) -> None:
+        """Record structured_lookup records as session retrievals (best-effort)."""
+        if not records:
+            return
+        items = [
+            RetrievedItem(
+                kind=RetrievalKind.RECORD,
+                text=json.dumps(rec, default=str)[:1000],
+                source="structured_lookup",
+            )
+            for rec in records
+        ]
+        await self._short_term.append_retrievals(session_id, items)
 
     async def compact_messages(
         self,
