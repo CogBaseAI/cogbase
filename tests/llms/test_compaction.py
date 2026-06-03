@@ -33,6 +33,49 @@ def test_estimate_tokens_is_four_chars_per_token():
     assert estimate_tokens("a" * 40) == 10
 
 
+def test_estimate_tokens_counts_cjk_as_one_each():
+    # Chinese ideographs tokenize at ~1 token/char, not 4 chars/token. The old
+    # len // 4 heuristic would have undercounted these by ~4x.
+    assert estimate_tokens("你好世界") == 4              # 4 hanzi -> 4 tokens
+    assert estimate_tokens("数据科学") == 4
+    assert estimate_tokens("你" * 100) == 100
+    # Japanese kana and Korean Hangul are counted the same way.
+    assert estimate_tokens("こんにちは") == 5            # 5 kana -> 5 tokens
+    assert estimate_tokens("안녕하세요") == 5            # 5 Hangul -> 5 tokens
+
+
+def test_estimate_tokens_mixed_cjk_and_latin():
+    # 2 CJK chars (~1 token each) + 4 Latin chars (~4 chars/token -> 1 token).
+    assert estimate_tokens("abcd你好") == 2 + 4 // 4
+    # CJK punctuation (fullwidth) also counts as CJK.
+    assert estimate_tokens("你好，世界") == 5
+
+
+def test_estimate_tokens_cjk_not_undercounted_vs_old_heuristic():
+    text = "这是一个用于测试令牌估算的中文句子。" * 5
+    old = len(text) // 4
+    assert estimate_tokens(text) == len(text)  # all CJK -> ~1 token/char
+    assert estimate_tokens(text) > old * 3     # materially higher than old len//4
+
+
+def test_split_by_tokens_respects_budget_for_cjk():
+    # Each line is 10 hanzi -> ~10 tokens; with a budget of 25 the splitter must
+    # group by real token cost, not raw char count (char count would pack 4x more).
+    text = "\n".join(["汉字测试内容样例文本"] * 8)  # 10 chars/line
+    chunks = split_by_tokens(text, 25)
+    assert len(chunks) > 1
+    assert all(estimate_tokens(c) <= 25 for c in chunks)
+    # lossless: no characters dropped.
+    assert "".join("".join(chunks).split()) == "".join(text.split())
+
+
+def test_split_hard_splits_oversized_cjk_line_within_budget():
+    line = "字" * 100  # 100 tokens, no line breaks
+    chunks = split_by_tokens(line, 30)
+    assert all(estimate_tokens(c) <= 30 for c in chunks)
+    assert "".join(chunks) == line  # lossless reassembly
+
+
 def test_estimate_messages_tokens_counts_content_and_tool_call_args():
     messages = [
         {"role": "user", "content": "abcd"},  # 1 token

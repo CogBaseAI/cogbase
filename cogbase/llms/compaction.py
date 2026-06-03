@@ -30,9 +30,32 @@ import asyncio
 
 from cogbase.llms.base import ChatMessage, LLMBase
 
+
+def _is_cjk(cp: int) -> bool:
+    """Whether codepoint *cp* is a script BPE tokenizers split ~1 token/char.
+
+    CJK ideographs and extensions, kana, bopomofo, Hangul, and half/fullwidth
+    forms tokenize at roughly one token per character (often more), versus the
+    ~4 chars/token of Latin text. Counting these separately keeps token
+    estimates from undercounting Chinese/Japanese/Korean transcripts by ~4x,
+    which would let a "within budget" chunk overflow the real context window.
+    """
+    return (
+        0x3000 <= cp <= 0x9FFF       # CJK symbols/punct, kana, bopomofo, CJK Unified + ext A
+        or 0xAC00 <= cp <= 0xD7A3    # Hangul syllables
+        or 0xF900 <= cp <= 0xFAFF    # CJK compatibility ideographs
+        or 0xFF00 <= cp <= 0xFFEF    # half/fullwidth forms
+        or 0x20000 <= cp <= 0x2FA1F  # CJK extensions B-F and compatibility supplement
+    )
+
+
 # Max transcript tokens fed to a single summarisation call. Longer transcripts
 # are split into chunks of this size, summarised in parallel, and merged.
-DEFAULT_CHUNK_TOKENS = 4000
+#
+# This is deliberately below the full context window of modern 128k-token models:
+# summarisation still needs room for the compression prompt, output tokens, token
+# estimation error, and smaller compatible backends.
+DEFAULT_CHUNK_TOKENS = 64_000
 
 _COMPRESS_PROMPT = (
     "Compress the following conversation transcript into a concise bullet-point "
@@ -42,8 +65,13 @@ _COMPRESS_PROMPT = (
 
 
 def estimate_tokens(text: str) -> int:
-    """Rough token estimate (~4 chars/token)."""
-    return len(text) // 4
+    """Rough token estimate.
+
+    Latin-script text runs ~4 chars/token; CJK characters are ~1 token each and
+    are counted separately so CJK transcripts are not undercounted ~4x.
+    """
+    cjk = sum(1 for ch in text if _is_cjk(ord(ch)))
+    return cjk + (len(text) - cjk) // 4
 
 
 def estimate_messages_tokens(messages: list[ChatMessage]) -> int:
@@ -74,29 +102,46 @@ def render_message(m: ChatMessage) -> str:
 def split_by_tokens(text: str, max_tokens: int) -> list[str]:
     """Split *text* into chunks each within ~max_tokens, on line boundaries.
 
-    A single line longer than the budget is hard-split by characters so no chunk
-    ever exceeds the budget.
+    Sizing uses :func:`estimate_tokens`, so CJK text is chunked by real token
+    cost rather than raw character count. A single line longer than the budget is
+    hard-split so no chunk ever exceeds it.
     """
-    max_chars = max_tokens * 4
     chunks: list[str] = []
     current: list[str] = []
-    size = 0
+    size = 0  # estimated tokens of the lines buffered in `current`
     for line in text.split("\n"):
-        if len(line) > max_chars:
+        line_tokens = estimate_tokens(line)
+        if line_tokens > max_tokens:
             if current:
                 chunks.append("\n".join(current))
                 current, size = [], 0
-            for i in range(0, len(line), max_chars):
-                chunks.append(line[i : i + max_chars])
+            chunks.extend(_hard_split_line(line, max_tokens))
             continue
-        if size + len(line) + 1 > max_chars and current:
+        if size + line_tokens + 1 > max_tokens and current:
             chunks.append("\n".join(current))
             current, size = [], 0
         current.append(line)
-        size += len(line) + 1
+        size += line_tokens + 1
     if current:
         chunks.append("\n".join(current))
     return chunks
+
+
+def _hard_split_line(line: str, max_tokens: int) -> list[str]:
+    """Split one over-long line into pieces each within ~max_tokens tokens."""
+    pieces: list[str] = []
+    start = 0
+    size = 0.0
+    for i, ch in enumerate(line):
+        cost = 1.0 if _is_cjk(ord(ch)) else 0.25
+        if size + cost > max_tokens and i > start:
+            pieces.append(line[start:i])
+            start = i
+            size = 0.0
+        size += cost
+    if start < len(line):
+        pieces.append(line[start:])
+    return pieces
 
 
 async def summarize_transcript(

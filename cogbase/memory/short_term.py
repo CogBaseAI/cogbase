@@ -33,7 +33,14 @@ from cogbase.memory.models import (
 
 # Default working-context budget, in estimated tokens, used when a caller does
 # not specify one for build_context().
-DEFAULT_CONTEXT_TOKEN_BUDGET = 4000
+#
+# This is paid on every query turn (the working context is prepended to each
+# prompt alongside retrieval results, skill schemas, and the query), so it is
+# kept well below the model window: enough to retain dozens of recent turns
+# verbatim before compaction folds older ones into the running summary, while
+# leaving room for retrieval and output. Override per-instance via
+# ``max_context_tokens`` for longer-lived or detail-heavy sessions.
+DEFAULT_CONTEXT_TOKEN_BUDGET = 16_000
 
 # Default session time-to-live.  None means sessions never expire.
 DEFAULT_TTL_SECONDS = 3600
