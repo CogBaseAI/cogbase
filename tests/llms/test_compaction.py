@@ -181,8 +181,12 @@ async def test_prior_summary_triggers_fold_call():
     assert out == "S"
     # One call to summarise the transcript, one to fold into the prior summary.
     assert llm.complete.call_count == 2
-    fold_prompt = llm.complete.call_args_list[1].args[0][0]["content"]
-    assert "Existing summary:\nPRIOR" in fold_prompt
+    # Instructions are in the system message; the transcript/fold input is the
+    # user message.
+    fold_messages = llm.complete.call_args_list[1].args[0]
+    assert fold_messages[0]["role"] == "system"
+    fold_input = fold_messages[1]["content"]
+    assert "Existing summary:\nPRIOR" in fold_input
 
 
 @pytest.mark.asyncio

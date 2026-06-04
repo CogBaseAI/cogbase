@@ -61,6 +61,7 @@ from pydantic import BaseModel
 
 from cogbase.llms.compaction import (
     DEFAULT_CHUNK_TOKENS,
+    WORKING_CONTEXT_PROMPT,
     estimate_messages_tokens,
     estimate_tokens,
     render_message,
@@ -966,7 +967,10 @@ class QueryRunner:
         """
         transcript = "\n".join(render_message(m) for m in messages)
         summary = await summarize_transcript(
-            self._llm, transcript, chunk_tokens=DEFAULT_CHUNK_TOKENS
+            self._llm,
+            transcript,
+            chunk_tokens=DEFAULT_CHUNK_TOKENS,
+            compress_prompt=WORKING_CONTEXT_PROMPT,
         ) or "(empty summary)"
         return [
             {"role": "system", "content": system_prompt},

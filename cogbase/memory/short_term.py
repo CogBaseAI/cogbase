@@ -19,6 +19,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from cogbase.llms.compaction import (
+    CONVERSATION_SUMMARY_PROMPT,
     DEFAULT_CHUNK_TOKENS,
     estimate_tokens,
     summarize_transcript,
@@ -268,6 +269,7 @@ class ShortTermMemory:
                 transcript,
                 chunk_tokens=DEFAULT_CHUNK_TOKENS,
                 prior_summary=state.summary,
+                compress_prompt=CONVERSATION_SUMMARY_PROMPT,
             )
         except Exception:
             logger.warning("[short_term] compaction failed; keeping prior summary", exc_info=True)
