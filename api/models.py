@@ -150,6 +150,7 @@ class QueryResponse(BaseModel):
 
 
 class SkillResponse(BaseModel):
+    id: str
     name: str
     description: str
     metadata: dict[str, Any] = {}
@@ -162,12 +163,17 @@ class SkillListResponse(BaseModel):
 
 
 class AddSkillRequest(BaseModel):
-    skill_name: str
+    skill_id: str
+
+
+class AppSkillRef(BaseModel):
+    skill_id: str
+    name: str | None = None  # display name; None if the referenced skill is missing
 
 
 class AppSkillsResponse(BaseModel):
     app_name: str
-    skills: list[str]
+    skills: list[AppSkillRef]
 
 
 # ---------------------------------------------------------------------------

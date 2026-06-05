@@ -256,6 +256,16 @@ async def build_app(
     # a session_id (otherwise queries stay stateless via caller-passed history).
     short_term = ShortTermMemory(llm=llm)
 
+    # Resolve the skills assigned to this app (referenced by id) into loaded
+    # Skill objects the runner can route to and execute.
+    skills: list = []
+    if config.skills and sys.skill_registry is not None:
+        for skill_id in config.skills:
+            try:
+                skills.append(sys.skill_registry.get(skill_id))
+            except KeyError:
+                logger.warning("skill id=%s assigned to app=%s is not registered; skipping", skill_id, config.name)
+
     qrunner = QueryRunner(
         app_name=config.name,
         llm=llm,
@@ -266,6 +276,7 @@ async def build_app(
         vector_schemas=vc_schemas or None,
         structured_schemas=structured_schemas or None,
         short_term=short_term,
+        skills=skills or None,
     )
 
     # --- Workflows ---

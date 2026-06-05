@@ -6,7 +6,7 @@ import pytest
 import pytest_asyncio
 
 from cogbase.stores.structured.memory import InMemoryStructuredStore
-from api.system_store import AppRecord, DocRecord, DocWorkflowRecord, SystemStore, TaskRecord
+from api.system_store import AppRecord, DocRecord, DocWorkflowRecord, SkillRecord, SystemStore, TaskRecord
 
 
 def _make_record(name: str = "my-app", status: str = "active") -> AppRecord:
@@ -476,3 +476,50 @@ class TestDeleteDocCleansDocWorkflowRegistry:
 
         assert await store.get_doc_workflow("my-app", "doc-1", "analyze") is None
         assert await store.get_doc_workflow("my-app", "doc-2", "analyze") is not None
+
+
+def _make_skill_record(skill_id: str = "uuid-1", name: str = "greeter") -> SkillRecord:
+    return SkillRecord(
+        skill_id=skill_id,
+        name=name,
+        description="Says hi.",
+        metadata_json=None,
+        bundle_key=f"{skill_id}.zip",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+    )
+
+
+class TestSystemStoreSkills:
+    @pytest.mark.asyncio
+    async def test_save_and_get_skill(self, store):
+        await store.save_skill(_make_skill_record())
+        got = await store.get_skill("uuid-1")
+        assert got is not None
+        assert got.name == "greeter"
+        assert got.bundle_key == "uuid-1.zip"
+
+    @pytest.mark.asyncio
+    async def test_get_missing_skill_returns_none(self, store):
+        assert await store.get_skill("nope") is None
+
+    @pytest.mark.asyncio
+    async def test_list_skills(self, store):
+        await store.save_skill(_make_skill_record("uuid-1", "alpha"))
+        await store.save_skill(_make_skill_record("uuid-2", "beta"))
+        rows = await store.list_skills()
+        assert {r.skill_id for r in rows} == {"uuid-1", "uuid-2"}
+
+    @pytest.mark.asyncio
+    async def test_save_skill_overwrites(self, store):
+        await store.save_skill(_make_skill_record("uuid-1", "v1"))
+        await store.save_skill(_make_skill_record("uuid-1", "v2"))
+        got = await store.get_skill("uuid-1")
+        assert got.name == "v2"
+        assert len(await store.list_skills()) == 1
+
+    @pytest.mark.asyncio
+    async def test_delete_skill(self, store):
+        await store.save_skill(_make_skill_record())
+        await store.delete_skill("uuid-1")
+        assert await store.get_skill("uuid-1") is None

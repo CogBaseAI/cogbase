@@ -32,13 +32,19 @@ class Skill:
     name: str
     description: str
     raw_markdown: str               # full file content — injected as LLM context
+    id: str | None = None           # stable identifier; apps reference skills by id
     metadata: dict = field(default_factory=dict)
     source_path: Path | None = None
     site_packages: str | None = None  # venv site-packages injected into PYTHONPATH
 
 
-def _parse_skill(path: Path) -> Skill | None:
-    """Parse a SKILL.md file with YAML front-matter."""
+def _parse_skill(path: Path, skill_id: str | None = None) -> Skill | None:
+    """Parse a SKILL.md file with YAML front-matter.
+
+    *skill_id* is the stable identifier under which the skill is registered and
+    referenced by applications. When omitted (dev-time ``skills_dir`` loads), the
+    parent directory name is used.
+    """
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as e:
@@ -63,14 +69,21 @@ def _parse_skill(path: Path) -> Skill | None:
         logger.error("[skills] %s: metadata must be a mapping, got %s", path.name, type(metadata).__name__)
         return None
 
-    return Skill(name=name, description=description, raw_markdown=raw, metadata=metadata, source_path=path)
+    return Skill(
+        name=name,
+        description=description,
+        raw_markdown=raw,
+        id=skill_id or path.parent.name,
+        metadata=metadata,
+        source_path=path,
+    )
 
 
 # mtime-based cache: absolute path → (mtime, Skill)
 _skill_cache: dict[str, tuple[float, Skill]] = {}
 
 
-def _load_skill_cached(file_path: str) -> Skill | None:
+def _load_skill_cached(file_path: str, skill_id: str | None = None) -> Skill | None:
     """Load and cache a skill, re-parsing only when the file changes."""
     try:
         mtime = os.path.getmtime(file_path)
@@ -81,7 +94,7 @@ def _load_skill_cached(file_path: str) -> Skill | None:
     if cached and cached[0] == mtime:
         return cached[1]
 
-    skill = _parse_skill(Path(file_path))
+    skill = _parse_skill(Path(file_path), skill_id=skill_id)
     if skill:
         _skill_cache[file_path] = (mtime, skill)
     return skill
@@ -108,6 +121,23 @@ def load_skills(skill_names: list[str], skills_dir: str | Path) -> list[Skill]:
             skills.append(skill)
             logger.info("[skills] loaded '%s' from %s", skill.name, file_path)
     return skills
+
+
+def load_skill_dir(skill_dir: str | Path, skill_id: str | None = None) -> Skill | None:
+    """Load the skill rooted at *skill_dir* (expects a ``SKILL.md`` inside).
+
+    Used for skills materialized from the document store, where the directory name
+    is the *skill_id*.  Installs declared pip dependencies and sets *site_packages*.
+    """
+    file_path = os.path.join(str(skill_dir), "SKILL.md")
+    if not os.path.exists(file_path):
+        logger.error("[skills] no SKILL.md in %s", skill_dir)
+        return None
+    skill = _load_skill_cached(file_path, skill_id=skill_id)
+    if skill:
+        skill.site_packages = ensure_skill_deps(skill)
+        logger.info("[skills] loaded '%s' (id=%s) from %s", skill.name, skill.id, file_path)
+    return skill
 
 
 def ensure_skill_deps(skill: Skill, venvs_dir: str = _SKILL_VENVS_DIR) -> str | None:

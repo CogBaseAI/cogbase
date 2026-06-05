@@ -1,4 +1,4 @@
-"""Registry for looking up skills by name."""
+"""Registry for looking up skills by id."""
 
 from __future__ import annotations
 
@@ -8,26 +8,41 @@ from cogbase.skills.skill import Skill, load_skills
 
 
 class SkillRegistry:
-    """Maps skill names to loaded Skill instances."""
+    """Maps skill ids to loaded ``Skill`` instances.
+
+    Skills are keyed by their stable *id* (a UUID for uploaded skills, the
+    directory name for dev-time ``skills_dir`` loads). Names are for display only
+    and may change without affecting application references.
+    """
 
     def __init__(self) -> None:
         self._skills: dict[str, Skill] = {}
 
-    def register(self, skill: Skill) -> None:
-        """Register a skill. Raises ``ValueError`` if the name is already taken."""
-        if skill.name in self._skills:
-            raise ValueError(
-                f"A skill named '{skill.name}' is already registered. "
-                "Use a unique name or deregister the existing skill first."
-            )
-        self._skills[skill.name] = skill
+    def register(self, skill: Skill, *, replace: bool = False) -> None:
+        """Register *skill* by its id.
 
-    def get(self, name: str) -> Skill:
-        """Return the skill for ``name``. Raises ``KeyError`` if not found."""
-        if name not in self._skills:
+        Raises ``ValueError`` if the id is missing, or if it is already taken and
+        *replace* is False.
+        """
+        if not skill.id:
+            raise ValueError("Cannot register a skill without an id.")
+        if skill.id in self._skills and not replace:
+            raise ValueError(
+                f"A skill with id '{skill.id}' is already registered. "
+                "Pass replace=True to overwrite, or unregister it first."
+            )
+        self._skills[skill.id] = skill
+
+    def unregister(self, skill_id: str) -> None:
+        """Remove the skill with *skill_id*. No-op if it is not registered."""
+        self._skills.pop(skill_id, None)
+
+    def get(self, skill_id: str) -> Skill:
+        """Return the skill for *skill_id*. Raises ``KeyError`` if not found."""
+        if skill_id not in self._skills:
             known = ", ".join(sorted(self._skills)) or "(none)"
-            raise KeyError(f"No skill named '{name}'. Known skills: {known}")
-        return self._skills[name]
+            raise KeyError(f"No skill with id '{skill_id}'. Known ids: {known}")
+        return self._skills[skill_id]
 
     def all_skills(self) -> list[Skill]:
         """Return all registered skills."""
@@ -37,11 +52,12 @@ class SkillRegistry:
         """Scan *skills_dir* for SKILL.md files and register the results.
 
         When *skill_names* is given, only those subdirectories are loaded.
-        Otherwise every subdirectory with a SKILL.md is loaded.
+        Otherwise every subdirectory with a SKILL.md is loaded. Each skill is
+        registered under id = its directory name (dev-time convenience path).
         """
         skills_dir = Path(skills_dir)
         if skill_names is None:
             skill_names = [p.name for p in skills_dir.iterdir() if p.is_dir()]
         for skill in load_skills(skill_names, skills_dir):
-            if skill.name not in self._skills:
-                self._skills[skill.name] = skill
+            if skill.id not in self._skills:
+                self._skills[skill.id] = skill

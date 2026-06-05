@@ -1,26 +1,142 @@
-"""Endpoints for listing system-level skills."""
+"""Endpoints for uploading and managing system-wide skills.
+
+Skills are uploaded as a ZIP bundle (SKILL.md + scripts/assets). The bundle bytes
+are persisted in the system document store (the shared, multi-node source of
+truth) and materialized into a local cache dir for execution. Each skill gets a
+stable UUID; applications reference skills by id so renaming a skill never breaks
+existing references.
+"""
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+import json
+import logging
+import uuid
+from datetime import datetime, timezone
 
-from api.dependencies import SkillRegistryDep
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
+
+from api.dependencies import SkillBundleStoreDep, SkillRegistryDep, SystemStoreDep
 from api.models import SkillListResponse, SkillResponse
+from api.system_store import SkillRecord
+from cogbase.skills.skill import load_skill_dir
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/skills", tags=["skills"])
+
+
+def _to_response(skill) -> SkillResponse:
+    return SkillResponse(
+        id=skill.id,
+        name=skill.name,
+        description=skill.description,
+        metadata=skill.metadata,
+        source_path=str(skill.source_path) if skill.source_path else None,
+    )
+
+
+async def _ingest_bundle(
+    skill_id: str,
+    raw: bytes,
+    bundle_store,
+    skill_registry,
+    system_store,
+    *,
+    replace: bool,
+) -> SkillResponse:
+    """Materialize, validate, persist, and register a skill bundle."""
+    try:
+        skill_root = bundle_store.materialize(skill_id, raw)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid skill bundle: {exc}") from exc
+
+    skill = load_skill_dir(skill_root, skill_id=skill_id)
+    if skill is None:
+        await bundle_store.delete(skill_id)
+        raise HTTPException(
+            status_code=422,
+            detail="SKILL.md is missing or has invalid YAML front-matter.",
+        )
+
+    bundle_key = await bundle_store.save_bundle(skill_id, raw)
+
+    now = datetime.now(timezone.utc).isoformat()
+    existing = await system_store.get_skill(skill_id) if replace else None
+    record = SkillRecord(
+        skill_id=skill_id,
+        name=skill.name,
+        description=skill.description,
+        metadata_json=json.dumps(skill.metadata) if skill.metadata else None,
+        bundle_key=bundle_key,
+        created_at=existing.created_at if existing else now,
+        updated_at=now,
+    )
+    await system_store.save_skill(record)
+    skill_registry.register(skill, replace=replace)
+    logger.info("[skills] %s skill id=%s name=%s", "replaced" if replace else "uploaded", skill_id, skill.name)
+    return _to_response(skill)
+
+
+@router.post("", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
+async def upload_skill(
+    skill_registry: SkillRegistryDep,
+    bundle_store: SkillBundleStoreDep,
+    system_store: SystemStoreDep,
+    bundle: UploadFile = File(..., description="ZIP bundle containing SKILL.md and any scripts/assets"),
+) -> SkillResponse:
+    """Upload a new skill from a ZIP bundle. Assigns and returns a stable id."""
+    raw = await bundle.read()
+    skill_id = uuid.uuid4().hex
+    return await _ingest_bundle(
+        skill_id, raw, bundle_store, skill_registry, system_store, replace=False
+    )
+
+
+@router.put("/{skill_id}", response_model=SkillResponse)
+async def replace_skill(
+    skill_id: str,
+    skill_registry: SkillRegistryDep,
+    bundle_store: SkillBundleStoreDep,
+    system_store: SystemStoreDep,
+    bundle: UploadFile = File(..., description="Updated ZIP bundle containing SKILL.md and any scripts/assets"),
+) -> SkillResponse:
+    """Replace an existing skill's bundle, keeping its id (and so all app references)."""
+    if await system_store.get_skill(skill_id) is None:
+        raise HTTPException(status_code=404, detail=f"No skill with id '{skill_id}'")
+    raw = await bundle.read()
+    return await _ingest_bundle(
+        skill_id, raw, bundle_store, skill_registry, system_store, replace=True
+    )
 
 
 @router.get("", response_model=SkillListResponse)
 async def list_skills(skill_registry: SkillRegistryDep) -> SkillListResponse:
     """Return all skills available in the system."""
-    skills = skill_registry.all_skills()
-    items = [
-        SkillResponse(
-            name=s.name,
-            description=s.description,
-            metadata=s.metadata,
-            source_path=str(s.source_path) if s.source_path else None,
-        )
-        for s in skills
-    ]
+    items = [_to_response(s) for s in skill_registry.all_skills()]
     return SkillListResponse(skills=items, total=len(items))
+
+
+@router.get("/{skill_id}", response_model=SkillResponse)
+async def get_skill(skill_id: str, skill_registry: SkillRegistryDep) -> SkillResponse:
+    """Return a single skill by id."""
+    try:
+        return _to_response(skill_registry.get(skill_id))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No skill with id '{skill_id}'")
+
+
+@router.delete("/{skill_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_skill(
+    skill_id: str,
+    skill_registry: SkillRegistryDep,
+    bundle_store: SkillBundleStoreDep,
+    system_store: SystemStoreDep,
+) -> None:
+    """Delete a skill from the document store, local cache, and registry."""
+    if await system_store.get_skill(skill_id) is None:
+        raise HTTPException(status_code=404, detail=f"No skill with id '{skill_id}'")
+    await bundle_store.delete(skill_id)
+    await system_store.delete_skill(skill_id)
+    skill_registry.unregister(skill_id)
+    logger.info("[skills] deleted skill id=%s", skill_id)

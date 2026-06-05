@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from cogbase.config.models import EmbeddingConfig, LLMConfig
 from cogbase.embeddings.base import EmbeddingBase
 from cogbase.llms.base import LLMBase
+from cogbase.skills.registry import SkillRegistry
 from cogbase.stores import DocumentStoreBase, StructuredStoreBase, VectorStoreBase
 
 
@@ -30,3 +31,4 @@ class SystemResources:
     embedder: EmbeddingBase | None = None
     llm_config: LLMConfig | None = None
     embedding_config: EmbeddingConfig | None = None
+    skill_registry: SkillRegistry | None = None

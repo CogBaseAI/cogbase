@@ -7,8 +7,8 @@ from cogbase.skills.skill import Skill
 from cogbase.skills.registry import SkillRegistry
 
 
-def _make_skill(name: str, description: str = "A skill.") -> Skill:
-    return Skill(name=name, description=description, raw_markdown=f"# {name}\n")
+def _make_skill(name: str, description: str = "A skill.", skill_id: str | None = None) -> Skill:
+    return Skill(name=name, description=description, raw_markdown=f"# {name}\n", id=skill_id or name)
 
 
 def test_register_and_get():
@@ -18,11 +18,41 @@ def test_register_and_get():
     assert registry.get("echo") is skill
 
 
+def test_register_without_id_raises():
+    registry = SkillRegistry()
+    with pytest.raises(ValueError, match="without an id"):
+        registry.register(Skill(name="echo", description="d", raw_markdown="# echo"))
+
+
 def test_duplicate_registration_raises():
     registry = SkillRegistry()
     registry.register(_make_skill("echo"))
     with pytest.raises(ValueError, match="already registered"):
         registry.register(_make_skill("echo"))
+
+
+def test_register_replace_overwrites():
+    registry = SkillRegistry()
+    registry.register(_make_skill("echo", description="v1"))
+    registry.register(_make_skill("echo", description="v2"), replace=True)
+    assert registry.get("echo").description == "v2"
+
+
+def test_unregister():
+    registry = SkillRegistry()
+    registry.register(_make_skill("echo"))
+    registry.unregister("echo")
+    with pytest.raises(KeyError):
+        registry.get("echo")
+    registry.unregister("echo")  # idempotent — no raise
+
+
+def test_get_by_id_not_name():
+    registry = SkillRegistry()
+    registry.register(_make_skill("display-name", skill_id="uuid-123"))
+    assert registry.get("uuid-123").name == "display-name"
+    with pytest.raises(KeyError):
+        registry.get("display-name")
 
 
 def test_get_unknown_raises():

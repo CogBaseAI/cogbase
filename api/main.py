@@ -27,6 +27,8 @@ from api.system_config import SystemConfig
 from api.system_resources import SystemResources
 from api.system_store import SystemStore
 from cogbase.skills.registry import SkillRegistry
+from cogbase.skills.skill import load_skill_dir
+from cogbase.skills.store import SkillBundleStore
 
 format = '%(asctime)s [%(levelname)s] %(process)d %(threadName)s ' \
          '%(filename)s:%(lineno)d - %(message)s'
@@ -112,6 +114,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         skill_registry.load_from_dir(system_cfg.skills_dir)
         logger.info("skill_registry loaded from skills_dir=%s", system_cfg.skills_dir)
 
+    # Uploaded skills live in the system document store (the shared, multi-node
+    # source of truth). Materialize each into the local cache and register it so
+    # this node — even a freshly started one — sees skills uploaded elsewhere.
+    skill_bundle_store: SkillBundleStore | None = None
+    if system_resources.document_store is not None:
+        skill_bundle_store = SkillBundleStore(system_resources.document_store)
+        for sk in await system_store.list_skills():
+            try:
+                skill_root = await skill_bundle_store.sync_from_store(sk.skill_id)
+                skill = load_skill_dir(skill_root, skill_id=sk.skill_id)
+                if skill is not None:
+                    skill_registry.register(skill, replace=True)
+                    logger.info("synced skill id=%s name=%s from document store", sk.skill_id, sk.name)
+            except Exception as exc:
+                logger.warning("failed to sync skill id=%s: %s", sk.skill_id, exc)
+
+    # Make the registry available to build_app (skills are a system-level resource).
+    system_resources.skill_registry = skill_registry
+
     app_cache = AppCache()
 
     # Re-instantiate all previously active applications so they are immediately
@@ -130,6 +151,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.system_store = system_store
     app.state.system_resources = system_resources
     app.state.skill_registry = skill_registry
+    app.state.skill_bundle_store = skill_bundle_store
     app.state.app_cache = app_cache
 
     yield

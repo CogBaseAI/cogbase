@@ -24,6 +24,7 @@ from api.factory import build_app
 from api.app_cache import AppCache
 from api.models import (
     AddSkillRequest,
+    AppSkillRef,
     AppSkillsResponse,
     ApplicationListResponse,
     ApplicationResponse,
@@ -191,19 +192,31 @@ def _to_filter(fr: FilterRequest) -> Filter:
     return Filter(field=fr.field, op=op, value=fr.value)
 
 
-def _validate_skills(skill_names: list[str], skill_registry) -> None:
-    """Raise HTTP 422 if any skill name is not in the registry."""
+def _validate_skills(skill_ids: list[str], skill_registry) -> None:
+    """Raise HTTP 422 if any skill id is not in the registry."""
     unknown = []
-    for name in skill_names:
+    for skill_id in skill_ids:
         try:
-            skill_registry.get(name)
+            skill_registry.get(skill_id)
         except KeyError:
-            unknown.append(name)
+            unknown.append(skill_id)
     if unknown:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Unknown skill(s): {', '.join(unknown)}. Run GET /skills to see available skills.",
+            detail=f"Unknown skill id(s): {', '.join(unknown)}. Run GET /skills to see available skills.",
         )
+
+
+def _app_skills_response(app_name: str, skill_ids: list[str], skill_registry) -> AppSkillsResponse:
+    """Build an AppSkillsResponse, resolving display names from the registry."""
+    refs = []
+    for skill_id in skill_ids:
+        try:
+            name = skill_registry.get(skill_id).name
+        except KeyError:
+            name = None  # referenced skill was deleted; surface id with no name
+        refs.append(AppSkillRef(skill_id=skill_id, name=name))
+    return AppSkillsResponse(app_name=app_name, skills=refs)
 
 
 @router.post("", response_model=ApplicationResponse, status_code=status.HTTP_201_CREATED)
@@ -677,13 +690,14 @@ async def query_application_stream(
 async def list_application_skills(
     app_name: str,
     system_store: SystemStoreDep,
+    skill_registry: SkillRegistryDep,
 ) -> AppSkillsResponse:
-    """Return the skills currently assigned to an application."""
+    """Return the skills currently assigned to an application (id + display name)."""
     record = await system_store.get_app(app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
     config = AppConfig.from_yaml(record.config_yaml)
-    return AppSkillsResponse(app_name=app_name, skills=config.skills)
+    return _app_skills_response(app_name, config.skills, skill_registry)
 
 
 @router.post("/{app_name}/skills", response_model=AppSkillsResponse, status_code=status.HTTP_201_CREATED)
@@ -693,61 +707,60 @@ async def add_application_skill(
     system_store: SystemStoreDep,
     skill_registry: SkillRegistryDep,
 ) -> AppSkillsResponse:
-    """Assign a system skill to an application.
+    """Assign a system skill to an application by id.
 
-    The skill must exist in the system skill registry (configured via
-    ``skills_dir`` in ``cogbase_system.yaml``).  Adding the same skill twice
-    is idempotent.
+    The skill must exist in the system skill registry (uploaded via ``POST /skills``
+    or loaded from ``skills_dir``).  Adding the same skill twice is idempotent.
     """
     record = await system_store.get_app(app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
     try:
-        skill_registry.get(body.skill_name)
+        skill_registry.get(body.skill_id)
     except KeyError:
         raise HTTPException(
             status_code=404,
-            detail=f"Skill '{body.skill_name}' not found in the system skill registry",
+            detail=f"Skill id '{body.skill_id}' not found in the system skill registry",
         )
 
     config = AppConfig.from_yaml(record.config_yaml)
-    if body.skill_name not in config.skills:
-        updated_config = config.model_copy(update={"skills": config.skills + [body.skill_name]})
+    if body.skill_id not in config.skills:
+        updated_config = config.model_copy(update={"skills": config.skills + [body.skill_id]})
         updated_record = record.model_copy(
             update={"config_yaml": updated_config.to_yaml(), "updated_at": _now()}
         )
         await system_store.save_app(updated_record)
-        logger.info("Added skill '%s' to application '%s'", body.skill_name, app_name)
+        logger.info("Added skill id '%s' to application '%s'", body.skill_id, app_name)
         config = updated_config
 
-    return AppSkillsResponse(app_name=app_name, skills=config.skills)
+    return _app_skills_response(app_name, config.skills, skill_registry)
 
 
-@router.delete("/{app_name}/skills/{skill_name}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@router.delete("/{app_name}/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def remove_application_skill(
     app_name: str,
-    skill_name: str,
+    skill_id: str,
     system_store: SystemStoreDep,
 ) -> None:
-    """Remove a skill from an application."""
+    """Remove a skill from an application by id."""
     record = await system_store.get_app(app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
     config = AppConfig.from_yaml(record.config_yaml)
-    if skill_name not in config.skills:
+    if skill_id not in config.skills:
         raise HTTPException(
             status_code=404,
-            detail=f"Skill '{skill_name}' is not assigned to application '{app_name}'",
+            detail=f"Skill id '{skill_id}' is not assigned to application '{app_name}'",
         )
 
-    updated_config = config.model_copy(update={"skills": [s for s in config.skills if s != skill_name]})
+    updated_config = config.model_copy(update={"skills": [s for s in config.skills if s != skill_id]})
     updated_record = record.model_copy(
         update={"config_yaml": updated_config.to_yaml(), "updated_at": _now()}
     )
     await system_store.save_app(updated_record)
-    logger.info("Removed skill '%s' from application '%s'", skill_name, app_name)
+    logger.info("Removed skill id '%s' from application '%s'", skill_id, app_name)
 
 
 @router.get("/{app_name}/collections", response_model=CollectionsResponse)

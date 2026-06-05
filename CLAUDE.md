@@ -57,7 +57,7 @@ cogbase/
 ├── cogbase/
 │   ├── pipeline/             # chunking/, extraction/, ingestion_pipeline.py
 │   ├── stores/               # base.py, schema.py, filters.py, structured/, vector/, document/
-│   ├── skills/               # skill.py, registry.py
+│   ├── skills/               # skill.py, registry.py, store.py (uploadable-skill persistence)
 │   ├── embeddings/           # base.py, openai.py, huggingface.py
 │   ├── llms/                 # base.py, openai.py
 │   ├── tools/                # builtin/ (chunk_embed_upsert, extract)
@@ -143,10 +143,19 @@ Application lifecycle:
 - `GET /applications/{name}/documents` — list all documents with workflow status
 - `POST /applications/{name}/query` — blocking query
 - `POST /applications/{name}/query/stream` — streaming query (SSE)
-- `GET/POST/DELETE /applications/{name}/skills` — manage skills per application
+- `GET/POST/DELETE /applications/{name}/skills` — assign/unassign system skills to an application (by skill id)
 
 Workflows:
 - `POST /applications/{name}/workflows/{workflow_name}/stream` — run a workflow (SSE)
+
+Skills (system-wide, uploadable):
+- `POST /skills` — upload a skill ZIP bundle (SKILL.md + scripts/assets); assigns a stable UUID
+- `PUT /skills/{skill_id}` — replace a skill's bundle, keeping its id (and so all app references)
+- `GET /skills` / `GET /skills/{skill_id}` — list / fetch skills
+- `DELETE /skills/{skill_id}` — remove a skill from the document store, local cache, and registry
+- Bundles persist in the system document store (the shared, multi-node source of truth) and are
+  materialized into a local cache dir for execution; a fresh node syncs skills from the store on startup.
+  See `cogbase/skills/store.py` (`SkillBundleStore`) and the `skill_records` index in `api/system_store.py`.
 
 System:
 - `POST /system/config` — configure LLM and embedding providers at runtime (no restart required)

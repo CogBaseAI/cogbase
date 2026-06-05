@@ -574,7 +574,7 @@ class AppConfig(ConfigPromptMixin, BaseModel):
     )
     skills: list[str] = Field(
         default_factory=list,
-        description="Additional skill names to load.",
+        description="Ids of system-wide skills to load (see GET /skills). Referenced by id so a skill rename does not break the app.",
         json_schema_extra={"prompt_skip": True}, # skip for now, add back when needed
     )
     workflows: list[WorkflowConfig] = Field(

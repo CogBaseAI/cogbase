@@ -71,6 +71,22 @@ TASKS_SCHEMA = CollectionSchema(
 )
 
 
+SKILL_RECORDS_SCHEMA = CollectionSchema(
+    name="skill_records",
+    description="System-wide skill registry: metadata and bundle location per uploaded skill.",
+    primary_fields=["skill_id"],
+    fields={
+        "skill_id":      FieldSchema(type=FieldType.STRING, nullable=False),
+        "name":          FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "description":   FieldSchema(type=FieldType.STRING, nullable=True),
+        "metadata_json": FieldSchema(type=FieldType.STRING, nullable=True),  # JSON blob
+        "bundle_key":    FieldSchema(type=FieldType.STRING, nullable=False),  # document-store key
+        "created_at":    FieldSchema(type=FieldType.STRING, nullable=False),
+        "updated_at":    FieldSchema(type=FieldType.STRING, nullable=False),
+    },
+)
+
+
 DOC_WORKFLOW_REGISTRY_SCHEMA = CollectionSchema(
     name="doc_workflow_registry",
     description="Workflow processing status per document per workflow. One record per (app, doc, workflow).",
@@ -130,6 +146,16 @@ class AppRecord(BaseModel):
     updated_at: str   # ISO-8601 UTC
 
 
+class SkillRecord(BaseModel):
+    skill_id: str
+    name: str
+    description: str | None = None
+    metadata_json: str | None = None  # JSON blob
+    bundle_key: str                   # key of the ZIP bundle in the document store
+    created_at: str   # ISO-8601 UTC
+    updated_at: str   # ISO-8601 UTC
+
+
 class SystemStore:
     """Thin persistence layer for application metadata.
 
@@ -150,6 +176,7 @@ class SystemStore:
         await self._store.create_collection(SYSTEM_CONFIG_OVERRIDES_SCHEMA)
         await self._store.create_collection(TASKS_SCHEMA)
         await self._store.create_collection(DOC_WORKFLOW_REGISTRY_SCHEMA)
+        await self._store.create_collection(SKILL_RECORDS_SCHEMA)
 
     async def save_app(self, record: AppRecord) -> None:
         await self._store.save("app_records", [record.model_dump()])
@@ -170,6 +197,27 @@ class SystemStore:
         await self._store.delete_records("doc_registry", filters=[Col("app_name") == name])
         await self._store.delete_records("doc_workflow_registry", filters=[Col("app_name") == name])
         await self._store.delete_records("tasks", filters=[Col("app_name") == name])
+
+    # ------------------------------------------------------------------
+    # Skill registry
+    # ------------------------------------------------------------------
+
+    async def save_skill(self, record: SkillRecord) -> None:
+        await self._store.save("skill_records", [record.model_dump()])
+
+    async def get_skill(self, skill_id: str) -> SkillRecord | None:
+        rows = await self._store.query_as(
+            "skill_records",
+            filters=[Col("skill_id") == skill_id],
+            model=SkillRecord,
+        )
+        return rows[0] if rows else None
+
+    async def list_skills(self) -> list[SkillRecord]:
+        return await self._store.query_as("skill_records", filters=None, model=SkillRecord)
+
+    async def delete_skill(self, skill_id: str) -> None:
+        await self._store.delete_records("skill_records", filters=[Col("skill_id") == skill_id])
 
     # ------------------------------------------------------------------
     # Doc registry
