@@ -6,6 +6,7 @@ import DemosTab from './components/tabs/DemosTab'
 import IngestTab from './components/tabs/IngestTab'
 import DataTab from './components/tabs/DataTab'
 import QueryTab from './components/tabs/QueryTab'
+import SkillsTab from './components/tabs/SkillsTab'
 import SettingsTab from './components/tabs/SettingsTab'
 import DocModal from './components/modals/DocModal'
 import ConfigModal from './components/modals/ConfigModal'
@@ -26,7 +27,7 @@ function Layout() {
     setActiveTab(name)
   }
 
-  const tabs = ['build', 'apps', 'demos', 'ingest', 'data', 'query', 'settings']
+  const tabs = ['build', 'apps', 'demos', 'ingest', 'data', 'query', 'skills', 'settings']
 
   return (
     <>
@@ -86,6 +87,9 @@ function Layout() {
         </div>
         <div className={`panel ${activeTab === 'query' ? 'active' : ''}`}>
           <QueryTab active={activeTab === 'query'} />
+        </div>
+        <div className={`panel ${activeTab === 'skills' ? 'active' : ''}`}>
+          <SkillsTab active={activeTab === 'skills'} />
         </div>
         <div className={`panel ${activeTab === 'settings' ? 'active' : ''}`}>
           <SettingsTab active={activeTab === 'settings'} onAutoSwitch={() => switchTab('settings')} />
