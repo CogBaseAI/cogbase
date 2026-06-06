@@ -33,7 +33,21 @@ def _to_response(skill) -> SkillResponse:
         description=skill.description,
         metadata=skill.metadata,
         source_path=str(skill.source_path) if skill.source_path else None,
+        builtin=skill.builtin,
     )
+
+
+def _reject_if_builtin(skill_registry, skill_id: str) -> None:
+    """Block mutating operations on built-in (skills_dir) skills."""
+    try:
+        skill = skill_registry.get(skill_id)
+    except KeyError:
+        return
+    if skill.builtin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Skill '{skill_id}' is built-in and cannot be updated or deleted.",
+        )
 
 
 async def _ingest_bundle(
@@ -102,6 +116,7 @@ async def replace_skill(
     bundle: UploadFile = File(..., description="Updated ZIP bundle containing SKILL.md and any scripts/assets"),
 ) -> SkillResponse:
     """Replace an existing skill's bundle, keeping its id (and so all app references)."""
+    _reject_if_builtin(skill_registry, skill_id)
     if await system_store.get_skill(skill_id) is None:
         raise HTTPException(status_code=404, detail=f"No skill with id '{skill_id}'")
     raw = await bundle.read()
@@ -134,6 +149,7 @@ async def delete_skill(
     system_store: SystemStoreDep,
 ) -> None:
     """Delete a skill from the document store, local cache, and registry."""
+    _reject_if_builtin(skill_registry, skill_id)
     if await system_store.get_skill(skill_id) is None:
         raise HTTPException(status_code=404, detail=f"No skill with id '{skill_id}'")
     await bundle_store.delete(skill_id)

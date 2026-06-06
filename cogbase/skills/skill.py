@@ -36,6 +36,7 @@ class Skill:
     metadata: dict = field(default_factory=dict)
     source_path: Path | None = None
     site_packages: str | None = None  # venv site-packages injected into PYTHONPATH
+    builtin: bool = False             # loaded from skills_dir; read-only (cannot be updated/deleted via API)
 
 
 def _parse_skill(path: Path, skill_id: str | None = None) -> Skill | None:
@@ -117,6 +118,7 @@ def load_skills(skill_names: list[str], skills_dir: str | Path) -> list[Skill]:
             continue
         skill = _load_skill_cached(file_path)
         if skill:
+            skill.builtin = True
             skill.site_packages = ensure_skill_deps(skill)
             skills.append(skill)
             logger.info("[skills] loaded '%s' from %s", skill.name, file_path)

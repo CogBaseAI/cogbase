@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from cogbase.skills.skill import Skill, _parse_skill, load_skills
+from cogbase.skills.skill import Skill, _parse_skill, load_skill_dir, load_skills
 
 
 def _write_skill_md(tmp_path: Path, content: str) -> Path:
@@ -92,3 +92,25 @@ def test_skill_dataclass_fields():
     assert skill.metadata == {}
     assert skill.source_path is None
     assert skill.site_packages is None
+    assert skill.builtin is False
+
+
+def test_load_skills_marks_builtin(tmp_path):
+    (tmp_path / "weather").mkdir()
+    (tmp_path / "weather" / "SKILL.md").write_text(
+        "---\nname: weather\ndescription: Get weather.\n---\n# body\n"
+    )
+    skills = load_skills(["weather"], tmp_path)
+    assert len(skills) == 1
+    assert skills[0].builtin is True
+
+
+def test_load_skill_dir_not_builtin(tmp_path):
+    skill_dir = tmp_path / "abc123"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: uploaded\ndescription: From the store.\n---\n# body\n"
+    )
+    skill = load_skill_dir(skill_dir, skill_id="abc123")
+    assert skill is not None
+    assert skill.builtin is False

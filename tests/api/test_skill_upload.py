@@ -23,6 +23,7 @@ from api.dependencies import (
 from api.main import app
 from api.system_store import SystemStore
 from cogbase.skills.registry import SkillRegistry
+from cogbase.skills.skill import Skill
 from cogbase.skills.store import SkillBundleStore
 from cogbase.stores.document.local_fs import LocalFSDocumentStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -148,3 +149,48 @@ class TestReplaceGetDeleteSkill:
     async def test_delete_unknown_returns_404(self, ctx):
         client, *_ = ctx
         assert (await client.delete("/skills/ghost")).status_code == 404
+
+
+class TestBuiltinSkillsAreReadOnly:
+    """Built-in (skills_dir) skills are registered but live in no system store;
+    PUT/DELETE must reject them with a clear 403 rather than a misleading 404."""
+
+    def _register_builtin(self, registry, skill_id="builtin-skill"):
+        registry.register(
+            Skill(
+                name=skill_id,
+                description="A built-in skill.",
+                raw_markdown=f"---\nname: {skill_id}\ndescription: d\n---\n# {skill_id}\n",
+                id=skill_id,
+                builtin=True,
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_exposes_builtin_flag(self, ctx):
+        client, _, registry, _bs = ctx
+        self._register_builtin(registry)
+        await _upload(client, {"SKILL.md": VALID_MD})
+
+        by_name = {s["name"]: s for s in (await client.get("/skills")).json()["skills"]}
+        assert by_name["builtin-skill"]["builtin"] is True
+        assert by_name["greeter"]["builtin"] is False
+
+    @pytest.mark.asyncio
+    async def test_put_builtin_returns_403(self, ctx):
+        client, _, registry, _bs = ctx
+        self._register_builtin(registry)
+        resp = await client.put(
+            "/skills/builtin-skill",
+            files={"bundle": ("skill.zip", _zip({"SKILL.md": VALID_MD}), "application/zip")},
+        )
+        assert resp.status_code == 403
+        assert "built-in" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_delete_builtin_returns_403_and_keeps_skill(self, ctx):
+        client, _, registry, _bs = ctx
+        self._register_builtin(registry)
+        resp = await client.delete("/skills/builtin-skill")
+        assert resp.status_code == 403
+        assert registry.get("builtin-skill").builtin is True

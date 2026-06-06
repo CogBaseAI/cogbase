@@ -155,6 +155,7 @@ class SkillResponse(BaseModel):
     description: str
     metadata: dict[str, Any] = {}
     source_path: str | None = None
+    builtin: bool = False
 
 
 class SkillListResponse(BaseModel):
