@@ -12,6 +12,7 @@ MemoryManager
     +-- LongTermMemory     promoted, durable facts, preferences, and learned patterns
     |
 Existing stores
+    +-- DocumentStoreBase   episodic log (source of truth) + ingested documents
     +-- StructuredStoreBase
     +-- VectorStoreBase
 ```
@@ -53,6 +54,17 @@ deployments, route a session's requests to the same process by consistent-hashin
 `session_id` so the cache is reused; affinity is an optimization, not a
 correctness requirement, since any process can rehydrate from the log.
 
+Compaction is triggered by *model-context* pressure, not by a small per-turn
+working budget: when the rehydrated thread approaches a fixed fraction of the
+LLM's context window, older turns are folded into a running summary persisted as a
+`session_compacted` event (see
+[episodic-memory.md](episodic-memory.md#short-term-memory-rides-on-the-same-log)).
+Budget the trigger as a fraction of the deployed model's window (e.g. ~40–50%)
+rather than a fixed constant, so it tracks the model instead of chasing it.
+Triggering near the window — rather than well below it — keeps compaction *rare*,
+so each compaction is worth persisting and rehydrate chooses among few summary
+events.
+
 ## Episodic memory
 
 Episodic memory should be an append-only event log. It records what happened, not what the system believes forever. This makes it suitable for debugging, replay, analytics, and adaptive evolution.
@@ -68,7 +80,6 @@ Core event types:
 
 - `session_started`
 - `user_message`
-- `assistant_message`
 - `tool_called`
 - `tool_result`
 - `retrieval_result`
@@ -76,12 +87,19 @@ Core event types:
 - `feedback`
 - `session_compacted`
 
+`final_answer` is the canonical assistant turn (the text that ends the agent loop)
+and the only assistant output short-term rehydrate threads into the conversation;
+there is no separate `assistant_message` event in v1. Per-type payload contracts
+and the event-identity fields are specified in
+[episodic-memory.md](episodic-memory.md#event-payloads).
+
 Events should include enough metadata to support filtering and attribution:
 
 - `app_name`
 - `user_id`
 - `session_id`
-- `event_id`
+- `seq` (per-session monotonic; ordering + gap detection)
+- `event_id` (a `ulid`; idempotency key and witness for `seq`)
 - `event_type`
 - `created_at`
 - `parent_event_id`
@@ -124,7 +142,7 @@ Every long-term memory record should carry provenance:
 - `updated_at`
 - optional `expires_at`
 
-Promotion from episodic to long-term memory should be confidence-aware. Some memories can be promoted automatically, but memories that affect app behavior or store user, project, or organization facts should carry source event IDs and a review status.
+Promotion from episodic to long-term memory should be confidence-aware. Some memories can be promoted automatically, but memories that affect app behavior or store user, project, or organization facts should carry source event IDs and a review status. Promotion also *snapshots* the cited evidence into the long-term record rather than only referencing it, so the record stays valid after its source session log is expired or deleted (see [episodic-memory.md](episodic-memory.md#retention-deletion-and-redaction)).
 
 ## Scoping
 
@@ -147,16 +165,17 @@ Short-term memory:
 
 - an in-memory working cache; durability comes from the episodic log, not a
   separate store
-- rehydrate on cold start or cache miss by reading the log tail (from the last
-  `session_compacted` marker onward)
+- rehydrate on cold start or cache miss by reading the session log (small enough
+  to read whole) and taking the last `session_compacted` summary plus events after
+  it
 - route a session's requests to the same process by consistent-hashing
   `session_id` so the cache is reused; affinity is a cache optimization, not a
   correctness requirement
 
 Episodic memory (event-sourced — see [episodic-memory.md](episodic-memory.md)):
 
-- canonical log: document store, one append-only NDJSON object per session — the
-  single source of truth
+- canonical log: document store, one append-only NDJSON object per session (one
+  object per session, never per event) — the single source of truth
 - this requires `append` / `load_lines` support on the document store
 - the cross-session structured projection (one lean row per event) is deferred
   until the adaptive evolution engine is designed and can specify what to index;
@@ -179,10 +198,24 @@ class MemoryManager:
     async def record_tool_call(self, *, session_id: str, name: str, arguments: dict, metadata: dict | None = None) -> str: ...
     async def record_tool_result(self, *, session_id: str, tool_call_id: str, result: dict | str, metadata: dict | None = None) -> None: ...
     async def record_final_answer(self, *, session_id: str, answer: str, metadata: dict | None = None) -> None: ...
-    async def build_context(self, *, session_id: str, query: str, token_budget: int) -> list[dict]: ...
+    async def record_feedback(self, *, session_id: str, target_event_id: str, rating: str, comment: str | None = None) -> None: ...
+    async def compact_session(self, *, session_id: str, summary: str, replaces_through: int, token_stats: dict | None = None) -> None: ...
+    async def build_context(self, *, session_id: str, token_budget: int) -> list[dict]: ...
     async def recall(self, *, query: str, scope: dict, limit: int = 10) -> list[dict]: ...
     async def promote(self, *, source_event_ids: list[str], kind: str, content: str, scope: dict, confidence: float) -> str: ...
 ```
+
+This is a representative shape, not the full surface. Two deliberate boundary
+notes:
+
+- **Read-back lives on `EpisodicMemory`, not here.** `replay` and `tail`
+  (see [episodic-memory.md](episodic-memory.md#episodicmemory-writer)) are the
+  log's own surface; `MemoryManager` composes them for `build_context` rather
+  than re-exposing them.
+- **No dedicated `record_retrieval_result` yet.** Retrieval folds into
+  `tool_result` until the gap detector needs score-filtered reads, at which
+  point `retrieval_result` becomes a separate event (see
+  [episodic-memory.md](episodic-memory.md#event-payloads)).
 
 `QueryRunner` should accept `memory: MemoryManager | None`. When present, it should:
 
