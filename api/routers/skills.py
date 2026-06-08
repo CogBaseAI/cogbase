@@ -19,6 +19,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from api.dependencies import SkillBundleStoreDep, SkillRegistryDep, SystemStoreDep
 from api.models import SkillListResponse, SkillResponse
 from api.system_store import SkillRecord
+from cogbase.config.config import AppConfig
 from cogbase.skills.skill import load_skill_dir
 
 logger = logging.getLogger(__name__)
@@ -148,10 +149,29 @@ async def delete_skill(
     bundle_store: SkillBundleStoreDep,
     system_store: SystemStoreDep,
 ) -> None:
-    """Delete a skill from the document store, local cache, and registry."""
+    """Delete a skill from the document store, local cache, and registry.
+
+    A skill that is still assigned to one or more applications cannot be deleted;
+    unassign it from those apps first (DELETE /applications/{name}/skills/{id}).
+    """
     _reject_if_builtin(skill_registry, skill_id)
     if await system_store.get_skill(skill_id) is None:
         raise HTTPException(status_code=404, detail=f"No skill with id '{skill_id}'")
+
+    # TODO if app count grows large, consider a index of skill_id → apps.
+    referencing = []
+    for app in await system_store.list_apps():
+        if skill_id in AppConfig.from_yaml(app.config_yaml).skills:
+            referencing.append(app.name)
+    if referencing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Skill '{skill_id}' is still assigned to application(s): "
+                f"{', '.join(referencing)}. Unassign it before deleting."
+            ),
+        )
+
     await bundle_store.delete(skill_id)
     await system_store.delete_skill(skill_id)
     skill_registry.unregister(skill_id)

@@ -21,7 +21,7 @@ from api.dependencies import (
     get_system_store,
 )
 from api.main import app
-from api.system_store import SystemStore
+from api.system_store import AppRecord, SystemStore
 from cogbase.skills.registry import SkillRegistry
 from cogbase.skills.skill import Skill
 from cogbase.skills.store import SkillBundleStore
@@ -149,6 +149,71 @@ class TestReplaceGetDeleteSkill:
     async def test_delete_unknown_returns_404(self, ctx):
         client, *_ = ctx
         assert (await client.delete("/skills/ghost")).status_code == 404
+
+
+def _app_config_yaml(name: str, skill_id: str) -> str:
+    return (
+        f"name: {name}\n"
+        "llm:\n  provider: openai\n  model: gpt-4o-mini\n  api_key: sk-test\n"
+        f"skills:\n  - {skill_id}\n"
+    )
+
+
+async def _seed_app(system_store, name: str, skill_id: str) -> None:
+    await system_store.save_app(
+        AppRecord(
+            name=name,
+            config_yaml=_app_config_yaml(name, skill_id),
+            status="active",
+            created_at="2026-06-08T00:00:00Z",
+            updated_at="2026-06-08T00:00:00Z",
+        )
+    )
+
+
+class TestDeleteRejectsReferencedSkill:
+    """A skill assigned to an application cannot be deleted: the reference would
+    dangle, so deletion is blocked with 409 until the app unassigns it."""
+
+    @pytest.mark.asyncio
+    async def test_delete_referenced_skill_returns_409_and_keeps_skill(self, ctx):
+        client, system_store, registry, bundle_store = ctx
+        skill_id = (await _upload(client, {"SKILL.md": VALID_MD})).json()["id"]
+        await _seed_app(system_store, "my-app", skill_id)
+
+        resp = await client.delete(f"/skills/{skill_id}")
+        assert resp.status_code == 409
+        assert "my-app" in resp.json()["detail"]
+
+        # Nothing was removed.
+        assert registry.get(skill_id).name == "greeter"
+        assert await system_store.get_skill(skill_id) is not None
+        assert bundle_store.skill_dir(skill_id).exists()
+
+    @pytest.mark.asyncio
+    async def test_error_lists_all_referencing_apps(self, ctx):
+        client, system_store, registry, _ = ctx
+        skill_id = (await _upload(client, {"SKILL.md": VALID_MD})).json()["id"]
+        await _seed_app(system_store, "app-one", skill_id)
+        await _seed_app(system_store, "app-two", skill_id)
+
+        resp = await client.delete(f"/skills/{skill_id}")
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert "app-one" in detail and "app-two" in detail
+
+    @pytest.mark.asyncio
+    async def test_delete_succeeds_once_unreferenced(self, ctx):
+        client, system_store, registry, _ = ctx
+        skill_id = (await _upload(client, {"SKILL.md": VALID_MD})).json()["id"]
+
+        # An app that references a *different* skill must not block deletion.
+        await _seed_app(system_store, "other-app", "some-other-skill")
+
+        resp = await client.delete(f"/skills/{skill_id}")
+        assert resp.status_code == 204
+        with pytest.raises(KeyError):
+            registry.get(skill_id)
 
 
 class TestBuiltinSkillsAreReadOnly:

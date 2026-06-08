@@ -209,13 +209,10 @@ def _validate_skills(skill_ids: list[str], skill_registry) -> None:
 
 def _app_skills_response(app_name: str, skill_ids: list[str], skill_registry) -> AppSkillsResponse:
     """Build an AppSkillsResponse, resolving display names from the registry."""
-    refs = []
-    for skill_id in skill_ids:
-        try:
-            name = skill_registry.get(skill_id).name
-        except KeyError:
-            name = None  # referenced skill was deleted; surface id with no name
-        refs.append(AppSkillRef(skill_id=skill_id, name=name))
+    refs = [
+        AppSkillRef(skill_id=skill_id, name=skill_registry.get(skill_id).name)
+        for skill_id in skill_ids
+    ]
     return AppSkillsResponse(app_name=app_name, skills=refs)
 
 

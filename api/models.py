@@ -169,7 +169,7 @@ class AddSkillRequest(BaseModel):
 
 class AppSkillRef(BaseModel):
     skill_id: str
-    name: str | None = None  # display name; None if the referenced skill is missing
+    name: str  # display name; a referenced skill always exists (it can't be deleted while referenced)
 
 
 class AppSkillsResponse(BaseModel):
