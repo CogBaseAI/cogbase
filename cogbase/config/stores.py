@@ -82,3 +82,34 @@ class DocumentStoreConfig(ConfigPromptMixin, BaseModel):
         if self.type == "s3" and not self.bucket:
             raise ValueError("document_store.bucket is required for s3 type")
         return self
+
+
+class LogStoreConfig(ConfigPromptMixin, BaseModel):
+    type: Literal["local", "s3"] = Field(
+        default="local",
+        description="Append-only log store backend."
+    )
+    path: str | None = Field(
+        default=None,
+        description="Local filesystem root directory when type is local.",
+    )
+    bucket: str | None = Field(
+        default=None,
+        description="S3 directory bucket name when type is s3.",
+    )
+    prefix: str = Field(
+        default="",
+        description="Optional S3 key prefix when type is s3.",
+    )
+    region: str | None = Field(
+        default=None,
+        description="Optional AWS region when type is s3.",
+    )
+
+    @model_validator(mode="after")
+    def _validate(self) -> "LogStoreConfig":
+        if self.type == "local" and not self.path:
+            raise ValueError("log_store.path is required for local type")
+        if self.type == "s3" and not self.bucket:
+            raise ValueError("log_store.bucket is required for s3 type")
+        return self

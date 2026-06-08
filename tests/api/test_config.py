@@ -20,6 +20,7 @@ from cogbase.config.config import (
     StructuredStoreConfig,
     VectorStoreConfig,
 )
+from cogbase.config.stores import LogStoreConfig
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +83,34 @@ class TestVectorStoreConfig:
     def test_pgvector_with_url_valid(self):
         cfg = VectorStoreConfig(type="pgvector", url="postgresql://localhost/db")
         assert cfg.url == "postgresql://localhost/db"
+
+
+# ---------------------------------------------------------------------------
+# LogStoreConfig
+# ---------------------------------------------------------------------------
+
+class TestLogStoreConfig:
+    def test_local_default_requires_path(self):
+        with pytest.raises(Exception, match="path is required"):
+            LogStoreConfig(type="local")
+
+    def test_local_with_path_valid(self):
+        cfg = LogStoreConfig(type="local", path="/var/cogbase/logs")
+        assert cfg.type == "local"
+        assert cfg.path == "/var/cogbase/logs"
+
+    def test_s3_requires_bucket(self):
+        with pytest.raises(Exception, match="bucket is required"):
+            LogStoreConfig(type="s3")
+
+    def test_s3_with_bucket_valid(self):
+        cfg = LogStoreConfig(type="s3", bucket="logs--use1-az4--x-s3", prefix="ep")
+        assert cfg.bucket == "logs--use1-az4--x-s3"
+        assert cfg.prefix == "ep"
+
+    def test_invalid_type_rejected(self):
+        with pytest.raises(Exception):
+            LogStoreConfig(type="badtype")
 
 
 # ---------------------------------------------------------------------------

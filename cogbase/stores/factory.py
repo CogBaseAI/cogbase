@@ -6,8 +6,14 @@ without importing concrete store implementations directly.
 
 from __future__ import annotations
 
-from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
+from cogbase.config.stores import (
+    DocumentStoreConfig,
+    LogStoreConfig,
+    StructuredStoreConfig,
+    VectorStoreConfig,
+)
 from cogbase.stores.document.base import DocumentStoreBase
+from cogbase.stores.log.base import LogStoreBase
 from cogbase.stores.scope import AppScope
 from cogbase.stores.structured.base import StructuredStoreBase
 from cogbase.stores.vector.base import VectorStoreBase
@@ -53,3 +59,16 @@ def build_document_store(
         from cogbase.stores.document.s3 import S3DocumentStore
         return S3DocumentStore(bucket=cfg.bucket, prefix=cfg.prefix, region=cfg.region, scope=scope)
     raise ValueError(f"Unknown document_store type: {cfg.type!r}")
+
+
+def build_log_store(
+    cfg: LogStoreConfig, scope: AppScope | None = None
+) -> LogStoreBase:
+    """Instantiate an append-only log store from config."""
+    if cfg.type == "local":
+        from cogbase.stores.log.local_fs import LocalFSLogStore
+        return LocalFSLogStore(cfg.path, scope=scope)
+    if cfg.type == "s3":
+        from cogbase.stores.log.s3 import S3LogStore
+        return S3LogStore(bucket=cfg.bucket, prefix=cfg.prefix, region=cfg.region, scope=scope)
+    raise ValueError(f"Unknown log_store type: {cfg.type!r}")

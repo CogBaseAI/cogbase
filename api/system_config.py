@@ -22,7 +22,12 @@ import yaml
 from pydantic import BaseModel
 
 from cogbase.config.models import EmbeddingConfig, LLMConfig
-from cogbase.config.stores import DocumentStoreConfig, StructuredStoreConfig, VectorStoreConfig
+from cogbase.config.stores import (
+    DocumentStoreConfig,
+    LogStoreConfig,
+    StructuredStoreConfig,
+    VectorStoreConfig,
+)
 
 
 class SystemConfig(BaseModel):
@@ -46,6 +51,9 @@ class SystemConfig(BaseModel):
         document_store:   Default document store for full document text.
                           Applications can override it with their own
                           ``document_store`` config.
+        log_store:        Default append-only log store backing the episodic
+                          memory NDJSON log.  When ``None``, episodic logging
+                          runs without a durable backend.
     """
 
     system_db: StructuredStoreConfig = StructuredStoreConfig(
@@ -54,6 +62,7 @@ class SystemConfig(BaseModel):
     structured_store: StructuredStoreConfig | None = None
     vector_store: VectorStoreConfig | None = None
     document_store: DocumentStoreConfig | None = None
+    log_store: LogStoreConfig | None = None
     llm: LLMConfig | None = None
     embedding: EmbeddingConfig | None = None
     skills_dir: str | None = None  # directory containing <skill_name>/SKILL.md files

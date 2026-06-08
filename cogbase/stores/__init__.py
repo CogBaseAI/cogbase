@@ -1,5 +1,10 @@
 from cogbase.stores.document.base import DocumentStoreBase
-from cogbase.stores.factory import build_document_store, build_structured_store, build_vector_store
+from cogbase.stores.factory import (
+    build_document_store,
+    build_log_store,
+    build_structured_store,
+    build_vector_store,
+)
 from cogbase.stores.filters import Col, Filter, Op
 from cogbase.stores.log.base import LogStoreBase
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
@@ -21,6 +26,7 @@ __all__ = [
     "VectorStoreBase",
     "VectorCollectionSchema",
     "build_document_store",
+    "build_log_store",
     "build_structured_store",
     "build_vector_store",
 ]

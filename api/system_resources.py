@@ -8,7 +8,7 @@ from cogbase.config.models import EmbeddingConfig, LLMConfig
 from cogbase.embeddings.base import EmbeddingBase
 from cogbase.llms.base import LLMBase
 from cogbase.skills.registry import SkillRegistry
-from cogbase.stores import DocumentStoreBase, StructuredStoreBase, VectorStoreBase
+from cogbase.stores import DocumentStoreBase, LogStoreBase, StructuredStoreBase, VectorStoreBase
 
 
 @dataclass
@@ -27,6 +27,7 @@ class SystemResources:
     structured_store: StructuredStoreBase | None = None
     vector_store: VectorStoreBase | None = None
     document_store: DocumentStoreBase | None = None
+    log_store: LogStoreBase | None = None
     llm: LLMBase | None = None
     embedder: EmbeddingBase | None = None
     llm_config: LLMConfig | None = None

@@ -17,7 +17,12 @@ from cogbase.config.config import AppConfig
 from api.factory import build_app
 from cogbase.embeddings import build_embedding
 from cogbase.llms import build_llm
-from cogbase.stores import build_document_store, build_structured_store, build_vector_store
+from cogbase.stores import (
+    build_document_store,
+    build_log_store,
+    build_structured_store,
+    build_vector_store,
+)
 from api.app_cache import AppCache
 from api.routers.applications import router as applications_router
 from api.routers.app_generate import router as generate_router
@@ -72,6 +77,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if system_cfg.document_store is not None:
         system_resources.document_store = build_document_store(system_cfg.document_store)
         logger.info("system document_store type=%s", system_cfg.document_store.type)
+
+    if system_cfg.log_store is not None:
+        system_resources.log_store = build_log_store(system_cfg.log_store)
+        logger.info("system log_store type=%s", system_cfg.log_store.type)
 
     if system_cfg.llm is not None:
         try:
@@ -163,6 +172,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await _close_store(system_resources.vector_store)
     if system_resources.document_store is not None:
         await _close_store(system_resources.document_store)
+    if system_resources.log_store is not None:
+        await _close_store(system_resources.log_store)
 
 
 def _get_version() -> str:

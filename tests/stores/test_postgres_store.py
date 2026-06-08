@@ -58,7 +58,7 @@ from tests.stores.test_structured_store import (
     test_update_collection_cannot_change_primary_fields,
     test_update_collection_no_change_is_noop,
     test_delete_collection_removes_collection_and_data,
-    test_delete_collection_unknown_raises,
+    test_delete_collection_unknown_is_noop,
     test_delete_collection_leaves_other_collections_intact,
 )
 
