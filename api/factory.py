@@ -250,18 +250,21 @@ async def build_app(
 
     vc_schemas = [vc.schema for vc in vector_collections]
 
-    # Short-term memory: session-local working context. In-memory for now; the
-    # interface is async so a Redis backend can replace it for multi-worker
-    # deployments without touching the runner. Engaged only when a query carries
-    # a session_id (otherwise queries stay stateless via caller-passed history).
-    short_term = ShortTermMemory(llm=llm)
-
     # Episodic memory: the durable append-only event log.  Wired from the shared
     # (system) log store — deliberately unscoped, so events from every app land
     # in one log family and carry ``app_name`` for attribution (cross-app mining
     # by the future evolution engine).  Engaged only when a query carries a
     # session_id; absent a log store, the runner simply records nothing.
     episodic = EpisodicMemory(sys.log_store) if sys.log_store is not None else None
+
+    # Short-term memory: session-local working context, projected from the same
+    # episodic log (it has no store of its own).  Created only when episodic is
+    # available, and shares that instance so the thread it assembles and the
+    # events the runner records — including the session_compacted summaries it
+    # appends during compaction — ride the same per-session stream and flush.
+    short_term = (
+        ShortTermMemory(episodic=episodic, llm=llm) if episodic is not None else None
+    )
 
     # Resolve the skills assigned to this app (referenced by id) into loaded
     # Skill objects the runner can route to and execute.

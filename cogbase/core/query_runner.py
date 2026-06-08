@@ -71,7 +71,7 @@ from cogbase.llms.compaction import (
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, CompletionResult, LLMBase, SystemTool, ToolDefinition
-from cogbase.memory import EpisodicMemory, EventRef, MemoryRole, RetrievalKind, RetrievedItem, ShortTermMemory
+from cogbase.memory import EpisodicMemory, EventRef, ShortTermMemory
 from cogbase.stores import CollectionSchema, DocumentStoreBase, Filter, Op, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 
 logger = logging.getLogger(__name__)
@@ -414,12 +414,17 @@ class QueryRunner:
         passthrough_token_threshold: Estimated token count of ``structured_lookup`` results
                                      above which records are returned directly without LLM
                                      synthesis. None means disabled. Defaults None.
-        short_term:                  Session-local working-context cache. Engaged only when a
-                                     ``session_id`` is passed to ``run()``.
         episodic:                    Durable append-only event log. When present and a
                                      ``session_id`` is passed, the runner emits user_message,
                                      tool_called/tool_result, and final_answer events to the
                                      session's log (flushed at the turn boundary).
+        short_term:                  Session-local working context, projected from the episodic
+                                     log. Engaged only when a ``session_id`` is passed to
+                                     ``run()``. Must share *episodic*'s log store so the
+                                     continuity thread it assembles and the events the runner
+                                     records are the same stream; the runner's turn-boundary
+                                     flush also persists any ``session_compacted`` summary
+                                     short-term appends during context assembly.
     """
 
     def __init__(
@@ -601,22 +606,27 @@ class QueryRunner:
 
         # Slot 0 is reserved for the system prompt; updated each iteration.
         messages: list[ChatMessage] = [{"role": "system", "content": ""}]
+        context: list[ChatMessage] = []
+
+        if episodic_on:
+            # Attribution scope for every event this turn; idempotent per turn.
+            # Recorded before build_context so the turn's user_message is in the
+            # log family before the session's thread is (re)assembled.
+            self._episodic.bind_scope(session_id, app_name=self._app_name, user_id=user_id)
+            await self._episodic_record_user_message(session_id, user_input)
+
         if memory_active:
-            # Server-side session context replaces caller-passed history.
-            await self._short_term.append_message(session_id, MemoryRole.USER, user_input)
+            # Server-side session context — projected from the episodic log —
+            # replaces caller-passed history.  The current input is threaded in
+            # by build_context (its log record is still buffered, not yet flushed).
             context = await self._short_term.build_context(
                 session_id=session_id,
-                token_budget=self._context_token_budget,
+                current_user_message=user_input,
             )
             messages.extend(context)
         else:
             messages.extend(history or [])
             messages.append({"role": "user", "content": user_input})
-
-        if episodic_on:
-            # Attribution scope for every event this turn; idempotent per turn.
-            self._episodic.bind_scope(session_id, app_name=self._app_name, user_id=user_id)
-            await self._episodic_record_user_message(session_id, user_input)
 
         all_records: list[dict] = []
         all_chunks: list[Chunk] = []
@@ -670,10 +680,6 @@ class QueryRunner:
             if not tool_calls:
                 answer = "".join(tokens) + "\n"
                 cited_ids = _extract_cited_ids(answer)
-                if memory_active:
-                    await self._short_term.append_message(
-                        session_id, MemoryRole.ASSISTANT, answer
-                    )
                 if episodic_on:
                     await self._episodic_final_answer(session_id, answer)
                 yield QueryResult(
@@ -723,13 +729,7 @@ class QueryRunner:
                 if name == "structured_lookup":
                     records, tool_output, passthrough = await self._run_structured_lookup(inputs)
                     all_records.extend(records)
-                    if memory_active:
-                        await self._record_record_retrievals(session_id, records)
                     if passthrough:
-                        if memory_active:
-                            await self._short_term.append_message(
-                                session_id, MemoryRole.ASSISTANT, tool_output
-                            )
                         if episodic_on:
                             await self._episodic_tool_result(session_id, tc["id"], tool_output, t0, call_ref)
                             await self._episodic_final_answer(session_id, tool_output)
@@ -747,8 +747,6 @@ class QueryRunner:
                     seen_chunk_ids = {c.chunk_id for c in all_chunks}
                     chunks, tool_output = await self._run_vector_search(inputs, exclude_ids=seen_chunk_ids, default_top_k=top_k)
                     all_chunks.extend(chunks)
-                    if memory_active:
-                        await self._record_chunk_retrievals(session_id, chunks)
                 elif name == "read_document":
                     doc_slice, tool_output = await self._run_read_document(inputs)
                     if doc_slice is not None:
@@ -960,10 +958,6 @@ class QueryRunner:
         return env
 
     # ------------------------------------------------------------------
-    # Short-term memory recording
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
     # Episodic memory recording
     #
     # Recording buffers events in EpisodicMemory's per-session cache (cheap,
@@ -1054,35 +1048,6 @@ class QueryRunner:
         )
         assert last_exc is not None
         raise last_exc
-
-    async def _record_chunk_retrievals(self, session_id: str, chunks: list[Chunk]) -> None:
-        """Record vector_search chunks as session retrievals (best-effort)."""
-        if not chunks:
-            return
-        items = [
-            RetrievedItem(
-                kind=RetrievalKind.CHUNK,
-                ref_id=c.chunk_id,
-                text=c.text,
-                source="vector_search",
-            )
-            for c in chunks
-        ]
-        await self._short_term.append_retrievals(session_id, items)
-
-    async def _record_record_retrievals(self, session_id: str, records: list[dict]) -> None:
-        """Record structured_lookup records as session retrievals (best-effort)."""
-        if not records:
-            return
-        items = [
-            RetrievedItem(
-                kind=RetrievalKind.RECORD,
-                text=json.dumps(rec, default=str)[:1000],
-                source="structured_lookup",
-            )
-            for rec in records
-        ]
-        await self._short_term.append_retrievals(session_id, items)
 
     async def compact_messages(
         self,

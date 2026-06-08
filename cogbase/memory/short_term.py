@@ -1,15 +1,35 @@
-"""Short-term memory: session-local working context.
+"""Short-term memory: a projection over the episodic log.
 
-Short-term memory owns the working context for an active session.  Its single
-responsibility is to decide what belongs in the *next* LLM call: it holds the
-recent transcript plus retrieved evidence, compacts older turns into a summary
-when the raw transcript exceeds a token budget, and assembles a bounded message
-list on demand.
+Short-term memory owns the working context for an active session: it decides
+what belongs in the *next* LLM call.  It is **not** a store of its own — the
+episodic event log is its persistence (see ``docs/episodic-memory.md#short-term
+-memory-rides-on-the-same-log``).  Its durable record is the ``user_message`` /
+``final_answer`` continuity events the query runner already appends each turn,
+plus the ``session_compacted`` summaries this layer appends when the thread
+nears the model window.
 
-The initial implementation is in-memory (a dict keyed by ``session_id`` with
-lazy TTL expiry).  Redis or another expiring cache can replace the backing
-store later for multi-worker deployments without changing this interface — all
-public methods are ``async`` for exactly that reason.
+The three operations the layer performs:
+
+- **Rehydrate.** :meth:`build_context` rebuilds the conversational thread by
+  reading the (small) whole log and projecting it: the latest
+  ``session_compacted`` summary plus every continuity event after the ``seq`` it
+  covers (``replaces_through``).  On a cold start or a process handoff this is a
+  full reconstruction; any process can serve any session because the log is the
+  source of truth.
+- **Append-a-summary compaction.** When the projected thread approaches the
+  model-context budget, the overflow (oldest turns) is folded into the running
+  summary and persisted as a *new* ``session_compacted`` event — the log is
+  append-only, so compaction never rewrites history.  The event rides the
+  current turn's flush, so it lands durably alongside the turn's
+  ``final_answer``.  A lost in-memory summary is self-healing: the raw turns are
+  still in the log, so the next rehydrate re-derives it.
+- **Near pass-through assembly.** Because compaction keeps the thread under the
+  budget, context assembly is "summary header + the projected turns + the
+  current input" — no per-turn newest-first budget walk.
+
+A small per-session cache holds only session metadata (app/user/scope) and TTL;
+the conversational thread is always projected fresh from the log, so a
+``build_context`` from a warm or a cold process produces the same result.
 """
 
 from __future__ import annotations
@@ -25,26 +45,36 @@ from cogbase.llms.compaction import (
     summarize_transcript,
 )
 from cogbase.llms.base import ChatMessage, LLMBase
+from cogbase.memory.episodic import EpisodicMemory
 from cogbase.memory.models import (
+    EventType,
+    MemoryEvent,
     MemoryMessage,
     MemoryRole,
-    RetrievedItem,
     SessionState,
 )
 
-# Default working-context budget, in estimated tokens, used when a caller does
-# not specify one for build_context().
+# Default working-context budget, in estimated tokens, that triggers compaction.
 #
-# This is paid on every query turn (the working context is prepended to each
-# prompt alongside retrieval results, skill schemas, and the query), so it is
-# kept well below the model window: enough to retain dozens of recent turns
-# verbatim before compaction folds older ones into the running summary, while
-# leaving room for retrieval and output. Override per-instance via
-# ``max_context_tokens`` for longer-lived or detail-heavy sessions.
-DEFAULT_CONTEXT_TOKEN_BUDGET = 16_000
+# Compaction fires on *model-context* pressure — when the rehydrated thread
+# approaches a fixed fraction of the LLM window — not on a small per-turn budget.
+# Keeping it large (a fraction of a 128k-token window, leaving room for the
+# system prompt, retrieval, skills, and output) keeps compaction rare and each
+# persisted ``session_compacted`` summary worth keeping.  Override per-instance
+# via ``compaction_token_budget``.
+DEFAULT_COMPACTION_TOKEN_BUDGET = 96_000
 
-# Default session time-to-live.  None means sessions never expire.
+# Default session time-to-live for the metadata cache.  None means never expire.
+# This only bounds the in-memory cache; the durable log has its own retention
+# clock (see docs/episodic-memory.md#retention-deletion-and-redaction).
 DEFAULT_TTL_SECONDS = 3600
+
+# Continuity events short-term threads into the conversation, mapped to the role
+# they project to.  Tool calls/results are intra-turn scratch and never threaded.
+_CONTINUITY_ROLE: dict[EventType, MemoryRole] = {
+    EventType.USER_MESSAGE: MemoryRole.USER,
+    EventType.FINAL_ANSWER: MemoryRole.ASSISTANT,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -54,30 +84,39 @@ def _utcnow() -> datetime:
 
 
 class ShortTermMemory:
-    """In-memory store of per-session working context.
+    """Per-session working context, projected from the episodic log.
 
     Args:
-        ttl_seconds:           Session idle lifetime; refreshed on every access.
-                               ``None`` disables expiry.
-        max_context_tokens:    Default token budget used by ``build_context`` and
-                               the threshold above which compaction kicks in.
-        llm:                   Optional LLM used to summarise overflow turns during
-                               compaction.  When ``None``, overflow turns are
-                               dropped (sliding window) and no running summary is
-                               kept — there is nothing to summarise with.
+        episodic:                The append-only event log this layer rides on;
+                                 the source of truth for every session's thread.
+                                 Must be the same instance the query runner
+                                 records into, so compaction events ride the
+                                 turn's flush.
+        ttl_seconds:             Idle lifetime of the in-memory metadata cache;
+                                 ``None`` disables expiry.  Does not affect the
+                                 durable log.
+        compaction_token_budget: Estimated-token threshold above which the
+                                 rehydrated thread is compacted into a summary.
+        llm:                     LLM used to summarise overflow turns during
+                                 compaction.  When ``None`` no compaction runs
+                                 and the full thread is assembled as-is.
     """
 
     def __init__(
         self,
         *,
+        episodic: EpisodicMemory,
         ttl_seconds: int | None = DEFAULT_TTL_SECONDS,
-        max_context_tokens: int = DEFAULT_CONTEXT_TOKEN_BUDGET,
+        compaction_token_budget: int = DEFAULT_COMPACTION_TOKEN_BUDGET,
         llm: LLMBase | None = None,
     ) -> None:
-        self._sessions: dict[str, SessionState] = {}
+        self._episodic = episodic
         self._ttl_seconds = ttl_seconds
-        self._max_context_tokens = max_context_tokens
+        self._compaction_token_budget = compaction_token_budget
         self._llm = llm
+        # Cache holds only session metadata + TTL; the thread is projected fresh
+        # from the log on every read, so a warm and a cold process agree.
+        self._sessions: dict[str, SessionState] = {}
         self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
@@ -93,10 +132,11 @@ class ShortTermMemory:
         metadata: dict | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Create a session and return its id.
+        """Create (or resume) a session and return its id.
 
-        If ``session_id`` is supplied and already exists it is returned as-is
-        (idempotent resume); otherwise a new session is created.
+        Seeds the metadata cache only; the conversational thread lives in the
+        log and is materialised on the first ``build_context``.  Resuming an
+        existing ``session_id`` is idempotent.
         """
         async with self._lock:
             self._sweep_expired_locked()
@@ -116,57 +156,35 @@ class ShortTermMemory:
             return state.session_id
 
     async def get(self, session_id: str) -> SessionState | None:
-        """Return the (non-expired) session state, or ``None`` if absent/expired."""
+        """Return the projected session state, or ``None`` if it has no history.
+
+        Rehydrates the conversational thread from the log so the returned state
+        reflects every durably-recorded turn — including turns recorded by
+        another process.  Returns ``None`` only when the session is neither
+        cached nor present in the log.
+        """
         async with self._lock:
-            return self._get_live_locked(session_id)
+            self._sweep_expired_locked()
+            cached = self._get_live_locked(session_id)
+            events = await self._episodic.replay(session_id=session_id)
+            if cached is None and not events:
+                return None
+            summary, _, messages = self._project(events)
+            state = cached or SessionState(session_id=session_id)
+            state.messages = messages
+            state.summary = summary
+            self._touch_locked(state)
+            self._sessions[session_id] = state
+            return state
 
     async def end_session(self, session_id: str) -> None:
-        """Drop a session and its working context."""
+        """Drop the cached metadata for a session.
+
+        This evicts only the in-memory cache; the durable log is untouched (its
+        deletion is episodic memory's concern — retention / erasure).
+        """
         async with self._lock:
             self._sessions.pop(session_id, None)
-
-    # ------------------------------------------------------------------
-    # Recording
-    # ------------------------------------------------------------------
-
-    async def append_message(
-        self,
-        session_id: str,
-        role: MemoryRole | str,
-        content: str,
-    ) -> None:
-        """Append a conversational turn, lazily creating the session if needed."""
-        if not content:
-            return
-        async with self._lock:
-            state = self._ensure_locked(session_id)
-            state.messages.append(
-                MemoryMessage(
-                    role=MemoryRole(role),
-                    content=content,
-                    token_estimate=estimate_tokens(content),
-                )
-            )
-            self._touch_locked(state)
-
-    async def append_retrievals(
-        self,
-        session_id: str,
-        items: list[RetrievedItem],
-    ) -> None:
-        """Record retrieved evidence for the session (deduped by ``ref_id``)."""
-        if not items:
-            return
-        async with self._lock:
-            state = self._ensure_locked(session_id)
-            seen = {r.ref_id for r in state.retrievals if r.ref_id is not None}
-            for item in items:
-                if item.ref_id is not None and item.ref_id in seen:
-                    continue
-                state.retrievals.append(item)
-                if item.ref_id is not None:
-                    seen.add(item.ref_id)
-            self._touch_locked(state)
 
     # ------------------------------------------------------------------
     # Context assembly
@@ -176,117 +194,188 @@ class ShortTermMemory:
         self,
         *,
         session_id: str,
+        current_user_message: str | None = None,
         token_budget: int | None = None,
     ) -> list[ChatMessage]:
-        """Assemble the message list for the next LLM call within ``token_budget``.
+        """Assemble the message list for the next LLM call.
 
-        Newest turns are kept verbatim; once the transcript exceeds the budget,
-        the oldest overflow turns are folded into the session ``summary`` and a
-        single system message carrying that summary is prepended.  The selection
-        decision (budget, included, summarised) is recorded on the session
-        metadata under ``last_context``.
+        Rehydrates the thread from the log, compacts it if it has grown past the
+        budget (appending a ``session_compacted`` event that rides the turn's
+        flush), then assembles: an optional summary header, the projected turns,
+        and ``current_user_message`` as the final user turn.
 
-        Returns an empty list for an unknown/expired session so callers can fall
-        back to stateless behaviour.
+        ``current_user_message`` is the turn's input.  The runner records it into
+        the episodic log separately; it is passed here because that record is
+        still buffered (not yet flushed) when this runs, so the projection — which
+        reads the flushed log — would not otherwise include it.
         """
-        budget = token_budget or self._max_context_tokens
+        budget = token_budget or self._compaction_token_budget
         async with self._lock:
-            state = self._get_live_locked(session_id)
-            if state is None:
-                return []
+            self._sweep_expired_locked()
+            # replay reads the session log to make sure every query sees the latest messages.
+            # TODO add a cache layer.
+            events = await self._episodic.replay(session_id=session_id)
+            summary, replaces_through, messages = self._project(events)
 
-            # Reserve room for the summary header so the running summary never
-            # crowds out the live transcript entirely.
-            summary_reserve = estimate_tokens(state.summary) if state.summary else 0
-            transcript_budget = max(budget - summary_reserve, budget // 2)
+            summary, messages, summarized = await self._maybe_compact_locked(
+                session_id, summary, replaces_through, messages, budget
+            )
 
-            # Walk newest-first, keeping messages that fit; the rest overflow.
-            kept_rev: list[MemoryMessage] = []
-            running = 0
-            overflow: list[MemoryMessage] = []
-            for msg in reversed(state.messages):
-                cost = msg.token_estimate or estimate_tokens(msg.content)
-                if running + cost <= transcript_budget or not kept_rev:
-                    # Always keep at least the most recent turn (the live query).
-                    kept_rev.append(msg)
-                    running += cost
-                else:
-                    overflow.append(msg)
-
-            overflow.reverse()  # back to chronological order
-            kept = list(reversed(kept_rev))
-
-            if overflow:
-                await self._compact_into_summary_locked(state, overflow)
-                # Drop the compacted turns from the live transcript.
-                state.messages = kept
-
+            state = self._get_live_locked(session_id) or SessionState(session_id=session_id)
+            state.messages = messages
+            state.summary = summary
             state.metadata["last_context"] = {
                 "budget": budget,
-                "included_messages": len(kept),
-                "summarized_messages": len(overflow),
-                "has_summary": state.summary is not None,
+                "included_messages": len(messages),
+                "summarized_messages": summarized,
+                "has_summary": summary is not None,
             }
             self._touch_locked(state)
+            self._sessions[session_id] = state
 
             context: list[ChatMessage] = []
-            if state.summary:
+            if summary:
                 context.append(
                     {
                         "role": "system",
                         "content": (
                             "Summary of earlier conversation in this session:\n"
-                            f"{state.summary}"
+                            f"{summary}"
                         ),
                     }
                 )
-            for msg in kept:
+            for msg in messages:
                 context.append({"role": msg.role.value, "content": msg.content})
+            if current_user_message:
+                context.append({"role": "user", "content": current_user_message})
             return context
+
+    # ------------------------------------------------------------------
+    # Projection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _project(
+        events: list[MemoryEvent],
+    ) -> tuple[str | None, int, list[MemoryMessage]]:
+        """Project a session's events into (summary, replaces_through, messages).
+
+        Takes the latest ``session_compacted`` summary and the ``seq`` it covers,
+        then every continuity event after that ``seq`` in order.  ``events`` are
+        already ulid-deduped and in log order; a ``seq`` is kept on first
+        occurrence, so an out-of-order straggler that reuses a ``seq`` does not
+        displace the active writer's event (see
+        docs/episodic-memory.md#single-writer-and-append-safety).
+        """
+        summary: str | None = None
+        replaces_through = -1
+        for event in events:
+            if event.event_type is EventType.SESSION_COMPACTED:
+                summary = event.payload.get("summary")
+                replaces_through = int(event.payload.get("replaces_through", -1))
+
+        messages: list[MemoryMessage] = []
+        seen_seqs: set[int] = set()
+        for event in events:
+            role = _CONTINUITY_ROLE.get(event.event_type)
+            if role is None or event.seq <= replaces_through or event.seq in seen_seqs:
+                continue
+            seen_seqs.add(event.seq)
+            text = event.payload.get("text", "")
+            messages.append(
+                MemoryMessage(
+                    role=role,
+                    content=text,
+                    seq=event.seq,
+                    token_estimate=estimate_tokens(text),
+                )
+            )
+        return summary, replaces_through, messages
 
     # ------------------------------------------------------------------
     # Compaction
     # ------------------------------------------------------------------
 
-    async def _compact_into_summary_locked(
+    async def _maybe_compact_locked(
         self,
-        state: SessionState,
-        overflow: list[MemoryMessage],
-    ) -> None:
-        """Fold ``overflow`` turns into ``state.summary`` via the LLM (best-effort).
+        session_id: str,
+        summary: str | None,
+        replaces_through: int,
+        messages: list[MemoryMessage],
+        budget: int,
+    ) -> tuple[str | None, list[MemoryMessage], int]:
+        """Fold the oldest turns into the running summary when over *budget*.
 
-        Without an LLM there is nothing to summarise with: the overflow turns are
-        simply dropped from the live transcript by the caller and no running
-        summary is kept. A transient LLM failure is logged and leaves the prior
-        summary intact rather than failing the in-flight query.
+        Returns the (possibly updated) summary, the retained messages, and the
+        number of messages summarised.  On no LLM, or a transient LLM failure, or
+        nothing to fold, the thread is returned unchanged — never truncated
+        without a durable summary covering the dropped turns (the durability
+        invariant).  Assumes the instance lock is held.
         """
-        if self._llm is None:
-            return
+        thread_tokens = (estimate_tokens(summary) if summary else 0) + sum(
+            m.token_estimate for m in messages
+        )
+        if self._llm is None or thread_tokens <= budget:
+            return summary, messages, 0
+
+        # Walk newest-first, keeping turns that fit half the budget (leaving room
+        # for the summary header and the current turn); the rest overflow.
+        kept_rev: list[MemoryMessage] = []
+        overflow_rev: list[MemoryMessage] = []
+        running = 0
+        keep_budget = budget // 2
+        for msg in reversed(messages):
+            cost = msg.token_estimate or estimate_tokens(msg.content)
+            if (running + cost <= keep_budget or not kept_rev):
+                kept_rev.append(msg)
+                running += cost
+            else:
+                overflow_rev.append(msg)
+
+        overflow = list(reversed(overflow_rev))
+        if not overflow:
+            return summary, messages, 0
+        kept = list(reversed(kept_rev))
+
+        # The last seq the new summary covers: the highest folded seq, but never
+        # below the prior summary's coverage.
+        covered = max(replaces_through, max(m.seq for m in overflow if m.seq is not None))
         transcript = "\n".join(f"[{m.role.value}] {m.content}" for m in overflow)
         try:
-            summary = await summarize_transcript(
+            new_summary = await summarize_transcript(
                 self._llm,
                 transcript,
                 chunk_tokens=DEFAULT_CHUNK_TOKENS,
-                prior_summary=state.summary,
+                prior_summary=summary,
                 compress_prompt=CONVERSATION_SUMMARY_PROMPT,
             )
         except Exception:
-            logger.warning("[short_term] compaction failed; keeping prior summary", exc_info=True)
-            return
-        # Preserve the prior summary if summarisation produced nothing.
-        state.summary = summary or state.summary
+            logger.warning(
+                "[short_term] compaction failed; serving the full thread", exc_info=True
+            )
+            return summary, messages, 0
+
+        new_summary = new_summary or summary
+        if not new_summary:
+            # Summariser produced nothing and there was no prior summary: keep the
+            # turns rather than drop them without a covering summary.
+            return summary, messages, 0
+
+        # Persist the summary as a new event so future rehydrates honour it.  It
+        # is buffered now and flushed with the turn's continuity events, so a
+        # crash before the flush only costs a re-compaction (the raw turns are
+        # still in the log) — the durability invariant holds.
+        await self._episodic.record_compaction(
+            session_id=session_id,
+            summary=new_summary,
+            replaces_through=covered,
+            token_stats={"thread_tokens": thread_tokens, "budget": budget},
+        )
+        return new_summary, kept, len(overflow)
 
     # ------------------------------------------------------------------
     # Internal helpers (assume the lock is held)
     # ------------------------------------------------------------------
-
-    def _ensure_locked(self, session_id: str) -> SessionState:
-        state = self._get_live_locked(session_id)
-        if state is None:
-            state = SessionState(session_id=session_id)
-            self._sessions[session_id] = state
-        return state
 
     def _get_live_locked(self, session_id: str) -> SessionState | None:
         state = self._sessions.get(session_id)

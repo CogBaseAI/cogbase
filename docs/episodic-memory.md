@@ -455,8 +455,9 @@ events are cross-app. Short-term memory reads its tail from the same log. Pass
    the per-type payload contracts. ✅
 3. Implement `EpisodicMemory` (append + replay + tail) over the log store. ✅
 4. Instrument `QueryRunner`; wire the factory. ✅
-5. Build short-term context assembly and compaction over the log tail; route by
-   consistent-hashing `session_id`.
+5. Build short-term context assembly and compaction over the log tail. ✅
+   (Routing by consistent-hashing `session_id` is a deployment concern, deferred
+   to the multi-node rollout.)
 6. Plumb scope (`user_id`, scope metadata) through the API.
 7. Distill long-term facts and preferences from per-session logs (offline).
 8. When the adaptive evolution engine is designed, add the structured projection

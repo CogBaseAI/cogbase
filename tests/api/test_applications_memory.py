@@ -30,8 +30,9 @@ from api.system_resources import SystemResources
 from api.system_store import SystemStore
 from cogbase.core.app import CogBaseApp
 from cogbase.core.query_runner import QueryRunner
-from cogbase.memory import ShortTermMemory
+from cogbase.memory import EpisodicMemory, ShortTermMemory
 from cogbase.skills.registry import SkillRegistry
+from cogbase.stores.log.local_fs import LocalFSLogStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 
 
@@ -73,13 +74,14 @@ def _streaming_llm(answers: list[str], captured: list[list]) -> MagicMock:
     return llm
 
 
-def _real_app(name: str, mem: ShortTermMemory, llm: MagicMock) -> CogBaseApp:
+def _real_app(name: str, mem: ShortTermMemory, episodic: EpisodicMemory, llm: MagicMock) -> CogBaseApp:
     """A real CogBaseApp whose QueryRunner is wired to *mem* (no skills, no stores)."""
     runner = QueryRunner(
         app_name=name,
         llm=llm,
         document_store=MagicMock(),
         short_term=mem,
+        episodic=episodic,
     )
     return CogBaseApp(
         name=name,
@@ -113,15 +115,16 @@ async def client():
 
 
 @pytest.mark.asyncio
-async def test_query_endpoint_threads_session_through_real_short_term_memory(client):
-    mem = ShortTermMemory()
+async def test_query_endpoint_threads_session_through_real_short_term_memory(client, tmp_path):
+    episodic = EpisodicMemory(LocalFSLogStore(tmp_path))
+    mem = ShortTermMemory(episodic=episodic)
     sid = await mem.start_session(app_name="memory-e2e-app")
     captured: list[list] = []
     llm = _streaming_llm(
         ["Paris is the capital of France.", "About 2 million people live there."],
         captured,
     )
-    real_app = _real_app("memory-e2e-app", mem, llm)
+    real_app = _real_app("memory-e2e-app", mem, episodic, llm)
 
     # Deploy the real app behind the API.
     with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=real_app):

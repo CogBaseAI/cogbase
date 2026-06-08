@@ -1,16 +1,20 @@
-"""Integration tests for QueryRunner wired to short-term memory."""
+"""Integration tests for QueryRunner wired to short-term memory.
+
+Short-term memory projects the episodic log, so the runner is wired with both a
+``ShortTermMemory`` and the ``EpisodicMemory`` it rides on (the same instance).
+"""
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from cogbase.core.query_runner import QueryResult, QueryRunner
 from cogbase.llms.base import CompletionResult
-from cogbase.memory import MemoryRole, ShortTermMemory
+from cogbase.memory import EpisodicMemory, MemoryRole, ShortTermMemory
 from cogbase.skills.skill import Skill
+from cogbase.stores.log.local_fs import LocalFSLogStore
 
 
 def _text_result(content: str) -> CompletionResult:
@@ -50,12 +54,22 @@ async def _drain(runner: QueryRunner, *args, **kwargs) -> tuple[list[str], Query
     return tokens, result
 
 
-def _runner(llm, short_term=None, skills=None) -> QueryRunner:
+@pytest.fixture
+def episodic(tmp_path) -> EpisodicMemory:
+    return EpisodicMemory(LocalFSLogStore(tmp_path))
+
+
+def _mem(episodic: EpisodicMemory, llm=None) -> ShortTermMemory:
+    return ShortTermMemory(episodic=episodic, llm=llm)
+
+
+def _runner(llm, *, short_term=None, episodic=None, skills=None) -> QueryRunner:
     return QueryRunner(
         app_name="testapp",
         llm=llm,
         document_store=MagicMock(),
         short_term=short_term,
+        episodic=episodic,
         skills=skills,
     )
 
@@ -65,11 +79,11 @@ def _make_skill(name: str, description: str = "A skill.") -> Skill:
 
 
 @pytest.mark.asyncio
-async def test_run_records_turns_into_session():
+async def test_run_records_turns_into_session(episodic):
     llm = _make_llm(_text_result("hi there"))
-    mem = ShortTermMemory()
+    mem = _mem(episodic)
     sid = await mem.start_session(app_name="testapp")
-    runner = _runner(llm, short_term=mem)
+    runner = _runner(llm, short_term=mem, episodic=episodic)
 
     _, result = await _drain(runner, "hello", session_id=sid)
     assert result.answer.startswith("hi there")
@@ -81,13 +95,16 @@ async def test_run_records_turns_into_session():
 
 
 @pytest.mark.asyncio
-async def test_second_turn_sees_prior_context_without_caller_history():
-    # Turn 1
-    mem = ShortTermMemory()
+async def test_second_turn_sees_prior_context_without_caller_history(episodic):
+    mem = _mem(episodic)
     sid = await mem.start_session()
 
     llm1 = _make_llm(_text_result("Paris is the capital of France."))
-    await _drain(_runner(llm1, short_term=mem), "What is the capital of France?", session_id=sid)
+    await _drain(
+        _runner(llm1, short_term=mem, episodic=episodic),
+        "What is the capital of France?",
+        session_id=sid,
+    )
 
     # Turn 2 — capture the messages the LLM is given (no caller history passed).
     captured = {}
@@ -103,22 +120,29 @@ async def test_second_turn_sees_prior_context_without_caller_history():
         return _stream_gen(_text_result("It has about 2 million people."))
     llm2.complete_stream = MagicMock(side_effect=_side_effect)
 
-    await _drain(_runner(llm2, short_term=mem), "How many people live there?", session_id=sid)
+    await _drain(
+        _runner(llm2, short_term=mem, episodic=episodic),
+        "How many people live there?",
+        session_id=sid,
+    )
 
     contents = [m.get("content") for m in captured["messages"]]
-    # Prior turn's question and answer are present in the assembled context.
     assert any("capital of France" in (c or "") for c in contents)
     assert any("Paris" in (c or "") for c in contents)
     assert any("How many people" in (c or "") for c in contents)
 
 
 @pytest.mark.asyncio
-async def test_skill_routing_uses_assembled_memory_context():
+async def test_skill_routing_uses_assembled_memory_context(episodic):
     # Turn 1: seed the session with a prior Q&A.
-    mem = ShortTermMemory()
+    mem = _mem(episodic)
     sid = await mem.start_session(app_name="testapp")
     llm1 = _make_llm(_text_result("Paris is the capital of France."))
-    await _drain(_runner(llm1, short_term=mem), "What is the capital of France?", session_id=sid)
+    await _drain(
+        _runner(llm1, short_term=mem, episodic=episodic),
+        "What is the capital of France?",
+        session_id=sid,
+    )
 
     # Turn 2: skills present, so select() runs. Capture the router messages.
     captured = {}
@@ -134,21 +158,22 @@ async def test_skill_routing_uses_assembled_memory_context():
     llm2.complete = AsyncMock(side_effect=_capture_router)
     llm2.complete_stream = MagicMock(side_effect=lambda *a, **kw: _stream_gen())
 
-    runner = _runner(llm2, short_term=mem, skills=[_make_skill("weather")])
-    # No caller history passed — the assembled session context is the only source.
+    runner = _runner(
+        llm2, short_term=mem, episodic=episodic, skills=[_make_skill("weather")]
+    )
     await _drain(runner, "How many people live there?", session_id=sid)
 
     router_text = "\n".join(str(m.get("content", "")) for m in captured["router"])
-    # Prior turn (recovered from memory) reached the skill router, not an empty history.
+    # Prior turn (recovered from the log) reached the skill router.
     assert "capital of France" in router_text
     assert "Paris" in router_text
 
 
 @pytest.mark.asyncio
 async def test_no_memory_path_is_unchanged():
-    # No short_term configured → caller history is used, nothing recorded.
+    # No short_term/episodic configured → caller history is used, nothing recorded.
     llm = _make_llm(_text_result("answer"))
-    runner = _runner(llm, short_term=None)
+    runner = _runner(llm, short_term=None, episodic=None)
     _, result = await _drain(
         runner,
         "q",

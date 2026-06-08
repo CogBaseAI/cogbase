@@ -5,8 +5,9 @@ Two places compact conversation transcripts into bounded summaries:
   - ``QueryRunner.compact_messages`` (``cogbase/core/query_runner.py``) collapses
     the transient in-loop working message list when it outgrows the context
     budget, returning a fresh ``[system, summary]`` message list.
-  - ``ShortTermMemory._compact_into_summary_locked`` (``cogbase/memory/short_term.py``)
-    folds overflow turns into the durable per-session running summary.
+  - ``ShortTermMemory._maybe_compact_locked`` (``cogbase/memory/short_term.py``)
+    folds overflow turns into the running summary, persisted as a
+    ``session_compacted`` event in the episodic log.
 
 Summarisation is inherently an LLM operation: ``summarize_transcript`` requires a
 live ``LLMBase``. Policy for the no-LLM case and for transient LLM failures lives

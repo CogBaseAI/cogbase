@@ -1,9 +1,11 @@
 """Data models for the memory layer.
 
-These types are shared by the short-term tier today and are shaped so the
-planned episodic/long-term tiers and a unifying ``MemoryManager`` can reuse
-them.  Everything here is plain Pydantic, consistent with
-:mod:`cogbase.core.models` and :mod:`cogbase.core.session`.
+These types serve the short-term and episodic tiers and are shaped so the
+planned long-term tier and a unifying ``MemoryManager`` can reuse them.  The
+short-term :class:`SessionState` / :class:`MemoryMessage` are a *projection* of
+the episodic :class:`MemoryEvent` log, not an independent store.  Everything
+here is plain Pydantic, consistent with :mod:`cogbase.core.models` and
+:mod:`cogbase.core.session`.
 """
 
 from __future__ import annotations
@@ -29,45 +31,32 @@ class MemoryRole(str, Enum):
 
 
 class MemoryMessage(BaseModel):
-    """A single conversational turn held in a session's working context."""
+    """A single conversational turn projected from the episodic log.
+
+    Short-term memory builds these by projecting the continuity events
+    (``user_message`` / ``final_answer``) of a session's log; ``seq`` is the
+    source event's per-session sequence number, retained so compaction can
+    record the ``replaces_through`` watermark it covers.  Messages not sourced
+    from a log event (e.g. the current turn's pending input) carry ``seq=None``.
+    """
 
     role: MemoryRole
     content: str
+    # Source event's per-session seq; None for messages not (yet) in the log.
+    seq: int | None = None
     created_at: datetime = Field(default_factory=_utcnow)
-    # Rough token cost, filled in when appended so context assembly can budget
+    # Rough token cost, filled in when projected so context assembly can budget
     # without re-estimating every message on every call.
     token_estimate: int = 0
 
 
-class RetrievalKind(str, Enum):
-    """What a :class:`RetrievedItem` refers to."""
-
-    CHUNK = "chunk"     # a passage from vector_search
-    RECORD = "record"   # a structured_lookup record
-    SLICE = "slice"     # a read_document slice
-
-
-class RetrievedItem(BaseModel):
-    """A piece of evidence retrieved during a session.
-
-    Kept separately from messages so the session can reason about (and later
-    re-rank or expire) retrieved evidence without parsing the transcript.
-    """
-
-    kind: RetrievalKind
-    ref_id: str | None = None      # chunk_id / doc_id / primary key, when available
-    text: str = ""
-    score: float | None = None
-    source: str | None = None      # the tool that produced it, e.g. "vector_search"
-    created_at: datetime = Field(default_factory=_utcnow)
-
-
 class SessionState(BaseModel):
-    """The full working context for one active session.
+    """A projected view of one session's working context.
 
-    Short-term memory owns one of these per ``session_id``.  It is intentionally
-    not a source of truth — it decides what belongs in the next LLM call and is
-    allowed to drop or compact its own contents.
+    Short-term memory rebuilds one of these per ``session_id`` by projecting the
+    episodic log (see :mod:`cogbase.memory.short_term`).  It is intentionally not
+    a source of truth — the log is — so it holds only what belongs in the next
+    LLM call: the recent continuity thread plus the running compaction summary.
     """
 
     session_id: str = Field(default_factory=lambda: str(uuid4()))
@@ -79,8 +68,8 @@ class SessionState(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
     messages: list[MemoryMessage] = Field(default_factory=list)
-    retrievals: list[RetrievedItem] = Field(default_factory=list)
-    # Compacted summary of turns that no longer fit the raw transcript.
+    # Running summary from the latest ``session_compacted`` event covering the
+    # turns folded out of ``messages``.
     summary: str | None = None
 
     created_at: datetime = Field(default_factory=_utcnow)
@@ -98,10 +87,9 @@ class SessionState(BaseModel):
 #
 # These types model the durable per-session event log (see
 # docs/episodic-memory.md).  Unlike the short-term types above — which are a
-# mutable in-memory working cache — a :class:`MemoryEvent` is immutable once
-# appended: the log only ever grows.  Short-term memory is being refactored to
-# ride on this same log (build-order step 5); until then the two model families
-# coexist here.
+# transient projection of this log — a :class:`MemoryEvent` is immutable once
+# appended: the log only ever grows.  Short-term memory rehydrates its
+# :class:`SessionState` from these events.
 # ---------------------------------------------------------------------------
 
 

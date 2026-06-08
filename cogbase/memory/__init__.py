@@ -1,9 +1,9 @@
 """Memory layer for CogBase.
 
-The short-term tier and the episodic event writer are implemented.  Short-term
-memory is being refactored to ride on the episodic log (docs/memory.md
-build-order step 5); long-term memory and a unifying ``MemoryManager`` are
-planned.
+The short-term tier and the episodic event writer are implemented; short-term
+memory rides on the episodic log as a projection over it (rehydrate, append-a-
+``session_compacted`` compaction, near-pass-through assembly).  Long-term memory
+and a unifying ``MemoryManager`` are planned.
 """
 
 from cogbase.memory.episodic import EpisodicMemory
@@ -17,9 +17,7 @@ from cogbase.memory.models import (
     MemoryMessage,
     MemoryRole,
     RetrievalHit,
-    RetrievalKind,
     RetrievalResultPayload,
-    RetrievedItem,
     SessionCompactedPayload,
     SessionStartedPayload,
     SessionState,
@@ -33,8 +31,6 @@ __all__ = [
     # short-term
     "MemoryMessage",
     "MemoryRole",
-    "RetrievalKind",
-    "RetrievedItem",
     "SessionState",
     "ShortTermMemory",
     "estimate_tokens",

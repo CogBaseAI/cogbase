@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-CogBase is in active early development. The knowledge pipeline, workflow engine, query runner, skills registry, REST API, store adapters, app generator, document registry, and background task tracking are implemented. The short-term memory tier (session-local working context with token-budgeted assembly and compaction) is implemented in `cogbase/memory/`; the episodic and long-term tiers and the adaptive evolution engine are planned but not yet implemented.
+CogBase is in active early development. The knowledge pipeline, workflow engine, query runner, skills registry, REST API, store adapters, app generator, document registry, and background task tracking are implemented. The short-term and episodic memory tiers are implemented in `cogbase/memory/`: episodic memory is a durable append-only per-session event log (`episodic.py` over `cogbase/stores/log/`), and short-term memory (`short_term.py`) is a projection over that log — it rehydrates the conversational thread from the log, compacts by appending a `session_compacted` summary event, and assembles near pass-through context. The long-term tier and the adaptive evolution engine are planned but not yet implemented.
 
 ## Architecture
 
