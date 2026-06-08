@@ -29,7 +29,7 @@ from cogbase.stores import (
 )
 from cogbase.core.app import CogBaseApp
 from cogbase.core.query_runner import QueryRunner
-from cogbase.memory import ShortTermMemory
+from cogbase.memory import EpisodicMemory, ShortTermMemory
 from cogbase.stores.schema import FieldSchema, FieldType
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion_pipeline import (
@@ -256,6 +256,13 @@ async def build_app(
     # a session_id (otherwise queries stay stateless via caller-passed history).
     short_term = ShortTermMemory(llm=llm)
 
+    # Episodic memory: the durable append-only event log.  Wired from the shared
+    # (system) log store — deliberately unscoped, so events from every app land
+    # in one log family and carry ``app_name`` for attribution (cross-app mining
+    # by the future evolution engine).  Engaged only when a query carries a
+    # session_id; absent a log store, the runner simply records nothing.
+    episodic = EpisodicMemory(sys.log_store) if sys.log_store is not None else None
+
     # Resolve the skills assigned to this app (referenced by id) into loaded
     # Skill objects the runner can route to and execute.
     skills: list = []
@@ -276,6 +283,7 @@ async def build_app(
         vector_schemas=vc_schemas or None,
         structured_schemas=structured_schemas or None,
         short_term=short_term,
+        episodic=episodic,
         skills=skills or None,
     )
 

@@ -314,6 +314,7 @@ class CogBaseApp:
         system_prompt: str | None = None,
         top_k: int = 10,
         session_id: str | None = None,
+        user_id: str | None = None,
     ):
         """Stream the answer token-by-token, then yield a final QueryResult.
 
@@ -328,10 +329,11 @@ class CogBaseApp:
             session_id:    When set and the runner has short-term memory wired,
                            the turn is recorded into that session and its
                            assembled context replaces ``history``.
+            user_id:       Attribution carried onto the session's episodic events.
         """
         logger.info("app.query_stream.start query=%s session=%s", text[:200], session_id)
         effective_prompt = system_prompt or self._query_prompt
-        kwargs = {"history": history, "top_k": top_k, "session_id": session_id}
+        kwargs = {"history": history, "top_k": top_k, "session_id": session_id, "user_id": user_id}
         if effective_prompt:
             kwargs["base_prompt"] = effective_prompt
         async for chunk in self._runner.run(text, **kwargs):

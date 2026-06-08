@@ -55,6 +55,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from collections.abc import AsyncGenerator
 
 from pydantic import BaseModel
@@ -70,12 +71,17 @@ from cogbase.llms.compaction import (
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, CompletionResult, LLMBase, SystemTool, ToolDefinition
-from cogbase.memory import MemoryRole, RetrievalKind, RetrievedItem, ShortTermMemory
+from cogbase.memory import EpisodicMemory, EventRef, MemoryRole, RetrievalKind, RetrievedItem, ShortTermMemory
 from cogbase.stores import CollectionSchema, DocumentStoreBase, Filter, Op, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 
 logger = logging.getLogger(__name__)
 
 _TOOL_TIMEOUT = 30  # seconds
+
+# Attempts to land a turn's continuity events (user_message / final_answer) in the
+# log before the turn is acknowledged.  The buffer is retained between attempts
+# (it is the retry buffer), so each retry simply re-appends the same batch.
+_CONTINUITY_FLUSH_RETRIES = 3
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +414,12 @@ class QueryRunner:
         passthrough_token_threshold: Estimated token count of ``structured_lookup`` results
                                      above which records are returned directly without LLM
                                      synthesis. None means disabled. Defaults None.
+        short_term:                  Session-local working-context cache. Engaged only when a
+                                     ``session_id`` is passed to ``run()``.
+        episodic:                    Durable append-only event log. When present and a
+                                     ``session_id`` is passed, the runner emits user_message,
+                                     tool_called/tool_result, and final_answer events to the
+                                     session's log (flushed at the turn boundary).
     """
 
     def __init__(
@@ -425,6 +437,7 @@ class QueryRunner:
         max_calls: int = 10,
         passthrough_token_threshold: int | None = None,
         short_term: ShortTermMemory | None = None,
+        episodic: EpisodicMemory | None = None,
         context_token_budget: int | None = None,
     ) -> None:
         self._app_name = app_name
@@ -441,6 +454,7 @@ class QueryRunner:
         self._max_calls = max_calls
         self._passthrough_token_threshold = passthrough_token_threshold
         self._short_term = short_term
+        self._episodic = episodic
         self._context_token_budget = context_token_budget
 
         # Retrieval tool definitions — exposed as _tool_defs for introspection.
@@ -561,6 +575,7 @@ class QueryRunner:
         base_prompt: str = "You are a helpful assistant.",
         top_k: int = 10,
         session_id: str | None = None,
+        user_id: str | None = None,
     ) -> AsyncGenerator[str | QueryResult, None]:
         """Drive the agent loop, yielding str tokens then a final QueryResult.
 
@@ -576,10 +591,13 @@ class QueryRunner:
                          omits top_k from its tool arguments. Hard-capped at 20.
             session_id:  When set and short-term memory is configured, the runner
                          records the turn into the session and builds context from
-                         it instead of ``history``.
+                         it instead of ``history``.  Also keys the episodic log.
+            user_id:     Attribution for episodic events; carried onto every event
+                         recorded for this turn.
         """
         skills = self._skills
         memory_active = self._short_term is not None and session_id is not None
+        episodic_on = self._episodic is not None and session_id is not None
 
         # Slot 0 is reserved for the system prompt; updated each iteration.
         messages: list[ChatMessage] = [{"role": "system", "content": ""}]
@@ -594,6 +612,11 @@ class QueryRunner:
         else:
             messages.extend(history or [])
             messages.append({"role": "user", "content": user_input})
+
+        if episodic_on:
+            # Attribution scope for every event this turn; idempotent per turn.
+            self._episodic.bind_scope(session_id, app_name=self._app_name, user_id=user_id)
+            await self._episodic_record_user_message(session_id, user_input)
 
         all_records: list[dict] = []
         all_chunks: list[Chunk] = []
@@ -651,6 +674,8 @@ class QueryRunner:
                     await self._short_term.append_message(
                         session_id, MemoryRole.ASSISTANT, answer
                     )
+                if episodic_on:
+                    await self._episodic_final_answer(session_id, answer)
                 yield QueryResult(
                     answer=answer,
                     structured_records=all_records,
@@ -690,6 +715,11 @@ class QueryRunner:
                 name = tc["name"]
                 logger.info("[runner] execute_tool %s(%s)", name, json.dumps(inputs)[:300])
 
+                call_ref: EventRef | None = None
+                if episodic_on:
+                    call_ref = await self._episodic_tool_call(session_id, tc["id"], name, inputs)
+                t0 = time.monotonic()
+
                 if name == "structured_lookup":
                     records, tool_output, passthrough = await self._run_structured_lookup(inputs)
                     all_records.extend(records)
@@ -700,6 +730,9 @@ class QueryRunner:
                             await self._short_term.append_message(
                                 session_id, MemoryRole.ASSISTANT, tool_output
                             )
+                        if episodic_on:
+                            await self._episodic_tool_result(session_id, tc["id"], tool_output, t0, call_ref)
+                            await self._episodic_final_answer(session_id, tool_output)
                         yield QueryResult(
                             answer=tool_output,
                             structured_records=all_records,
@@ -724,6 +757,9 @@ class QueryRunner:
                     tool_output = await self._execute_tool(name, inputs, current_skill)
                     logger.info("[runner] execute_tool done: %s", tool_output[:300])
 
+                if episodic_on:
+                    await self._episodic_tool_result(session_id, tc["id"], tool_output, t0, call_ref)
+
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
@@ -735,6 +771,8 @@ class QueryRunner:
             "I was unable to complete your request within the allowed number of steps. "
             "Please try a simpler or more specific request."
         )
+        if episodic_on:
+            await self._episodic_final_answer(session_id, answer)
         # limit the number of references to avoid large context
         yield QueryResult(
             answer=answer,
@@ -924,6 +962,98 @@ class QueryRunner:
     # ------------------------------------------------------------------
     # Short-term memory recording
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Episodic memory recording
+    #
+    # Recording buffers events in EpisodicMemory's per-session cache (cheap,
+    # in-memory); the durable append happens at the turn boundary in
+    # _episodic_final_answer's flush.  Every method is a no-op when episodic
+    # memory is not wired.  Failure handling is *tiered* (see
+    # docs/episodic-memory.md#episodicmemory-writer):
+    #
+    #   - Best-effort (tool_called / tool_result): swallow failures — losing one
+    #     costs only analytics, never continuity, and must never break a turn.
+    #   - Continuity-critical (user_message / final_answer + the turn flush):
+    #     propagate failures.  These are what a later rehydrate reconstructs the
+    #     thread from; if one is silently dropped, a follow-up that fails over to
+    #     another node rehydrates a log missing a turn the user already saw.  So
+    #     the turn must NOT be acknowledged complete unless they are durable.
+    # ------------------------------------------------------------------
+
+    async def _episodic_record_user_message(self, session_id: str, content: str) -> None:
+        # Continuity-critical: buffer must not fail silently (it is flushed,
+        # alongside final_answer, at the turn boundary).  Let exceptions propagate.
+        if self._episodic is None:
+            return
+        await self._episodic.record_user_message(session_id=session_id, content=content)
+
+    async def _episodic_tool_call(
+        self, session_id: str, tool_call_id: str, name: str, inputs: dict
+    ) -> EventRef | None:
+        if self._episodic is None:
+            return None
+        try:
+            return await self._episodic.record_tool_call(
+                session_id=session_id, tool_call_id=tool_call_id, name=name, arguments=inputs
+            )
+        except Exception:
+            logger.warning("[runner] episodic tool_called record failed", exc_info=True)
+            return None
+
+    async def _episodic_tool_result(
+        self,
+        session_id: str,
+        tool_call_id: str,
+        output: str,
+        t0: float,
+        call_ref: EventRef | None,
+    ) -> None:
+        if self._episodic is None:
+            return
+        try:
+            await self._episodic.record_tool_result(
+                session_id=session_id,
+                tool_call_id=tool_call_id,
+                result=output,
+                latency_ms=(time.monotonic() - t0) * 1000.0,
+                parent_event_id=call_ref,
+            )
+        except Exception:
+            logger.warning("[runner] episodic tool_result record failed", exc_info=True)
+
+    async def _episodic_final_answer(self, session_id: str, answer: str) -> None:
+        """Record the canonical assistant turn and durably flush the turn's events.
+
+        ``final_answer`` is continuity-critical: rehydrate reconstructs the thread
+        from it (and from the ``user_message`` flushed in the same batch), so the
+        append must land before the turn is acknowledged complete.  The flush is
+        retried a bounded number of times — the buffer is retained between
+        attempts, so a retry re-appends the same batch — and a persistent failure
+        is surfaced (raised), not swallowed: better to fail the turn than to
+        acknowledge an answer that a future session cannot rehydrate.
+        """
+        if self._episodic is None:
+            return
+        await self._episodic.record_final_answer(session_id=session_id, answer=answer)
+        last_exc: Exception | None = None
+        for attempt in range(_CONTINUITY_FLUSH_RETRIES):
+            try:
+                await self._episodic.flush(session_id)
+                return
+            except Exception as exc:  # noqa: BLE001 — retried, then re-raised below
+                last_exc = exc
+                logger.warning(
+                    "[runner] episodic flush attempt %d/%d failed",
+                    attempt + 1, _CONTINUITY_FLUSH_RETRIES, exc_info=True,
+                )
+                await asyncio.sleep(0.05 * (attempt + 1))
+        logger.error(
+            "[runner] episodic continuity flush failed after %d attempts; failing the turn",
+            _CONTINUITY_FLUSH_RETRIES,
+        )
+        assert last_exc is not None
+        raise last_exc
 
     async def _record_chunk_retrievals(self, session_id: str, chunks: list[Chunk]) -> None:
         """Record vector_search chunks as session retrievals (best-effort)."""

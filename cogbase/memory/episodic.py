@@ -81,6 +81,24 @@ class EpisodicMemory:
     # Recording (buffer + stamp)
     # ------------------------------------------------------------------
 
+    def bind_scope(
+        self,
+        session_id: str,
+        *,
+        app_name: str | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        """Register a session's attribution scope without emitting an event.
+
+        Later recorded events inherit ``app_name`` / ``user_id`` so callers need
+        not re-pass them on every record.  Idempotent and process-local (rebuilt
+        on a cold start), so it is safe — and expected — to call once per turn.
+        Use this where ``record_session_started`` would be wrong: the per-turn
+        query runner does not own session creation and must not log a
+        ``session_started`` event on every turn.
+        """
+        self._scope[session_id] = {"app_name": app_name, "user_id": user_id}
+
     async def record(self, event: MemoryEvent) -> EventRef:
         """Stamp *event* with its ``seq`` + ``ulid`` and buffer it for the next flush.
 
