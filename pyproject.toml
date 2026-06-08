@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "cogbase"
 version = "0.3.0"
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2.0", "pandas>=2.0"]
+dependencies = ["pydantic>=2.0", "pandas>=2.0", "python-ulid>=2.0"]
 
 [project.optional-dependencies]
 faiss = ["faiss-cpu>=1.7"]

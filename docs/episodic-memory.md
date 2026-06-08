@@ -452,8 +452,8 @@ events are cross-app. Short-term memory reads its tail from the same log. Pass
 1. Add the `LogStoreBase` contract (`append` / `load_lines` / `delete`) and its
    local_fs and s3 (directory-bucket) implementations. ✅
 2. Add the `MemoryEvent` model with identity (`session_id` + `seq` + `ulid`) and
-   the per-type payload contracts.
-3. Implement `EpisodicMemory` (append + replay + tail) over the log store.
+   the per-type payload contracts. ✅
+3. Implement `EpisodicMemory` (append + replay + tail) over the log store. ✅
 4. Instrument `QueryRunner`; wire the factory.
 5. Build short-term context assembly and compaction over the log tail; route by
    consistent-hashing `session_id`.

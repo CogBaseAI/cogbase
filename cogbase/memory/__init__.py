@@ -1,21 +1,36 @@
 """Memory layer for CogBase.
 
-Currently only the short-term tier is implemented.  Episodic and long-term
-memory (see ``docs/memory.md``) are planned; their models and a unifying
-``MemoryManager`` will wrap the short-term store without changing its
-signatures.
+The short-term tier and the episodic event writer are implemented.  Short-term
+memory is being refactored to ride on the episodic log (docs/memory.md
+build-order step 5); long-term memory and a unifying ``MemoryManager`` are
+planned.
 """
 
+from cogbase.memory.episodic import EpisodicMemory
 from cogbase.memory.models import (
+    CONTINUITY_EVENT_TYPES,
+    EventRef,
+    EventType,
+    FeedbackPayload,
+    FinalAnswerPayload,
+    MemoryEvent,
     MemoryMessage,
     MemoryRole,
+    RetrievalHit,
     RetrievalKind,
+    RetrievalResultPayload,
     RetrievedItem,
+    SessionCompactedPayload,
+    SessionStartedPayload,
     SessionState,
+    ToolCalledPayload,
+    ToolResultPayload,
+    UserMessagePayload,
 )
 from cogbase.memory.short_term import ShortTermMemory, estimate_tokens
 
 __all__ = [
+    # short-term
     "MemoryMessage",
     "MemoryRole",
     "RetrievalKind",
@@ -23,4 +38,19 @@ __all__ = [
     "SessionState",
     "ShortTermMemory",
     "estimate_tokens",
+    # episodic
+    "EpisodicMemory",
+    "MemoryEvent",
+    "EventType",
+    "EventRef",
+    "CONTINUITY_EVENT_TYPES",
+    "SessionStartedPayload",
+    "UserMessagePayload",
+    "FinalAnswerPayload",
+    "SessionCompactedPayload",
+    "ToolCalledPayload",
+    "ToolResultPayload",
+    "RetrievalResultPayload",
+    "RetrievalHit",
+    "FeedbackPayload",
 ]
