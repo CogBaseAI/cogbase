@@ -51,21 +51,35 @@ detector needs — at any time with no data loss. So we defer it (see
 This keeps the near-term work small: add append/tail reads to the document store,
 write events to per-session logs, and read them back per session.
 
-## Document store additions
+## A dedicated append-only log store, not an extension of the document store
 
-Episodic memory is the reason the document store grows append support. Today
-`DocumentStoreBase.save` overwrites; the log needs ordered, durable appends and
-tail reads:
+Episodic memory needs ordered, durable appends and tail reads. Those do **not**
+belong on `DocumentStoreBase`: that store is overwrite-oriented (`save` replaces),
+and bolting an `append` next to it invites a caller to `save` over a log object
+and silently truncate it. A log object must only ever grow. So the append-only
+behavior lives in its own small contract, `LogStoreBase`
+(`cogbase/stores/log/`), keeping the truncation-safety a type-level guarantee
+rather than a convention:
 
 ```python
-async def append(self, collection: str, doc_id: str, content: str) -> None:
-    """Append content to doc_id, creating it if absent. Ordered and durable."""
+class LogStoreBase(abc.ABC):
+    async def append(self, collection: str, log_id: str, lines: Sequence[str]) -> None:
+        """Append lines to log_id, creating it if absent. Ordered and durable; the
+        whole batch lands as one append. Never overwrites."""
 
-async def load_lines(
-    self, collection: str, doc_id: str, *, tail: int | None = None
-) -> list[str]:
-    """Read the log back, optionally just the last `tail` lines (for rehydrate)."""
+    async def load_lines(
+        self, collection: str, log_id: str, *, tail: int | None = None
+    ) -> list[str]:
+        """Read the log back, optionally just the last `tail` lines (for rehydrate)."""
+
+    async def delete(self, collection: str, log_id: str) -> None:
+        """Whole-object delete — the only supported mutation (retention, erasure)."""
 ```
+
+The contract is **line-oriented**: callers append and read NDJSON *records*, so
+the trailing `\n` framing is the store's job, not the caller's — another way the
+log API resists misuse. `collection` namespaces log families (e.g. `episodic`);
+`log_id` is one append-only stream (a `session_id`).
 
 The log is one object per session, period — never one object per event. A
 session's conversation is short, so its log object stays small; that keeps the
@@ -82,17 +96,20 @@ whole object. Two deferred S3 optimizations, neither worth building now:
   range-read a suffix (e.g. from the midpoint), check whether it already contains
   *N* lines, and widen only if it fell short.
 
-Backend implementations:
+Two backend implementations:
 
-- **local_fs** — `open(path, "a")` with `O_APPEND` (atomic for line-sized
-  writes), via `run_in_executor`. `tail` seeks from EOF; `load_lines()` reads the
-  whole file.
-- **s3** — one object per session. **Directory buckets** support native append
-  (offset-based `PutObject`); **standard buckets** read-modify-write the whole
-  object under `If-Match` CAS (cheap because the object is small). Either way a
-  read just fetches the whole object and `tail` filters the last *N* lines in
-  memory — no range reads, listing, or sorting needed at this size.
-- **memory** — string concatenation.
+- **local_fs** (`LocalFSLogStore`) — `open(path, "a")` with `O_APPEND` (atomic
+  for line-sized writes), via `run_in_executor`; a turn's batch is one `write()`
+  call. `load_lines()` reads the whole file and `tail` slices the last *N* lines.
+- **s3** (`S3LogStore`) — **directory buckets** (S3 Express One Zone), one object
+  per session, using **native append**: each `PutObject` passes
+  `WriteOffsetBytes` equal to the current object size, and S3 rejects a stale
+  offset. That offset is a **fencing token** — a deposed or stalled old writer
+  cannot append after a handoff (see [single-writer and append
+  safety](#session-affinity-and-routing)) — which standard-bucket
+  read-modify-write CAS could not provide. A read fetches the whole object and
+  `tail` filters the last *N* lines in memory; no range reads, listing, or
+  sorting at this size.
 
 NDJSON is the format: each event serializes to `json.dumps(event) + "\n"`. It is
 line-oriented (cheap `tail` reads), needs no partial-read parsing, and
@@ -232,12 +249,12 @@ process that holds it.
 
 Node-local shared cache:
 
-- With **local_fs** as the document store, processes on a node need **no**
-  node-local shared cache: the OS file-system page cache is already shared across
-  processes on the host, so log tail reads after a process restart hit warm cache.
-- With **s3** as the document store, there is no shared host cache, so a
-  node-local shared store may later be worth adding to avoid re-fetching logs
-  across processes. Defer it until measured.
+- With **local_fs** as the log store, processes on a node need **no** node-local
+  shared cache: the OS file-system page cache is already shared across processes
+  on the host, so log tail reads after a process restart hit warm cache.
+- With **s3** as the log store, there is no shared host cache, so a node-local
+  shared store may later be worth adding to avoid re-fetching logs across
+  processes. Defer it until measured.
 
 Single-writer and append safety:
 
@@ -248,11 +265,12 @@ Single-writer and append safety:
   after handoff (a lease alone does not prevent this; only a **fencing token** the
   store rejects when stale does).
 - So the append leans on the backend's own serialization as the safety net, not on
-  affinity: **local_fs** `O_APPEND` is atomic for line-sized writes; **s3**
-  standard buckets use `If-Match: <etag>` CAS on the single session log object
-  (serializes appenders; the loser re-reads and retries, preserving monotonic
-  `seq`); **s3 directory buckets** use the append offset, itself a conditional on
-  object length.
+  affinity: **local_fs** `O_APPEND` is atomic for line-sized writes; **s3
+  directory buckets** use the **append offset** (`WriteOffsetBytes` must equal the
+  current object size), itself a conditional on object length, and create-if-absent
+  uses `If-None-Match: *`. (We target directory buckets specifically for native
+  append; standard buckets, lacking it, would force a read-modify-write of the
+  whole object under `If-Match` CAS and could not fence a stuck writer.)
 - These guard *byte-level* integrity and *overwrite*, but the backends differ on
   the **stuck-writer** case. `O_APPEND` has **no fencing**: if a deposed or stalled
   old writer wakes and appends after the new owner has advanced, both appends
@@ -260,10 +278,10 @@ Single-writer and append safety:
   distinct events both stamped `seq=6`). local_fs cannot *prevent* this — only
   *detect* it, which is exactly the `ulid` witness's job (see
   [Event identity](#event-identity)): the two records carry different ULIDs, so the
-  straggler is identifiable instead of silently masking one. s3 conditional writes,
-  by contrast, can **reject** the stale writer — its etag is no longer current so
-  `If-Match` fails (or the append offset no longer matches); the etag/offset is the
-  fencing token. So local_fs *detects*, s3 *prevents*.
+  straggler is identifiable instead of silently masking one. The s3 directory
+  bucket, by contrast, can **reject** the stale writer — its `WriteOffsetBytes` no
+  longer matches the object length, so the conditional append fails; the offset is
+  the fencing token. So local_fs *detects*, s3 *prevents*.
 - A retry (the same logical event again) is the simpler duplicate, caught by the
   `ulid` dedupe key regardless of backend — `O_APPEND` will happily write the same
   line twice, so identity, not the append primitive, makes recording idempotent. On
@@ -387,11 +405,11 @@ because rehydrate re-derives it from the raw turns still in the log.
 
 ```python
 class EpisodicMemory:
-    def __init__(self, document_store) -> None: ...
+    def __init__(self, log_store: LogStoreBase) -> None: ...
 
     async def record(self, event: MemoryEvent) -> str:
-        # stamp seq + ulid, append NDJSON line to the session's log (source of
-        # truth); dedupe by ulid so a retried append is idempotent
+        # stamp seq + ulid, append the NDJSON line to the session's log (source of
+        # truth) via the log store; dedupe by ulid so a retried append is idempotent
         ...
 
     # the wrappers return the event's (session_id, seq) reference so callers can
@@ -402,7 +420,7 @@ class EpisodicMemory:
     async def record_final_answer(self, *, session_id, answer, cited_ids) -> str: ...
 
     async def replay(self, *, session_id) -> list[MemoryEvent]:
-        # whole-log fetch from the document store (replay, debug, distillation)
+        # whole-log fetch from the log store (replay, debug, distillation)
         ...
 
     async def tail(self, *, session_id, limit) -> list[MemoryEvent]:
@@ -424,18 +442,18 @@ already used by short-term memory:
   `structured_lookup` / `vector_search` branches
 - final answer and passthrough → `final_answer`
 
-Wire `EpisodicMemory` in `api/factory.py` from the shared (system) document store
-so events are cross-app. Short-term memory reads its tail from the same log. Pass
+Wire `EpisodicMemory` in `api/factory.py` from a shared (system) log store so
+events are cross-app. Short-term memory reads its tail from the same log. Pass
 `app_name` / `user_id` / scope through `api/models.py` → `app.query_stream` →
 `runner.run()` for attribution.
 
 ## Build order
 
-1. Add `append` / `load_lines` to `DocumentStoreBase` and the local_fs, s3, and
-   memory backends.
+1. Add the `LogStoreBase` contract (`append` / `load_lines` / `delete`) and its
+   local_fs and s3 (directory-bucket) implementations. ✅
 2. Add the `MemoryEvent` model with identity (`session_id` + `seq` + `ulid`) and
    the per-type payload contracts.
-3. Implement `EpisodicMemory` (append + replay + tail) over the document store.
+3. Implement `EpisodicMemory` (append + replay + tail) over the log store.
 4. Instrument `QueryRunner`; wire the factory.
 5. Build short-term context assembly and compaction over the log tail; route by
    consistent-hashing `session_id`.

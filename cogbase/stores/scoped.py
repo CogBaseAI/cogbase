@@ -8,9 +8,12 @@ delegate to the inner store after prefixing the collection name via ``_c()``.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from cogbase.core.models import Chunk
 from cogbase.stores.document.base import DocumentStoreBase
 from cogbase.stores.filters import Filter
+from cogbase.stores.log.base import LogStoreBase
 from cogbase.stores.schema import CollectionSchema
 from cogbase.stores.scope import AppScope
 from cogbase.stores.structured.base import StructuredStoreBase
@@ -126,3 +129,22 @@ class ScopedDocumentStore(DocumentStoreBase):
 
     async def load_bytes(self, collection: str, doc_id: str) -> bytes:
         return await self._inner.load_bytes(self._c(collection), doc_id)
+
+
+class ScopedLogStore(LogStoreBase):
+    """Log store proxy that transparently prefixes every log-type name."""
+
+    def __init__(self, inner: LogStoreBase, scope: AppScope) -> None:
+        super().__init__(scope)
+        self._inner = inner
+
+    async def append(self, log_type: str, log_id: str, lines: Sequence[str]) -> None:
+        await self._inner.append(self._c(log_type), log_id, lines)
+
+    async def load_lines(
+        self, log_type: str, log_id: str, *, tail: int | None = None
+    ) -> list[str]:
+        return await self._inner.load_lines(self._c(log_type), log_id, tail=tail)
+
+    async def delete(self, log_type: str, log_id: str) -> None:
+        await self._inner.delete(self._c(log_type), log_id)

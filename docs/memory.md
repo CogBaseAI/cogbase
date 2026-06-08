@@ -12,7 +12,8 @@ MemoryManager
     +-- LongTermMemory     promoted, durable facts, preferences, and learned patterns
     |
 Existing stores
-    +-- DocumentStoreBase   episodic log (source of truth) + ingested documents
+    +-- LogStoreBase        episodic log (append-only source of truth)
+    +-- DocumentStoreBase   ingested documents
     +-- StructuredStoreBase
     +-- VectorStoreBase
 ```
@@ -159,7 +160,8 @@ The memory manager should never return broader-scope memories unless the caller 
 
 ## Storage strategy
 
-Use the existing stores first.
+Reuse the existing stores where they fit; the one new storage primitive is the
+append-only log store that backs the episodic log.
 
 Short-term memory:
 
@@ -174,9 +176,11 @@ Short-term memory:
 
 Episodic memory (event-sourced — see [episodic-memory.md](episodic-memory.md)):
 
-- canonical log: document store, one append-only NDJSON object per session (one
-  object per session, never per event) — the single source of truth
-- this requires `append` / `load_lines` support on the document store
+- canonical log: a dedicated append-only log store (`LogStoreBase`), one
+  append-only NDJSON object per session (one object per session, never per event)
+  — the single source of truth
+- the log store is deliberately separate from the document store, whose `save`
+  overwrites: an append-only log must never be truncatable by a stray `save`
 - the cross-session structured projection (one lean row per event) is deferred
   until the adaptive evolution engine is designed and can specify what to index;
   every other consumer reads the log per-session
@@ -242,7 +246,7 @@ Initial integration points:
 
 ## Build order
 
-1. Add `append` / `load_lines` to the document store; add memory models and an
+1. Add the append-only `LogStoreBase` (local_fs + s3); add memory models and an
    in-memory `MemoryManager`.
 2. Instrument `QueryRunner` to emit episodic events to the per-session log.
 3. Add short-term context assembly and compaction over the log tail (rehydrate on
