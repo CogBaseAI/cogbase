@@ -63,7 +63,7 @@ def episodic(tmp_path):
 
 def _runner(llm, episodic=None, system_tools=None) -> QueryRunner:
     return QueryRunner(
-        app_name="testapp",
+        app_id="testapp",
         llm=llm,
         document_store=MagicMock(),
         episodic=episodic,
@@ -118,7 +118,7 @@ async def test_attribution_is_carried_onto_events(episodic):
     await _drain(_runner(llm, episodic=episodic), "q", session_id="s1", user_id="u-42")
 
     events = await episodic.replay(session_id="s1")
-    assert all(e.app_name == "testapp" for e in events)
+    assert all(e.app_id == "testapp" for e in events)
     assert all(e.user_id == "u-42" for e in events)
 
 

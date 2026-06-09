@@ -41,11 +41,12 @@ def _minimal_app(workflow_runners: dict | None = None) -> CogBaseApp:
     llm = MagicMock()
     llm.complete = AsyncMock(return_value={"content": "ok", "tool_calls": None})
     doc_store = InMemoryDocumentStore()
-    runner = QueryRunner(app_name="test-app", llm=llm, document_store=doc_store, structured_store=store)
+    runner = QueryRunner(app_id="test-app", llm=llm, document_store=doc_store, structured_store=store)
     return CogBaseApp(
         "test-app",
         [pipeline],
         runner,
+        app_id="test-app",
         document_store=doc_store,
         structured_store=store,
         workflow_runners=workflow_runners or {},
@@ -197,14 +198,14 @@ class TestAfterIngestTrigger:
         llm = MagicMock()
         llm.complete = AsyncMock(return_value={"content": "ok", "tool_calls": None})
         doc_store = InMemoryDocumentStore()
-        qrunner = QueryRunner(app_name="test-app", llm=llm, document_store=doc_store, structured_store=store)
+        qrunner = QueryRunner(app_id="test-app", llm=llm, document_store=doc_store, structured_store=store)
 
         runner = _make_wf_runner(
             "check",
             trigger_type="after_ingest",
             params_from_collection=_after_ingest_source(),
         )
-        app = CogBaseApp("test-app", [pipeline], qrunner, document_store=doc_store, structured_store=store, workflow_runners={"check": runner}, llm=llm, task_store=_mock_task_store())
+        app = CogBaseApp("test-app", [pipeline], qrunner, app_id="test-app", document_store=doc_store, structured_store=store, workflow_runners={"check": runner}, llm=llm, task_store=_mock_task_store())
 
         with patch(self._PATCH, side_effect=self._discard_task) as mock_ct:
             await app.ingest_documents([Document(doc_id="d-fail", text="text")])

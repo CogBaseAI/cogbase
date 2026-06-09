@@ -77,7 +77,7 @@ def _streaming_llm(answers: list[str], captured: list[list]) -> MagicMock:
 def _real_app(name: str, mem: ShortTermMemory, episodic: EpisodicMemory, llm: MagicMock) -> CogBaseApp:
     """A real CogBaseApp whose QueryRunner is wired to *mem* (no skills, no stores)."""
     runner = QueryRunner(
-        app_name=name,
+        app_id=name,
         llm=llm,
         document_store=MagicMock(),
         short_term=mem,
@@ -87,6 +87,7 @@ def _real_app(name: str, mem: ShortTermMemory, episodic: EpisodicMemory, llm: Ma
         name=name,
         pipelines=[],
         runner=runner,
+        app_id=name,
         document_store=MagicMock(),
         structured_store=MagicMock(),
         workflow_runners={},
@@ -118,7 +119,7 @@ async def client():
 async def test_query_endpoint_threads_session_through_real_short_term_memory(client, tmp_path):
     episodic = EpisodicMemory(LocalFSLogStore(tmp_path))
     mem = ShortTermMemory(episodic=episodic)
-    sid = await mem.start_session(app_name="memory-e2e-app")
+    sid = await mem.start_session(app_id="memory-e2e-app")
     captured: list[list] = []
     llm = _streaming_llm(
         ["Paris is the capital of France.", "About 2 million people live there."],

@@ -508,9 +508,10 @@ class TestWhenConditionRouting:
         llm = MagicMock()
         llm.complete = AsyncMock(return_value={"content": "ok", "tool_calls": None})
         doc_store = InMemoryDocumentStore()
-        runner = QueryRunner(app_name="app", llm=llm, document_store=doc_store, structured_store=store)
+        runner = QueryRunner(app_id="app", llm=llm, document_store=doc_store, structured_store=store)
         return CogBaseApp(
             "app", pipelines, runner,
+            app_id="app",
             document_store=doc_store,
             structured_store=store,
             workflow_runners={},

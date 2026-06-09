@@ -11,6 +11,7 @@ from api.system_store import AppRecord, DocRecord, DocWorkflowRecord, SkillRecor
 
 def _make_record(name: str = "my-app", status: str = "active") -> AppRecord:
     return AppRecord(
+        app_id=name,
         name=name,
         config_yaml="name: my-app\nllm:\n  model: gpt-4o-mini\n",
         status=status,
@@ -102,11 +103,11 @@ class TestSystemStoreDeleteApp:
     async def test_delete_cascades_doc_records(self, store):
         await store.save_app(_make_record(name="my-app"))
         await store.save_doc(DocRecord(
-            app_name="my-app", doc_id="doc-1", status="active",
+            app_id="my-app", doc_id="doc-1", status="active",
             ingested_at="2026-01-01T00:00:00+00:00",
         ))
         await store.save_doc(DocRecord(
-            app_name="my-app", doc_id="doc-2", status="active",
+            app_id="my-app", doc_id="doc-2", status="active",
             ingested_at="2026-01-01T00:00:00+00:00",
         ))
         await store.delete_app("my-app")
@@ -115,8 +116,8 @@ class TestSystemStoreDeleteApp:
     @pytest.mark.asyncio
     async def test_delete_cascades_task_records(self, store):
         await store.save_app(_make_record(name="my-app"))
-        await store.create_task(_make_task(task_id="t-1", app_name="my-app"))
-        await store.create_task(_make_task(task_id="t-2", app_name="my-app", doc_id="doc-2"))
+        await store.create_task(_make_task(task_id="t-1", app_id="my-app"))
+        await store.create_task(_make_task(task_id="t-2", app_id="my-app", doc_id="doc-2"))
         await store.delete_app("my-app")
         assert await store.list_tasks("my-app") == []
 
@@ -133,10 +134,10 @@ class TestSystemStoreDeleteApp:
         for name in ("app-a", "app-b"):
             await store.save_app(_make_record(name=name))
             await store.save_doc(DocRecord(
-                app_name=name, doc_id="doc-1", status="active",
+                app_id=name, doc_id="doc-1", status="active",
                 ingested_at="2026-01-01T00:00:00+00:00",
             ))
-            await store.create_task(_make_task(task_id=f"t-{name}", app_name=name))
+            await store.create_task(_make_task(task_id=f"t-{name}", app_id=name))
             await store.upsert_doc_workflow_status(name, "doc-1", "analyze", "done")
 
         await store.delete_app("app-a")
@@ -154,7 +155,7 @@ class TestSystemStoreDeleteApp:
 
 def _make_task(
     task_id: str = "t-001",
-    app_name: str = "my-app",
+    app_id: str = "my-app",
     task_type: str = "ingest",
     task_name: str = "ingest",
     doc_id: str | None = "doc-1",
@@ -162,7 +163,7 @@ def _make_task(
 ) -> TaskRecord:
     return TaskRecord(
         task_id=task_id,
-        app_name=app_name,
+        app_id=app_id,
         task_type=task_type,
         task_name=task_name,
         doc_id=doc_id,
@@ -179,7 +180,7 @@ class TestCreateAndGetTask:
         fetched = await store.get_task("t-001")
         assert fetched is not None
         assert fetched.task_id == "t-001"
-        assert fetched.app_name == "my-app"
+        assert fetched.app_id == "my-app"
         assert fetched.status == "pending"
 
     @pytest.mark.asyncio
@@ -222,7 +223,7 @@ class TestUpdateTask:
         await store.update_task("t-001", status="running")
         fetched = await store.get_task("t-001")
         assert fetched.doc_id == "doc-42"
-        assert fetched.app_name == "my-app"
+        assert fetched.app_id == "my-app"
 
     @pytest.mark.asyncio
     async def test_update_nonexistent_is_noop(self, store):
@@ -244,8 +245,8 @@ class TestListTasks:
 
     @pytest.mark.asyncio
     async def test_list_isolated_by_app(self, store):
-        await store.create_task(_make_task(task_id="t-1", app_name="app-a"))
-        await store.create_task(_make_task(task_id="t-2", app_name="app-b"))
+        await store.create_task(_make_task(task_id="t-1", app_id="app-a"))
+        await store.create_task(_make_task(task_id="t-2", app_id="app-b"))
         assert len(await store.list_tasks("app-a")) == 1
         assert len(await store.list_tasks("app-b")) == 1
         assert len(await store.list_tasks("app-c")) == 0
@@ -301,7 +302,7 @@ class TestCreateWorkflowTask:
         task_id = await store.create_workflow_task("my-app", "analyze", "doc-42", '{"issue": "x"}')
         task = await store.get_task(task_id)
         assert task is not None
-        assert task.app_name == "my-app"
+        assert task.app_id == "my-app"
         assert task.task_type == "workflow"
         assert task.task_name == "analyze"
         assert task.doc_id == "doc-42"
@@ -355,7 +356,7 @@ class TestUpsertAndGetDocWorkflow:
         await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "pending")
         record = await store.get_doc_workflow("my-app", "doc-1", "analyze")
         assert record is not None
-        assert record.app_name == "my-app"
+        assert record.app_id == "my-app"
         assert record.doc_id == "doc-1"
         assert record.workflow_name == "analyze"
         assert record.status == "pending"
@@ -452,7 +453,7 @@ class TestDeleteDocCleansDocWorkflowRegistry:
     @pytest.mark.asyncio
     async def test_delete_doc_removes_workflow_records(self, store):
         await store.save_doc(DocRecord(
-            app_name="my-app", doc_id="doc-1", status="active",
+            app_id="my-app", doc_id="doc-1", status="active",
             ingested_at="2026-01-01T00:00:00+00:00",
         ))
         await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "done")
@@ -467,7 +468,7 @@ class TestDeleteDocCleansDocWorkflowRegistry:
     async def test_delete_doc_only_removes_target_doc(self, store):
         for doc_id in ("doc-1", "doc-2"):
             await store.save_doc(DocRecord(
-                app_name="my-app", doc_id=doc_id, status="active",
+                app_id="my-app", doc_id=doc_id, status="active",
                 ingested_at="2026-01-01T00:00:00+00:00",
             ))
             await store.upsert_doc_workflow_status("my-app", doc_id, "analyze", "done")

@@ -137,14 +137,14 @@ async def test_seq_resumes_from_log_on_cold_start(tmp_path):
 
 async def test_session_scope_is_inherited_by_later_events(episodic):
     await episodic.record_session_started(
-        session_id=SESSION, app_name="legal", user_id="u-1"
+        session_id=SESSION, app_id="legal", user_id="u-1"
     )
     await episodic.record_user_message(session_id=SESSION, content="q")
     await episodic.flush(SESSION)
 
     events = await episodic.replay(session_id=SESSION)
     user_msg = next(e for e in events if e.event_type == EventType.USER_MESSAGE)
-    assert user_msg.app_name == "legal"
+    assert user_msg.app_id == "legal"
     assert user_msg.user_id == "u-1"
 
 

@@ -396,7 +396,7 @@ IN WITNESS WHEREOF, the parties have executed this Agreement as of the Effective
             llm=llm,
             embedder=embedder,
         )
-        app = await build_app(config, system=system, app_status="new")
+        app = await build_app(config, system=system, app_id=config.name, app_status="new")
 
         results = await app.ingest_documents(
             RULES_DOCUMENTS + CONTRACTS_DOCUMENTS
@@ -710,7 +710,7 @@ This Agreement is governed by the laws of the State of Texas.
             llm=llm,
             embedder=embedder,
         )
-        app = await build_app(config, system=system, app_status="new")
+        app = await build_app(config, system=system, app_id=config.name, app_status="new")
 
         documents = [
             Document(doc_id=doc_id, text=contract_text)

@@ -61,7 +61,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _doc_to_response(record: DocRecord) -> DocResponse:
+def _doc_to_response(record: DocRecord, app_name: str) -> DocResponse:
     import json as _json
     try:
         meta = _json.loads(record.metadata) if record.metadata else {}
@@ -69,14 +69,14 @@ def _doc_to_response(record: DocRecord) -> DocResponse:
         meta = {}
     return DocResponse(
         doc_id=record.doc_id,
-        app_name=record.app_name,
+        app_name=app_name,
         status=record.status,
         ingested_at=record.ingested_at,
         metadata=meta,
     )
 
 
-def _doc_workflow_to_response(record: DocRecord, workflow_status: str) -> DocWorkflowResponse:
+def _doc_workflow_to_response(record: DocRecord, workflow_status: str, app_name: str) -> DocWorkflowResponse:
     import json as _json
     try:
         meta = _json.loads(record.metadata) if record.metadata else {}
@@ -84,11 +84,19 @@ def _doc_workflow_to_response(record: DocRecord, workflow_status: str) -> DocWor
         meta = {}
     return DocWorkflowResponse(
         doc_id=record.doc_id,
-        app_name=record.app_name,
+        app_name=app_name,
         status=record.status,
         ingested_at=record.ingested_at,
         metadata=meta,
         workflow_status=workflow_status,
+    )
+
+
+def _task_to_response(record: TaskRecord, app_name: str) -> TaskResponse:
+    """Map a TaskRecord (id-keyed) to a name-facing TaskResponse."""
+    return TaskResponse(
+        app_name=app_name,
+        **record.model_dump(exclude={"app_id"}),
     )
 
 
@@ -246,7 +254,9 @@ async def create_application(
         )
 
     now = _now()
+    app_id = uuid.uuid4().hex
     record = AppRecord(
+        app_id=app_id,
         name=config.name,
         config_yaml=yaml_text,
         status="initializing",
@@ -254,10 +264,10 @@ async def create_application(
         updated_at=now,
     )
     await system_store.save_app(record)
-    logger.info("Creating application '%s'", config.name)
+    logger.info("Creating application '%s' (app_id=%s)", config.name, app_id)
 
     try:
-        app = await build_app(config, system=system_resources, app_status=record.status, task_store=system_store)
+        app = await build_app(config, app_id=app_id, system=system_resources, app_status=record.status, task_store=system_store)
         app_cache.add(config.name, app)
         record = record.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("Application '%s' created successfully", config.name)
@@ -324,9 +334,8 @@ async def update_application(
 
     app_cache.remove(app_name)
 
-    if config.name != app_name:
-        await system_store.delete_app(app_name)
-
+    # The record's identity is its stable app_id, so a rename just updates the
+    # ``name`` field on the same row — storage keyed by app_id never moves.
     updated = record.model_copy(
         update={
             "name": config.name,
@@ -337,10 +346,10 @@ async def update_application(
         }
     )
     await system_store.save_app(updated)
-    logger.info("Updating application '%s'", app_name)
+    logger.info("Updating application '%s' (app_id=%s)", app_name, record.app_id)
 
     try:
-        app = await build_app(config, system=system_resources, app_status=updated.status, task_store=system_store)
+        app = await build_app(config, app_id=record.app_id, system=system_resources, app_status=updated.status, task_store=system_store)
         app_cache.add(config.name, app)
         updated = updated.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("Application '%s' updated successfully", config.name)
@@ -367,7 +376,7 @@ async def delete_application(
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
     config = AppConfig.from_yaml(record.config_yaml)
-    app_scope = AppScope(app=app_name)
+    app_scope = AppScope(app_id=record.app_id)
 
     vector_store = (
         build_vector_store(config.vector_store, scope=app_scope)
@@ -408,7 +417,7 @@ async def delete_application(
     )
     if document_store:
         try:
-            await document_store.delete_collection(app_name)
+            await document_store.delete_collection(record.app_id)
             logger.info("Deleted document store collection for app '%s'", app_name)
         except Exception:
             logger.warning(
@@ -417,7 +426,7 @@ async def delete_application(
             )
 
     app_cache.remove(app_name)
-    await system_store.delete_app(app_name)
+    await system_store.delete_app(record.app_id)
     logger.info("Application '%s' deleted", app_name)
 
 
@@ -439,7 +448,7 @@ async def _get_active_app(
     if record is None or record.status != "active":
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found or not active")
     config = AppConfig.from_yaml(record.config_yaml)
-    app = await build_app(config, system=system_resources, app_status=record.status, task_store=system_store)
+    app = await build_app(config, app_id=record.app_id, system=system_resources, app_status=record.status, task_store=system_store)
     app_cache.add(app_name, app)
     return app
 
@@ -475,6 +484,10 @@ async def upload_documents(
         raise HTTPException(status_code=422, detail="metadata must be a JSON object")
 
     app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    # Identity for all storage keys comes from the persisted record, not the app
+    # instance — the stable app_id, not the (mutable) client-facing name.
+    record = await system_store.get_app(app_name)
+    app_id = record.app_id
 
     def _safe_doc_id(filename: str) -> str:
         stem = pathlib.Path(filename).stem
@@ -496,7 +509,7 @@ async def upload_documents(
 
         # 1. Save document bytes to document store.
         try:
-            await app.document_store.save_bytes(app.name, doc_path, content)
+            await app.document_store.save_bytes(app_id, doc_path, content)
         except NotImplementedError:
             logger.warning("upload_documents: save_bytes not supported, skipping raw save doc_id=%s", doc_id)
         except Exception:
@@ -507,7 +520,7 @@ async def upload_documents(
         #    reconstruct everything it needs from the task record + document store alone.
         await system_store.create_task(TaskRecord(
             task_id=task_id,
-            app_name=app_name,
+            app_id=app_id,
             task_type="ingest",
             task_name="ingest",
             doc_id=doc_id,
@@ -541,7 +554,7 @@ async def upload_documents(
 
                     try:
                         current_app = app_cache.get(app_name) or app
-                        content = await current_app.document_store.load_bytes(app.name, doc_path)
+                        content = await current_app.document_store.load_bytes(app_id, doc_path)
                     except Exception as exc:
                         await system_store.update_task(
                             task_id, status=TaskStatus.FAILED, completed_at=_now(),
@@ -567,7 +580,7 @@ async def upload_documents(
                         if result.success:
                             await system_store.update_task(task_id, status=TaskStatus.DONE, completed_at=_now())
                             await system_store.save_doc(DocRecord(
-                                app_name=app_name,
+                                app_id=app_id,
                                 doc_id=doc.doc_id,
                                 status="active",
                                 ingested_at=_now(),
@@ -831,8 +844,8 @@ async def list_docs(
     record = await system_store.get_app(app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
-    docs = await system_store.list_docs(app_name, status=status)
-    items = [_doc_to_response(d) for d in docs]
+    docs = await system_store.list_docs(record.app_id, status=status)
+    items = [_doc_to_response(d, app_name) for d in docs]
     return DocListResponse(docs=items, total=len(items))
 
 
@@ -846,10 +859,10 @@ async def get_doc(
     record = await system_store.get_app(app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
-    doc = await system_store.get_doc(app_name, doc_id)
+    doc = await system_store.get_doc(record.app_id, doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"Document '{doc_id}' not found")
-    return _doc_to_response(doc)
+    return _doc_to_response(doc, app_name)
 
 
 @router.delete("/{app_name}/docs/{doc_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
@@ -865,10 +878,10 @@ async def delete_doc(
     record = await system_store.get_app(app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
-    doc = await system_store.get_doc(app_name, doc_id)
+    doc = await system_store.get_doc(record.app_id, doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"Document '{doc_id}' not found")
-    await system_store.delete_doc(app_name, doc_id)
+    await system_store.delete_doc(record.app_id, doc_id)
     logger.info("Document '%s' deleted from app '%s'", doc_id, app_name)
 
 
@@ -895,9 +908,9 @@ async def list_tasks(
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
     tasks = await system_store.list_tasks(
-        app_name, task_type=task_type, task_name=task_name, doc_id=doc_id, status=status
+        record.app_id, task_type=task_type, task_name=task_name, doc_id=doc_id, status=status
     )
-    items = [TaskResponse(**t.model_dump()) for t in tasks]
+    items = [_task_to_response(t, app_name) for t in tasks]
     return TaskListResponse(tasks=items, total=len(items))
 
 
@@ -908,10 +921,11 @@ async def get_task(
     system_store: SystemStoreDep,
 ) -> TaskResponse:
     """Return a single task by ID."""
+    record = await system_store.get_app(app_name)
     task = await system_store.get_task(task_id)
-    if task is None or task.app_name != app_name:
+    if record is None or task is None or task.app_id != record.app_id:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
-    return TaskResponse(**task.model_dump())
+    return _task_to_response(task, app_name)
 
 
 # ---------------------------------------------------------------------------
@@ -948,17 +962,17 @@ async def list_workflow_docs(
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
     wf_records = await system_store.list_doc_workflows(
-        app_name, workflow_name=workflow_name, status=status
+        record.app_id, workflow_name=workflow_name, status=status
     )
     if not wf_records:
         return WorkflowDocListResponse(app_name=app_name, workflow_name=workflow_name, docs=[], total=0)
 
     doc_ids = {wr.doc_id for wr in wf_records}
-    all_docs = await system_store.list_docs(app_name, status="active")
+    all_docs = await system_store.list_docs(record.app_id, status="active")
     docs_by_id = {d.doc_id: d for d in all_docs if d.doc_id in doc_ids}
 
     items = [
-        _doc_workflow_to_response(docs_by_id[wr.doc_id], wr.status)
+        _doc_workflow_to_response(docs_by_id[wr.doc_id], wr.status, app_name)
         for wr in wf_records
         if wr.doc_id in docs_by_id
     ]
@@ -985,19 +999,20 @@ async def stream_workflow(
     Sentinel: ``data: [DONE]``
     """
     app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app_id = (await system_store.get_app(app_name)).app_id
     try:
         wf_runner = app.get_workflow(workflow_name)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found")
 
     pending = await system_store.list_tasks(
-        app_name, task_type="workflow", task_name=workflow_name, doc_id=body.doc_id, status=TaskStatus.PENDING
+        app_id, task_type="workflow", task_name=workflow_name, doc_id=body.doc_id, status=TaskStatus.PENDING
     )
     if not pending:
         params_list = await app.resolve_workflow_params(wf_runner, body.doc_id)
         pending = [
             await system_store.get_task(
-                await system_store.create_workflow_task(app_name, workflow_name, body.doc_id, json.dumps(p))
+                await system_store.create_workflow_task(app_id, workflow_name, body.doc_id, json.dumps(p))
             )
             for p in params_list
         ]
@@ -1020,7 +1035,7 @@ async def stream_workflow(
             # TODO if failed, some items such as some clauses in a contract may be successfully processed,
             #      need to clean up the partial results.
             await system_store.upsert_doc_workflow_status(
-                app_name, body.doc_id, workflow_name,
+                app_id, body.doc_id, workflow_name,
                 DocWorkflowStatus.DONE if all_ok else DocWorkflowStatus.FAILED,
             )
         yield "data: [DONE]\n\n"

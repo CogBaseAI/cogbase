@@ -87,11 +87,16 @@ def _build_chunker(cfg: ChunkerConfig) -> Any:
 async def build_app(
     config: AppConfig,
     *,
+    app_id: str,
     system: SystemResources | None = None,
     app_status: str,
     task_store: Any | None = None,
 ) -> Any:
     """Instantiate a CogBase application from *config*.
+
+    *app_id* is the application's stable internal id (distinct from the mutable
+    client-facing ``config.name``); it drives the store scope prefix and the
+    per-app document-store collection, so storage survives a rename.
 
     Resources are resolved in priority order:
 
@@ -100,7 +105,7 @@ async def build_app(
     3. No fallback — raises ``ValueError`` when a required resource is absent.
     """
     sys = system or SystemResources()
-    app_scope = AppScope(app=config.name)
+    app_scope = AppScope(app_id=app_id)
 
     # --- Top-level resources (independent of pipeline) ---
     llm = _build_llm(config.llm) if config.llm else sys.llm
@@ -277,7 +282,7 @@ async def build_app(
                 logger.warning("skill id=%s assigned to app=%s is not registered; skipping", skill_id, config.name)
 
     qrunner = QueryRunner(
-        app_name=config.name,
+        app_id=app_id,
         llm=llm,
         document_store=document_store,
         structured_store=structured_store,
@@ -328,6 +333,7 @@ async def build_app(
         config.name,
         pipelines,
         qrunner,
+        app_id=app_id,
         document_store=document_store,
         structured_store=structured_store,
         workflow_runners=workflow_runners,

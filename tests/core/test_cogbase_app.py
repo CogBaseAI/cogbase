@@ -179,7 +179,7 @@ async def _make_app(
     pipeline = await _make_pipeline(llm, store, vector_store=vector_store, embedder=embedder, chunker=chunker, name=name)
     doc_store = InMemoryDocumentStore()
     runner = QueryRunner(
-        app_name=name,
+        app_id=name,
         llm=llm,
         document_store=doc_store,
         structured_store=store,
@@ -192,7 +192,7 @@ async def _make_app(
         name, [pipeline], runner,
         document_store=doc_store,
         structured_store=store,
-        workflow_runners={},
+        app_id=name, workflow_runners={},
         llm=llm,
         task_store=_mock_task_store(),
     )
@@ -224,13 +224,13 @@ class TestCogBaseAppConstruction:
     async def test_pipeline_wired_to_app(self):
         store = InMemoryStructuredStore()
         pipeline = await _make_pipeline(_make_llm("{}"), store)
-        runner = QueryRunner(app_name="test", llm=_make_llm("{}"), document_store=InMemoryDocumentStore(), structured_store=store, structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None)
+        runner = QueryRunner(app_id="test", llm=_make_llm("{}"), document_store=InMemoryDocumentStore(), structured_store=store, structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None)
         llm = _make_llm("{}")
         app = CogBaseApp(
             "test", [pipeline], runner,
             document_store=InMemoryDocumentStore(),
             structured_store=store,
-            workflow_runners={},
+            app_id="test", workflow_runners={},
             llm=llm,
             task_store=_mock_task_store(),
         )
@@ -456,7 +456,7 @@ class TestVectorOnlyMode:
         )
         doc_store = InMemoryDocumentStore()
         runner = QueryRunner(
-            app_name="vector-only",
+            app_id="vector-only",
             llm=llm,
             document_store=doc_store,
             vector_store=vc_store,
@@ -467,7 +467,7 @@ class TestVectorOnlyMode:
             "vector-only", [pipeline], runner,
             document_store=doc_store,
             structured_store=InMemoryStructuredStore(),
-            workflow_runners={},
+            app_id="vector-only", workflow_runners={},
             llm=llm,
             task_store=_mock_task_store(),
         )
@@ -507,12 +507,12 @@ class TestVectorOnlyMode:
             vector_collections=[vc],
         )
         doc_store = InMemoryDocumentStore()
-        runner = QueryRunner(app_name="testapp", llm=_make_llm("{}"), document_store=doc_store, vector_store=vector_store, embedder=StubEmbedding(dim=4), vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None)
+        runner = QueryRunner(app_id="testapp", llm=_make_llm("{}"), document_store=doc_store, vector_store=vector_store, embedder=StubEmbedding(dim=4), vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None)
         app = CogBaseApp(
             "testapp", [pipeline], runner,
             document_store=doc_store,
             structured_store=InMemoryStructuredStore(),
-            workflow_runners={},
+            app_id="testapp", workflow_runners={},
             llm=_make_llm("{}"),
             task_store=_mock_task_store(),
         )
@@ -728,7 +728,7 @@ class TestRoutingStrategyAuto:
             MagicMock(spec=QueryRunner),
             document_store=InMemoryDocumentStore(),
             structured_store=InMemoryStructuredStore(),
-            workflow_runners={},
+            app_id="test", workflow_runners={},
             llm=llm,
             routing_strategy=RoutingStrategy.AUTO,
             task_store=_mock_task_store(),
@@ -858,7 +858,7 @@ class TestQueryPrompt:
             "test", [], runner,
             document_store=InMemoryDocumentStore(),
             structured_store=InMemoryStructuredStore(),
-            workflow_runners={},
+            app_id="test", workflow_runners={},
             llm=_make_llm(""),
             task_store=_mock_task_store(),
             query_prompt=query_prompt,
@@ -886,7 +886,7 @@ class TestQueryPrompt:
             "test", [], runner,
             document_store=InMemoryDocumentStore(),
             structured_store=InMemoryStructuredStore(),
-            workflow_runners={},
+            app_id="test", workflow_runners={},
             llm=_make_llm(""),
             task_store=_mock_task_store(),
             query_prompt="Answer in one sentence.",
@@ -908,7 +908,7 @@ class TestQueryPrompt:
             "test", [], runner,
             document_store=InMemoryDocumentStore(),
             structured_store=InMemoryStructuredStore(),
-            workflow_runners={},
+            app_id="test", workflow_runners={},
             llm=_make_llm(""),
             task_store=_mock_task_store(),
             query_prompt=None,
@@ -930,7 +930,7 @@ class TestQueryPrompt:
             "test", [], runner,
             document_store=InMemoryDocumentStore(),
             structured_store=InMemoryStructuredStore(),
-            workflow_runners={},
+            app_id="test", workflow_runners={},
             llm=_make_llm(""),
             task_store=_mock_task_store(),
             query_prompt="Be precise.",
@@ -955,7 +955,7 @@ class TestQueryPrompt:
             "test", [], runner,
             document_store=InMemoryDocumentStore(),
             structured_store=InMemoryStructuredStore(),
-            workflow_runners={},
+            app_id="test", workflow_runners={},
             llm=_make_llm(""),
             task_store=_mock_task_store(),
             query_prompt="Config prompt.",
@@ -977,7 +977,7 @@ class TestQueryPrompt:
             "test", [], runner,
             document_store=InMemoryDocumentStore(),
             structured_store=InMemoryStructuredStore(),
-            workflow_runners={},
+            app_id="test", workflow_runners={},
             llm=_make_llm(""),
             task_store=_mock_task_store(),
             query_prompt="Config prompt.",
@@ -999,7 +999,7 @@ class TestQueryPrompt:
             "test", [], runner,
             document_store=InMemoryDocumentStore(),
             structured_store=InMemoryStructuredStore(),
-            workflow_runners={},
+            app_id="test", workflow_runners={},
             llm=_make_llm(""),
             task_store=_mock_task_store(),
             query_prompt=None,

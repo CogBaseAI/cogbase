@@ -135,7 +135,7 @@ class ShortTermMemory:
     async def start_session(
         self,
         *,
-        app_name: str | None = None,
+        app_id: str | None = None,
         user_id: str | None = None,
         scope: dict | None = None,
         metadata: dict | None = None,
@@ -154,7 +154,7 @@ class ShortTermMemory:
                 self._touch_locked(state)
                 return state.session_id
             state = SessionState(
-                app_name=app_name,
+                app_id=app_id,
                 user_id=user_id,
                 scope=scope or {},
                 metadata=metadata or {},

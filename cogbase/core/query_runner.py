@@ -393,7 +393,7 @@ class QueryRunner:
     """Unified LLM agent loop with skill routing and retrieval tools.
 
     Args:
-        app_name:                    Application name; used to scope document store reads.
+        app_id:                      Stable internal application id; used to scope document store reads.
         llm:                         LLM backend.
         document_store:              Document store; enables the ``read_document`` tool.
         structured_store:            Structured store; enables the ``structured_lookup`` tool.
@@ -429,7 +429,7 @@ class QueryRunner:
 
     def __init__(
         self,
-        app_name: str,
+        app_id: str,
         llm: LLMBase,
         document_store: DocumentStoreBase,
         structured_store: StructuredStoreBase | None = None,
@@ -445,7 +445,7 @@ class QueryRunner:
         episodic: EpisodicMemory | None = None,
         context_token_budget: int | None = None,
     ) -> None:
-        self._app_name = app_name
+        self._app_id = app_id
         self._llm = llm
         self._document_store = document_store
         self._structured_store = structured_store
@@ -470,7 +470,7 @@ class QueryRunner:
             self._tool_defs.append(_STRUCTURED_LOOKUP_DEF)
         if vector_schemas:
             self._tool_defs.append(_VECTOR_SEARCH_DEF)
-        if document_store is not None and app_name is not None:
+        if document_store is not None and app_id is not None:
             self._tool_defs.append(_READ_DOCUMENT_DEF)
 
     # ------------------------------------------------------------------
@@ -614,7 +614,7 @@ class QueryRunner:
             # Attribution scope for every event this turn; idempotent per turn.
             # Recorded before build_context so the turn's user_message is in the
             # log family before the session's thread is (re)assembled.
-            self._episodic.bind_scope(session_id, app_name=self._app_name, user_id=user_id)
+            self._episodic.bind_scope(session_id, app_id=self._app_id, user_id=user_id)
             await self._episodic_record_user_message(session_id, user_input)
 
         if memory_active:
@@ -886,7 +886,7 @@ class QueryRunner:
         return chunks, _format_chunks(chunks)
 
     async def _run_read_document(self, inputs: dict) -> tuple[DocumentSlice | None, str]:
-        if self._document_store is None or self._app_name is None:
+        if self._document_store is None or self._app_id is None:
             return None, "read_document is unavailable (no document store configured)"
 
         doc_id = str(inputs.get("doc_id", ""))
@@ -897,7 +897,7 @@ class QueryRunner:
         length = min(int(inputs.get("length") or 2000), 10000)
 
         try:
-            text = await self._document_store.load(self._app_name, doc_id)
+            text = await self._document_store.load(self._app_id, doc_id)
         except KeyError:
             return None, f"read_document error: document '{doc_id}' not found"
         except Exception as exc:

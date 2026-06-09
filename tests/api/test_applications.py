@@ -12,7 +12,7 @@ import json
 import textwrap
 import zipfile
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import yaml
 
@@ -795,8 +795,10 @@ class TestUploadDocuments:
                 files=[("files", ("invoice.pdf", raw_bytes, "application/pdf"))],
             )
 
+        # First arg is the app's internal collection id (a generated app_id);
+        # the test pins the doc_path and bytes, not the opaque id.
         store.save_bytes.assert_awaited_once_with(
-            "my-contract-analyzer", "originals/invoice.pdf", raw_bytes
+            ANY, "originals/invoice.pdf", raw_bytes
         )
 
     @pytest.mark.asyncio
@@ -1637,9 +1639,9 @@ class TestQueryCollection:
 # ---------------------------------------------------------------------------
 
 
-def _make_doc_record(app_name: str, doc_id: str, status: str = "active") -> DocRecord:
+def _make_doc_record(app_id: str, doc_id: str, status: str = "active") -> DocRecord:
     return DocRecord(
-        app_name=app_name,
+        app_id=app_id,
         doc_id=doc_id,
         status=status,
         ingested_at="2024-01-01T00:00:00+00:00",
@@ -1668,11 +1670,12 @@ class TestListWorkflowDocs:
     async def test_returns_docs_with_workflow_status(self, app_overrides):
         client = app_overrides["client"]
         system_store: SystemStore = app_overrides["system_store"]
-        await system_store.save_doc(_make_doc_record("my-contract-analyzer", "doc-1"))
-        await system_store.upsert_doc_workflow_status(
-            "my-contract-analyzer", "doc-1", "summarize", "done"
-        )
         await _create_app(client, _mock_app_instance())
+        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        await system_store.save_doc(_make_doc_record(app_id, "doc-1"))
+        await system_store.upsert_doc_workflow_status(
+            app_id, "doc-1", "summarize", "done"
+        )
 
         resp = await client.get(
             "/applications/my-contract-analyzer/workflows/summarize/docs"
@@ -1688,12 +1691,13 @@ class TestListWorkflowDocs:
     async def test_filters_by_status_query_param(self, app_overrides):
         client = app_overrides["client"]
         system_store: SystemStore = app_overrides["system_store"]
-        for doc_id, wf_status in [("doc-1", "done"), ("doc-2", "pending"), ("doc-3", "done")]:
-            await system_store.save_doc(_make_doc_record("my-contract-analyzer", doc_id))
-            await system_store.upsert_doc_workflow_status(
-                "my-contract-analyzer", doc_id, "summarize", wf_status
-            )
         await _create_app(client, _mock_app_instance())
+        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        for doc_id, wf_status in [("doc-1", "done"), ("doc-2", "pending"), ("doc-3", "done")]:
+            await system_store.save_doc(_make_doc_record(app_id, doc_id))
+            await system_store.upsert_doc_workflow_status(
+                app_id, doc_id, "summarize", wf_status
+            )
 
         resp = await client.get(
             "/applications/my-contract-analyzer/workflows/summarize/docs?status=done"
@@ -1709,13 +1713,14 @@ class TestListWorkflowDocs:
     async def test_excludes_docs_not_in_active_doc_registry(self, app_overrides):
         client = app_overrides["client"]
         system_store: SystemStore = app_overrides["system_store"]
+        await _create_app(client, _mock_app_instance())
+        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
         # doc-1 is active; doc-2 has a workflow record but no entry in the doc registry
-        await system_store.save_doc(_make_doc_record("my-contract-analyzer", "doc-1"))
+        await system_store.save_doc(_make_doc_record(app_id, "doc-1"))
         for doc_id in ["doc-1", "doc-2"]:
             await system_store.upsert_doc_workflow_status(
-                "my-contract-analyzer", doc_id, "summarize", "done"
+                app_id, doc_id, "summarize", "done"
             )
-        await _create_app(client, _mock_app_instance())
 
         resp = await client.get(
             "/applications/my-contract-analyzer/workflows/summarize/docs"

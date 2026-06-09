@@ -47,7 +47,7 @@ def test_structured_store_scope_stored():
         async def query(self, collection: str, filters: list[Filter] | None = None, fields: list[str] | None = None) -> list[dict]: return []
         async def delete_records(self, collection: str, filters: list[Filter] | None = None) -> None: ...
 
-    scope = AppScope(app="myapp")
+    scope = AppScope(app_id="myapp")
     store = Minimal(scope=scope)
     assert store._scope is scope
     assert store._c("col") == "myapp__col"

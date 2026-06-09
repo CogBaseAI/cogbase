@@ -60,7 +60,7 @@ class SessionState(BaseModel):
     """
 
     session_id: str = Field(default_factory=lambda: str(uuid4()))
-    app_name: str | None = None
+    app_id: str | None = None
     user_id: str | None = None
     # Explicit scope (session / user / app / project / org / global) per
     # docs/memory.md; carried so multi-tenant callers can isolate sessions.
@@ -154,7 +154,7 @@ class MemoryEvent(BaseModel):
     ulid: str = ""
     event_type: EventType
     created_at: datetime = Field(default_factory=_utcnow)
-    app_name: str | None = None
+    app_id: str | None = None
     user_id: str | None = None
     # Causal link to a prior event in the same session (e.g. tool_result →
     # tool_called); stored as the full triplet so it resolves by log seek.

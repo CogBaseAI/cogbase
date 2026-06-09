@@ -13,9 +13,9 @@ from cogbase.stores import Col, CollectionSchema, FieldSchema, FieldType, Struct
 DOC_REGISTRY_SCHEMA = CollectionSchema(
     name="doc_registry",
     description="Document registry: one record per successfully ingested document per application.",
-    primary_fields=["app_name", "doc_id"],
+    primary_fields=["app_id", "doc_id"],
     fields={
-        "app_name":    FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "app_id":      FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "doc_id":      FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "status":      FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "ingested_at": FieldSchema(type=FieldType.STRING, nullable=False),
@@ -26,10 +26,11 @@ DOC_REGISTRY_SCHEMA = CollectionSchema(
 
 APP_RECORDS_SCHEMA = CollectionSchema(
     name="app_records",
-    description="CogBase application registry: configuration, status, and error state per named application.",
-    primary_fields=["name"],
+    description="CogBase application registry: configuration, status, and error state per application.",
+    primary_fields=["app_id"],
     fields={
-        "name":        FieldSchema(type=FieldType.STRING, nullable=False),
+        "app_id":      FieldSchema(type=FieldType.STRING, nullable=False),
+        "name":        FieldSchema(type=FieldType.STRING, nullable=False, index=True),  # client-facing handle (unique)
         "config_yaml": FieldSchema(type=FieldType.STRING, nullable=False),
         "status":      FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "error":       FieldSchema(type=FieldType.STRING, nullable=True),
@@ -57,7 +58,7 @@ TASKS_SCHEMA = CollectionSchema(
     primary_fields=["task_id"],
     fields={
         "task_id":      FieldSchema(type=FieldType.STRING, nullable=False),
-        "app_name":     FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "app_id":       FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "task_type":    FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "task_name":    FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "doc_id":       FieldSchema(type=FieldType.STRING, nullable=True, index=True),
@@ -90,9 +91,9 @@ SKILL_RECORDS_SCHEMA = CollectionSchema(
 DOC_WORKFLOW_REGISTRY_SCHEMA = CollectionSchema(
     name="doc_workflow_registry",
     description="Workflow processing status per document per workflow. One record per (app, doc, workflow).",
-    primary_fields=["app_name", "doc_id", "workflow_name"],
+    primary_fields=["app_id", "doc_id", "workflow_name"],
     fields={
-        "app_name":      FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "app_id":        FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "doc_id":        FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "workflow_name": FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "status":        FieldSchema(type=FieldType.STRING, nullable=False, index=True),
@@ -102,7 +103,7 @@ DOC_WORKFLOW_REGISTRY_SCHEMA = CollectionSchema(
 
 
 class DocRecord(BaseModel):
-    app_name: str
+    app_id: str
     doc_id: str
     status: str        # "active" | "failed" | "deleted"
     ingested_at: str   # ISO-8601 UTC
@@ -111,7 +112,7 @@ class DocRecord(BaseModel):
 
 class TaskRecord(BaseModel):
     task_id: str
-    app_name: str
+    app_id: str
     task_type: str      # "ingest" | "workflow"
     task_name: str      # "ingest" for ingest tasks; workflow name for workflow tasks
     doc_id: str | None = None
@@ -124,7 +125,7 @@ class TaskRecord(BaseModel):
 
 
 class DocWorkflowRecord(BaseModel):
-    app_name: str
+    app_id: str
     doc_id: str
     workflow_name: str
     status: DocWorkflowStatus
@@ -138,7 +139,8 @@ class SystemConfigOverride(BaseModel):
 
 
 class AppRecord(BaseModel):
-    name: str
+    app_id: str       # stable internal id (primary key)
+    name: str         # client-facing handle (unique, mutable)
     config_yaml: str
     status: str       # "initializing" | "active" | "error"
     error: str | None = None
@@ -192,11 +194,11 @@ class SystemStore:
     async def list_apps(self) -> list[AppRecord]:
         return await self._store.query_as("app_records", filters=None, model=AppRecord)
 
-    async def delete_app(self, name: str) -> None:
-        await self._store.delete_records("app_records", filters=[Col("name") == name])
-        await self._store.delete_records("doc_registry", filters=[Col("app_name") == name])
-        await self._store.delete_records("doc_workflow_registry", filters=[Col("app_name") == name])
-        await self._store.delete_records("tasks", filters=[Col("app_name") == name])
+    async def delete_app(self, app_id: str) -> None:
+        await self._store.delete_records("app_records", filters=[Col("app_id") == app_id])
+        await self._store.delete_records("doc_registry", filters=[Col("app_id") == app_id])
+        await self._store.delete_records("doc_workflow_registry", filters=[Col("app_id") == app_id])
+        await self._store.delete_records("tasks", filters=[Col("app_id") == app_id])
 
     # ------------------------------------------------------------------
     # Skill registry
@@ -226,41 +228,41 @@ class SystemStore:
     async def save_doc(self, record: DocRecord) -> None:
         await self._store.save("doc_registry", [record.model_dump()])
 
-    async def get_doc(self, app_name: str, doc_id: str) -> DocRecord | None:
+    async def get_doc(self, app_id: str, doc_id: str) -> DocRecord | None:
         rows = await self._store.query_as(
             "doc_registry",
-            filters=[Col("app_name") == app_name, Col("doc_id") == doc_id],
+            filters=[Col("app_id") == app_id, Col("doc_id") == doc_id],
             model=DocRecord,
         )
         return rows[0] if rows else None
 
     async def list_docs(
         self,
-        app_name: str,
+        app_id: str,
         *,
         status: str | None = None,
     ) -> list[DocRecord]:
-        filters = [Col("app_name") == app_name]
+        filters = [Col("app_id") == app_id]
         if status is not None:
             filters.append(Col("status") == status)
         return await self._store.query_as("doc_registry", filters=filters, model=DocRecord)
 
-    async def delete_doc(self, app_name: str, doc_id: str) -> None:
+    async def delete_doc(self, app_id: str, doc_id: str) -> None:
         await self._store.delete_records(
             "doc_registry",
-            filters=[Col("app_name") == app_name, Col("doc_id") == doc_id],
+            filters=[Col("app_id") == app_id, Col("doc_id") == doc_id],
         )
         await self._store.delete_records(
             "tasks",
             filters=[
-                Col("app_name") == app_name,
+                Col("app_id") == app_id,
                 Col("doc_id") == doc_id,
                 Col("task_type") == "workflow",
             ],
         )
         await self._store.delete_records(
             "doc_workflow_registry",
-            filters=[Col("app_name") == app_name, Col("doc_id") == doc_id],
+            filters=[Col("app_id") == app_id, Col("doc_id") == doc_id],
         )
 
     async def save_system_config_override(self, key: str, value_json: str) -> None:
@@ -285,14 +287,14 @@ class SystemStore:
 
     async def upsert_doc_workflow_status(
         self,
-        app_name: str,
+        app_id: str,
         doc_id: str,
         workflow_name: str,
         status: DocWorkflowStatus,
     ) -> None:
         """Create or overwrite the workflow processing status for a document."""
         record = DocWorkflowRecord(
-            app_name=app_name,
+            app_id=app_id,
             doc_id=doc_id,
             workflow_name=workflow_name,
             status=status,
@@ -302,14 +304,14 @@ class SystemStore:
 
     async def get_doc_workflow(
         self,
-        app_name: str,
+        app_id: str,
         doc_id: str,
         workflow_name: str,
     ) -> DocWorkflowRecord | None:
         rows = await self._store.query_as(
             "doc_workflow_registry",
             filters=[
-                Col("app_name") == app_name,
+                Col("app_id") == app_id,
                 Col("doc_id") == doc_id,
                 Col("workflow_name") == workflow_name,
             ],
@@ -319,13 +321,13 @@ class SystemStore:
 
     async def list_doc_workflows(
         self,
-        app_name: str,
+        app_id: str,
         *,
         workflow_name: str | None = None,
         doc_id: str | None = None,
         status: DocWorkflowStatus | None = None,
     ) -> list[DocWorkflowRecord]:
-        filters = [Col("app_name") == app_name]
+        filters = [Col("app_id") == app_id]
         if workflow_name is not None:
             filters.append(Col("workflow_name") == workflow_name)
         if doc_id is not None:
@@ -355,14 +357,14 @@ class SystemStore:
 
     async def list_tasks(
         self,
-        app_name: str,
+        app_id: str,
         *,
         task_type: str | None = None,
         task_name: str | None = None,
         doc_id: str | None = None,
         status: TaskStatus | None = None,
     ) -> list[TaskRecord]:
-        filters = [Col("app_name") == app_name]
+        filters = [Col("app_id") == app_id]
         if task_type is not None:
             filters.append(Col("task_type") == task_type)
         if task_name is not None:
@@ -375,7 +377,7 @@ class SystemStore:
 
     async def create_workflow_task(
         self,
-        app_name: str,
+        app_id: str,
         workflow_name: str,
         doc_id: str | None,
         params_json: str | None,
@@ -385,7 +387,7 @@ class SystemStore:
         now = datetime.now(timezone.utc).isoformat()
         await self.create_task(TaskRecord(
             task_id=task_id,
-            app_name=app_name,
+            app_id=app_id,
             task_type="workflow",
             task_name=workflow_name,
             doc_id=doc_id,

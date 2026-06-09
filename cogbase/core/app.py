@@ -52,6 +52,7 @@ class CogBaseApp:
         pipelines: list[IngestionPipeline],
         runner: QueryRunner,
         *,
+        app_id: str,
         document_store: DocumentStoreBase,
         structured_store: StructuredStoreBase,
         workflow_runners: dict[str, "WorkflowRunner"],
@@ -61,6 +62,9 @@ class CogBaseApp:
         query_prompt: str | None = None,
     ) -> None:
         self.name = name
+        # Stable internal id — the per-app document-store collection key and the
+        # storage identity that survives a rename of ``name``.
+        self.app_id = app_id
         self._pipelines = pipelines
         self._runner = runner
         self._document_store = document_store
@@ -137,7 +141,7 @@ class CogBaseApp:
         docs_to_process: list[Document] = []
         for doc in documents:
             try:
-                await self._document_store.save(self.name, doc.doc_id, doc.text)
+                await self._document_store.save(self.app_id, doc.doc_id, doc.text)
                 docs_to_process.append(doc)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("app.ingest_documents.store_save_failed doc_id=%s", doc.doc_id)
@@ -214,7 +218,7 @@ class CogBaseApp:
                 )
                 try:
                     await self._task_store.upsert_doc_workflow_status(
-                        self.name, doc.doc_id, wf_runner.workflow.name, initial_status
+                        self.app_id, doc.doc_id, wf_runner.workflow.name, initial_status
                     )
                 except Exception:
                     logger.exception(
@@ -230,7 +234,7 @@ class CogBaseApp:
                     task_id: str | None = None
                     try:
                         task_id = await self._task_store.create_workflow_task(
-                            self.name, wf_runner.workflow.name, doc.doc_id, _json.dumps(params)
+                            self.app_id, wf_runner.workflow.name, doc.doc_id, _json.dumps(params)
                         )
                     except Exception:
                         logger.exception(
@@ -299,7 +303,7 @@ class CogBaseApp:
             # TODO if failed, some items such as some clauses in a contract may be successfully processed,
             #      need to clean up the partial results.
             await self._task_store.upsert_doc_workflow_status(
-                self.name, doc_id, wf_name,
+                self.app_id, doc_id, wf_name,
                 DocWorkflowStatus.DONE if all_ok else DocWorkflowStatus.FAILED,
             )
         except Exception:

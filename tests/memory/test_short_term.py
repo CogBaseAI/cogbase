@@ -47,7 +47,7 @@ async def _seed_turn(ep: EpisodicMemory, session_id: str, question: str, answer:
 @pytest.mark.asyncio
 async def test_start_session_returns_id_and_is_resumable(episodic):
     mem = ShortTermMemory(episodic=episodic)
-    sid = await mem.start_session(app_name="acme", user_id="u1")
+    sid = await mem.start_session(app_id="acme", user_id="u1")
     assert sid
 
     # Resume with the same id is idempotent (no new session created).
@@ -55,7 +55,7 @@ async def test_start_session_returns_id_and_is_resumable(episodic):
     assert same == sid
     state = await mem.get(sid)
     assert state is not None
-    assert state.app_name == "acme"
+    assert state.app_id == "acme"
     assert state.user_id == "u1"
 
 

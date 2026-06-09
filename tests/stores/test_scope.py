@@ -16,15 +16,15 @@ from cogbase.stores.vector.faiss_store import FAISSMemoryVectorStore, FAISSVecto
 # ---------------------------------------------------------------------------
 
 def test_app_only_prefix():
-    assert AppScope(app="myapp").prefix() == "myapp"
+    assert AppScope(app_id="myapp").prefix() == "myapp"
 
 
 def test_namespace_and_app_prefix():
-    assert AppScope(namespace="eng", app="myapp").prefix() == "eng__myapp"
+    assert AppScope(namespace_id="eng", app_id="myapp").prefix() == "eng__myapp"
 
 
 def test_full_hierarchy_prefix():
-    assert AppScope(account="acme", namespace="eng", app="myapp").prefix() == "acme__eng__myapp"
+    assert AppScope(account_id="acme", namespace_id="eng", app_id="myapp").prefix() == "acme__eng__myapp"
 
 
 def test_all_none_prefix_returns_none():
@@ -32,11 +32,11 @@ def test_all_none_prefix_returns_none():
 
 
 def test_partial_none_skipped():
-    assert AppScope(account="acme", app="myapp").prefix() == "acme__myapp"
+    assert AppScope(account_id="acme", app_id="myapp").prefix() == "acme__myapp"
 
 
 def test_custom_separator():
-    assert AppScope(account="acme", app="myapp").prefix(sep=".") == "acme.myapp"
+    assert AppScope(account_id="acme", app_id="myapp").prefix(sep=".") == "acme.myapp"
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ def test_vector_store_c_no_scope():
 
 
 def test_vector_store_c_with_scope():
-    store = FAISSMemoryVectorStore(scope=AppScope(app="myapp"))
+    store = FAISSMemoryVectorStore(scope=AppScope(app_id="myapp"))
     assert store._c("chunks") == "myapp__chunks"
 
 
@@ -59,7 +59,7 @@ def test_structured_store_c_no_scope():
 
 
 def test_structured_store_c_with_scope():
-    store = InMemoryStructuredStore(scope=AppScope(namespace="eng", app="myapp"))
+    store = InMemoryStructuredStore(scope=AppScope(namespace_id="eng", app_id="myapp"))
     assert store._c("contracts") == "eng__myapp__contracts"
 
 
@@ -69,7 +69,7 @@ def test_document_store_c_no_scope():
 
 
 def test_document_store_c_with_scope():
-    store = InMemoryDocumentStore(scope=AppScope(app="myapp"))
+    store = InMemoryDocumentStore(scope=AppScope(app_id="myapp"))
     assert store._c("docs") == "myapp__docs"
 
 
@@ -89,14 +89,14 @@ SCHEMA = CollectionSchema(
 
 
 async def test_scoped_structured_store_uses_prefixed_frame_key():
-    store = InMemoryStructuredStore(scope=AppScope(app="myapp"))
+    store = InMemoryStructuredStore(scope=AppScope(app_id="myapp"))
     await store.create_collection(SCHEMA)
     assert "myapp__contracts" in store._frames
     assert "contracts" not in store._frames
 
 
 async def test_scoped_structured_store_save_and_query():
-    store = InMemoryStructuredStore(scope=AppScope(app="myapp"))
+    store = InMemoryStructuredStore(scope=AppScope(app_id="myapp"))
     await store.create_collection(SCHEMA)
     await store.save("contracts", [{"doc_id": "x", "value": "hello"}])
     rows = await store.query("contracts")
@@ -106,8 +106,8 @@ async def test_scoped_structured_store_save_and_query():
 async def test_two_scoped_structured_stores_do_not_conflict():
     """Two apps with scoped stores sharing the same underlying instance."""
     raw = InMemoryStructuredStore()
-    a = raw.with_scope(AppScope(app="app_a"))
-    b = raw.with_scope(AppScope(app="app_b"))
+    a = raw.with_scope(AppScope(app_id="app_a"))
+    b = raw.with_scope(AppScope(app_id="app_b"))
 
     await a.create_collection(SCHEMA)
     await b.create_collection(SCHEMA)
@@ -125,8 +125,8 @@ async def test_two_scoped_structured_stores_do_not_conflict():
 
 async def test_scoped_structured_delete_records_isolated():
     raw = InMemoryStructuredStore()
-    a = raw.with_scope(AppScope(app="app_a"))
-    b = raw.with_scope(AppScope(app="app_b"))
+    a = raw.with_scope(AppScope(app_id="app_a"))
+    b = raw.with_scope(AppScope(app_id="app_b"))
     await a.create_collection(SCHEMA)
     await b.create_collection(SCHEMA)
     await a.save("contracts", [{"doc_id": "x", "value": "a"}])
@@ -140,8 +140,8 @@ async def test_scoped_structured_delete_records_isolated():
 
 async def test_scoped_structured_delete_collection_isolated():
     raw = InMemoryStructuredStore()
-    a = raw.with_scope(AppScope(app="app_a"))
-    b = raw.with_scope(AppScope(app="app_b"))
+    a = raw.with_scope(AppScope(app_id="app_a"))
+    b = raw.with_scope(AppScope(app_id="app_b"))
     await a.create_collection(SCHEMA)
     await b.create_collection(SCHEMA)
     await a.save("contracts", [{"doc_id": "x", "value": "a"}])
@@ -158,7 +158,7 @@ async def test_scoped_structured_delete_collection_isolated():
 # ---------------------------------------------------------------------------
 
 async def test_sqlite_scoped_table_name(tmp_path):
-    store = SQLiteStructuredStore(tmp_path / "test.db", scope=AppScope(app="myapp"))
+    store = SQLiteStructuredStore(tmp_path / "test.db", scope=AppScope(app_id="myapp"))
     await store.create_collection(SCHEMA)
     tables = {row[0] for row in store._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "myapp__contracts" in tables
@@ -167,8 +167,8 @@ async def test_sqlite_scoped_table_name(tmp_path):
 
 
 async def test_sqlite_two_scoped_apps_no_conflict(tmp_path):
-    store_a = SQLiteStructuredStore(tmp_path / "a.db", scope=AppScope(app="app_a"))
-    store_b = SQLiteStructuredStore(tmp_path / "b.db", scope=AppScope(app="app_b"))
+    store_a = SQLiteStructuredStore(tmp_path / "a.db", scope=AppScope(app_id="app_a"))
+    store_b = SQLiteStructuredStore(tmp_path / "b.db", scope=AppScope(app_id="app_b"))
     await store_a.create_collection(SCHEMA)
     await store_b.create_collection(SCHEMA)
     await store_a.save("contracts", [{"doc_id": "x", "value": "a"}])
@@ -187,7 +187,7 @@ VSCHEMA = VectorCollectionSchema(name="chunks", dimensions=2, description="test 
 
 
 async def test_faiss_scoped_uses_prefixed_key():
-    store = FAISSMemoryVectorStore(scope=AppScope(app="myapp"))
+    store = FAISSMemoryVectorStore(scope=AppScope(app_id="myapp"))
     await store.create_collection(VSCHEMA)
     assert "myapp__chunks" in store._collections
     assert "chunks" not in store._collections
@@ -195,8 +195,8 @@ async def test_faiss_scoped_uses_prefixed_key():
 
 async def test_faiss_two_scoped_stores_do_not_conflict():
     raw = FAISSMemoryVectorStore()
-    a = raw.with_scope(AppScope(app="app_a"))
-    b = raw.with_scope(AppScope(app="app_b"))
+    a = raw.with_scope(AppScope(app_id="app_a"))
+    b = raw.with_scope(AppScope(app_id="app_b"))
 
     await a.create_collection(VSCHEMA)
     await b.create_collection(VSCHEMA)
@@ -218,8 +218,8 @@ async def test_faiss_two_scoped_stores_do_not_conflict():
 
 async def test_faiss_scoped_delete_isolated():
     raw = FAISSMemoryVectorStore()
-    a = raw.with_scope(AppScope(app="app_a"))
-    b = raw.with_scope(AppScope(app="app_b"))
+    a = raw.with_scope(AppScope(app_id="app_a"))
+    b = raw.with_scope(AppScope(app_id="app_b"))
     await a.create_collection(VSCHEMA)
     await b.create_collection(VSCHEMA)
     await a.upsert("chunks", [Chunk(chunk_id="ca", doc_id="d1", text="t", embedding=[1.0, 0.0])])
@@ -232,7 +232,7 @@ async def test_faiss_scoped_delete_isolated():
 
 
 async def test_faiss_scoped_file_store_roundtrip(tmp_path):
-    scope = AppScope(app="myapp")
+    scope = AppScope(app_id="myapp")
     store = FAISSVectorStore(path=tmp_path / "store", scope=scope)
     await store.create_collection(VSCHEMA)
     chunk = Chunk(chunk_id="c1", doc_id="d1", text="hello", embedding=[1.0, 0.0])
@@ -251,8 +251,8 @@ async def test_faiss_scoped_file_store_roundtrip(tmp_path):
 
 async def test_in_memory_doc_scoped_isolation():
     raw = InMemoryDocumentStore()
-    a = raw.with_scope(AppScope(app="app_a"))
-    b = raw.with_scope(AppScope(app="app_b"))
+    a = raw.with_scope(AppScope(app_id="app_a"))
+    b = raw.with_scope(AppScope(app_id="app_b"))
 
     await a.save("docs", "file1", "content_a")
     await b.save("docs", "file1", "content_b")
@@ -266,8 +266,8 @@ async def test_in_memory_doc_scoped_isolation():
 
 async def test_in_memory_doc_scoped_delete_isolated():
     raw = InMemoryDocumentStore()
-    a = raw.with_scope(AppScope(app="app_a"))
-    b = raw.with_scope(AppScope(app="app_b"))
+    a = raw.with_scope(AppScope(app_id="app_a"))
+    b = raw.with_scope(AppScope(app_id="app_b"))
 
     await a.save("docs", "file1", "a_content")
     await b.save("docs", "file1", "b_content")
@@ -278,7 +278,7 @@ async def test_in_memory_doc_scoped_delete_isolated():
 
 
 async def test_local_fs_scoped_path_uses_prefix(tmp_path):
-    store = LocalFSDocumentStore(tmp_path, scope=AppScope(app="myapp"))
+    store = LocalFSDocumentStore(tmp_path, scope=AppScope(app_id="myapp"))
     await store.save("docs", "file1.txt", "hello")
     # The file should live under myapp__docs/, not docs/
     assert (tmp_path / "myapp__docs" / "file1.txt").exists()
@@ -287,8 +287,8 @@ async def test_local_fs_scoped_path_uses_prefix(tmp_path):
 
 async def test_local_fs_two_scoped_apps_isolated(tmp_path):
     raw = LocalFSDocumentStore(tmp_path)
-    a = raw.with_scope(AppScope(app="app_a"))
-    b = raw.with_scope(AppScope(app="app_b"))
+    a = raw.with_scope(AppScope(app_id="app_a"))
+    b = raw.with_scope(AppScope(app_id="app_b"))
 
     await a.save("docs", "file1.txt", "a_content")
     await b.save("docs", "file1.txt", "b_content")
@@ -307,13 +307,13 @@ async def test_with_scope_does_not_modify_original_store():
     """Calling with_scope() should not alter the underlying store's scope."""
     raw = InMemoryStructuredStore()
     assert raw._scope is None
-    _ = raw.with_scope(AppScope(app="myapp"))
+    _ = raw.with_scope(AppScope(app_id="myapp"))
     assert raw._scope is None  # raw store is unaffected
 
 
 async def test_register_schema_via_scoped_proxy():
     raw = InMemoryStructuredStore()
-    proxy = raw.with_scope(AppScope(app="myapp"))
+    proxy = raw.with_scope(AppScope(app_id="myapp"))
     proxy.register_schema(SCHEMA)
     # Proxy has bare schema; raw store has scoped schema
     assert "contracts" in proxy._schemas

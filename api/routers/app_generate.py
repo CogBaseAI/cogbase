@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
@@ -243,7 +244,9 @@ async def deploy(
 
     stored_yaml = config.to_yaml()
     now = _now()
+    app_id = uuid.uuid4().hex
     record = AppRecord(
+        app_id=app_id,
         name=config.name,
         config_yaml=stored_yaml,
         status="initializing",
@@ -253,7 +256,7 @@ async def deploy(
     await system_store.save_app(record)
 
     try:
-        app = await build_app(config, system=system_resources, app_status=record.status, task_store=system_store)
+        app = await build_app(config, app_id=app_id, system=system_resources, app_status=record.status, task_store=system_store)
         app_cache.add(config.name, app)
         record = record.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("deployed app name=%s", config.name)

@@ -305,7 +305,7 @@ class TestBuildAppStructuredStoreResolution:
         mock_build_llm.return_value = _mock_llm()
         cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
         with pytest.raises(ValueError, match="structured store"):
-            await build_app(cfg, app_status="initializing")
+            await build_app(cfg, app_id=cfg.name, app_status="initializing")
 
     @patch("api.factory._build_llm")
     async def test_uses_system_store_when_no_app_store(self, mock_build_llm):
@@ -316,7 +316,7 @@ class TestBuildAppStructuredStoreResolution:
         app = await build_app(
             cfg,
             system=SystemResources(structured_store=system_store, document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
         structured_store = next(iter(app._pipelines[0]._structured_by_name.values())).store
@@ -334,7 +334,7 @@ class TestBuildAppStructuredStoreResolution:
         app = await build_app(
             cfg,
             system=SystemResources(structured_store=system_store, document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
         structured_store = next(iter(app._pipelines[0]._structured_by_name.values())).store
@@ -358,7 +358,7 @@ class TestBuildAppCollectionCreation:
         await build_app(
             cfg,
             system=SystemResources(structured_store=structured_store, vector_store=vector_store, document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
 
@@ -381,7 +381,7 @@ class TestBuildAppCollectionCreation:
         await build_app(
             cfg,
             system=SystemResources(structured_store=structured_store, vector_store=vector_store, document_store=InMemoryDocumentStore()),
-            app_status="active",
+            app_id=cfg.name, app_status="active",
             task_store=_mock_task_store(),
         )
 
@@ -405,7 +405,7 @@ class TestBuildAppCollectionCreation:
         await build_app(
             cfg,
             system=SystemResources(structured_store=structured_store, vector_store=vector_store, document_store=InMemoryDocumentStore()),
-            app_status="active",
+            app_id=cfg.name, app_status="active",
             task_store=_mock_task_store(),
         )
 
@@ -426,7 +426,7 @@ class TestBuildAppCollectionCreation:
         doc_store = InMemoryDocumentStore()
         ts = _mock_task_store()
         # First pass — initialising: creates the table.
-        await build_app(cfg, system=SystemResources(structured_store=store, document_store=doc_store), app_status="initializing", task_store=ts)
+        await build_app(cfg, system=SystemResources(structured_store=store, document_store=doc_store), app_id=cfg.name, app_status="initializing", task_store=ts)
 
         # Simulate restart: wipe only _schemas (the data frame persists in a real
         # backing store; InMemoryStructuredStore's frame is retained here to mimic
@@ -434,7 +434,7 @@ class TestBuildAppCollectionCreation:
         store._schemas.clear()
 
         # Second pass — active: must register schemas so query doesn't raise KeyError.
-        app2 = await build_app(cfg, system=SystemResources(structured_store=store, document_store=doc_store), app_status="active", task_store=ts)
+        app2 = await build_app(cfg, system=SystemResources(structured_store=store, document_store=doc_store), app_id=cfg.name, app_status="active", task_store=ts)
 
         # Query through the scoped store (handles the name prefix); must succeed.
         scoped_store = next(iter(app2._pipelines[0]._structured_by_name.values())).store
@@ -451,7 +451,7 @@ class TestBuildAppVectorStoreResolution:
         app = await build_app(
             cfg,
             system=SystemResources(structured_store=system_store, document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
         assert app._pipelines[0]._vector_by_name == {}
@@ -468,7 +468,7 @@ class TestBuildAppVectorStoreResolution:
             app = await build_app(
                 cfg,
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs, document_store=InMemoryDocumentStore()),
-                app_status="initializing",
+                app_id=cfg.name, app_status="initializing",
                 task_store=_mock_task_store(),
             )
 
@@ -487,7 +487,7 @@ class TestBuildAppVectorStoreResolution:
             app = await build_app(
                 cfg,
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs, document_store=InMemoryDocumentStore()),
-                app_status="initializing",
+                app_id=cfg.name, app_status="initializing",
                 task_store=_mock_task_store(),
             )
 
@@ -576,7 +576,7 @@ class TestBuildAppDocumentCollection:
             app = await build_app(
                 cfg,
                 system=SystemResources(vector_store=sys_vs, structured_store=InMemoryStructuredStore(), document_store=InMemoryDocumentStore()),
-                app_status="initializing",
+                app_id=cfg.name, app_status="initializing",
                 task_store=_mock_task_store(),
             )
 
@@ -593,7 +593,7 @@ class TestBuildAppDocumentCollection:
             app = await build_app(
                 cfg,
                 system=SystemResources(vector_store=sys_vs, structured_store=InMemoryStructuredStore(), document_store=InMemoryDocumentStore()),
-                app_status="initializing",
+                app_id=cfg.name, app_status="initializing",
                 task_store=_mock_task_store(),
             )
 
@@ -614,7 +614,7 @@ class TestBuildAppDocumentCollection:
             app = await build_app(
                 cfg,
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs, document_store=InMemoryDocumentStore()),
-                app_status="initializing",
+                app_id=cfg.name, app_status="initializing",
                 task_store=_mock_task_store(),
             )
 
@@ -633,7 +633,7 @@ class TestBuildAppDocumentCollection:
             app = await build_app(
                 cfg,
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs, document_store=InMemoryDocumentStore()),
-                app_status="initializing",
+                app_id=cfg.name, app_status="initializing",
                 task_store=_mock_task_store(),
             )
 
@@ -653,7 +653,7 @@ class TestBuildAppDocumentCollection:
             app = await build_app(
                 cfg,
                 system=SystemResources(structured_store=system_store, vector_store=sys_vs, document_store=InMemoryDocumentStore()),
-                app_status="initializing",
+                app_id=cfg.name, app_status="initializing",
                 task_store=_mock_task_store(),
             )
 
@@ -668,7 +668,7 @@ class TestBuildAppDocumentCollection:
         cfg = AppConfig.from_yaml(_SUMMARIZE_ONLY_CONFIG_YAML)
         # No vector store supplied
         with pytest.raises(ValueError, match="vector store"):
-            await build_app(cfg, app_status="initializing")
+            await build_app(cfg, app_id=cfg.name, app_status="initializing")
 
 
 # ---------------------------------------------------------------------------
@@ -765,7 +765,7 @@ class TestBuildAppListExtractor:
         app = await build_app(
             cfg,
             system=SystemResources(structured_store=system_store, document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
 
@@ -780,7 +780,7 @@ class TestBuildAppListExtractor:
         app = await build_app(
             cfg,
             system=SystemResources(structured_store=system_store, document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
 
@@ -795,7 +795,7 @@ class TestBuildAppListExtractor:
         app = await build_app(
             cfg,
             system=SystemResources(structured_store=system_store, document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
 
@@ -810,7 +810,7 @@ class TestBuildAppListExtractor:
         app = await build_app(
             cfg,
             system=SystemResources(structured_store=system_store, document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
 
@@ -826,7 +826,7 @@ class TestBuildAppListExtractor:
         app = await build_app(
             cfg,
             system=SystemResources(structured_store=system_store, document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
 
@@ -841,7 +841,7 @@ class TestBuildAppListExtractor:
         app = await build_app(
             cfg,
             system=SystemResources(structured_store=system_store, document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
 
@@ -858,7 +858,7 @@ class TestBuildAppListExtractor:
         app = await build_app(
             cfg,
             system=SystemResources(structured_store=system_store, document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
 
@@ -883,7 +883,7 @@ llm:
         app = await build_app(
             cfg,
             system=SystemResources(document_store=sys_doc, structured_store=InMemoryStructuredStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
 
@@ -907,7 +907,7 @@ document_store:
         app = await build_app(
             cfg,
             system=SystemResources(document_store=sys_doc, structured_store=InMemoryStructuredStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
 
@@ -970,7 +970,7 @@ class TestBuildAppMatchMetadataFields:
         mock_build_embedder.return_value = MagicMock()
         cfg = AppConfig.from_yaml(_TWO_PIPELINE_CONFIG_YAML)
         sys_vs = FAISSVectorStore()
-        app = await build_app(cfg, system=SystemResources(vector_store=sys_vs, structured_store=InMemoryStructuredStore(), document_store=InMemoryDocumentStore()), app_status="initializing", task_store=_mock_task_store())
+        app = await build_app(cfg, system=SystemResources(vector_store=sys_vs, structured_store=InMemoryStructuredStore(), document_store=InMemoryDocumentStore()), app_id=cfg.name, app_status="initializing", task_store=_mock_task_store())
         # Both pipelines match on doc_type — both collections should include it in metadata_fields
         contract_vc = app._pipelines[0]._vector_by_name["contract_chunks"]
         rule_vc = app._pipelines[0]._vector_by_name["rule_chunks"]
@@ -988,7 +988,7 @@ class TestBuildAppMatchMetadataFields:
         )
         cfg = AppConfig.from_yaml(yaml_with_explicit)
         sys_vs = FAISSVectorStore()
-        app = await build_app(cfg, system=SystemResources(vector_store=sys_vs, structured_store=InMemoryStructuredStore(), document_store=InMemoryDocumentStore()), app_status="initializing", task_store=_mock_task_store())
+        app = await build_app(cfg, system=SystemResources(vector_store=sys_vs, structured_store=InMemoryStructuredStore(), document_store=InMemoryDocumentStore()), app_id=cfg.name, app_status="initializing", task_store=_mock_task_store())
         contract_vc = app._pipelines[0]._vector_by_name["contract_chunks"]
         assert "vendor" in contract_vc.schema.metadata_fields
         assert "doc_type" in contract_vc.schema.metadata_fields
@@ -1004,7 +1004,7 @@ class TestBuildAppMatchMetadataFields:
         app = await build_app(
             cfg,
             system=SystemResources(structured_store=system_store, vector_store=sys_vs, document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
         vc = app._pipelines[0]._vector_by_name["document_chunks"]
@@ -1026,7 +1026,7 @@ class TestBuildAppQueryPrompt:
         app = await build_app(
             cfg,
             system=SystemResources(structured_store=InMemoryStructuredStore(), document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
         assert app._query_prompt == "Answer in one sentence."
@@ -1038,7 +1038,7 @@ class TestBuildAppQueryPrompt:
         app = await build_app(
             cfg,
             system=SystemResources(structured_store=InMemoryStructuredStore(), document_store=InMemoryDocumentStore()),
-            app_status="initializing",
+            app_id=cfg.name, app_status="initializing",
             task_store=_mock_task_store(),
         )
         assert app._query_prompt is None

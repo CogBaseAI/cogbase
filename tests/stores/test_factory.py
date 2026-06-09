@@ -69,7 +69,7 @@ def test_build_log_store_unknown_type_raises():
 # ---------------------------------------------------------------------------
 
 def test_build_structured_store_with_scope():
-    scope = AppScope(app="myapp")
+    scope = AppScope(app_id="myapp")
     store = build_structured_store(StructuredStoreConfig(type="memory"), scope=scope)
     assert isinstance(store, InMemoryStructuredStore)
     assert store._scope == scope
@@ -77,7 +77,7 @@ def test_build_structured_store_with_scope():
 
 
 def test_build_vector_store_faiss_with_scope():
-    scope = AppScope(app="myapp")
+    scope = AppScope(app_id="myapp")
     store = build_vector_store(VectorStoreConfig(type="faiss"), scope=scope)
     assert isinstance(store, FAISSVectorStore)
     assert store._scope == scope
@@ -85,7 +85,7 @@ def test_build_vector_store_faiss_with_scope():
 
 
 def test_build_document_store_local_with_scope(tmp_path):
-    scope = AppScope(namespace="eng", app="myapp")
+    scope = AppScope(namespace_id="eng", app_id="myapp")
     store = build_document_store(
         DocumentStoreConfig(type="local", path=str(tmp_path / "docs")), scope=scope
     )
@@ -95,7 +95,7 @@ def test_build_document_store_local_with_scope(tmp_path):
 
 
 def test_build_log_store_local_with_scope(tmp_path):
-    scope = AppScope(namespace="eng", app="myapp")
+    scope = AppScope(namespace_id="eng", app_id="myapp")
     store = build_log_store(
         LogStoreConfig(type="local", path=str(tmp_path / "logs")), scope=scope
     )

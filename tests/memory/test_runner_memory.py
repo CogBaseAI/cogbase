@@ -65,7 +65,7 @@ def _mem(episodic: EpisodicMemory, llm=None) -> ShortTermMemory:
 
 def _runner(llm, *, short_term=None, episodic=None, skills=None) -> QueryRunner:
     return QueryRunner(
-        app_name="testapp",
+        app_id="testapp",
         llm=llm,
         document_store=MagicMock(),
         short_term=short_term,
@@ -82,7 +82,7 @@ def _make_skill(name: str, description: str = "A skill.") -> Skill:
 async def test_run_records_turns_into_session(episodic):
     llm = _make_llm(_text_result("hi there"))
     mem = _mem(episodic)
-    sid = await mem.start_session(app_name="testapp")
+    sid = await mem.start_session(app_id="testapp")
     runner = _runner(llm, short_term=mem, episodic=episodic)
 
     _, result = await _drain(runner, "hello", session_id=sid)
@@ -136,7 +136,7 @@ async def test_second_turn_sees_prior_context_without_caller_history(episodic):
 async def test_skill_routing_uses_assembled_memory_context(episodic):
     # Turn 1: seed the session with a prior Q&A.
     mem = _mem(episodic)
-    sid = await mem.start_session(app_name="testapp")
+    sid = await mem.start_session(app_id="testapp")
     llm1 = _make_llm(_text_result("Paris is the capital of France."))
     await _drain(
         _runner(llm1, short_term=mem, episodic=episodic),
