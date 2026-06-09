@@ -3,12 +3,12 @@
   GET  /skills
   GET  /applications/{name}/skills
   POST /applications/{name}/skills
-  DELETE /applications/{name}/skills/{skill_id}
+  DELETE /applications/{name}/skills/{skill_name}
 
 Also covers creating/updating applications with skills declared in config.yaml.
 
-Skills are referenced by id. In these tests the skill id and display name are the
-same string (e.g. "skill-alpha") for readability.
+Skills are referenced by name in the API. In these tests the skill id and display
+name are the same string (e.g. "skill-alpha") for readability.
 """
 
 from __future__ import annotations
@@ -65,8 +65,8 @@ def _make_bundle(config_yaml: str) -> bytes:
     return buf.getvalue()
 
 
-def _skill_ids(resp_json: dict) -> set[str]:
-    return {s["skill_id"] for s in resp_json["skills"]}
+def _skill_names(resp_json: dict) -> set[str]:
+    return {s["name"] for s in resp_json["skills"]}
 
 
 _BASE_CONFIG = textwrap.dedent("""\
@@ -179,7 +179,7 @@ class TestListApplicationSkills:
         await _create_app(client, config)
         resp = await client.get("/applications/my-app/skills")
         assert resp.status_code == 200
-        assert resp.json()["skills"] == [{"skill_id": "skill-alpha", "name": "skill-alpha"}]
+        assert resp.json()["skills"] == [{"name": "skill-alpha"}]
 
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown_app(self, client):
@@ -197,44 +197,44 @@ class TestAddApplicationSkill:
         await _create_app(client)
         resp = await client.post(
             "/applications/my-app/skills",
-            json={"skill_id": "skill-alpha"},
+            json={"skill_name": "skill-alpha"},
         )
         assert resp.status_code == 201
         assert resp.json() == {
             "app_name": "my-app",
-            "skills": [{"skill_id": "skill-alpha", "name": "skill-alpha"}],
+            "skills": [{"name": "skill-alpha"}],
         }
 
     @pytest.mark.asyncio
     async def test_skill_persisted_in_config_yaml(self, client):
         await _create_app(client)
-        await client.post("/applications/my-app/skills", json={"skill_id": "skill-alpha"})
+        await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
 
         resp = await client.get("/applications/my-app/skills")
-        assert "skill-alpha" in _skill_ids(resp.json())
+        assert "skill-alpha" in _skill_names(resp.json())
 
     @pytest.mark.asyncio
     async def test_adding_multiple_skills(self, client):
         await _create_app(client)
-        await client.post("/applications/my-app/skills", json={"skill_id": "skill-alpha"})
-        resp = await client.post("/applications/my-app/skills", json={"skill_id": "skill-beta"})
+        await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
+        resp = await client.post("/applications/my-app/skills", json={"skill_name": "skill-beta"})
         assert resp.status_code == 201
-        assert _skill_ids(resp.json()) == {"skill-alpha", "skill-beta"}
+        assert _skill_names(resp.json()) == {"skill-alpha", "skill-beta"}
 
     @pytest.mark.asyncio
     async def test_idempotent_when_skill_already_assigned(self, client):
         await _create_app(client)
-        await client.post("/applications/my-app/skills", json={"skill_id": "skill-alpha"})
-        resp = await client.post("/applications/my-app/skills", json={"skill_id": "skill-alpha"})
+        await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
+        resp = await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
         assert resp.status_code == 201
-        ids = [s["skill_id"] for s in resp.json()["skills"]]
-        assert ids.count("skill-alpha") == 1
+        names = [s["name"] for s in resp.json()["skills"]]
+        assert names.count("skill-alpha") == 1
 
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown_app(self, client):
         resp = await client.post(
             "/applications/ghost/skills",
-            json={"skill_id": "skill-alpha"},
+            json={"skill_name": "skill-alpha"},
         )
         assert resp.status_code == 404
 
@@ -243,7 +243,7 @@ class TestAddApplicationSkill:
         await _create_app(client)
         resp = await client.post(
             "/applications/my-app/skills",
-            json={"skill_id": "nonexistent-skill"},
+            json={"skill_name": "nonexistent-skill"},
         )
         assert resp.status_code == 404
         assert "nonexistent-skill" in resp.json()["detail"]
@@ -257,30 +257,30 @@ class TestRemoveApplicationSkill:
     @pytest.mark.asyncio
     async def test_returns_204_on_success(self, client):
         await _create_app(client)
-        await client.post("/applications/my-app/skills", json={"skill_id": "skill-alpha"})
+        await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
         resp = await client.delete("/applications/my-app/skills/skill-alpha")
         assert resp.status_code == 204
 
     @pytest.mark.asyncio
     async def test_skill_removed_from_config_yaml(self, client):
         await _create_app(client)
-        await client.post("/applications/my-app/skills", json={"skill_id": "skill-alpha"})
+        await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
         await client.delete("/applications/my-app/skills/skill-alpha")
 
         resp = await client.get("/applications/my-app/skills")
-        assert "skill-alpha" not in _skill_ids(resp.json())
+        assert "skill-alpha" not in _skill_names(resp.json())
 
     @pytest.mark.asyncio
     async def test_removes_only_specified_skill(self, client):
         await _create_app(client)
-        await client.post("/applications/my-app/skills", json={"skill_id": "skill-alpha"})
-        await client.post("/applications/my-app/skills", json={"skill_id": "skill-beta"})
+        await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
+        await client.post("/applications/my-app/skills", json={"skill_name": "skill-beta"})
         await client.delete("/applications/my-app/skills/skill-alpha")
 
         resp = await client.get("/applications/my-app/skills")
-        ids = _skill_ids(resp.json())
-        assert "skill-alpha" not in ids
-        assert "skill-beta" in ids
+        names = _skill_names(resp.json())
+        assert "skill-alpha" not in names
+        assert "skill-beta" in names
 
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown_app(self, client):
@@ -306,7 +306,7 @@ class TestSkillsInConfig:
         await _create_app(client, config)
 
         resp = await client.get("/applications/my-app/skills")
-        assert _skill_ids(resp.json()) == {"skill-alpha", "skill-beta"}
+        assert _skill_names(resp.json()) == {"skill-alpha", "skill-beta"}
 
     @pytest.mark.asyncio
     async def test_create_with_unknown_skill_returns_422(self, client):
@@ -335,9 +335,9 @@ class TestSkillsInConfig:
         assert resp.status_code == 200
 
         resp = await client.get("/applications/my-app/skills")
-        ids = _skill_ids(resp.json())
-        assert "skill-beta" in ids
-        assert "skill-alpha" not in ids
+        names = _skill_names(resp.json())
+        assert "skill-beta" in names
+        assert "skill-alpha" not in names
 
     @pytest.mark.asyncio
     async def test_update_with_unknown_skill_returns_422(self, client):

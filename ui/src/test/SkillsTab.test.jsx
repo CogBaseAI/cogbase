@@ -78,7 +78,7 @@ describe('delete', () => {
     await user.click(screen.getAllByText('Delete')[0])
 
     expect(fetchSpy).toHaveBeenCalledWith(
-      expect.stringContaining('/skills/aaa111'),
+      expect.stringContaining('/skills/pdf-summarizer'),
       expect.objectContaining({ method: 'DELETE' })
     )
   })

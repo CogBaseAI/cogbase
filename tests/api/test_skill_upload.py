@@ -1,9 +1,9 @@
 """Tests for the skill upload/CRUD APIs:
 
-  POST   /skills          — upload a ZIP bundle (assigns a UUID)
-  PUT    /skills/{id}      — replace an existing skill's bundle
-  GET    /skills/{id}      — fetch one skill
-  DELETE /skills/{id}      — remove from store, cache, and registry
+  POST   /skills               — upload a ZIP bundle (assigns a UUID)
+  PUT    /skills/{skill_name}  — replace an existing skill's bundle
+  GET    /skills/{skill_name}  — fetch one skill
+  DELETE /skills/{skill_name}  — remove from store, cache, and registry
 """
 
 from __future__ import annotations
@@ -99,11 +99,13 @@ class TestReplaceGetDeleteSkill:
     @pytest.mark.asyncio
     async def test_put_keeps_id_and_updates_metadata(self, ctx):
         client, system_store, registry, _ = ctx
-        skill_id = (await _upload(client, {"SKILL.md": VALID_MD})).json()["id"]
+        body = (await _upload(client, {"SKILL.md": VALID_MD})).json()
+        skill_name = body["name"]  # "greeter"
+        skill_id = body["id"]
 
         updated_md = "---\nname: greeter\ndescription: Says hello v2.\n---\n# Greeter v2\n"
         resp = await client.put(
-            f"/skills/{skill_id}",
+            f"/skills/{skill_name}",
             files={"bundle": ("skill.zip", _zip({"SKILL.md": updated_md}), "application/zip")},
         )
         assert resp.status_code == 200
@@ -112,7 +114,7 @@ class TestReplaceGetDeleteSkill:
         assert len(await system_store.list_skills()) == 1  # replaced, not duplicated
 
     @pytest.mark.asyncio
-    async def test_put_unknown_id_returns_404(self, ctx):
+    async def test_put_unknown_name_returns_404(self, ctx):
         client, *_ = ctx
         resp = await client.put(
             "/skills/ghost",
@@ -123,8 +125,8 @@ class TestReplaceGetDeleteSkill:
     @pytest.mark.asyncio
     async def test_get_skill(self, ctx):
         client, *_ = ctx
-        skill_id = (await _upload(client, {"SKILL.md": VALID_MD})).json()["id"]
-        resp = await client.get(f"/skills/{skill_id}")
+        skill_name = (await _upload(client, {"SKILL.md": VALID_MD})).json()["name"]
+        resp = await client.get(f"/skills/{skill_name}")
         assert resp.status_code == 200
         assert resp.json()["name"] == "greeter"
 
@@ -136,9 +138,11 @@ class TestReplaceGetDeleteSkill:
     @pytest.mark.asyncio
     async def test_delete_removes_everywhere(self, ctx):
         client, system_store, registry, bundle_store = ctx
-        skill_id = (await _upload(client, {"SKILL.md": VALID_MD})).json()["id"]
+        body = (await _upload(client, {"SKILL.md": VALID_MD})).json()
+        skill_name = body["name"]  # "greeter"
+        skill_id = body["id"]
 
-        resp = await client.delete(f"/skills/{skill_id}")
+        resp = await client.delete(f"/skills/{skill_name}")
         assert resp.status_code == 204
         with pytest.raises(KeyError):
             registry.get(skill_id)
@@ -179,10 +183,12 @@ class TestDeleteRejectsReferencedSkill:
     @pytest.mark.asyncio
     async def test_delete_referenced_skill_returns_409_and_keeps_skill(self, ctx):
         client, system_store, registry, bundle_store = ctx
-        skill_id = (await _upload(client, {"SKILL.md": VALID_MD})).json()["id"]
+        body = (await _upload(client, {"SKILL.md": VALID_MD})).json()
+        skill_name = body["name"]  # "greeter"
+        skill_id = body["id"]
         await _seed_app(system_store, "my-app", skill_id)
 
-        resp = await client.delete(f"/skills/{skill_id}")
+        resp = await client.delete(f"/skills/{skill_name}")
         assert resp.status_code == 409
         assert "my-app" in resp.json()["detail"]
 
@@ -194,11 +200,13 @@ class TestDeleteRejectsReferencedSkill:
     @pytest.mark.asyncio
     async def test_error_lists_all_referencing_apps(self, ctx):
         client, system_store, registry, _ = ctx
-        skill_id = (await _upload(client, {"SKILL.md": VALID_MD})).json()["id"]
+        body = (await _upload(client, {"SKILL.md": VALID_MD})).json()
+        skill_name = body["name"]
+        skill_id = body["id"]
         await _seed_app(system_store, "app-one", skill_id)
         await _seed_app(system_store, "app-two", skill_id)
 
-        resp = await client.delete(f"/skills/{skill_id}")
+        resp = await client.delete(f"/skills/{skill_name}")
         assert resp.status_code == 409
         detail = resp.json()["detail"]
         assert "app-one" in detail and "app-two" in detail
@@ -206,12 +214,14 @@ class TestDeleteRejectsReferencedSkill:
     @pytest.mark.asyncio
     async def test_delete_succeeds_once_unreferenced(self, ctx):
         client, system_store, registry, _ = ctx
-        skill_id = (await _upload(client, {"SKILL.md": VALID_MD})).json()["id"]
+        body = (await _upload(client, {"SKILL.md": VALID_MD})).json()
+        skill_name = body["name"]
+        skill_id = body["id"]
 
         # An app that references a *different* skill must not block deletion.
         await _seed_app(system_store, "other-app", "some-other-skill")
 
-        resp = await client.delete(f"/skills/{skill_id}")
+        resp = await client.delete(f"/skills/{skill_name}")
         assert resp.status_code == 204
         with pytest.raises(KeyError):
             registry.get(skill_id)
@@ -247,7 +257,7 @@ class TestBuiltinSkillsAreReadOnly:
         client, _, registry, _bs = ctx
         self._register_builtin(registry)
         resp = await client.put(
-            "/skills/builtin-skill",
+            "/skills/builtin-skill",  # "builtin-skill" is the skill's name
             files={"bundle": ("skill.zip", _zip({"SKILL.md": VALID_MD}), "application/zip")},
         )
         assert resp.status_code == 403

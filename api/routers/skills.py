@@ -38,16 +38,20 @@ def _to_response(skill) -> SkillResponse:
     )
 
 
-def _reject_if_builtin(skill_registry, skill_id: str) -> None:
-    """Block mutating operations on built-in (skills_dir) skills."""
+def _get_skill_by_name(skill_registry, skill_name: str):
+    """Return the skill with *skill_name*, raising HTTP 404 if not found."""
     try:
-        skill = skill_registry.get(skill_id)
+        return skill_registry.get_by_name(skill_name)
     except KeyError:
-        return
+        raise HTTPException(status_code=404, detail=f"No skill with name '{skill_name}'")
+
+
+def _reject_if_builtin(skill) -> None:
+    """Block mutating operations on built-in (skills_dir) skills."""
     if skill.builtin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Skill '{skill_id}' is built-in and cannot be updated or deleted.",
+            detail=f"Skill '{skill.name}' is built-in and cannot be updated or deleted.",
         )
 
 
@@ -108,21 +112,22 @@ async def upload_skill(
     )
 
 
-@router.put("/{skill_id}", response_model=SkillResponse)
+@router.put("/{skill_name}", response_model=SkillResponse)
 async def replace_skill(
-    skill_id: str,
+    skill_name: str,
     skill_registry: SkillRegistryDep,
     bundle_store: SkillBundleStoreDep,
     system_store: SystemStoreDep,
     bundle: UploadFile = File(..., description="Updated ZIP bundle containing SKILL.md and any scripts/assets"),
 ) -> SkillResponse:
-    """Replace an existing skill's bundle, keeping its id (and so all app references)."""
-    _reject_if_builtin(skill_registry, skill_id)
-    if await system_store.get_skill(skill_id) is None:
-        raise HTTPException(status_code=404, detail=f"No skill with id '{skill_id}'")
+    """Replace an existing skill's bundle by name, keeping its id (and so all app references)."""
+    skill = _get_skill_by_name(skill_registry, skill_name)
+    _reject_if_builtin(skill)
+    if await system_store.get_skill(skill.id) is None:
+        raise HTTPException(status_code=404, detail=f"No skill with name '{skill_name}'")
     raw = await bundle.read()
     return await _ingest_bundle(
-        skill_id, raw, bundle_store, skill_registry, system_store, replace=True
+        skill.id, raw, bundle_store, skill_registry, system_store, replace=True
     )
 
 
@@ -133,46 +138,44 @@ async def list_skills(skill_registry: SkillRegistryDep) -> SkillListResponse:
     return SkillListResponse(skills=items, total=len(items))
 
 
-@router.get("/{skill_id}", response_model=SkillResponse)
-async def get_skill(skill_id: str, skill_registry: SkillRegistryDep) -> SkillResponse:
-    """Return a single skill by id."""
-    try:
-        return _to_response(skill_registry.get(skill_id))
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"No skill with id '{skill_id}'")
+@router.get("/{skill_name}", response_model=SkillResponse)
+async def get_skill(skill_name: str, skill_registry: SkillRegistryDep) -> SkillResponse:
+    """Return a single skill by name."""
+    return _to_response(_get_skill_by_name(skill_registry, skill_name))
 
 
-@router.delete("/{skill_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@router.delete("/{skill_name}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_skill(
-    skill_id: str,
+    skill_name: str,
     skill_registry: SkillRegistryDep,
     bundle_store: SkillBundleStoreDep,
     system_store: SystemStoreDep,
 ) -> None:
-    """Delete a skill from the document store, local cache, and registry.
+    """Delete a skill by name from the document store, local cache, and registry.
 
     A skill that is still assigned to one or more applications cannot be deleted;
-    unassign it from those apps first (DELETE /applications/{name}/skills/{id}).
+    unassign it from those apps first (DELETE /applications/{name}/skills/{skill_name}).
     """
-    _reject_if_builtin(skill_registry, skill_id)
-    if await system_store.get_skill(skill_id) is None:
-        raise HTTPException(status_code=404, detail=f"No skill with id '{skill_id}'")
+    skill = _get_skill_by_name(skill_registry, skill_name)
+    _reject_if_builtin(skill)
+    if await system_store.get_skill(skill.id) is None:
+        raise HTTPException(status_code=404, detail=f"No skill with name '{skill_name}'")
 
-    # TODO if app count grows large, consider a index of skill_id → apps.
+    # TODO if app count grows large, consider an index of skill_id → apps.
     referencing = []
     for app in await system_store.list_apps():
-        if skill_id in AppConfig.from_yaml(app.config_yaml).skills:
+        if skill.id in AppConfig.from_yaml(app.config_yaml).skills:
             referencing.append(app.name)
     if referencing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                f"Skill '{skill_id}' is still assigned to application(s): "
+                f"Skill '{skill_name}' is still assigned to application(s): "
                 f"{', '.join(referencing)}. Unassign it before deleting."
             ),
         )
 
-    await bundle_store.delete(skill_id)
-    await system_store.delete_skill(skill_id)
-    skill_registry.unregister(skill_id)
-    logger.info("[skills] deleted skill id=%s", skill_id)
+    await bundle_store.delete(skill.id)
+    await system_store.delete_skill(skill.id)
+    skill_registry.unregister(skill.id)
+    logger.info("[skills] deleted skill name=%s id=%s", skill_name, skill.id)

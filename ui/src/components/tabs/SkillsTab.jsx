@@ -5,7 +5,7 @@ export default function SkillsTab({ active }) {
   const { apiUrl, currentApp } = useApp()
   const [skills, setSkills] = useState(null)   // null=loading, []|[...]=loaded
   const [error, setError] = useState(null)
-  const [assigned, setAssigned] = useState(new Set()) // skill ids assigned to currentApp
+  const [assigned, setAssigned] = useState(new Set()) // skill names assigned to currentApp
   const [picked, setPicked] = useState(null)   // File | null (new upload)
   const [uploading, setUploading] = useState(false)
   const [uploadMsg, setUploadMsg] = useState({ text: '', cls: '' })
@@ -30,7 +30,7 @@ export default function SkillsTab({ active }) {
       const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/skills`)
       if (!resp.ok) { setAssigned(new Set()); return }
       const { skills: refs = [] } = await resp.json()
-      setAssigned(new Set(refs.map(r => r.skill_id)))
+      setAssigned(new Set(refs.map(r => r.name)))
     } catch { setAssigned(new Set()) }
   }
 
@@ -61,21 +61,21 @@ export default function SkillsTab({ active }) {
     }
   }
 
-  function startReplace(skillId) {
-    replaceTargetRef.current = skillId
+  function startReplace(skillName) {
+    replaceTargetRef.current = skillName
     replaceInputRef.current?.click()
   }
 
   async function doReplace(file) {
-    const skillId = replaceTargetRef.current
+    const skillName = replaceTargetRef.current
     replaceTargetRef.current = null
     if (replaceInputRef.current) replaceInputRef.current.value = ''
-    if (!skillId || !file) return
-    setBusyId(skillId)
+    if (!skillName || !file) return
+    setBusyId(skillName)
     try {
       const form = new FormData()
       form.append('bundle', file)
-      const resp = await fetch(`${apiUrl}/skills/${encodeURIComponent(skillId)}`, { method: 'PUT', body: form })
+      const resp = await fetch(`${apiUrl}/skills/${encodeURIComponent(skillName)}`, { method: 'PUT', body: form })
       if (!resp.ok) {
         const d = await resp.json().catch(() => ({}))
         alert('Replace failed: ' + ((Array.isArray(d.detail) ? d.detail[0]?.msg : d.detail) || resp.status))
@@ -88,9 +88,9 @@ export default function SkillsTab({ active }) {
 
   async function deleteSkill(skill) {
     if (!confirm(`Delete skill "${skill.name}"? It will be removed from every application that uses it.`)) return
-    setBusyId(skill.id)
+    setBusyId(skill.name)
     try {
-      const resp = await fetch(`${apiUrl}/skills/${encodeURIComponent(skill.id)}`, { method: 'DELETE' })
+      const resp = await fetch(`${apiUrl}/skills/${encodeURIComponent(skill.name)}`, { method: 'DELETE' })
       if (resp.ok || resp.status === 204 || resp.status === 404) {
         loadSkills()
         loadAssigned()
@@ -103,17 +103,17 @@ export default function SkillsTab({ active }) {
 
   async function toggleAssign(skill) {
     if (!currentApp) return
-    const isOn = assigned.has(skill.id)
-    setBusyId(skill.id)
+    const isOn = assigned.has(skill.name)
+    setBusyId(skill.name)
     try {
       const base = `${apiUrl}/applications/${encodeURIComponent(currentApp)}/skills`
       const resp = isOn
-        ? await fetch(`${base}/${encodeURIComponent(skill.id)}`, { method: 'DELETE' })
-        : await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ skill_id: skill.id }) })
+        ? await fetch(`${base}/${encodeURIComponent(skill.name)}`, { method: 'DELETE' })
+        : await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ skill_name: skill.name }) })
       if (resp.ok || resp.status === 204 || resp.status === 201) {
         setAssigned(prev => {
           const next = new Set(prev)
-          if (isOn) next.delete(skill.id); else next.add(skill.id)
+          if (isOn) next.delete(skill.name); else next.add(skill.name)
           return next
         })
       } else {
@@ -185,8 +185,8 @@ export default function SkillsTab({ active }) {
             </thead>
             <tbody>
               {skills.map(s => {
-                const on = assigned.has(s.id)
-                const busy = busyId === s.id
+                const on = assigned.has(s.name)
+                const busy = busyId === s.name
                 return (
                   <tr key={s.id}>
                     <td>
@@ -206,7 +206,7 @@ export default function SkillsTab({ active }) {
                     <td style={{ color: 'var(--muted)', fontSize: 12 }}>{s.description}</td>
                     <td>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => startReplace(s.id)}>Replace</button>
+                        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => startReplace(s.name)}>Replace</button>
                         <button className="btn btn-red btn-sm" disabled={busy} onClick={() => deleteSkill(s)}>Delete</button>
                       </div>
                     </td>

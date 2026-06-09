@@ -164,11 +164,10 @@ class SkillListResponse(BaseModel):
 
 
 class AddSkillRequest(BaseModel):
-    skill_id: str
+    skill_name: str
 
 
 class AppSkillRef(BaseModel):
-    skill_id: str
     name: str  # display name; a referenced skill always exists (it can't be deleted while referenced)
 
 

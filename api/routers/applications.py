@@ -218,7 +218,7 @@ def _validate_skills(skill_ids: list[str], skill_registry) -> None:
 def _app_skills_response(app_name: str, skill_ids: list[str], skill_registry) -> AppSkillsResponse:
     """Build an AppSkillsResponse, resolving display names from the registry."""
     refs = [
-        AppSkillRef(skill_id=skill_id, name=skill_registry.get(skill_id).name)
+        AppSkillRef(name=skill_registry.get(skill_id).name)
         for skill_id in skill_ids
     ]
     return AppSkillsResponse(app_name=app_name, skills=refs)
@@ -718,7 +718,7 @@ async def add_application_skill(
     system_store: SystemStoreDep,
     skill_registry: SkillRegistryDep,
 ) -> AppSkillsResponse:
-    """Assign a system skill to an application by id.
+    """Assign a system skill to an application by name.
 
     The skill must exist in the system skill registry (uploaded via ``POST /skills``
     or loaded from ``skills_dir``).  Adding the same skill twice is idempotent.
@@ -728,42 +728,50 @@ async def add_application_skill(
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
     try:
-        skill_registry.get(body.skill_id)
+        skill = skill_registry.get_by_name(body.skill_name)
     except KeyError:
         raise HTTPException(
             status_code=404,
-            detail=f"Skill id '{body.skill_id}' not found in the system skill registry",
+            detail=f"Skill '{body.skill_name}' not found in the system skill registry",
         )
 
+    skill_id = skill.id
     config = AppConfig.from_yaml(record.config_yaml)
-    if body.skill_id not in config.skills:
-        updated_config = config.model_copy(update={"skills": config.skills + [body.skill_id]})
+    if skill_id not in config.skills:
+        updated_config = config.model_copy(update={"skills": config.skills + [skill_id]})
         updated_record = record.model_copy(
             update={"config_yaml": updated_config.to_yaml(), "updated_at": _now()}
         )
         await system_store.save_app(updated_record)
-        logger.info("Added skill id '%s' to application '%s'", body.skill_id, app_name)
+        logger.info("Added skill '%s' (id=%s) to application '%s'", body.skill_name, skill_id, app_name)
         config = updated_config
 
     return _app_skills_response(app_name, config.skills, skill_registry)
 
 
-@router.delete("/{app_name}/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@router.delete("/{app_name}/skills/{skill_name}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def remove_application_skill(
     app_name: str,
-    skill_id: str,
+    skill_name: str,
     system_store: SystemStoreDep,
+    skill_registry: SkillRegistryDep,
 ) -> None:
-    """Remove a skill from an application by id."""
+    """Remove a skill from an application by name."""
     record = await system_store.get_app(app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
+    try:
+        skill = skill_registry.get_by_name(skill_name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    skill_id = skill.id
     config = AppConfig.from_yaml(record.config_yaml)
     if skill_id not in config.skills:
         raise HTTPException(
             status_code=404,
-            detail=f"Skill id '{skill_id}' is not assigned to application '{app_name}'",
+            detail=f"Skill '{skill_name}' is not assigned to application '{app_name}'",
         )
 
     updated_config = config.model_copy(update={"skills": [s for s in config.skills if s != skill_id]})
@@ -771,7 +779,7 @@ async def remove_application_skill(
         update={"config_yaml": updated_config.to_yaml(), "updated_at": _now()}
     )
     await system_store.save_app(updated_record)
-    logger.info("Removed skill id '%s' from application '%s'", skill_id, app_name)
+    logger.info("Removed skill '%s' (id=%s) from application '%s'", skill_name, skill_id, app_name)
 
 
 @router.get("/{app_name}/collections", response_model=CollectionsResponse)
