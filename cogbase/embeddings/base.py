@@ -26,6 +26,20 @@ class EmbeddingBase(abc.ABC):
     order.
     """
 
+    @property
+    def dimensions(self) -> int | None:
+        """Output vector dimensionality, when known without an embedding call.
+
+        Returns the length of the vectors :meth:`embed` produces — derived from
+        a configured override or the model itself — or ``None`` when it can only
+        be determined by actually embedding (e.g. an API model whose dimension
+        was left at the provider default).  The base implementation returns
+        ``None``; concrete embedders override it when they can report the value.
+        Callers that need it unconditionally can embed a probe and measure
+        ``len`` of a result.
+        """
+        return None
+
     @abc.abstractmethod
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """Return embeddings for *texts*.

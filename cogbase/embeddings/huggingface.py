@@ -36,6 +36,12 @@ class SentenceTransformersEmbedding(EmbeddingBase):
             ) from exc
 
         self._model = SentenceTransformer(model_name)
+        self._dimensions = self._model.get_sentence_embedding_dimension()
+
+    @property
+    def dimensions(self) -> int | None:
+        """The model's embedding dimensionality, known once it is loaded."""
+        return self._dimensions
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:

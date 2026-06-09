@@ -4,6 +4,7 @@ import pytest
 
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
+from cogbase.embeddings.openai import OpenAIEmbedding
 
 
 # ---------------------------------------------------------------------------
@@ -59,3 +60,39 @@ class TestEmbeddingBaseIsAbstract:
                 return [[1.0] for _ in texts]
 
         assert await ConstantEmbedding().embed([]) == []
+
+
+# ---------------------------------------------------------------------------
+# EmbeddingBase.dimensions — reported without an embedding call
+# ---------------------------------------------------------------------------
+
+class TestEmbeddingDimensions:
+    def test_base_default_is_none(self):
+        """A subclass that only implements ``embed`` reports unknown dimensions."""
+
+        class ConstantEmbedding(EmbeddingBase):
+            async def embed(self, texts: list[str]) -> list[list[float]]:
+                return [[0.1, 0.2, 0.3] for _ in texts]
+
+        assert ConstantEmbedding().dimensions is None
+
+    def test_subclass_can_override(self):
+        class FixedEmbedding(EmbeddingBase):
+            @property
+            def dimensions(self) -> int:
+                return 8
+
+            async def embed(self, texts: list[str]) -> list[list[float]]:
+                return [[0.0] * 8 for _ in texts]
+
+        assert FixedEmbedding().dimensions == 8
+
+    def test_openai_reports_configured_dimensions(self):
+        # No client call: the property just surfaces the configured override.
+        embedder = OpenAIEmbedding(client=None, dimensions=256)
+        assert embedder.dimensions == 256
+
+    def test_openai_native_dimension_is_none(self):
+        # Left at the provider default — only an embedding response reveals it.
+        embedder = OpenAIEmbedding(client=None)
+        assert embedder.dimensions is None

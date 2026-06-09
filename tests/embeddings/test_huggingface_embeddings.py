@@ -34,6 +34,14 @@ class TestSentenceTransformersEmbedding:
         assert len(result[0]) == 384
 
     @pytest.mark.asyncio
+    async def test_dimensions_property_matches_embed(self, embedder):
+        # Reported from the loaded model, without any embedding call, and it
+        # agrees with the actual vector length.
+        assert embedder.dimensions == 384
+        result = await embedder.embed(["test sentence"])
+        assert embedder.dimensions == len(result[0])
+
+    @pytest.mark.asyncio
     async def test_empty_input(self, embedder):
         assert await embedder.embed([]) == []
 

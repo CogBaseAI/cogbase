@@ -52,6 +52,12 @@ class OpenAIEmbedding(EmbeddingBase):
         self._model = model
         self._dimensions = dimensions
 
+    @property
+    def dimensions(self) -> int | None:
+        """The configured output dimension, or ``None`` for the model's native
+        dimensionality (which the API only reveals in an embedding response)."""
+        return self._dimensions
+
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
