@@ -54,13 +54,37 @@ def _is_cjk(cp: int) -> bool:
     )
 
 
-# Max transcript tokens fed to a single summarisation call. Longer transcripts
-# are split into chunks of this size, summarised in parallel, and merged.
+# Compaction sizes are *fractions of a model's context window*, not absolute
+# token counts: the absolute budget is derived per-deployment from the configured
+# window (see ``LLMBase.context_window``) so it can never exceed it. Two ratios,
+# against two (possibly different) models:
 #
-# This is deliberately below the full context window of modern 128k-token models:
-# summarisation still needs room for the compression prompt, output tokens, token
-# estimation error, and smaller compatible backends.
+#   - CONTEXT_BUDGET_RATIO  — fraction of the *answering* model's window kept as
+#     live working context before compaction fires. Below 1.0 to leave room for
+#     the system prompt, retrieval, skills, and output.
+#   - SUMMARISE_CHUNK_RATIO — fraction of the *summariser* model's window fed to
+#     one summarisation call. Smaller, to leave room for the compression prompt,
+#     output tokens, and token-estimation error.
+#
+# The gap between them (budget > chunk) is load-bearing: with the call site
+# keeping ~budget/2 of newest turns, the typical overflow lands under one chunk,
+# so steady-state compaction is a single LLM round trip rather than a split.
+CONTEXT_BUDGET_RATIO = 0.75
+SUMMARISE_CHUNK_RATIO = 0.5
+
+# Fallback absolute chunk size for callers without an LLM in hand (window
+# unknown). Equals DEFAULT_CONTEXT_WINDOW * SUMMARISE_CHUNK_RATIO.
 DEFAULT_CHUNK_TOKENS = 64_000
+
+
+def context_budget_tokens(llm: LLMBase, model: str | None = None) -> int:
+    """Working-context budget (tokens) before compaction, for *llm*'s window."""
+    return int(llm.context_window(model) * CONTEXT_BUDGET_RATIO)
+
+
+def summarise_chunk_tokens(llm: LLMBase, model: str | None = None) -> int:
+    """Max tokens fed to one summarisation call, for *llm*'s window."""
+    return int(llm.context_window(model) * SUMMARISE_CHUNK_RATIO)
 
 # Default prompt, tuned for the query-runner working-context case: the transcript
 # is an in-loop agent transcript (tool calls + tool outputs) and the summary is
@@ -292,7 +316,7 @@ async def _map_reduce(
         return await _summarize_chunk(llm, transcript, compress_prompt, stats)
 
     chunks = split_by_tokens(transcript, chunk_tokens)
-    logger.debug(
+    logger.info(
         "[compaction] depth=%d: mapping %d chunk(s) (%d tok total)",
         depth,
         len(chunks),
@@ -304,12 +328,26 @@ async def _map_reduce(
     merged = "\n".join(p for p in partials if p)
 
     # Merged partials can themselves exceed the budget for very long transcripts;
-    # recurse until a single chunk fits.
-    if estimate_tokens(merged) > chunk_tokens:
-        logger.debug(
+    # recurse until a single chunk fits. Only recurse while we are making
+    # progress: each pass must yield strictly fewer tokens than it consumed.
+    # Without this guard a pathologically small budget (e.g. one below a single
+    # summary's minimum size) loops forever, since the reduced output never drops
+    # under the budget. Strictly-decreasing token counts bound the recursion.
+    merged_tokens = estimate_tokens(merged)
+    if merged_tokens > chunk_tokens:
+        if merged_tokens >= estimate_tokens(transcript):
+            logger.warning(
+                "[compaction] depth=%d: reduction stalled at %d tok (budget=%d); "
+                "returning best-effort summary without further recursion",
+                depth,
+                merged_tokens,
+                chunk_tokens,
+            )
+            return merged
+        logger.info(
             "[compaction] depth=%d: merged partials still %d tok > %d budget; recursing",
             depth,
-            estimate_tokens(merged),
+            merged_tokens,
             chunk_tokens,
         )
         return await _map_reduce(
@@ -336,7 +374,7 @@ async def _summarize_chunk(
     stats.llm_calls += 1
     stats.llm_seconds += elapsed
     content = result.get("content") or ""
-    logger.debug(
+    logger.info(
         "[compaction] chunk summarised in %.2fs: %d -> %d tok",
         elapsed,
         estimate_tokens(transcript),

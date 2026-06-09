@@ -21,6 +21,10 @@ from cogbase.stores.log.local_fs import LocalFSLogStore
 def _summarizing_llm(summary: str = "SUMMARY") -> MagicMock:
     llm = MagicMock()
     llm.complete = AsyncMock(return_value={"content": summary, "tool_calls": None})
+    # A real context window; otherwise MagicMock's int() defaults to 1, collapsing
+    # the summariser's chunk budget to 1 token and fanning the transcript into
+    # hundreds of single-token chunks.
+    llm.context_window = MagicMock(return_value=128_000)
     return llm
 
 

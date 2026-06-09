@@ -8,6 +8,11 @@ from typing import Literal, TypedDict, Union
 
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
 
+# Conservative fallback context window (tokens) for backends that do not report
+# one. Sized for a modern 128k-token model; concrete backends override with the
+# value from config so compaction budgets track the real window.
+DEFAULT_CONTEXT_WINDOW = 128_000
+
 
 class ToolCall(TypedDict):
     """A tool call requested by the LLM."""
@@ -81,6 +86,16 @@ class ChatMessage(_ChatMessageRequired, total=False):
 
 class LLMBase(abc.ABC):
     """Provider-agnostic async chat completion interface."""
+
+    def context_window(self, model: str | None = None) -> int:
+        """Context window, in tokens, for *model* (the ``complete`` selector).
+
+        ``model="mini"`` selects the mini model's window; any other value
+        selects the default model's.  Backends override with the configured
+        window; the base returns a conservative :data:`DEFAULT_CONTEXT_WINDOW`
+        so callers can always size a budget as a fraction of it.
+        """
+        return DEFAULT_CONTEXT_WINDOW
 
     @abc.abstractmethod
     async def complete(

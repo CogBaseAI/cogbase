@@ -40,8 +40,9 @@ from datetime import datetime, timedelta, timezone
 
 from cogbase.llms.compaction import (
     CONVERSATION_SUMMARY_PROMPT,
-    DEFAULT_CHUNK_TOKENS,
+    context_budget_tokens,
     estimate_tokens,
+    summarise_chunk_tokens,
     summarize_transcript,
 )
 from cogbase.llms.base import ChatMessage, LLMBase
@@ -54,14 +55,11 @@ from cogbase.memory.models import (
     SessionState,
 )
 
-# Default working-context budget, in estimated tokens, that triggers compaction.
-#
-# Compaction fires on *model-context* pressure — when the rehydrated thread
-# approaches a fixed fraction of the LLM window — not on a small per-turn budget.
-# Keeping it large (a fraction of a 128k-token window, leaving room for the
-# system prompt, retrieval, skills, and output) keeps compaction rare and each
-# persisted ``session_compacted`` summary worth keeping.  Override per-instance
-# via ``compaction_token_budget``.
+# Fallback working-context budget when no LLM is configured (so the model window
+# is unknown and no compaction runs anyway). When an LLM *is* present the budget
+# is derived from its context window via ``context_budget_tokens`` — a fraction
+# of the real window, so it tracks the deployed model and can never exceed it.
+# Equals DEFAULT_CONTEXT_WINDOW * CONTEXT_BUDGET_RATIO.
 DEFAULT_COMPACTION_TOKEN_BUDGET = 96_000
 
 # Default session time-to-live for the metadata cache.  None means never expire.
@@ -97,6 +95,10 @@ class ShortTermMemory:
                                  durable log.
         compaction_token_budget: Estimated-token threshold above which the
                                  rehydrated thread is compacted into a summary.
+                                 ``None`` (the default) derives it from ``llm``'s
+                                 context window — a fraction that tracks the
+                                 deployed model — falling back to a constant when
+                                 no LLM is configured.
         llm:                     LLM used to summarise overflow turns during
                                  compaction.  When ``None`` no compaction runs
                                  and the full thread is assembled as-is.
@@ -107,13 +109,20 @@ class ShortTermMemory:
         *,
         episodic: EpisodicMemory,
         ttl_seconds: int | None = DEFAULT_TTL_SECONDS,
-        compaction_token_budget: int = DEFAULT_COMPACTION_TOKEN_BUDGET,
+        compaction_token_budget: int | None = None,
         llm: LLMBase | None = None,
     ) -> None:
         self._episodic = episodic
         self._ttl_seconds = ttl_seconds
-        self._compaction_token_budget = compaction_token_budget
         self._llm = llm
+        # Budget tracks the answering model's window when an LLM is present; an
+        # explicit value still wins for deployments that want to pin it.
+        if compaction_token_budget is not None:
+            self._compaction_token_budget = compaction_token_budget
+        elif llm is not None:
+            self._compaction_token_budget = context_budget_tokens(llm)
+        else:
+            self._compaction_token_budget = DEFAULT_COMPACTION_TOKEN_BUDGET
         # Cache holds only session metadata + TTL; the thread is projected fresh
         # from the log on every read, so a warm and a cold process agree.
         self._sessions: dict[str, SessionState] = {}
@@ -345,7 +354,7 @@ class ShortTermMemory:
             new_summary = await summarize_transcript(
                 self._llm,
                 transcript,
-                chunk_tokens=DEFAULT_CHUNK_TOKENS,
+                chunk_tokens=summarise_chunk_tokens(self._llm),
                 prior_summary=summary,
                 compress_prompt=CONVERSATION_SUMMARY_PROMPT,
             )

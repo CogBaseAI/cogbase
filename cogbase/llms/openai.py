@@ -10,6 +10,7 @@ from collections.abc import AsyncGenerator, Sequence
 from typing import Any
 
 from cogbase.llms.base import (
+    DEFAULT_CONTEXT_WINDOW,
     ChatMessage,
     CompletionResult,
     LLMBase,
@@ -51,11 +52,18 @@ class OpenAILLM(LLMBase):
         *,
         mini_model: str | None = None,
         reasoning_effort: ReasoningEffort | None = None,
+        context_window: int = DEFAULT_CONTEXT_WINDOW,
+        mini_context_window: int | None = None,
     ) -> None:
         self._client = client
         self._model = model
         self._mini_model = mini_model
         self._reasoning_effort = reasoning_effort
+        self._context_window = context_window
+        self._mini_context_window = mini_context_window or context_window
+
+    def context_window(self, model: str | None = None) -> int:
+        return self._mini_context_window if model == "mini" else self._context_window
 
     async def complete(
         self,

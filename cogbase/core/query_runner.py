@@ -61,11 +61,11 @@ from collections.abc import AsyncGenerator
 from pydantic import BaseModel
 
 from cogbase.llms.compaction import (
-    DEFAULT_CHUNK_TOKENS,
     WORKING_CONTEXT_PROMPT,
     estimate_messages_tokens,
     estimate_tokens,
     render_message,
+    summarise_chunk_tokens,
     summarize_transcript,
 )
 from cogbase.core.models import Chunk
@@ -460,6 +460,8 @@ class QueryRunner:
         self._passthrough_token_threshold = passthrough_token_threshold
         self._short_term = short_term
         self._episodic = episodic
+        # In-loop compaction stays opt-in: None leaves the guard off. When a
+        # budget is wanted but unspecified, derive it from the model window.
         self._context_token_budget = context_token_budget
 
         # Retrieval tool definitions — exposed as _tool_defs for introspection.
@@ -1064,7 +1066,7 @@ class QueryRunner:
         summary = await summarize_transcript(
             self._llm,
             transcript,
-            chunk_tokens=DEFAULT_CHUNK_TOKENS,
+            chunk_tokens=summarise_chunk_tokens(self._llm),
             compress_prompt=WORKING_CONTEXT_PROMPT,
         ) or "(empty summary)"
         return [

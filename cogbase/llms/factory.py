@@ -19,5 +19,11 @@ def build_llm(cfg: LLMConfig) -> LLMBase:
             raise ImportError("openai package required: pip install openai") from exc
         from cogbase.llms.openai import OpenAILLM
         client = openai.AsyncOpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
-        return OpenAILLM(client, model=cfg.model, mini_model=cfg.mini_model)
+        return OpenAILLM(
+            client,
+            model=cfg.model,
+            mini_model=cfg.mini_model,
+            context_window=cfg.context_window,
+            mini_context_window=cfg.mini_context_window,
+        )
     raise ValueError(f"Unknown LLM provider: {cfg.provider!r}")

@@ -70,6 +70,10 @@ def _make_llm(*results: CompletionResult) -> MagicMock:
 
     llm.complete = AsyncMock(side_effect=lambda *a, **kw: _pop())
     llm.complete_stream = MagicMock(side_effect=lambda *a, **kw: _stream_gen(_pop()))
+    # A real context window; otherwise MagicMock's int() defaults to 1, collapsing
+    # the summariser's chunk budget to 1 token and fanning the transcript into
+    # many single-token chunks (draining the queued responses above).
+    llm.context_window = MagicMock(return_value=128_000)
     return llm
 
 
@@ -108,6 +112,8 @@ def _make_llm_tracking(*results: CompletionResult) -> MagicMock:
 
     llm.complete = AsyncMock(side_effect=lambda *a, **kw: _pop())
     llm.complete_stream = MagicMock(side_effect=lambda *a, **kw: _stream_gen(_pop()))
+    # See _make_llm: give the summariser a sane chunk budget.
+    llm.context_window = MagicMock(return_value=128_000)
     return llm
 
 

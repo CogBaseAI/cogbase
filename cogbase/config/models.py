@@ -26,6 +26,20 @@ class LLMConfig(ConfigPromptMixin, BaseModel):
             "Callers request it via model='mini'; falls back to 'model' when unset."
         ),
     )
+    context_window: int = Field(
+        default=128_000,
+        description=(
+            "Context window of 'model', in tokens. Used to size compaction "
+            "budgets as a fraction of the window so they can never exceed it."
+        ),
+    )
+    mini_context_window: int | None = Field(
+        default=None,
+        description=(
+            "Context window of 'mini_model', in tokens. Falls back to "
+            "'context_window' when unset."
+        ),
+    )
     base_url: str = Field(
         default='https://api.openai.com/v1',
         description=(
