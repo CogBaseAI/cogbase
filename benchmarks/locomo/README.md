@@ -78,7 +78,7 @@ The query runner counts the input and output tokens for each query and returns t
 `QueryResponse`, so the benchmark can report per-query token cost alongside accuracy.
 
 The answering model is **not** a CLI flag — it is configured server-side via
-sytem config file or `POST /system/config` (`--judge_model` only selects the model that grades answers).
+system config file or `POST /system/config` (`--judge_model` only selects the model that grades answers).
 The two runs below use the same command and the same `gpt-4o-mini` judge; only the server's answering
 model differs. Both cover the first 2 conversations (233 questions):
 

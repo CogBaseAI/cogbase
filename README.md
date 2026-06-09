@@ -14,6 +14,23 @@ It provides the foundational layer that vertical AI products are built on: a kno
 
 ---
 
+## Benchmarks
+
+Competitive with purpose-built systems on public benchmarks.
+
+| Benchmark | Task | CogBase | Comparison |
+|---|---|---|---|
+| [LoCoMo](https://github.com/snap-research/locomo) | Conversational memory | **92.8%** | Mem0 91.6% (Apr 2026) |
+| [GraphRAG-Bench](https://graphrag-bench.github.io/) (Medical) | Document QA | **74.46** with extraction pipeline | above top leaderboard entry (73.30) |
+| [GraphRAG-Bench](https://graphrag-bench.github.io/) (Medical) | Document QA | 72.94 simple chunking | 2nd on leaderboard (leader 73.30) |
+| [GraphRAG-Bench](https://graphrag-bench.github.io/) (Novel) | Document QA | 58.62 simple chunking | 3rd on leaderboard (leaders 63.72 / 58.94) |
+
+On **[GraphRAG-Bench](https://graphrag-bench.github.io/) Medical**, CogBase's **structured-extraction pipeline scores 74.46 — above the top leaderboard entry (73.30)** — the same extraction + workflow layer that sets CogBase apart from plain chunk-and-retrieve RAG, with the app config generated from a natural-language description — no hand-authored schema, and no purpose-built, hand-maintained knowledge graph. Even simple chunking alone places CogBase 2nd–3rd across subsets.
+
+Details: [benchmarks/graphrag/README.md](benchmarks/graphrag/README.md) · [benchmarks/locomo/README.md](benchmarks/locomo/README.md).
+
+---
+
 ## The problem
 
 **Your AI says "I don't know" — or worse, gives a partial answer — when the full answer is in the documents.**
