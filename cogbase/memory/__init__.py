@@ -2,20 +2,30 @@
 
 The short-term tier and the episodic event writer are implemented; short-term
 memory rides on the episodic log as a projection over it (rehydrate, append-a-
-``session_compacted`` compaction, near-pass-through assembly).  Long-term memory
-and a unifying ``MemoryManager`` are planned.
+``session_compacted`` compaction, near-pass-through assembly).  The long-term
+tier — the ``LongTermMemory`` recall/reconcile/promote service and the offline
+``Distiller`` that promotes durable records out of session logs — is implemented
+in ``long_term.py`` / ``distill.py``.  A unifying ``MemoryManager`` is planned.
 """
 
+from cogbase.memory.distill import Distiller
 from cogbase.memory.episodic import EpisodicMemory
+from cogbase.memory.long_term import LongTermMemory
 from cogbase.memory.models import (
     CONTINUITY_EVENT_TYPES,
     EventRef,
     EventType,
     FeedbackPayload,
     FinalAnswerPayload,
+    LongTermRecord,
+    MemoryCandidate,
     MemoryEvent,
+    MemoryKind,
     MemoryMessage,
     MemoryRole,
+    MemoryScope,
+    MemoryStatus,
+    ReconcileOp,
     RetrievalHit,
     RetrievalResultPayload,
     SessionCompactedPayload,
@@ -49,4 +59,13 @@ __all__ = [
     "RetrievalResultPayload",
     "RetrievalHit",
     "FeedbackPayload",
+    # long-term
+    "LongTermMemory",
+    "Distiller",
+    "LongTermRecord",
+    "MemoryCandidate",
+    "MemoryScope",
+    "MemoryKind",
+    "MemoryStatus",
+    "ReconcileOp",
 ]

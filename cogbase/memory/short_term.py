@@ -48,12 +48,11 @@ from cogbase.llms.compaction import (
 from cogbase.llms.base import ChatMessage, LLMBase
 from cogbase.memory.episodic import EpisodicMemory
 from cogbase.memory.models import (
-    EventType,
     MemoryEvent,
     MemoryMessage,
-    MemoryRole,
     SessionState,
 )
+from cogbase.memory.projection import latest_compaction, project_thread
 
 # Fallback working-context budget when no LLM is configured (so the model window
 # is unknown and no compaction runs anyway). When an LLM *is* present the budget
@@ -66,13 +65,6 @@ DEFAULT_COMPACTION_TOKEN_BUDGET = 96_000
 # This only bounds the in-memory cache; the durable log has its own retention
 # clock (see docs/episodic-memory.md#retention-deletion-and-redaction).
 DEFAULT_TTL_SECONDS = 3600
-
-# Continuity events short-term threads into the conversation, mapped to the role
-# they project to.  Tool calls/results are intra-turn scratch and never threaded.
-_CONTINUITY_ROLE: dict[EventType, MemoryRole] = {
-    EventType.USER_MESSAGE: MemoryRole.USER,
-    EventType.FINAL_ANSWER: MemoryRole.ASSISTANT,
-}
 
 logger = logging.getLogger(__name__)
 
@@ -270,35 +262,12 @@ class ShortTermMemory:
         """Project a session's events into (summary, replaces_through, messages).
 
         Takes the latest ``session_compacted`` summary and the ``seq`` it covers,
-        then every continuity event after that ``seq`` in order.  ``events`` are
-        already ulid-deduped and in log order; a ``seq`` is kept on first
-        occurrence, so an out-of-order straggler that reuses a ``seq`` does not
-        displace the active writer's event (see
-        docs/episodic-memory.md#single-writer-and-append-safety).
+        then every continuity event after that ``seq`` in order.  The thread
+        projection is the shared :mod:`cogbase.memory.projection` helper (also
+        used by the distiller); this method layers the summary lookup on top.
         """
-        summary: str | None = None
-        replaces_through = -1
-        for event in events:
-            if event.event_type is EventType.SESSION_COMPACTED:
-                summary = event.payload.get("summary")
-                replaces_through = int(event.payload.get("replaces_through", -1))
-
-        messages: list[MemoryMessage] = []
-        seen_seqs: set[int] = set()
-        for event in events:
-            role = _CONTINUITY_ROLE.get(event.event_type)
-            if role is None or event.seq <= replaces_through or event.seq in seen_seqs:
-                continue
-            seen_seqs.add(event.seq)
-            text = event.payload.get("text", "")
-            messages.append(
-                MemoryMessage(
-                    role=role,
-                    content=text,
-                    seq=event.seq,
-                    token_estimate=estimate_tokens(text),
-                )
-            )
+        summary, replaces_through = latest_compaction(events)
+        messages = project_thread(events, since_seq=replaces_through)
         return summary, replaces_through, messages
 
     # ------------------------------------------------------------------

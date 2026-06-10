@@ -1,0 +1,107 @@
+"""Integration tests for QueryRunner wired to long-term memory.
+
+Verifies the recall seam: when a ``LongTermMemory`` is wired, ``run`` recalls
+scope-relevant records and injects them into the LLM context as a system block
+marked memory-derived (kept distinct from document-backed evidence).
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+import pytest
+
+from cogbase.core.query_runner import QueryRunner
+from cogbase.llms.base import CompletionResult
+from cogbase.memory.long_term import LongTermMemory
+from cogbase.memory.models import MemoryCandidate, MemoryKind
+from cogbase.stores.scope import AppScope
+from cogbase.stores.structured.memory import InMemoryStructuredStore
+from cogbase.stores.vector.faiss_store import FAISSMemoryVectorStore
+
+from tests.memory.test_long_term import HashingEmbedding
+
+
+def _capturing_llm(answer: str) -> tuple[MagicMock, list]:
+    """Fake LLM that records the messages of each completion and streams *answer*."""
+    llm = MagicMock()
+    captured: list = []
+
+    async def _stream(messages, **kw):
+        captured.append(messages)
+        yield answer
+
+    llm.complete_stream = MagicMock(side_effect=_stream)
+    return llm, captured
+
+
+async def _long_term(app_id="app1") -> LongTermMemory:
+    return LongTermMemory(
+        InMemoryStructuredStore().with_scope(AppScope(app_id=app_id)),
+        FAISSMemoryVectorStore().with_scope(AppScope(app_id=app_id)),
+        MagicMock(),
+        HashingEmbedding(),
+        app_id=app_id,
+    )
+
+
+async def _drain(runner, **kwargs):
+    result = None
+    async for item in runner.run(**kwargs):
+        if not isinstance(item, str):
+            result = item
+    return result
+
+
+@pytest.mark.asyncio
+async def test_recall_injects_memory_block_scoped_to_user():
+    lt = await _long_term()
+    await lt.promote(
+        candidate=MemoryCandidate(
+            content="user prefers dark mode", kind=MemoryKind.PREFERENCE
+        ),
+        scope={"user": "u1"},
+    )
+    llm, captured = _capturing_llm("ok")
+    runner = QueryRunner(
+        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
+    )
+
+    await _drain(runner, user_input="what theme do I like?", user_id="u1")
+
+    # The first completion's message list carries a memory-derived system block.
+    system_blocks = [m["content"] for m in captured[0] if m["role"] == "system"]
+    assert any("memory-derived" in b and "dark mode" in b for b in system_blocks)
+
+
+@pytest.mark.asyncio
+async def test_recall_does_not_leak_other_users_memory():
+    lt = await _long_term()
+    await lt.promote(
+        candidate=MemoryCandidate(
+            content="user prefers dark mode", kind=MemoryKind.PREFERENCE
+        ),
+        scope={"user": "u1"},
+    )
+    llm, captured = _capturing_llm("ok")
+    runner = QueryRunner(
+        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
+    )
+
+    # A different user must not see u1's preference.
+    await _drain(runner, user_input="what theme do I like?", user_id="u2")
+    system_blocks = " ".join(m["content"] for m in captured[0] if m["role"] == "system")
+    assert "dark mode" not in system_blocks
+
+
+@pytest.mark.asyncio
+async def test_no_recall_when_nothing_relevant_injects_no_block():
+    lt = await _long_term()
+    llm, captured = _capturing_llm("ok")
+    runner = QueryRunner(
+        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
+    )
+
+    await _drain(runner, user_input="anything", user_id="u1")
+    system_blocks = " ".join(m["content"] for m in captured[0] if m["role"] == "system")
+    assert "memory-derived" not in system_blocks

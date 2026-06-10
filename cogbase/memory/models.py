@@ -12,9 +12,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from typing import ClassVar
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
+
+from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
 
 
 def _utcnow() -> datetime:
@@ -244,3 +247,176 @@ class FeedbackPayload(BaseModel):
     target: EventRef
     rating: str
     comment: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Long-term memory: curated, durable cross-session knowledge
+#
+# These model the records distilled out of session logs (see
+# docs/long-term-memory.md).  Unlike the episodic log (append-only) and the
+# short-term projection (transient), long-term records are *mutable*:
+# reconciliation reinforces, revises, or supersedes them in place so the store
+# stays curated rather than append-only.  They live physically in the system
+# stores but are partitioned per app for RBAC (the ``app_id`` partition key,
+# realized by the scoped store layout — see
+# docs/long-term-memory.md#the-app-is-the-partition-boundary).
+# ---------------------------------------------------------------------------
+
+
+class MemoryScope(str, Enum):
+    """The recall scope of a long-term record *within* an app.
+
+    This is the finer filter inside the app partition (which is the outer RBAC
+    fence — see :class:`LongTermRecord.app_id`).  Note: ``app`` is deliberately
+    **not** a scope value; the app is the partition, not a scope.
+    """
+
+    USER = "user"
+    GLOBAL = "global"
+
+
+class MemoryKind(str, Enum):
+    """What a long-term record is about (docs/long-term-memory.md#record-shape)."""
+
+    PREFERENCE = "preference"
+    FACT = "fact"
+    CORRECTION = "correction"
+    RETRIEVAL_HINT = "retrieval_hint"
+
+
+class MemoryStatus(str, Enum):
+    """Lifecycle state of a long-term record.
+
+    Only ``active`` records are recalled into the query path; ``pending_review``
+    gates behaviour-affecting kinds until a reviewer accepts them, and
+    ``superseded`` marks records retracted by a contradicting observation.
+    """
+
+    ACTIVE = "active"
+    PENDING_REVIEW = "pending_review"
+    SUPERSEDED = "superseded"
+
+
+class ReconcileOp(str, Enum):
+    """The operation reconciliation applies a candidate against belief with.
+
+    The crux of long-term memory and the one step with no analog in the
+    document pipeline (docs/long-term-memory.md#pipeline): a new observation is
+    merged against accumulated belief rather than upserted by primary key.
+    """
+
+    ADD = "ADD"
+    UPDATE = "UPDATE"
+    DELETE = "DELETE"
+    NOOP = "NOOP"
+
+
+class LongTermRecord(BaseModel):
+    """One curated, durable memory promoted out of session logs.
+
+    The record is *self-contained*: ``evidence_snapshot`` copies the deciding
+    cited text so the record stays valid after the source session log expires,
+    while ``source_event_ids`` keep the audit trail into the log while it lives
+    (docs/long-term-memory.md#pipeline, step 5).
+    """
+
+    memory_id: str = Field(default_factory=lambda: str(uuid4()))
+    # Partition key — the outer RBAC fence.  Physically the records live in the
+    # shared system stores; isolation is realized by the scoped store layout
+    # (each app addresses its own prefixed collections), so this field is for
+    # self-containment / audit, not the enforcement path.  Named ``app_id`` to
+    # match the rest of the memory layer (the stable internal id, not the
+    # mutable client-facing name).
+    app_id: str | None = None
+    scope: MemoryScope = MemoryScope.USER
+    # Concrete id at the scope level (e.g. the user_id for a USER-scoped record);
+    # None for GLOBAL.  Recall matches this against the caller's authorized ids.
+    scope_id: str | None = None
+    kind: MemoryKind = MemoryKind.FACT
+    content: str = ""
+    # 0..1; reinforced on repeat observation, weighed in reconciliation.
+    confidence: float = 0.5
+    status: MemoryStatus = MemoryStatus.ACTIVE
+    source_event_ids: list[EventRef] = Field(default_factory=list)
+    evidence_snapshot: dict = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+    expires_at: datetime | None = None
+
+    def is_expired(self, now: datetime | None = None) -> bool:
+        if self.expires_at is None:
+            return False
+        return (now or _utcnow()) >= self.expires_at
+
+    @classmethod
+    def collection_schema(cls, collection_name: str) -> CollectionSchema:
+        """The structured-store schema for this record, under *collection_name*.
+
+        Co-located with the model so the persisted schema and the fields above
+        stay in lockstep: every field a row carries is declared here.  Scalar
+        attributes are stored as strings (enum values and ISO timestamps are
+        dumped as text); ``confidence`` is the one numeric column; the two
+        provenance attributes are nested structures stored as JSON.
+        """
+        s = lambda **kw: FieldSchema(type=FieldType.STRING, **kw)  # noqa: E731
+        return CollectionSchema(
+            name=collection_name,
+            description=(
+                "Curated long-term memory records (facts, preferences, "
+                "corrections, retrieval hints) with provenance and lifecycle."
+            ),
+            primary_fields=["memory_id"],
+            fields={
+                "memory_id": s(nullable=False, index=True),
+                "app_id": s(),
+                "scope": s(index=True),
+                "scope_id": s(index=True),
+                "kind": s(index=True),
+                "content": s(),
+                "confidence": FieldSchema(type=FieldType.FLOAT, index=True),
+                "status": s(index=True),
+                "source_event_ids": FieldSchema(type=FieldType.JSON),
+                "evidence_snapshot": FieldSchema(type=FieldType.JSON),
+                "created_at": s(index=True),
+                "updated_at": s(index=True),
+                "expires_at": s(index=True),
+            },
+        )
+
+    # The record fields projected into the content vector's metadata so recall
+    # and reconcile can filter on them.  Kept adjacent to :meth:`vector_metadata`
+    # so the indexed field list and the written values stay in lockstep, and
+    # used to build the vector collection's ``metadata_fields``.
+    VECTOR_METADATA_FIELDS: ClassVar[tuple[str, ...]] = (
+        "scope", "scope_id", "kind", "status",
+    )
+
+    def vector_metadata(self) -> dict:
+        """The subset of fields indexed on this record's content vector.
+
+        Enum fields are dumped to their values to match how the structured row
+        stores them.  The keys are exactly :attr:`VECTOR_METADATA_FIELDS`.
+        """
+        return {
+            "scope": self.scope.value,
+            "scope_id": self.scope_id,
+            "kind": self.kind.value,
+            "status": self.status.value,
+        }
+
+
+class MemoryCandidate(BaseModel):
+    """A distiller's proposed memory, before reconciliation decides its fate.
+
+    Carries everything reconciliation needs to ADD / UPDATE / DELETE / NOOP it
+    against accumulated belief, including the provenance to snapshot on
+    promotion.  ``confidence`` is optional: reconciliation assigns a
+    kind-dependent default when the distiller does not set one.
+    """
+
+    content: str
+    kind: MemoryKind = MemoryKind.FACT
+    scope: MemoryScope = MemoryScope.USER
+    source_event_ids: list[EventRef] = Field(default_factory=list)
+    evidence_snapshot: dict = Field(default_factory=dict)
+    confidence: float | None = None
