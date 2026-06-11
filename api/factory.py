@@ -29,7 +29,7 @@ from cogbase.stores import (
 )
 from cogbase.core.app import CogBaseApp
 from cogbase.core.query_runner import QueryRunner
-from cogbase.memory import EpisodicMemory, ShortTermMemory
+from cogbase.memory import Distiller, EpisodicMemory, LongTermMemory, ShortTermMemory
 from cogbase.stores.schema import FieldSchema, FieldType
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion_pipeline import (
@@ -271,6 +271,37 @@ async def build_app(
         ShortTermMemory(episodic=episodic, llm=llm) if episodic is not None else None
     )
 
+    # Long-term memory: curated cross-session knowledge.  Like the episodic log
+    # it is system-level infrastructure — physically in the shared system stores,
+    # logically partitioned per app by wrapping them in the app scope so each app
+    # addresses its own prefixed collections (isolation by store layout, not a
+    # query-time predicate; see docs/long-term-memory.md#the-app-is-the-partition-boundary).
+    # Requires the system structured + vector stores and an embedder.
+    long_term = None
+    if (
+        sys.structured_store is not None
+        and sys.vector_store is not None
+        and embedder is not None
+    ):
+        # Collections are created lazily on first use (the vector dimensionality
+        # is learned from the first embedding), so build_app does no long-term
+        # DDL — keeping app construction's collection-creation behaviour unchanged.
+        long_term = LongTermMemory(
+            sys.structured_store.with_scope(app_scope),
+            sys.vector_store.with_scope(app_scope),
+            llm,
+            embedder,
+            app_id=app_id,
+        )
+
+    # Distiller: offline promotion of durable records out of a settled session
+    # log.  Needs both the log to read and the long-term store to write into.
+    distiller = (
+        Distiller(episodic, long_term, llm)
+        if episodic is not None and long_term is not None
+        else None
+    )
+
     # Resolve the skills assigned to this app (referenced by id) into loaded
     # Skill objects the runner can route to and execute.
     skills: list = []
@@ -292,6 +323,7 @@ async def build_app(
         structured_schemas=structured_schemas or None,
         short_term=short_term,
         episodic=episodic,
+        long_term=long_term,
         skills=skills or None,
     )
 
@@ -341,4 +373,8 @@ async def build_app(
         routing_strategy=config.pipeline_routing.strategy,
         task_store=task_store,
         query_prompt=config.query_prompt,
+        short_term=short_term,
+        episodic=episodic,
+        long_term=long_term,
+        distiller=distiller,
     )

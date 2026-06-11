@@ -71,7 +71,7 @@ from cogbase.llms.compaction import (
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, CompletionResult, LLMBase, SystemTool, ToolDefinition
-from cogbase.memory import EpisodicMemory, EventRef, ShortTermMemory
+from cogbase.memory import EpisodicMemory, EventRef, LongTermMemory, ShortTermMemory
 from cogbase.stores import CollectionSchema, DocumentStoreBase, Filter, Op, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 
 logger = logging.getLogger(__name__)
@@ -425,6 +425,10 @@ class QueryRunner:
                                      records are the same stream; the runner's turn-boundary
                                      flush also persists any ``session_compacted`` summary
                                      short-term appends during context assembly.
+        long_term:                   Curated cross-session memory. When present, ``run()``
+                                     recalls relevant records and injects them into the
+                                     context marked as memory-derived (kept distinct from
+                                     document-backed evidence by the evidence policy).
     """
 
     def __init__(
@@ -443,6 +447,7 @@ class QueryRunner:
         passthrough_token_threshold: int | None = None,
         short_term: ShortTermMemory | None = None,
         episodic: EpisodicMemory | None = None,
+        long_term: LongTermMemory | None = None,
         context_token_budget: int | None = None,
     ) -> None:
         self._app_id = app_id
@@ -460,6 +465,7 @@ class QueryRunner:
         self._passthrough_token_threshold = passthrough_token_threshold
         self._short_term = short_term
         self._episodic = episodic
+        self._long_term = long_term
         # In-loop compaction stays opt-in: None leaves the guard off. When a
         # budget is wanted but unspecified, derive it from the model window.
         self._context_token_budget = context_token_budget
@@ -582,7 +588,6 @@ class QueryRunner:
         base_prompt: str = "You are a helpful assistant.",
         top_k: int = 10,
         session_id: str | None = None,
-        user_id: str | None = None,
     ) -> AsyncGenerator[str | QueryResult, None]:
         """Drive the agent loop, yielding str tokens then a final QueryResult.
 
@@ -599,22 +604,21 @@ class QueryRunner:
             session_id:  When set and short-term memory is configured, the runner
                          records the turn into the session and builds context from
                          it instead of ``history``.  Also keys the episodic log.
-            user_id:     Attribution for episodic events; carried onto every event
-                         recorded for this turn.
         """
         skills = self._skills
         memory_active = self._short_term is not None and session_id is not None
         episodic_on = self._episodic is not None and session_id is not None
+        long_term_on = self._long_term is not None
 
         # Slot 0 is reserved for the system prompt; updated each iteration.
         messages: list[ChatMessage] = [{"role": "system", "content": ""}]
         context: list[ChatMessage] = []
 
         if episodic_on:
-            # Attribution scope for every event this turn; idempotent per turn.
+            # App attribution for every event this turn; idempotent per turn.
             # Recorded before build_context so the turn's user_message is in the
             # log family before the session's thread is (re)assembled.
-            self._episodic.bind_scope(session_id, app_id=self._app_id, user_id=user_id)
+            self._episodic.bind_app(session_id, app_id=self._app_id)
             await self._episodic_record_user_message(session_id, user_input)
 
         if memory_active:
@@ -629,6 +633,16 @@ class QueryRunner:
         else:
             messages.extend(history or [])
             messages.append({"role": "user", "content": user_input})
+
+        # Long-term recall: relevant curated memories injected as a system
+        # block marked memory-derived, so the evidence policy keeps them distinct
+        # from document-backed claims.  Placed right after slot 0 (the system
+        # prompt is written there below) and before the conversation turns.
+        if long_term_on:
+            # TODO add long-term memory reference in response
+            memory_block = await self._recall_memory_block(user_input)
+            if memory_block:
+                messages.insert(1, {"role": "system", "content": memory_block})
 
         all_records: list[dict] = []
         all_chunks: list[Chunk] = []
@@ -958,6 +972,31 @@ class QueryRunner:
             existing = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = f"{skill.site_packages}:{existing}" if existing else skill.site_packages
         return env
+
+    # ------------------------------------------------------------------
+    # Long-term memory recall
+    # ------------------------------------------------------------------
+
+    async def _recall_memory_block(self, user_input: str) -> str | None:
+        """Recall relevant memories and format them as a system block.
+
+        Returns ``None`` (inject nothing) when nothing is recalled or recall
+        fails — long-term recall is an enrichment, never allowed to break a turn.
+        """
+        try:
+            memories = await self._long_term.recall(query=user_input)
+        except Exception:
+            logger.warning("[runner] long-term recall failed", exc_info=True)
+            return None
+        if not memories:
+            return None
+        lines = "\n".join(f"- [{m.kind.value}] {m.content}" for m in memories)
+        logger.info("[runner] long-term recall injected %d memories", len(memories))
+        return (
+            "Relevant long-term memory about the user/project (recalled; "
+            "memory-derived background knowledge — NOT cited document evidence, "
+            "do not present these as sourced facts):\n" + lines
+        )
 
     # ------------------------------------------------------------------
     # Episodic memory recording

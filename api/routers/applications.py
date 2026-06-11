@@ -38,6 +38,9 @@ from api.models import (
     IngestDocumentsAcceptedResponse,
     QueryRequest,
     QueryResponse,
+    SessionStartRequest,
+    SessionResponse,
+    SessionCloseResponse,
     CollectionQueryRequest,
     CollectionQueryResponse,
     TaskListResponse,
@@ -604,12 +607,12 @@ async def upload_documents(
 
 async def _drain_query(
     app, text: str, history: list[dict] | None = None, system_prompt: str | None = None,
-    top_k: int = 10, session_id: str | None = None, user_id: str | None = None,
+    top_k: int = 10, session_id: str | None = None,
 ):
     """Drain app.query_stream and return the final result."""
     async for item in app.query_stream(
         text, history=history, system_prompt=system_prompt, top_k=top_k,
-        session_id=session_id, user_id=user_id,
+        session_id=session_id,
     ):
         if not isinstance(item, str):
             return item
@@ -633,13 +636,13 @@ async def query_application(
     app = await _get_active_app(app_name, app_cache, system_store, system_resources)
     history = [{"role": m.role, "content": m.content} for m in body.history] or None
     try:
-        result = await _drain_query(app, body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k, session_id=body.session_id, user_id=body.user_id)
+        result = await _drain_query(app, body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k, session_id=body.session_id)
     except Exception:
         logger.exception("query failed for app '%s', retrying with fresh app", app_name)
         app = await _get_active_app(
             app_name, app_cache, system_store, system_resources, force_refresh=True
         )
-        result = await _drain_query(app, body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k, session_id=body.session_id, user_id=body.user_id)
+        result = await _drain_query(app, body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k, session_id=body.session_id)
     return QueryResponse(
         answer=result.answer,
         structured_records=result.structured_records,
@@ -670,7 +673,7 @@ async def query_application_stream(
 
     async def event_stream():
         try:
-            async for item in app.query_stream(body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k, session_id=body.session_id, user_id=body.user_id):
+            async for item in app.query_stream(body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k, session_id=body.session_id):
                 if isinstance(item, str):
                     yield f"data: {json.dumps({'token': item})}\n\n"
                 else:
@@ -690,6 +693,73 @@ async def query_application_stream(
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# Session lifecycle endpoints (short-term + long-term memory)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{app_name}/sessions", response_model=SessionResponse)
+async def start_session(
+    app_name: str,
+    body: SessionStartRequest,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+) -> SessionResponse:
+    """Open (or resume) a conversation session and return its id.
+
+    Seeds the short-term metadata cache; the conversational thread itself lives
+    in the episodic log and is materialised on the first query.
+    """
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    try:
+        session_id = await app.start_session(
+            metadata=body.metadata,
+            session_id=body.session_id,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    return SessionResponse(session_id=session_id)
+
+
+@router.post("/{app_name}/sessions/{session_id}/close", response_model=SessionCloseResponse)
+async def close_session(
+    app_name: str,
+    session_id: str,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+) -> SessionCloseResponse:
+    """Settle a session: evict the short-term cache and enqueue distillation.
+
+    Distillation runs offline (a background task, mirroring the ingestion task
+    model) so close returns immediately.  When no distiller is wired the cache
+    is still evicted and distillation is reported 'skipped'.
+    """
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    await app.end_session(session_id)
+
+    distiller = app.distiller
+    if distiller is None:
+        return SessionCloseResponse(session_id=session_id, distillation="skipped")
+
+    task_id = await system_store.create_distill_task(app.app_id, session_id)
+
+    async def _run_distill_bg() -> None:
+        await system_store.start_task(task_id)
+        try:
+            await distiller.distill_session(session_id=session_id)
+            await system_store.complete_distill_task(task_id, success=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("distillation failed for session '%s'", session_id)
+            await system_store.complete_distill_task(task_id, success=False, error=str(exc))
+
+    asyncio.create_task(_run_distill_bg())
+    return SessionCloseResponse(
+        session_id=session_id, distillation="enqueued", task_id=task_id
+    )
 
 
 # ---------------------------------------------------------------------------

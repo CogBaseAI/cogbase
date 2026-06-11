@@ -109,9 +109,28 @@ class QueryRequest(BaseModel):
             "across requests to continue a conversation. Omit for stateless queries."
         ),
     )
-    user_id: str | None = Field(
-        default=None,
-        description="Optional user identifier associated with the session (memory scoping).",
+
+
+class SessionStartRequest(BaseModel):
+    metadata: dict | None = Field(
+        default=None, description="Arbitrary session metadata seeded into the short-term cache."
+    )
+    session_id: str | None = Field(
+        default=None, description="Resume an existing session id instead of creating a new one."
+    )
+
+
+class SessionResponse(BaseModel):
+    session_id: str
+
+
+class SessionCloseResponse(BaseModel):
+    session_id: str
+    distillation: str = Field(
+        description="One of 'enqueued' / 'skipped' — whether a distillation task was started on close."
+    )
+    task_id: str | None = Field(
+        default=None, description="The distillation task id when one was enqueued."
     )
 
 

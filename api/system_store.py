@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -113,8 +114,8 @@ class DocRecord(BaseModel):
 class TaskRecord(BaseModel):
     task_id: str
     app_id: str
-    task_type: str      # "ingest" | "workflow"
-    task_name: str      # "ingest" for ingest tasks; workflow name for workflow tasks
+    task_type: str      # "ingest" | "workflow" | "distill"
+    task_name: str      # "ingest" for ingest; workflow name for workflows; "distill" for distillation
     doc_id: str | None = None
     params_json: str | None = None  # JSON-serialized params
     status: TaskStatus
@@ -405,6 +406,47 @@ class SystemStore:
         error: str | None = None,
     ) -> None:
         """Mark a workflow task as done or failed."""
+        await self.update_task(
+            task_id,
+            status=TaskStatus.DONE if success else TaskStatus.FAILED,
+            completed_at=datetime.now(timezone.utc).isoformat(),
+            error=error,
+        )
+
+    async def create_distill_task(
+        self, app_id: str, session_id: str
+    ) -> str:
+        """Create a long-term distillation task for a settled session; return its id.
+
+        Mirrors the workflow/ingest task model so distillation runs are
+        inspectable; the session id rides ``params_json``.
+        """
+        task_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        await self.create_task(TaskRecord(
+            task_id=task_id,
+            app_id=app_id,
+            task_type="distill",
+            task_name="distill",
+            doc_id=session_id,
+            params_json=json.dumps({"session_id": session_id}),
+            status=TaskStatus.PENDING,
+            created_at=now,
+        ))
+        return task_id
+
+    async def start_task(self, task_id: str) -> None:
+        """Mark a task as running (execution has begun)."""
+        await self.update_task(
+            task_id,
+            status=TaskStatus.RUNNING,
+            started_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    async def complete_distill_task(
+        self, task_id: str, *, success: bool, error: str | None = None
+    ) -> None:
+        """Mark a distillation task as done or failed."""
         await self.update_task(
             task_id,
             status=TaskStatus.DONE if success else TaskStatus.FAILED,

@@ -21,6 +21,7 @@ from cogbase.stores.filters import Col
 from cogbase.workflows.context import render_value
 
 if TYPE_CHECKING:
+    from cogbase.memory import Distiller, EpisodicMemory, LongTermMemory, ShortTermMemory
     from cogbase.workflows.runner import WorkflowRunner
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,10 @@ class CogBaseApp:
         routing_strategy: RoutingStrategy = RoutingStrategy.AUTO,
         task_store: Any,
         query_prompt: str | None = None,
+        short_term: "ShortTermMemory | None" = None,
+        episodic: "EpisodicMemory | None" = None,
+        long_term: "LongTermMemory | None" = None,
+        distiller: "Distiller | None" = None,
     ) -> None:
         self.name = name
         # Stable internal id — the per-app document-store collection key and the
@@ -74,6 +79,14 @@ class CogBaseApp:
         self._routing_strategy = routing_strategy
         self._task_store = task_store
         self._query_prompt = query_prompt
+        # Memory tiers (all optional — wired only when the system stores back
+        # them).  The runner already holds short/long-term for the query path;
+        # the app holds them too so the session-lifecycle API can start/close
+        # sessions and trigger distillation.
+        self._short_term = short_term
+        self._episodic = episodic
+        self._long_term = long_term
+        self._distiller = distiller
 
     def _find_pipeline_by_metadata(self, doc: Document) -> IngestionPipeline | None:
         for p in self._pipelines:
@@ -318,7 +331,6 @@ class CogBaseApp:
         system_prompt: str | None = None,
         top_k: int = 10,
         session_id: str | None = None,
-        user_id: str | None = None,
     ):
         """Stream the answer token-by-token, then yield a final QueryResult.
 
@@ -333,15 +345,63 @@ class CogBaseApp:
             session_id:    When set and the runner has short-term memory wired,
                            the turn is recorded into that session and its
                            assembled context replaces ``history``.
-            user_id:       Attribution carried onto the session's episodic events.
         """
         logger.info("app.query_stream.start query=%s session=%s", text[:200], session_id)
         effective_prompt = system_prompt or self._query_prompt
-        kwargs = {"history": history, "top_k": top_k, "session_id": session_id, "user_id": user_id}
+        kwargs = {"history": history, "top_k": top_k, "session_id": session_id}
         if effective_prompt:
             kwargs["base_prompt"] = effective_prompt
         async for chunk in self._runner.run(text, **kwargs):
             yield chunk
+
+    # ------------------------------------------------------------------
+    # Session lifecycle (short-term + long-term memory)
+    # ------------------------------------------------------------------
+
+    @property
+    def distiller(self) -> "Distiller | None":
+        """The offline distiller, if long-term memory is wired."""
+        return self._distiller
+
+    async def start_session(
+        self,
+        *,
+        metadata: dict | None = None,
+        session_id: str | None = None,
+    ) -> str:
+        """Open (or resume) a session and return its id.
+
+        Seeds the short-term metadata cache; the conversational thread lives in
+        the episodic log and is materialised on the first query.  Raises if no
+        short-term memory is configured (sessions are meaningless without it).
+        """
+        if self._short_term is None:
+            raise RuntimeError("session lifecycle requires short-term memory to be configured")
+        return await self._short_term.start_session(
+            app_id=self.app_id,
+            metadata=metadata,
+            session_id=session_id,
+        )
+
+    async def close_session(self, session_id: str) -> bool:
+        """Settle a session: evict the short-term cache and distill it.
+
+        Evicts only the in-memory short-term cache (the durable episodic log is
+        untouched), then — when a distiller is wired — runs distillation inline
+        and returns whether it ran.  Callers wanting non-blocking settle should
+        enqueue :meth:`Distiller.distill_session` as a background task instead and
+        call :meth:`end_session`.
+        """
+        await self.end_session(session_id)
+        if self._distiller is None:
+            return False
+        await self._distiller.distill_session(session_id=session_id)
+        return True
+
+    async def end_session(self, session_id: str) -> None:
+        """Evict a session's short-term cache without distilling."""
+        if self._short_term is not None:
+            await self._short_term.end_session(session_id)
 
     # ------------------------------------------------------------------
     # Workflow interface
