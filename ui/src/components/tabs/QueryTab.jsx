@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
+import ReactMarkdown from 'react-markdown'
 import { useApp } from '../../context'
 import { streamSSE } from '../../utils'
 
@@ -114,7 +115,11 @@ export default function QueryTab({ active }) {
                   color: m.error ? 'var(--red)' : m.thinking || m.muted ? 'var(--muted)' : undefined,
                   fontFamily: m.mono ? 'monospace' : undefined,
                   fontSize: m.mono ? 11 : undefined,
-                }}>{m.text}</div>
+                }}>
+                  {m.role === 'bot' && !m.mono && !m.thinking
+                    ? <div className="md"><ReactMarkdown>{m.text}</ReactMarkdown></div>
+                    : m.text}
+                </div>
               </div>
             ))}
           </div>
