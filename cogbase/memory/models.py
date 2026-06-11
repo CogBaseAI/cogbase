@@ -64,10 +64,6 @@ class SessionState(BaseModel):
 
     session_id: str = Field(default_factory=lambda: str(uuid4()))
     app_id: str | None = None
-    user_id: str | None = None
-    # Explicit scope (session / user / app / project / org / global) per
-    # docs/memory.md; carried so multi-tenant callers can isolate sessions.
-    scope: dict = Field(default_factory=dict)
     metadata: dict = Field(default_factory=dict)
 
     messages: list[MemoryMessage] = Field(default_factory=list)
@@ -158,7 +154,6 @@ class MemoryEvent(BaseModel):
     event_type: EventType
     created_at: datetime = Field(default_factory=_utcnow)
     app_id: str | None = None
-    user_id: str | None = None
     # Causal link to a prior event in the same session (e.g. tool_result →
     # tool_called); stored as the full triplet so it resolves by log seek.
     parent_event_id: EventRef | None = None
@@ -263,18 +258,6 @@ class FeedbackPayload(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class MemoryScope(str, Enum):
-    """The recall scope of a long-term record *within* an app.
-
-    This is the finer filter inside the app partition (which is the outer RBAC
-    fence — see :class:`LongTermRecord.app_id`).  Note: ``app`` is deliberately
-    **not** a scope value; the app is the partition, not a scope.
-    """
-
-    USER = "user"
-    GLOBAL = "global"
-
-
 class MemoryKind(str, Enum):
     """What a long-term record is about (docs/long-term-memory.md#record-shape)."""
 
@@ -328,10 +311,6 @@ class LongTermRecord(BaseModel):
     # match the rest of the memory layer (the stable internal id, not the
     # mutable client-facing name).
     app_id: str | None = None
-    scope: MemoryScope = MemoryScope.USER
-    # Concrete id at the scope level (e.g. the user_id for a USER-scoped record);
-    # None for GLOBAL.  Recall matches this against the caller's authorized ids.
-    scope_id: str | None = None
     kind: MemoryKind = MemoryKind.FACT
     content: str = ""
     # 0..1; reinforced on repeat observation, weighed in reconciliation.
@@ -369,8 +348,6 @@ class LongTermRecord(BaseModel):
             fields={
                 "memory_id": s(nullable=False, index=True),
                 "app_id": s(),
-                "scope": s(index=True),
-                "scope_id": s(index=True),
                 "kind": s(index=True),
                 "content": s(),
                 "confidence": FieldSchema(type=FieldType.FLOAT, index=True),
@@ -388,7 +365,7 @@ class LongTermRecord(BaseModel):
     # so the indexed field list and the written values stay in lockstep, and
     # used to build the vector collection's ``metadata_fields``.
     VECTOR_METADATA_FIELDS: ClassVar[tuple[str, ...]] = (
-        "scope", "scope_id", "kind", "status",
+        "kind", "status",
     )
 
     def vector_metadata(self) -> dict:
@@ -398,8 +375,6 @@ class LongTermRecord(BaseModel):
         stores them.  The keys are exactly :attr:`VECTOR_METADATA_FIELDS`.
         """
         return {
-            "scope": self.scope.value,
-            "scope_id": self.scope_id,
             "kind": self.kind.value,
             "status": self.status.value,
         }
@@ -416,7 +391,6 @@ class MemoryCandidate(BaseModel):
 
     content: str
     kind: MemoryKind = MemoryKind.FACT
-    scope: MemoryScope = MemoryScope.USER
     source_event_ids: list[EventRef] = Field(default_factory=list)
     evidence_snapshot: dict = Field(default_factory=dict)
     confidence: float | None = None

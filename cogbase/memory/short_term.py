@@ -27,7 +27,7 @@ The three operations the layer performs:
   budget, context assembly is "summary header + the projected turns + the
   current input" — no per-turn newest-first budget walk.
 
-A small per-session cache holds only session metadata (app/user/scope) and TTL;
+A small per-session cache holds only session metadata (app) and TTL;
 the conversational thread is always projected fresh from the log, so a
 ``build_context`` from a warm or a cold process produces the same result.
 """
@@ -128,8 +128,6 @@ class ShortTermMemory:
         self,
         *,
         app_id: str | None = None,
-        user_id: str | None = None,
-        scope: dict | None = None,
         metadata: dict | None = None,
         session_id: str | None = None,
     ) -> str:
@@ -147,8 +145,6 @@ class ShortTermMemory:
                 return state.session_id
             state = SessionState(
                 app_id=app_id,
-                user_id=user_id,
-                scope=scope or {},
                 metadata=metadata or {},
                 **({"session_id": session_id} if session_id else {}),
             )

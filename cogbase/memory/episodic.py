@@ -71,7 +71,7 @@ class EpisodicMemory:
         # from the log on a cold start, so losing it costs at most a re-read.
         self._buffers: dict[str, list[MemoryEvent]] = {}   # unflushed events, in seq order
         self._next_seq: dict[str, int] = {}                # next seq to assign
-        self._scope: dict[str, dict] = {}                  # app_id / user_id per session
+        self._app_ids: dict[str, str | None] = {}          # app_id per session
         # One lock per session keeps cross-session appends concurrent while
         # serializing a session's own record/flush (it has a single writer).
         self._locks: dict[str, asyncio.Lock] = {}
@@ -81,23 +81,22 @@ class EpisodicMemory:
     # Recording (buffer + stamp)
     # ------------------------------------------------------------------
 
-    def bind_scope(
+    def bind_app(
         self,
         session_id: str,
         *,
         app_id: str | None = None,
-        user_id: str | None = None,
     ) -> None:
-        """Register a session's attribution scope without emitting an event.
+        """Register a session's app attribution without emitting an event.
 
-        Later recorded events inherit ``app_id`` / ``user_id`` so callers need
-        not re-pass them on every record.  Idempotent and process-local (rebuilt
-        on a cold start), so it is safe — and expected — to call once per turn.
-        Use this where ``record_session_started`` would be wrong: the per-turn
-        query runner does not own session creation and must not log a
+        Later recorded events inherit ``app_id`` so callers need not re-pass it
+        on every record.  Idempotent and process-local (rebuilt on a cold
+        start), so it is safe — and expected — to call once per turn.  Use this
+        where ``record_session_started`` would be wrong: the per-turn query
+        runner does not own session creation and must not log a
         ``session_started`` event on every turn.
         """
-        self._scope[session_id] = {"app_id": app_id, "user_id": user_id}
+        self._app_ids[session_id] = app_id
 
     async def record(self, event: MemoryEvent) -> EventRef:
         """Stamp *event* with its ``seq`` + ``ulid`` and buffer it for the next flush.
@@ -109,7 +108,7 @@ class EpisodicMemory:
         lock = await self._lock_for(event.session_id)
         async with lock:
             await self._ensure_session_locked(event.session_id)
-            self._fill_scope_locked(event)
+            self._fill_app_locked(event)
             event.seq = self._next_seq[event.session_id]
             event.ulid = str(ULID())
             self._next_seq[event.session_id] += 1
@@ -121,18 +120,16 @@ class EpisodicMemory:
         *,
         session_id: str,
         app_id: str | None = None,
-        user_id: str | None = None,
         metadata: dict | None = None,
     ) -> EventRef:
-        # Establish the session's scope so later events inherit it without the
-        # caller re-passing app_id / user_id on every record.
-        self._scope[session_id] = {"app_id": app_id, "user_id": user_id}
+        # Establish the session's app attribution so later events inherit it
+        # without the caller re-passing app_id on every record.
+        self._app_ids[session_id] = app_id
         return await self.record(
             MemoryEvent(
                 session_id=session_id,
                 event_type=EventType.SESSION_STARTED,
                 app_id=app_id,
-                user_id=user_id,
                 payload=SessionStartedPayload(metadata=metadata or {}).model_dump(),
             )
         )
@@ -353,7 +350,7 @@ class EpisodicMemory:
             await self._log.delete(self._log_type, session_id)
             self._buffers.pop(session_id, None)
             self._next_seq.pop(session_id, None)
-            self._scope.pop(session_id, None)
+            self._app_ids.pop(session_id, None)
 
     # ------------------------------------------------------------------
     # Internals
@@ -413,12 +410,7 @@ class EpisodicMemory:
                 )
         self._next_seq[session_id] = next_seq
 
-    def _fill_scope_locked(self, event: MemoryEvent) -> None:
-        """Inherit app_id / user_id from the session's recorded scope."""
-        scope = self._scope.get(event.session_id)
-        if not scope:
-            return
+    def _fill_app_locked(self, event: MemoryEvent) -> None:
+        """Inherit app_id from the session's recorded attribution."""
         if event.app_id is None:
-            event.app_id = scope.get("app_id")
-        if event.user_id is None:
-            event.user_id = scope.get("user_id")
+            event.app_id = self._app_ids.get(event.session_id)

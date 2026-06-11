@@ -132,20 +132,17 @@ async def test_seq_resumes_from_log_on_cold_start(tmp_path):
     assert [e.seq for e in events] == [0, 1, 2]
 
 
-# -- scope inheritance & payload contracts ----------------------------------
+# -- app attribution inheritance & payload contracts -------------------------
 
 
-async def test_session_scope_is_inherited_by_later_events(episodic):
-    await episodic.record_session_started(
-        session_id=SESSION, app_id="legal", user_id="u-1"
-    )
+async def test_session_app_id_is_inherited_by_later_events(episodic):
+    await episodic.record_session_started(session_id=SESSION, app_id="legal")
     await episodic.record_user_message(session_id=SESSION, content="q")
     await episodic.flush(SESSION)
 
     events = await episodic.replay(session_id=SESSION)
     user_msg = next(e for e in events if e.event_type == EventType.USER_MESSAGE)
     assert user_msg.app_id == "legal"
-    assert user_msg.user_id == "u-1"
 
 
 async def test_tool_result_marks_ok_and_error(episodic):

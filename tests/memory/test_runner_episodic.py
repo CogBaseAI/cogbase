@@ -95,7 +95,7 @@ def _echo_tool() -> SystemTool:
 
 async def test_run_records_user_message_and_final_answer(episodic):
     llm = _make_llm(_text_result("hi there"))
-    await _drain(_runner(llm, episodic=episodic), "hello", session_id="s1", user_id="u1")
+    await _drain(_runner(llm, episodic=episodic), "hello", session_id="s1")
 
     events = await episodic.replay(session_id="s1")
     assert [e.event_type for e in events] == [
@@ -115,11 +115,10 @@ async def test_recorded_events_are_durable_after_the_turn(episodic):
 
 async def test_attribution_is_carried_onto_events(episodic):
     llm = _make_llm(_text_result("a"))
-    await _drain(_runner(llm, episodic=episodic), "q", session_id="s1", user_id="u-42")
+    await _drain(_runner(llm, episodic=episodic), "q", session_id="s1")
 
     events = await episodic.replay(session_id="s1")
     assert all(e.app_id == "testapp" for e in events)
-    assert all(e.user_id == "u-42" for e in events)
 
 
 # -- tool call / result recording -------------------------------------------

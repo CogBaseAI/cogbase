@@ -5,19 +5,18 @@ docs/long-term-memory.md).  It sits over a structured store (canonical records)
 and a vector store (semantic recall over ``content`` and the reconcile step's
 "find related records" lookup).  Both stores are passed in **already
 app-scoped** by the factory, so this service treats the app partition as given
-and reasons only about ``scope`` (``user`` / ``project`` / ``organization`` /
-``global``) within it.
+— it is the only partition until multi-user / RBAC is designed.
 
 Three operations make up the surface:
 
-- :meth:`recall` — online, on the query path: a scoped vector search over memory
-  ``content``, filtered to the caller's authorized scopes.  Results are marked
+- :meth:`recall` — online, on the query path: a vector search over memory
+  ``content``, filtered to active records.  Results are marked
   memory-derived by the caller so the evidence policy can keep them distinct
   from document-backed claims.
 - :meth:`promote` — the ADD path: embed, write the structured record and its
   content vector with a provenance snapshot.
 - :meth:`reconcile` — **the crux, no analog in the document pipeline.**  Merge a
-  new observation against accumulated belief: vector-recall related in-scope
+  new observation against accumulated belief: vector-recall related
   records, let an LLM emit one ``ReconcileOp`` (ADD / UPDATE / DELETE / NOOP),
   and apply it (reinforce confidence, revise content, or supersede a
   contradicted record).
@@ -42,7 +41,6 @@ from cogbase.memory.models import (
     LongTermRecord,
     MemoryCandidate,
     MemoryKind,
-    MemoryScope,
     MemoryStatus,
     ReconcileOp,
 )
@@ -91,7 +89,7 @@ _RECONCILE_SCHEMA: dict = {
 
 _RECONCILE_SYSTEM_PROMPT = (
     "You curate a long-term memory store.  You are given a NEW observation and a "
-    "list of EXISTING related memories in the same scope.  Decide how the new "
+    "list of EXISTING related memories.  Decide how the new "
     "observation reconciles against accumulated belief, and return exactly one "
     "operation as a JSON object.\n\n"
     "Operations:\n"
@@ -196,8 +194,8 @@ class LongTermMemory:
                 name=self._vector_collection,
                 dimensions=dimensions,
                 description=(
-                    "Long-term memory content: durable user/project/org facts, "
-                    "preferences, corrections, and retrieval hints distilled from "
+                    "Long-term memory content: durable facts, preferences, "
+                    "corrections, and retrieval hints distilled from "
                     "session logs."
                 ),
                 metadata_fields=list(LongTermRecord.VECTOR_METADATA_FIELDS),
@@ -210,28 +208,21 @@ class LongTermMemory:
     # ------------------------------------------------------------------
 
     async def recall(
-        self, *, query: str, scope: dict, limit: int = 10
+        self, *, query: str, limit: int = 10
     ) -> list[LongTermRecord]:
-        """Return active memories relevant to *query*, scoped to the caller.
+        """Return active memories relevant to *query*.
 
-        *scope* maps a :class:`MemoryScope` level to the caller's concrete id at
-        that level, e.g. ``{"user": "u1", "project": "p7"}``.  A record is
-        returned only when it is ``active`` and either ``global`` or its
-        ``(scope, scope_id)`` is one the caller is authorized for — the
-        non-negotiable multi-tenant rule.  The app partition itself is enforced
-        by the scoped store, not here.  Results are ordered by vector relevance.
+        The app partition is enforced by the scoped store, not here.  Results
+        are ordered by vector relevance.
         """
         if not query.strip() or limit <= 0:
             return []
-        # Over-fetch: the scope/status filter is applied in Python (an OR across
-        # authorized scopes the AND-only filter DSL cannot express), so fetch a
-        # wider band than ``limit`` to refill what the filter drops.
+        # Over-fetch: the status filter is applied in Python, so fetch a wider
+        # band than ``limit`` to refill what the filter drops.
         hits = await self._search_content(query, top_k=max(limit * 4, limit))
         ordered_ids: list[str] = []
         for chunk in hits:
-            if self._authorized(chunk.metadata, scope) and (
-                chunk.metadata.get("status") == MemoryStatus.ACTIVE.value
-            ):
+            if chunk.metadata.get("status") == MemoryStatus.ACTIVE.value:
                 if chunk.doc_id not in ordered_ids:
                     ordered_ids.append(chunk.doc_id)
             if len(ordered_ids) >= limit:
@@ -251,7 +242,6 @@ class LongTermMemory:
         self,
         *,
         candidate: MemoryCandidate,
-        scope: dict,
         status: MemoryStatus | None = None,
     ) -> str:
         """Write *candidate* as a new active/pending record; returns its id.
@@ -261,7 +251,6 @@ class LongTermMemory:
         the kind's promotion gate (preferences/hints auto-active, facts/
         corrections held for review).
         """
-        scope_id = self._resolve_scope_id(candidate.scope, scope)
         confidence = (
             candidate.confidence
             if candidate.confidence is not None
@@ -269,8 +258,6 @@ class LongTermMemory:
         )
         record = LongTermRecord(
             app_id=self._app_id,
-            scope=candidate.scope,
-            scope_id=scope_id,
             kind=candidate.kind,
             content=candidate.content,
             confidence=confidence,
@@ -280,8 +267,8 @@ class LongTermMemory:
         )
         await self._save_record(record)
         logger.info(
-            "[long_term] promote memory_id=%s kind=%s scope=%s status=%s",
-            record.memory_id, record.kind.value, record.scope.value, record.status.value,
+            "[long_term] promote memory_id=%s kind=%s status=%s",
+            record.memory_id, record.kind.value, record.status.value,
         )
         return record.memory_id
 
@@ -289,19 +276,18 @@ class LongTermMemory:
     # Reconcile (the crux)
     # ------------------------------------------------------------------
 
-    async def reconcile(self, *, candidate: MemoryCandidate, scope: dict) -> str:
+    async def reconcile(self, *, candidate: MemoryCandidate) -> str:
         """Merge *candidate* against accumulated belief; return the affected id.
 
-        Vector-recalls related in-scope records, asks the LLM for one
+        Vector-recalls related records, asks the LLM for one
         ``ReconcileOp``, and applies it.  ADD with no related records skips the
         LLM entirely.  On any LLM/parse failure the candidate is conservatively
         ADDed rather than dropped — never silently lose a candidate.
         """
-        scope_id = self._resolve_scope_id(candidate.scope, scope)
-        related = await self._related_records(candidate, scope_id)
+        related = await self._related_records(candidate)
 
         if not related:
-            return await self.promote(candidate=candidate, scope=scope)
+            return await self.promote(candidate=candidate)
 
         decision = await self._decide(candidate, related)
         op = decision.op
@@ -315,10 +301,10 @@ class LongTermMemory:
             return await self._apply_update(target, candidate, decision.revised_content)
 
         if op is ReconcileOp.DELETE and target is not None:
-            return await self._apply_delete(target, candidate, scope)
+            return await self._apply_delete(target, candidate)
 
         # ADD, or UPDATE/DELETE that named no resolvable target.
-        return await self.promote(candidate=candidate, scope=scope)
+        return await self.promote(candidate=candidate)
 
     # ------------------------------------------------------------------
     # Reconcile internals
@@ -346,7 +332,7 @@ class LongTermMemory:
         return target.memory_id
 
     async def _apply_delete(
-        self, target: LongTermRecord, candidate: MemoryCandidate, scope: dict
+        self, target: LongTermRecord, candidate: MemoryCandidate
     ) -> str:
         """Supersede *target* and promote *candidate* — but only if it outranks.
 
@@ -370,7 +356,7 @@ class LongTermMemory:
         target.status = MemoryStatus.SUPERSEDED
         target.updated_at = _utcnow()
         await self._save_record(target)
-        new_id = await self.promote(candidate=candidate, scope=scope)
+        new_id = await self.promote(candidate=candidate)
         logger.info(
             "[long_term] reconcile DELETE superseded=%s replaced_by=%s",
             target.memory_id, new_id,
@@ -438,16 +424,14 @@ class LongTermMemory:
         return None
 
     async def _related_records(
-        self, candidate: MemoryCandidate, scope_id: str | None
+        self, candidate: MemoryCandidate
     ) -> list[LongTermRecord]:
-        """Vector-recall active records in the candidate's exact scope."""
+        """Vector-recall active records related to the candidate."""
         hits = await self._search_content(candidate.content, top_k=_RECONCILE_CANDIDATES * 3)
         ids = [
             c.doc_id
             for c in hits
             if c.metadata.get("status") == MemoryStatus.ACTIVE.value
-            and c.metadata.get("scope") == candidate.scope.value
-            and c.metadata.get("scope_id") == scope_id
         ]
         if not ids:
             return []
@@ -461,8 +445,8 @@ class LongTermMemory:
     async def _save_record(self, record: LongTermRecord) -> None:
         """Upsert the structured row and its content vector.
 
-        The vector is always re-upserted so its metadata (``status`` / ``scope``
-        / ``kind``) tracks the structured record — recall and reconcile filter on
+        The vector is always re-upserted so its metadata (``status`` /
+        ``kind``) tracks the structured record — recall and reconcile filter on
         that metadata, so a superseded record must carry ``status=superseded`` in
         the index too.  ``content`` is re-embedded each time; on a status-only
         change this re-embeds identical text (correct, just not free) — a
@@ -502,31 +486,6 @@ class LongTermMemory:
     def _to_row(record: LongTermRecord) -> dict:
         """JSON-serializable row: ISO timestamps, enum values, refs as dicts."""
         return record.model_dump(mode="json")
-
-    # ------------------------------------------------------------------
-    # Scope helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _resolve_scope_id(level: MemoryScope, scope: dict) -> str | None:
-        """The caller's concrete id at *level* (None for GLOBAL)."""
-        if level is MemoryScope.GLOBAL:
-            return None
-        return scope.get(level.value)
-
-    @staticmethod
-    def _authorized(metadata: dict, scope: dict) -> bool:
-        """True if the caller (per *scope*) may see a record with *metadata*.
-
-        Global records are always visible within the app partition; otherwise the
-        record's ``(scope, scope_id)`` must be one the caller supplied an id for.
-        """
-        level = metadata.get("scope")
-        if level == MemoryScope.GLOBAL.value:
-            return True
-        if level not in scope:
-            return False
-        return metadata.get("scope_id") == scope.get(level)
 
     @staticmethod
     def _default_status(kind: MemoryKind) -> MemoryStatus:

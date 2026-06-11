@@ -63,13 +63,13 @@ async def test_distill_promotes_candidates_with_provenance(episodic):
     lt = await _long_term()
     llm = _extracting_llm([
         {"content": "user prefers concise answers", "kind": "preference",
-         "scope": "user", "source_seqs": [0]},
+         "source_seqs": [0]},
         {"content": "user works at Acme Corp", "kind": "fact",
-         "scope": "user", "source_seqs": [2]},
+         "source_seqs": [2]},
     ])
     distiller = Distiller(episodic, lt, llm)
 
-    ids = await distiller.distill_session(session_id=sid, scope={"user": "u1"})
+    ids = await distiller.distill_session(session_id=sid)
     assert len(ids) == 2
 
     recs = {r.content: r for r in await lt._load_records(ids)}
@@ -88,20 +88,20 @@ async def test_distill_promotes_candidates_with_provenance(episodic):
 async def test_distill_empty_thread_returns_nothing(episodic):
     lt = await _long_term()
     distiller = Distiller(episodic, lt, _extracting_llm([]))
-    assert await distiller.distill_session(session_id="empty", scope={"user": "u1"}) == []
+    assert await distiller.distill_session(session_id="empty") == []
 
 
 @pytest.mark.asyncio
-async def test_distill_drops_candidate_with_bad_scope(episodic):
+async def test_distill_drops_candidate_with_bad_kind(episodic):
     sid = "sess-2"
     await _seed_turn(episodic, sid, "hello", "hi")
     lt = await _long_term()
     llm = _extracting_llm([
-        {"content": "valid one", "kind": "preference", "scope": "user", "source_seqs": [0]},
-        {"content": "broken", "kind": "preference", "scope": "nonsense", "source_seqs": [0]},
+        {"content": "valid one", "kind": "preference", "source_seqs": [0]},
+        {"content": "broken", "kind": "nonsense", "source_seqs": [0]},
     ])
-    # The bad-scope item is schema-invalid, so extraction fails validation and
+    # The bad-kind item is schema-invalid, so extraction fails validation and
     # nothing is returned — verifies we never promote a malformed candidate.
     distiller = Distiller(episodic, lt, llm)
-    ids = await distiller.distill_session(session_id=sid, scope={"user": "u1"})
+    ids = await distiller.distill_session(session_id=sid)
     assert ids == []

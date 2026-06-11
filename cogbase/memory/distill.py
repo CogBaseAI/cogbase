@@ -35,7 +35,6 @@ from cogbase.memory.models import (
     MemoryCandidate,
     MemoryEvent,
     MemoryKind,
-    MemoryScope,
 )
 from cogbase.memory.projection import project_thread
 
@@ -54,16 +53,12 @@ _EXTRACTION_SCHEMA: dict = {
                         "type": "string",
                         "enum": [k.value for k in MemoryKind],
                     },
-                    "scope": {
-                        "type": "string",
-                        "enum": [s.value for s in MemoryScope],
-                    },
                     "source_seqs": {
                         "type": "array",
                         "items": {"type": "integer"},
                     },
                 },
-                "required": ["content", "kind", "scope"],
+                "required": ["content", "kind"],
                 "additionalProperties": False,
             },
         }
@@ -86,7 +81,6 @@ _SYSTEM_PROMPT = (
     "Rules:\n"
     "- Do NOT extract ephemeral, one-off, or task-local details.\n"
     "- Write each memory as a single self-contained natural-language claim.\n"
-    "- Choose the narrowest correct scope: user / project / organization / global.\n"
     "- Set source_seqs to the turn numbers the memory was derived from.\n"
     "- Return an empty array when nothing is worth remembering.\n"
     "- Return ONLY the JSON object — no explanation, no markdown fences.\n\n"
@@ -118,13 +112,8 @@ class Distiller:
         self._llm = llm
         self._max_retries = max_retries
 
-    async def distill_session(self, *, session_id: str, scope: dict) -> list[str]:
-        """Replay, extract candidates, reconcile each; return affected memory ids.
-
-        *scope* is the caller-identity dict (e.g. ``{"user": "u1"}``) threaded to
-        :meth:`LongTermMemory.reconcile` so each promoted record lands in the
-        right scope partition.
-        """
+    async def distill_session(self, *, session_id: str) -> list[str]:
+        """Replay, extract candidates, reconcile each; return affected memory ids."""
         events = await self._episodic.replay(session_id=session_id)
         thread = project_thread(events)
         if not thread:
@@ -148,7 +137,7 @@ class Distiller:
                 continue
             try:
                 memory_ids.append(
-                    await self._long_term.reconcile(candidate=candidate, scope=scope)
+                    await self._long_term.reconcile(candidate=candidate)
                 )
             except Exception:
                 logger.warning(
@@ -173,9 +162,8 @@ class Distiller:
     ) -> MemoryCandidate | None:
         try:
             kind = MemoryKind(item["kind"])
-            scope_level = MemoryScope(item["scope"])
         except (KeyError, ValueError):
-            logger.warning("[distill] dropping candidate with bad kind/scope: %s", item)
+            logger.warning("[distill] dropping candidate with bad kind: %s", item)
             return None
         content = (item.get("content") or "").strip()
         if not content:
@@ -187,7 +175,6 @@ class Distiller:
         return MemoryCandidate(
             content=content,
             kind=kind,
-            scope=scope_level,
             source_event_ids=source_event_ids,
             evidence_snapshot=snapshot,
         )

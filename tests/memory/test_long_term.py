@@ -3,8 +3,8 @@
 These back the service with real in-memory structured + FAISS vector stores and a
 deterministic feature-hashing embedder, and drive :meth:`reconcile` with a fake
 LLM that returns a chosen ``ReconcileOp`` — so each operation (ADD / UPDATE /
-DELETE / NOOP) and the scope/multi-tenant recall rule are exercised in isolation,
-ahead of any wiring into the live query path.
+DELETE / NOOP) and the recall rules are exercised in isolation, ahead of any
+wiring into the live query path.
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from cogbase.memory.models import (
     EventRef,
     MemoryCandidate,
     MemoryKind,
-    MemoryScope,
     MemoryStatus,
 )
 from cogbase.stores.scope import AppScope
@@ -78,11 +77,10 @@ async def _make_service(llm=None, *, app_id="app1") -> LongTermMemory:
     return svc
 
 
-def _candidate(content, *, kind=MemoryKind.FACT, scope=MemoryScope.USER, seqs=()):
+def _candidate(content, *, kind=MemoryKind.FACT, seqs=()):
     return MemoryCandidate(
         content=content,
         kind=kind,
-        scope=scope,
         source_event_ids=[EventRef(session_id="s1", seq=s, ulid=f"u{s}") for s in seqs],
         evidence_snapshot={"turns": list(seqs)},
     )
@@ -97,11 +95,9 @@ async def test_promote_preference_is_auto_active():
     svc = await _make_service()
     mid = await svc.promote(
         candidate=_candidate("prefers concise answers", kind=MemoryKind.PREFERENCE),
-        scope={"user": "u1"},
     )
     recs = await svc._load_records([mid])
     assert recs[0].status is MemoryStatus.ACTIVE
-    assert recs[0].scope_id == "u1"
     assert recs[0].app_id == "app1"
 
 
@@ -110,7 +106,6 @@ async def test_promote_fact_is_gated_pending_review():
     svc = await _make_service()
     mid = await svc.promote(
         candidate=_candidate("user works at Acme", kind=MemoryKind.FACT),
-        scope={"user": "u1"},
     )
     recs = await svc._load_records([mid])
     assert recs[0].status is MemoryStatus.PENDING_REVIEW
@@ -126,7 +121,6 @@ async def test_reconcile_add_when_no_related():
     svc = await _make_service(llm=_llm_returning({"operation": "NOOP"}))
     mid = await svc.reconcile(
         candidate=_candidate("user prefers dark mode", kind=MemoryKind.PREFERENCE),
-        scope={"user": "u1"},
     )
     svc._llm.complete.assert_not_called()
     assert (await svc._load_records([mid]))[0].content == "user prefers dark mode"
@@ -137,14 +131,12 @@ async def test_reconcile_update_reinforces_confidence_and_merges_provenance():
     svc = await _make_service()
     mid = await svc.promote(
         candidate=_candidate("user prefers concise answers", kind=MemoryKind.PREFERENCE, seqs=[1]),
-        scope={"user": "u1"},
     )
     before = (await svc._load_records([mid]))[0].confidence
 
     svc._llm = _llm_returning({"operation": "UPDATE", "target_memory_id": mid})
     out = await svc.reconcile(
         candidate=_candidate("user likes concise answers", kind=MemoryKind.PREFERENCE, seqs=[5]),
-        scope={"user": "u1"},
     )
     assert out == mid
     rec = (await svc._load_records([mid]))[0]
@@ -158,7 +150,6 @@ async def test_reconcile_update_revises_content():
     svc = await _make_service()
     mid = await svc.promote(
         candidate=_candidate("user prefers concise answers", kind=MemoryKind.PREFERENCE),
-        scope={"user": "u1"},
     )
     svc._llm = _llm_returning(
         {"operation": "UPDATE", "target_memory_id": mid,
@@ -166,7 +157,6 @@ async def test_reconcile_update_revises_content():
     )
     await svc.reconcile(
         candidate=_candidate("user prefers concise answers with citations", kind=MemoryKind.PREFERENCE),
-        scope={"user": "u1"},
     )
     rec = (await svc._load_records([mid]))[0]
     assert rec.content == "user strongly prefers concise answers with citations"
@@ -178,14 +168,12 @@ async def test_reconcile_delete_supersedes_when_candidate_outranks():
     # Seed an inferred fact (active so it is recallable for reconcile).
     old = await svc.promote(
         candidate=_candidate("user is based in Berlin", kind=MemoryKind.FACT),
-        scope={"user": "u1"},
         status=MemoryStatus.ACTIVE,
     )
     # A confirmed correction contradicts it.
     svc._llm = _llm_returning({"operation": "DELETE", "target_memory_id": old})
     new = await svc.reconcile(
         candidate=_candidate("user is based in Munich", kind=MemoryKind.CORRECTION),
-        scope={"user": "u1"},
     )
     assert new != old
     old_rec = (await svc._load_records([old]))[0]
@@ -200,14 +188,12 @@ async def test_reconcile_delete_rejected_when_candidate_does_not_outrank():
     # Seed a confirmed correction (high confidence).
     strong = await svc.promote(
         candidate=_candidate("user is based in Munich", kind=MemoryKind.CORRECTION),
-        scope={"user": "u1"},
         status=MemoryStatus.ACTIVE,
     )
     # A weaker inferred fact tries to contradict it.
     svc._llm = _llm_returning({"operation": "DELETE", "target_memory_id": strong})
     out = await svc.reconcile(
         candidate=_candidate("user is based in Berlin", kind=MemoryKind.FACT),
-        scope={"user": "u1"},
     )
     # Existing belief stands; no new record promoted.
     assert out == strong
@@ -222,13 +208,11 @@ async def test_reconcile_noop_leaves_record_unchanged():
     svc = await _make_service()
     mid = await svc.promote(
         candidate=_candidate("user prefers concise answers", kind=MemoryKind.PREFERENCE),
-        scope={"user": "u1"},
     )
     before = (await svc._load_records([mid]))[0]
     svc._llm = _llm_returning({"operation": "NOOP", "target_memory_id": mid})
     out = await svc.reconcile(
         candidate=_candidate("user prefers concise answers", kind=MemoryKind.PREFERENCE),
-        scope={"user": "u1"},
     )
     assert out == mid
     after = (await svc._load_records([mid]))[0]
@@ -237,35 +221,17 @@ async def test_reconcile_noop_leaves_record_unchanged():
 
 
 # ---------------------------------------------------------------------------
-# recall — scope / multi-tenant rule
+# recall
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_recall_filters_to_caller_scope():
+async def test_recall_returns_active_records():
     svc = await _make_service()
     await svc.promote(
-        candidate=_candidate("u1 prefers dark mode", kind=MemoryKind.PREFERENCE),
-        scope={"user": "u1"},
+        candidate=_candidate("user prefers dark mode", kind=MemoryKind.PREFERENCE),
     )
-    await svc.promote(
-        candidate=_candidate("u2 prefers dark mode", kind=MemoryKind.PREFERENCE),
-        scope={"user": "u2"},
-    )
-    hits = await svc.recall(query="dark mode preference", scope={"user": "u1"})
-    assert [r.scope_id for r in hits] == ["u1"]
-
-
-@pytest.mark.asyncio
-async def test_recall_includes_global_for_any_caller():
-    svc = await _make_service()
-    await svc.promote(
-        candidate=_candidate("company holiday calendar matters", kind=MemoryKind.PREFERENCE,
-                             scope=MemoryScope.GLOBAL),
-        scope={},
-    )
-    hits = await svc.recall(query="company holiday calendar", scope={"user": "whoever"})
-    assert len(hits) == 1
-    assert hits[0].scope is MemoryScope.GLOBAL
+    hits = await svc.recall(query="dark mode preference")
+    assert [r.content for r in hits] == ["user prefers dark mode"]
 
 
 @pytest.mark.asyncio
@@ -274,9 +240,8 @@ async def test_recall_excludes_pending_review():
     # A fact is gated at pending_review by default → must not surface in recall.
     await svc.promote(
         candidate=_candidate("user works at Acme", kind=MemoryKind.FACT),
-        scope={"user": "u1"},
     )
-    hits = await svc.recall(query="where does the user work", scope={"user": "u1"})
+    hits = await svc.recall(query="where does the user work")
     assert hits == []
 
 
@@ -286,8 +251,7 @@ async def test_recall_isolated_across_apps():
     svc_b = await _make_service(app_id="app-b")
     await svc_a.promote(
         candidate=_candidate("tenant a secret preference", kind=MemoryKind.PREFERENCE),
-        scope={"user": "u1"},
     )
-    # Same user id, different app partition → must not leak.
-    hits = await svc_b.recall(query="tenant a secret preference", scope={"user": "u1"})
+    # Different app partition → must not leak.
+    hits = await svc_b.recall(query="tenant a secret preference")
     assert hits == []

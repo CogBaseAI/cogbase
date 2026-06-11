@@ -1,7 +1,7 @@
 """Integration tests for QueryRunner wired to long-term memory.
 
 Verifies the recall seam: when a ``LongTermMemory`` is wired, ``run`` recalls
-scope-relevant records and injects them into the LLM context as a system block
+relevant records and injects them into the LLM context as a system block
 marked memory-derived (kept distinct from document-backed evidence).
 """
 
@@ -54,44 +54,23 @@ async def _drain(runner, **kwargs):
 
 
 @pytest.mark.asyncio
-async def test_recall_injects_memory_block_scoped_to_user():
+async def test_recall_injects_memory_block():
     lt = await _long_term()
     await lt.promote(
         candidate=MemoryCandidate(
             content="user prefers dark mode", kind=MemoryKind.PREFERENCE
         ),
-        scope={"user": "u1"},
     )
     llm, captured = _capturing_llm("ok")
     runner = QueryRunner(
         app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
     )
 
-    await _drain(runner, user_input="what theme do I like?", user_id="u1")
+    await _drain(runner, user_input="what theme do I like?")
 
     # The first completion's message list carries a memory-derived system block.
     system_blocks = [m["content"] for m in captured[0] if m["role"] == "system"]
     assert any("memory-derived" in b and "dark mode" in b for b in system_blocks)
-
-
-@pytest.mark.asyncio
-async def test_recall_does_not_leak_other_users_memory():
-    lt = await _long_term()
-    await lt.promote(
-        candidate=MemoryCandidate(
-            content="user prefers dark mode", kind=MemoryKind.PREFERENCE
-        ),
-        scope={"user": "u1"},
-    )
-    llm, captured = _capturing_llm("ok")
-    runner = QueryRunner(
-        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
-    )
-
-    # A different user must not see u1's preference.
-    await _drain(runner, user_input="what theme do I like?", user_id="u2")
-    system_blocks = " ".join(m["content"] for m in captured[0] if m["role"] == "system")
-    assert "dark mode" not in system_blocks
 
 
 @pytest.mark.asyncio
@@ -102,6 +81,6 @@ async def test_no_recall_when_nothing_relevant_injects_no_block():
         app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
     )
 
-    await _drain(runner, user_input="anything", user_id="u1")
+    await _drain(runner, user_input="anything")
     system_blocks = " ".join(m["content"] for m in captured[0] if m["role"] == "system")
     assert "memory-derived" not in system_blocks
