@@ -6,7 +6,7 @@ import pytest
 import pytest_asyncio
 
 from cogbase.stores.structured.memory import InMemoryStructuredStore
-from api.system_store import AppRecord, DocRecord, DocWorkflowRecord, SkillRecord, SystemStore, TaskRecord
+from api.system_store import AppRecord, DocRecord, DocWorkflowRecord, SkillRecord, SystemStore, TaskRecord, new_app_id
 
 
 def _make_record(name: str = "my-app", status: str = "active") -> AppRecord:
@@ -26,6 +26,30 @@ async def store() -> SystemStore:
     ss = SystemStore(store=backend)
     await ss.setup()
     return ss
+
+
+class TestNewAppId:
+    def test_starts_with_app_prefix(self):
+        assert new_app_id().startswith("app_")
+
+    def test_valid_identifier_prefix(self):
+        # Scoped collection names are "<app_id>__<collection>" and must start
+        # with a letter or underscore, never a digit.
+        app_id = new_app_id()
+        assert app_id[0].isalpha() or app_id[0] == "_"
+        assert app_id.isidentifier()
+
+    def test_unique_across_calls(self):
+        ids = {new_app_id() for _ in range(1000)}
+        assert len(ids) == 1000
+
+    def test_hex_suffix_is_32_chars(self):
+        app_id = new_app_id()
+        suffix = app_id.removeprefix("app_")
+        assert len(suffix) == 32
+        # uuid4().hex is lowercase hexadecimal
+        int(suffix, 16)
+        assert suffix == suffix.lower()
 
 
 class TestSystemStoreSetup:

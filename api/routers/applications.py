@@ -51,7 +51,7 @@ from api.models import (
 )
 from api.system_store import (
     AppRecord, DocRecord, DocWorkflowRecord, DocWorkflowStatus,
-    SystemStore, TaskRecord, TaskStatus,
+    SystemStore, TaskRecord, TaskStatus, new_app_id,
 )
 from cogbase.core.models import Document
 from cogbase.pipeline.document_parser import parse_to_markdown
@@ -257,7 +257,7 @@ async def create_application(
         )
 
     now = _now()
-    app_id = uuid.uuid4().hex
+    app_id = new_app_id()
     record = AppRecord(
         app_id=app_id,
         name=config.name,

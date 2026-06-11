@@ -139,6 +139,16 @@ class SystemConfigOverride(BaseModel):
     updated_at: str  # ISO-8601 UTC
 
 
+def new_app_id() -> str:
+    """Generate a stable app id that is a valid identifier prefix.
+
+    Scoped collection names are ``<app_id>__<collection>`` and must satisfy the
+    store name rule (start with a letter or underscore), so the id is prefixed
+    with ``app_`` — a bare ``uuid4().hex`` may start with a digit.
+    """
+    return f"app_{uuid.uuid4().hex}"
+
+
 class AppRecord(BaseModel):
     app_id: str       # stable internal id (primary key)
     name: str         # client-facing handle (unique, mutable)

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
@@ -23,7 +22,7 @@ from api.models import (
     GenerateChatResponse,
     GenerateDeployRequest,
 )
-from api.system_store import AppRecord
+from api.system_store import AppRecord, new_app_id
 from cogbase.config.config import AppConfig
 from cogbase.core.app_generator import (
     GENERATOR_TOOLS,
@@ -244,7 +243,7 @@ async def deploy(
 
     stored_yaml = config.to_yaml()
     now = _now()
-    app_id = uuid.uuid4().hex
+    app_id = new_app_id()
     record = AppRecord(
         app_id=app_id,
         name=config.name,
