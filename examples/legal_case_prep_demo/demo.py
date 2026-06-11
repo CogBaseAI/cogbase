@@ -2,18 +2,20 @@
 
 Usage
 -----
-    # Start the API server first:
-    uvicorn api.main:app --reload --log-level info
+    # Start the API server first (Docker, no build required — see server/README.md):
+    ./server/docker_hub_demo.sh pull
+    ./server/docker_hub_demo.sh run
 
     # Then run the demo (from the repo root):
     python examples/legal_case_prep_demo/demo.py
 
-Requires OPENAI_API_KEY in a .env file at the repo root (or in the environment).
-Set COGBASE_API_URL to override the default http://localhost:8000.
+The API server runs at http://localhost:8000. After it starts, configure your LLM
+and embedding provider (including API key) via the UI Settings tab.
 
-NOTE: The contradiction and gap workflows require persistent store backends
-(SQLite + FAISS).  Configure cogbase_system.yaml with structured_store.type=sqlite
-and vector_store.type=faiss, or set COGBASE_CONFIG to point to your system config.
+NOTE: The contradiction and gap workflows require persistent store backends.
+The Docker demo image ships with SQLite + FAISS + local file storage, so they work
+out of the box; pass a host data directory to docker_hub_demo.sh run to persist
+data across container restarts (see server/README.md).
 
 Interactive commands
 --------------------

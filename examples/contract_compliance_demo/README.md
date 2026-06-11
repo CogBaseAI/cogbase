@@ -7,21 +7,17 @@ After a review is complete you can query across findings: list all high-severity
 ## Quick start
 
 ```bash
-# 1. Start the API server
-uvicorn api.main:app --reload
+# 1. Start the API server with Docker — no build required (see ../../server/README.md)
+./server/docker_hub_demo.sh pull
+./server/docker_hub_demo.sh run
 
 # 2. Run the demo from the repo root
 python examples/contract_compliance_demo/demo.py
 ```
 
-Requires `OPENAI_API_KEY` in a `.env` file at the repo root or in the
-environment. Set `COGBASE_API_URL` to override the default
-`http://localhost:8000`.
+The API server runs at `http://localhost:8000`. After the container starts, configure your LLM and embedding provider (including API key) via the UI Settings tab. See [`server/README.md`](../../server/README.md) for details, including how to pull a specific version, persist data, or serve on a different port.
 
-The `check`, `report`, and `alerts` commands require persistent store backends
-(SQLite + FAISS). Configure `cogbase_system.yaml` with
-`structured_store.type=sqlite` and `vector_store.type=faiss`, or set
-`COGBASE_CONFIG` to point to your system config.
+The `check`, `report`, and `alerts` commands require persistent store backends. The Docker demo image ships with SQLite + FAISS + local file storage, so they work out of the box; pass a host data directory to `docker_hub_demo.sh run` to persist data across container restarts (see `server/README.md`).
 
 ## Interactive commands
 

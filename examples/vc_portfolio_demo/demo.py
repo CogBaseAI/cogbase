@@ -2,15 +2,16 @@
 
 Usage
 -----
-    # Start the API server first:
-    uvicorn api.main:app --reload
+    # Start the API server first (Docker, no build required — see server/README.md):
+    ./server/docker_hub_demo.sh pull
+    ./server/docker_hub_demo.sh run
 
     # Then run the demo:
     cd /path/to/cogbase
     python examples/vc_portfolio_demo/demo.py
 
-Requires OPENAI_API_KEY in a .env file at the repo root (or in the environment).
-Set COGBASE_API_URL to override the default http://localhost:8000.
+The API server runs at http://localhost:8000. After it starts, configure your LLM
+and embedding provider (including API key) via the UI Settings tab.
 
 Commands (interactive loop)
 ---------------------------

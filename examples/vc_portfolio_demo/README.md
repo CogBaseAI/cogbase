@@ -7,14 +7,15 @@ The demo ships with synthetic data for three portfolio companies — Nova Analyt
 ## Quick start
 
 ```bash
-# 1. Start the API server
-uvicorn api.main:app --reload
+# 1. Start the API server with Docker — no build required (see ../../server/README.md)
+./server/docker_hub_demo.sh pull
+./server/docker_hub_demo.sh run
 
 # 2. Run the demo (from repo root)
 python examples/vc_portfolio_demo/demo.py
 ```
 
-Requires `OPENAI_API_KEY` in a `.env` file at the repo root (or in the environment). Set `COGBASE_API_URL` to override the default `http://localhost:8000`.
+The API server runs at `http://localhost:8000`. After the container starts, configure your LLM and embedding provider (including API key) via the UI Settings tab. See [`server/README.md`](../../server/README.md) for details, including how to pull a specific version, persist data, or serve on a different port.
 
 ## Interactive commands
 
