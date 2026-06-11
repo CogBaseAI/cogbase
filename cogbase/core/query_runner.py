@@ -71,7 +71,7 @@ from cogbase.llms.compaction import (
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, CompletionResult, LLMBase, SystemTool, ToolDefinition
-from cogbase.memory import EpisodicMemory, EventRef, LongTermMemory, ShortTermMemory
+from cogbase.memory import EpisodicMemory, EventRef, LongTermMemory, MemoryKind, ShortTermMemory
 from cogbase.stores import CollectionSchema, DocumentStoreBase, Filter, Op, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 
 logger = logging.getLogger(__name__)
@@ -235,6 +235,46 @@ _READ_DOCUMENT_DEF: ToolDefinition = {
             },
         },
         "required": ["doc_id"],
+        "additionalProperties": False,
+    },
+}
+
+_MEMORY_LOOKUP_DEF: ToolDefinition = {
+    "name": "memory_lookup",
+    "description": (
+        "Search the assistant's long-term memory: durable facts, preferences, "
+        "corrections, and retrieval hints remembered from past sessions. Use when "
+        "the user references something previously told to the assistant, or asks "
+        "what is known/remembered about a person, project, or topic — or when the "
+        "memory already provided in context is insufficient. Results are "
+        "memory-derived background knowledge, NOT cited document evidence. "
+        "Provide at least one of query / kind / entities."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Semantic search over memory content.",
+            },
+            "kind": {
+                "type": "string",
+                "enum": ["preference", "fact", "correction", "retrieval_hint"],
+                "description": "Restrict to one memory kind.",
+            },
+            "entities": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Restrict to memories about these entities (people, projects, "
+                    "organizations, systems), e.g. [\"acme corp\"]."
+                ),
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max memories to return (default: 10, max: 20).",
+            },
+        },
         "additionalProperties": False,
     },
 }
@@ -478,6 +518,8 @@ class QueryRunner:
             self._tool_defs.append(_VECTOR_SEARCH_DEF)
         if document_store is not None and app_id is not None:
             self._tool_defs.append(_READ_DOCUMENT_DEF)
+        if long_term is not None:
+            self._tool_defs.append(_MEMORY_LOOKUP_DEF)
 
     # ------------------------------------------------------------------
     # Accessors
@@ -767,6 +809,8 @@ class QueryRunner:
                     doc_slice, tool_output = await self._run_read_document(inputs)
                     if doc_slice is not None:
                         all_slices.append(doc_slice)
+                elif name == "memory_lookup":
+                    tool_output = await self._run_memory_lookup(inputs)
                 else:
                     tool_output = await self._execute_tool(name, inputs, current_skill)
                     logger.info("[runner] execute_tool done: %s", tool_output[:300])
@@ -976,6 +1020,49 @@ class QueryRunner:
     # ------------------------------------------------------------------
     # Long-term memory recall
     # ------------------------------------------------------------------
+
+    async def _run_memory_lookup(self, inputs: dict) -> str:
+        """Execute the memory_lookup tool against the long-term store.
+
+        ``status=active`` filtering is enforced inside ``LongTermMemory.lookup``,
+        never from LLM-supplied arguments.
+        """
+        if self._long_term is None:
+            return "memory_lookup is unavailable (no long-term memory configured)"
+
+        kind: MemoryKind | None = None
+        raw_kind = inputs.get("kind")
+        if raw_kind:
+            try:
+                kind = MemoryKind(raw_kind)
+            except ValueError:
+                return f"memory_lookup error: unknown kind '{raw_kind}'"
+        query = str(inputs.get("query") or "") or None
+        entities = [str(e) for e in (inputs.get("entities") or [])]
+        limit = min(int(inputs.get("limit") or 10), 20)
+        if not query and not kind and not entities:
+            return "memory_lookup error: provide at least one of query / kind / entities"
+
+        try:
+            memories = await self._long_term.lookup(
+                query=query, kind=kind, entities=entities, limit=limit
+            )
+        except Exception as exc:
+            logger.exception("[runner] memory_lookup.error")
+            return f"memory_lookup error: {exc}"
+
+        logger.info("[runner] memory_lookup.result memories=%d", len(memories))
+        if not memories:
+            return "(no matching memories)"
+        lines = "\n".join(
+            f"- [{m.kind.value}] {m.content}"
+            + (f" (entities: {', '.join(m.entities)})" if m.entities else "")
+            for m in memories
+        )
+        return (
+            "Memories (memory-derived background knowledge — NOT cited document "
+            "evidence, do not present these as sourced facts):\n" + lines
+        )
 
     async def _recall_memory_block(self, user_input: str) -> str | None:
         """Recall relevant memories and format them as a system block.

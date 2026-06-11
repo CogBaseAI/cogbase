@@ -77,10 +77,11 @@ async def _make_service(llm=None, *, app_id="app1") -> LongTermMemory:
     return svc
 
 
-def _candidate(content, *, kind=MemoryKind.FACT, seqs=()):
+def _candidate(content, *, kind=MemoryKind.FACT, seqs=(), entities=()):
     return MemoryCandidate(
         content=content,
         kind=kind,
+        entities=list(entities),
         source_event_ids=[EventRef(session_id="s1", seq=s, ulid=f"u{s}") for s in seqs],
         evidence_snapshot={"turns": list(seqs)},
     )
@@ -243,6 +244,124 @@ async def test_recall_excludes_pending_review():
     )
     hits = await svc.recall(query="where does the user work")
     assert hits == []
+
+
+@pytest.mark.asyncio
+async def test_promote_normalizes_entities():
+    svc = await _make_service()
+    mid = await svc.promote(
+        candidate=_candidate(
+            "user works at Acme Corp", kind=MemoryKind.PREFERENCE,
+            entities=["Acme Corp", "  acme corp ", "User"],
+        ),
+    )
+    rec = (await svc._load_records([mid]))[0]
+    assert rec.entities == ["acme corp", "user"]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_update_merges_entities():
+    svc = await _make_service()
+    mid = await svc.promote(
+        candidate=_candidate(
+            "user prefers concise answers", kind=MemoryKind.PREFERENCE,
+            entities=["user"],
+        ),
+    )
+    svc._llm = _llm_returning({"operation": "UPDATE", "target_memory_id": mid})
+    await svc.reconcile(
+        candidate=_candidate(
+            "user likes concise answers", kind=MemoryKind.PREFERENCE,
+            entities=["User", "acme corp"],
+        ),
+    )
+    rec = (await svc._load_records([mid]))[0]
+    assert rec.entities == ["user", "acme corp"]
+
+
+@pytest.mark.asyncio
+async def test_related_records_unions_entity_overlap_past_vector_miss():
+    # A paraphrased claim about the same entity that vector search misses must
+    # still surface as a reconcile candidate via the entity index.
+    svc = await _make_service()
+    mid = await svc.promote(
+        candidate=_candidate(
+            "alice's deployment target is aws", entities=["alice"],
+        ),
+        status=MemoryStatus.ACTIVE,
+    )
+
+    async def _no_vector_hits(query, *, top_k):
+        return []
+
+    svc._search_content = _no_vector_hits
+    related = await svc._related_records(
+        _candidate("the rollout platform chosen is azure", entities=["Alice"])
+    )
+    assert [r.memory_id for r in related] == [mid]
+
+
+# ---------------------------------------------------------------------------
+# lookup (the pull path)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_lookup_by_entities_without_query():
+    svc = await _make_service()
+    await svc.promote(
+        candidate=_candidate(
+            "user works at Acme Corp", kind=MemoryKind.PREFERENCE,
+            entities=["acme corp"],
+        ),
+    )
+    await svc.promote(
+        candidate=_candidate("user prefers dark mode", kind=MemoryKind.PREFERENCE),
+    )
+    hits = await svc.lookup(entities=["Acme Corp"])
+    assert [r.content for r in hits] == ["user works at Acme Corp"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_by_kind_without_query():
+    svc = await _make_service()
+    await svc.promote(
+        candidate=_candidate("user prefers dark mode", kind=MemoryKind.PREFERENCE),
+    )
+    await svc.promote(
+        candidate=_candidate("search contracts first", kind=MemoryKind.RETRIEVAL_HINT),
+    )
+    hits = await svc.lookup(kind=MemoryKind.RETRIEVAL_HINT)
+    assert [r.content for r in hits] == ["search contracts first"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_with_query_applies_kind_and_entity_filters():
+    svc = await _make_service()
+    await svc.promote(
+        candidate=_candidate(
+            "user prefers dark mode", kind=MemoryKind.PREFERENCE, entities=["user"],
+        ),
+    )
+    await svc.promote(
+        candidate=_candidate(
+            "user prefers dark roast coffee", kind=MemoryKind.PREFERENCE,
+            entities=["acme corp"],
+        ),
+    )
+    hits = await svc.lookup(
+        query="dark mode preference", kind=MemoryKind.PREFERENCE, entities=["user"],
+    )
+    assert [r.content for r in hits] == ["user prefers dark mode"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_excludes_non_active():
+    svc = await _make_service()
+    # A fact is gated at pending_review by default → must not surface in lookup.
+    await svc.promote(
+        candidate=_candidate("user works at Acme Corp", entities=["acme corp"]),
+    )
+    assert await svc.lookup(entities=["acme corp"]) == []
 
 
 @pytest.mark.asyncio

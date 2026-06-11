@@ -84,3 +84,51 @@ async def test_no_recall_when_nothing_relevant_injects_no_block():
     await _drain(runner, user_input="anything")
     system_blocks = " ".join(m["content"] for m in captured[0] if m["role"] == "system")
     assert "memory-derived" not in system_blocks
+
+
+# ---------------------------------------------------------------------------
+# memory_lookup tool (the pull path)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_memory_lookup_tool_registered_only_when_long_term_wired():
+    lt = await _long_term()
+    llm, _ = _capturing_llm("ok")
+    with_lt = QueryRunner(
+        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
+    )
+    without_lt = QueryRunner(app_id="app1", llm=llm, document_store=MagicMock())
+    assert "memory_lookup" in [t["name"] for t in with_lt._tool_defs]
+    assert "memory_lookup" not in [t["name"] for t in without_lt._tool_defs]
+
+
+@pytest.mark.asyncio
+async def test_memory_lookup_tool_returns_matching_memories():
+    lt = await _long_term()
+    await lt.promote(
+        candidate=MemoryCandidate(
+            content="user works at Acme Corp", kind=MemoryKind.PREFERENCE,
+            entities=["acme corp"],
+        ),
+    )
+    llm, _ = _capturing_llm("ok")
+    runner = QueryRunner(
+        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
+    )
+
+    output = await runner._run_memory_lookup({"entities": ["Acme Corp"]})
+    assert "user works at Acme Corp" in output
+    assert "memory-derived" in output
+
+    assert await runner._run_memory_lookup({"query": "unrelated topic"}) is not None
+
+
+@pytest.mark.asyncio
+async def test_memory_lookup_tool_rejects_empty_and_bad_arguments():
+    lt = await _long_term()
+    llm, _ = _capturing_llm("ok")
+    runner = QueryRunner(
+        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
+    )
+    assert "error" in await runner._run_memory_lookup({})
+    assert "error" in await runner._run_memory_lookup({"kind": "nonsense"})

@@ -35,6 +35,7 @@ from cogbase.memory.models import (
     MemoryCandidate,
     MemoryEvent,
     MemoryKind,
+    normalize_entities,
 )
 from cogbase.memory.projection import project_thread
 
@@ -52,6 +53,10 @@ _EXTRACTION_SCHEMA: dict = {
                     "kind": {
                         "type": "string",
                         "enum": [k.value for k in MemoryKind],
+                    },
+                    "entities": {
+                        "type": "array",
+                        "items": {"type": "string"},
                     },
                     "source_seqs": {
                         "type": "array",
@@ -81,6 +86,8 @@ _SYSTEM_PROMPT = (
     "Rules:\n"
     "- Do NOT extract ephemeral, one-off, or task-local details.\n"
     "- Write each memory as a single self-contained natural-language claim.\n"
+    "- Set entities to the named entities the memory is about (people, projects, "
+    "organizations, systems), lowercase; empty array when there are none.\n"
     "- Set source_seqs to the turn numbers the memory was derived from.\n"
     "- Return an empty array when nothing is worth remembering.\n"
     "- Return ONLY the JSON object — no explanation, no markdown fences.\n\n"
@@ -175,6 +182,7 @@ class Distiller:
         return MemoryCandidate(
             content=content,
             kind=kind,
+            entities=normalize_entities(item.get("entities", [])),
             source_event_ids=source_event_ids,
             evidence_snapshot=snapshot,
         )

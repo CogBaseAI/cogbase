@@ -258,6 +258,23 @@ class FeedbackPayload(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def normalize_entities(values: list[str]) -> list[str]:
+    """Normalize entity mentions: lowercase, strip, drop empties, dedupe.
+
+    Entities are an *index* over claims, not records of their own — matching is
+    exact on the normalized form, so both write (distill) and read (lookup,
+    reconcile) paths must normalize through this one function.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in values:
+        norm = v.strip().lower()
+        if norm and norm not in seen:
+            seen.add(norm)
+            out.append(norm)
+    return out
+
+
 class MemoryKind(str, Enum):
     """What a long-term record is about (docs/long-term-memory.md#record-shape)."""
 
@@ -313,6 +330,10 @@ class LongTermRecord(BaseModel):
     app_id: str | None = None
     kind: MemoryKind = MemoryKind.FACT
     content: str = ""
+    # Normalized entity mentions (people, projects, systems) the claim is about.
+    # An index over claims for exact-match lookup and reconcile candidate
+    # retrieval — not entity records; the claim stays the unit of memory.
+    entities: list[str] = Field(default_factory=list)
     # 0..1; reinforced on repeat observation, weighed in reconciliation.
     confidence: float = 0.5
     status: MemoryStatus = MemoryStatus.ACTIVE
@@ -350,6 +371,7 @@ class LongTermRecord(BaseModel):
                 "app_id": s(),
                 "kind": s(index=True),
                 "content": s(),
+                "entities": FieldSchema(type=FieldType.JSON),
                 "confidence": FieldSchema(type=FieldType.FLOAT, index=True),
                 "status": s(index=True),
                 "source_event_ids": FieldSchema(type=FieldType.JSON),
@@ -365,7 +387,7 @@ class LongTermRecord(BaseModel):
     # so the indexed field list and the written values stay in lockstep, and
     # used to build the vector collection's ``metadata_fields``.
     VECTOR_METADATA_FIELDS: ClassVar[tuple[str, ...]] = (
-        "kind", "status",
+        "kind", "status", "entities",
     )
 
     def vector_metadata(self) -> dict:
@@ -377,6 +399,7 @@ class LongTermRecord(BaseModel):
         return {
             "kind": self.kind.value,
             "status": self.status.value,
+            "entities": list(self.entities),
         }
 
 
@@ -391,6 +414,8 @@ class MemoryCandidate(BaseModel):
 
     content: str
     kind: MemoryKind = MemoryKind.FACT
+    # Normalized entity mentions the claim is about (see LongTermRecord.entities).
+    entities: list[str] = Field(default_factory=list)
     source_event_ids: list[EventRef] = Field(default_factory=list)
     evidence_snapshot: dict = Field(default_factory=dict)
     confidence: float | None = None

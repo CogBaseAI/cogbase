@@ -85,6 +85,22 @@ async def test_distill_promotes_candidates_with_provenance(episodic):
 
 
 @pytest.mark.asyncio
+async def test_distill_carries_normalized_entities(episodic):
+    sid = "sess-entities"
+    await _seed_turn(episodic, sid, "I work at Acme Corp", "Got it.")
+    lt = await _long_term()
+    llm = _extracting_llm([
+        {"content": "user works at Acme Corp", "kind": "preference",
+         "entities": ["Acme Corp", "acme corp"], "source_seqs": [0]},
+    ])
+    distiller = Distiller(episodic, lt, llm)
+
+    ids = await distiller.distill_session(session_id=sid)
+    rec = (await lt._load_records(ids))[0]
+    assert rec.entities == ["acme corp"]
+
+
+@pytest.mark.asyncio
 async def test_distill_empty_thread_returns_nothing(episodic):
     lt = await _long_term()
     distiller = Distiller(episodic, lt, _extracting_llm([]))

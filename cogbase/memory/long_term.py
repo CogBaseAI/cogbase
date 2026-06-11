@@ -7,12 +7,16 @@ and a vector store (semantic recall over ``content`` and the reconcile step's
 app-scoped** by the factory, so this service treats the app partition as given
 — it is the only partition until multi-user / RBAC is designed.
 
-Three operations make up the surface:
+Four operations make up the surface:
 
 - :meth:`recall` — online, on the query path: a vector search over memory
   ``content``, filtered to active records.  Results are marked
   memory-derived by the caller so the evidence policy can keep them distinct
   from document-backed claims.
+- :meth:`lookup` — the pull counterpart to :meth:`recall`, backing the query
+  runner's ``memory_lookup`` tool: an optional semantic query combined with
+  ``kind`` / ``entities`` filters, for when the per-turn injection isn't enough
+  ("what do you know about project X?").
 - :meth:`promote` — the ADD path: embed, write the structured record and its
   content vector with a provenance snapshot.
 - :meth:`reconcile` — **the crux, no analog in the document pipeline.**  Merge a
@@ -43,6 +47,7 @@ from cogbase.memory.models import (
     MemoryKind,
     MemoryStatus,
     ReconcileOp,
+    normalize_entities,
 )
 from cogbase.stores.filters import Col
 from cogbase.stores.vector.base import VectorCollectionSchema, VectorStoreBase
@@ -235,6 +240,63 @@ class LongTermMemory:
         return [by_id[mid] for mid in ordered_ids if mid in by_id]
 
     # ------------------------------------------------------------------
+    # Lookup (the pull path: the memory_lookup tool)
+    # ------------------------------------------------------------------
+
+    async def lookup(
+        self,
+        *,
+        query: str | None = None,
+        kind: MemoryKind | None = None,
+        entities: list[str] | None = None,
+        limit: int = 10,
+    ) -> list[LongTermRecord]:
+        """Return active memories matching the given criteria.
+
+        The pull counterpart to :meth:`recall` (the per-turn push): callers — in
+        practice the query runner's ``memory_lookup`` tool — combine an optional
+        semantic *query* with optional ``kind`` / ``entities`` filters.  Entity
+        matching is exact on the normalized form.  The ``status=active`` filter
+        is enforced here, never by the caller.  With a query, results follow
+        vector-relevance order; without one, most recently updated first.
+        """
+        if limit <= 0:
+            return []
+        wanted_entities = set(normalize_entities(entities or []))
+        if query and query.strip():
+            hits = await self._search_content(query, top_k=max(limit * 4, limit))
+            ordered_ids: list[str] = []
+            for chunk in hits:
+                if chunk.metadata.get("status") != MemoryStatus.ACTIVE.value:
+                    continue
+                if kind and chunk.metadata.get("kind") != kind.value:
+                    continue
+                if wanted_entities and not (
+                    wanted_entities & set(chunk.metadata.get("entities") or [])
+                ):
+                    continue
+                if chunk.doc_id not in ordered_ids:
+                    ordered_ids.append(chunk.doc_id)
+                if len(ordered_ids) >= limit:
+                    break
+            if not ordered_ids:
+                return []
+            by_id = {r.memory_id: r for r in await self._load_records(ordered_ids)}
+            return [by_id[mid] for mid in ordered_ids if mid in by_id]
+
+        # No query: a structured scan filtered by kind/status, entity overlap in
+        # Python (not expressible in the AND-only filter DSL).
+        filters = [Col("status") == MemoryStatus.ACTIVE.value]
+        if kind:
+            filters.append(Col("kind") == kind.value)
+        rows = await self._structured.query(self._structured_collection, filters)
+        records = [LongTermRecord.model_validate(row) for row in rows]
+        if wanted_entities:
+            records = [r for r in records if wanted_entities & set(r.entities)]
+        records.sort(key=lambda r: r.updated_at, reverse=True)
+        return records[:limit]
+
+    # ------------------------------------------------------------------
     # Promote (the ADD path)
     # ------------------------------------------------------------------
 
@@ -260,6 +322,7 @@ class LongTermMemory:
             app_id=self._app_id,
             kind=candidate.kind,
             content=candidate.content,
+            entities=normalize_entities(candidate.entities),
             confidence=confidence,
             status=status or self._default_status(candidate.kind),
             source_event_ids=list(candidate.source_event_ids),
@@ -315,6 +378,7 @@ class LongTermMemory:
     ) -> str:
         """Reinforce *target*: bump confidence, merge provenance, optionally revise."""
         target.confidence = min(1.0, target.confidence + CONFIDENCE_REINFORCE)
+        target.entities = normalize_entities(target.entities + candidate.entities)
         target.source_event_ids = _merge_refs(
             target.source_event_ids, candidate.source_event_ids
         )
@@ -378,7 +442,7 @@ class LongTermMemory:
         """Ask the LLM which ``ReconcileOp`` applies; ADD on any failure."""
         related_block = "\n".join(
             f"- id={r.memory_id} kind={r.kind.value} confidence={r.confidence:.2f} "
-            f"content={r.content!r}"
+            f"entities={r.entities} content={r.content!r}"
             for r in related
         )
         user = (
@@ -426,17 +490,46 @@ class LongTermMemory:
     async def _related_records(
         self, candidate: MemoryCandidate
     ) -> list[LongTermRecord]:
-        """Vector-recall active records related to the candidate."""
+        """Active records related to the candidate: vector ∪ entity overlap.
+
+        Vector similarity alone misses paraphrased claims about the same entity
+        (the contradiction then lands as a duplicate ADD), so records sharing a
+        normalized entity are unioned in after the vector hits.
+        """
         hits = await self._search_content(candidate.content, top_k=_RECONCILE_CANDIDATES * 3)
         ids = [
             c.doc_id
             for c in hits
             if c.metadata.get("status") == MemoryStatus.ACTIVE.value
-        ]
+        ][:_RECONCILE_CANDIDATES]
+        for record in await self._entity_overlap_records(candidate.entities):
+            if record.memory_id not in ids:
+                ids.append(record.memory_id)
         if not ids:
             return []
-        records = await self._load_records(ids[:_RECONCILE_CANDIDATES])
-        return records
+        return await self._load_records(ids[:_RECONCILE_CANDIDATES * 2])
+
+    async def _entity_overlap_records(
+        self, entities: list[str]
+    ) -> list[LongTermRecord]:
+        """Active records sharing at least one normalized entity.
+
+        The entity-array overlap is an OR the AND-only filter DSL cannot
+        express, so the store query carries only the ``status`` equality and the
+        overlap is applied in Python — same pattern as recall's status filter.
+        """
+        wanted = set(normalize_entities(entities))
+        if not wanted:
+            return []
+        rows = await self._structured.query(
+            self._structured_collection,
+            [Col("status") == MemoryStatus.ACTIVE.value],
+        )
+        return [
+            record
+            for record in (LongTermRecord.model_validate(row) for row in rows)
+            if wanted & set(record.entities)
+        ]
 
     # ------------------------------------------------------------------
     # Store helpers
