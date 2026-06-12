@@ -225,6 +225,79 @@ async def test_not_in_filter(structured_store):
 
 
 # ------------------------------------------------------------------
+# OVERLAPS (JSON-array fields)
+# ------------------------------------------------------------------
+
+async def _seed_tagged_collection(store):
+    schema = CollectionSchema(
+        name="tagged_memories",
+        description="Records with a JSON array of entity tags.",
+        primary_fields=["memory_id"],
+        fields={
+            "memory_id": FieldSchema(type=FieldType.STRING, nullable=False),
+            "status":    FieldSchema(type=FieldType.STRING, index=True),
+            "entities":  FieldSchema(type=FieldType.JSON),
+        },
+    )
+    await store.create_collection(schema)
+    await store.save("tagged_memories", [
+        {"memory_id": "m1", "status": "active",   "entities": ["acme", "jane"]},
+        {"memory_id": "m2", "status": "active",   "entities": ["bob"]},
+        {"memory_id": "m3", "status": "active",   "entities": []},
+        {"memory_id": "m4", "status": "archived", "entities": ["acme"]},
+    ])
+
+
+async def test_overlaps_filter_matches_any_shared_element(structured_store):
+    await _seed_tagged_collection(structured_store)
+    results = await structured_store.query(
+        "tagged_memories", [Col("entities").overlaps(["acme", "zoe"])]
+    )
+    assert {r["memory_id"] for r in results} == {"m1", "m4"}
+
+
+async def test_overlaps_filter_no_shared_element(structured_store):
+    await _seed_tagged_collection(structured_store)
+    results = await structured_store.query(
+        "tagged_memories", [Col("entities").overlaps(["zoe"])]
+    )
+    assert results == []
+
+
+async def test_overlaps_filter_empty_array_never_matches(structured_store):
+    await _seed_tagged_collection(structured_store)
+    results = await structured_store.query(
+        "tagged_memories", [Col("entities").overlaps(["acme", "jane", "bob"])]
+    )
+    assert "m3" not in {r["memory_id"] for r in results}
+
+
+async def test_overlaps_filter_combines_with_and(structured_store):
+    await _seed_tagged_collection(structured_store)
+    results = await structured_store.query("tagged_memories", [
+        Col("status") == "active",
+        Col("entities").overlaps(["acme"]),
+    ])
+    assert len(results) == 1 and results[0]["memory_id"] == "m1"
+
+
+def test_overlaps_on_scalar_sql_column_raises():
+    from cogbase.stores.filters import to_sql_where
+
+    with pytest.raises(ValueError, match="overlaps"):
+        to_sql_where([Col("status").overlaps(["active"])], json_fields=set())
+
+
+def test_overlaps_on_non_list_value_does_not_match():
+    from cogbase.stores.filters import matches
+
+    f = [Col("entities").overlaps(["acme"])]
+    assert not matches({"entities": "acme"}, f)
+    assert not matches({"entities": None}, f)
+    assert matches({"entities": ["acme", "jane"]}, f)
+
+
+# ------------------------------------------------------------------
 # LIKE
 # ------------------------------------------------------------------
 

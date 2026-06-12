@@ -284,15 +284,15 @@ class LongTermMemory:
             by_id = {r.memory_id: r for r in await self._load_records(ordered_ids)}
             return [by_id[mid] for mid in ordered_ids if mid in by_id]
 
-        # No query: a structured scan filtered by kind/status, entity overlap in
-        # Python (not expressible in the AND-only filter DSL).
+        # No query: a structured scan filtered by kind/status/entity overlap,
+        # all pushed down to the store.
         filters = [Col("status") == MemoryStatus.ACTIVE.value]
         if kind:
             filters.append(Col("kind") == kind.value)
+        if wanted_entities:
+            filters.append(Col("entities").overlaps(sorted(wanted_entities)))
         rows = await self._structured.query(self._structured_collection, filters)
         records = [LongTermRecord.model_validate(row) for row in rows]
-        if wanted_entities:
-            records = [r for r in records if wanted_entities & set(r.entities)]
         records.sort(key=lambda r: r.updated_at, reverse=True)
         return records[:limit]
 
@@ -512,24 +512,18 @@ class LongTermMemory:
     async def _entity_overlap_records(
         self, entities: list[str]
     ) -> list[LongTermRecord]:
-        """Active records sharing at least one normalized entity.
-
-        The entity-array overlap is an OR the AND-only filter DSL cannot
-        express, so the store query carries only the ``status`` equality and the
-        overlap is applied in Python — same pattern as recall's status filter.
-        """
+        """Active records sharing at least one normalized entity."""
         wanted = set(normalize_entities(entities))
         if not wanted:
             return []
         rows = await self._structured.query(
             self._structured_collection,
-            [Col("status") == MemoryStatus.ACTIVE.value],
+            [
+                Col("status") == MemoryStatus.ACTIVE.value,
+                Col("entities").overlaps(sorted(wanted)),
+            ],
         )
-        return [
-            record
-            for record in (LongTermRecord.model_validate(row) for row in rows)
-            if wanted & set(record.entities)
-        ]
+        return [LongTermRecord.model_validate(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Store helpers

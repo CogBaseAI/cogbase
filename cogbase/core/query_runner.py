@@ -325,8 +325,9 @@ Rules:
 _SCHEMA_HEADER = "\nAvailable structured collections (use these names and fields exactly):\n"
 
 _FILTER_LEGEND = """
-Filter operators: =, !=, <, >, <=, >=, like, in, not_in, is_null, is_not_null
+Filter operators: =, !=, <, >, <=, >=, like, in, not_in, overlaps, is_null, is_not_null
   in / not_in:            value must be a JSON array
+  overlaps:               json-typed array field shares >=1 element with value (a JSON array)
   like:                   SQL LIKE pattern (% = any sequence)
   is_null / is_not_null:  omit "value"
   JSON sub-keys:          use "field.subkey" notation

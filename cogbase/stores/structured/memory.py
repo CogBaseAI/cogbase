@@ -256,6 +256,11 @@ def _build_mask(df: pd.DataFrame, filters: list[Filter]) -> pd.Series:
                 mask &= col.isin(f.value)
             case Op.NOT_IN:
                 mask &= ~col.isin(f.value)
+            case Op.OVERLAPS:
+                wanted = set(f.value)
+                mask &= col.apply(
+                    lambda v: isinstance(v, (list, tuple, set)) and bool(wanted & set(v))
+                )
             case Op.LIKE:
                 mask &= col.apply(lambda v: _like(v, f.value))
             case Op.IS_NULL:

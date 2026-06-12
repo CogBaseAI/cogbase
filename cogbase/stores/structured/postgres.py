@@ -377,6 +377,15 @@ def _to_pg_where(
                 placeholders = ", ".join(f"${idx + i + 1}" for i in range(len(f.value)))
                 clauses.append(f"{col_expr} NOT IN ({placeholders})")
                 params.extend(str(v) for v in f.value) if is_json_subkey else params.extend(f.value)
+            case Op.OVERLAPS:
+                # JSONB ?| — true when the JSONB array shares at least one
+                # string element with the text[] of candidates.  Sub-keys need
+                # the JSONB extraction (->), not the text extraction (->>).
+                if is_json_subkey:
+                    col_name, key = f.field.split(".", 1)
+                    col_expr = f'"{col_name}"->\'{key}\''
+                clauses.append(f"{col_expr} ?| ${idx + 1}::text[]")
+                params.append([str(v) for v in f.value])
             case Op.LIKE:
                 clauses.append(f"{col_expr} ILIKE ${idx + 1}")
                 params.append(f.value)

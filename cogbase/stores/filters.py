@@ -55,6 +55,7 @@ class Op(str, Enum):
     GTE        = ">="
     IN         = "in"
     NOT_IN     = "not_in"
+    OVERLAPS   = "overlaps"
     LIKE       = "like"
     IS_NULL    = "is_null"
     IS_NOT_NULL = "is_not_null"
@@ -113,6 +114,12 @@ class Col:
     def not_in(self, values: list) -> Filter:
         return Filter(self.name, Op.NOT_IN, list(values))
 
+    # Array overlap: the JSON-array field shares at least one element with
+    # ``values``.  The inverse of ``in_``: ``in_`` tests a scalar field against
+    # a list of candidates; ``overlaps`` tests a list field against them.
+    def overlaps(self, values: list) -> Filter:
+        return Filter(self.name, Op.OVERLAPS, list(values))
+
     # Pattern match (SQL LIKE semantics: % = any sequence, _ = any char)
     def like(self, pattern: str) -> Filter:
         return Filter(self.name, Op.LIKE, pattern)
@@ -165,6 +172,8 @@ def _eval(val: Any, f: Filter) -> bool:
             return val in f.value
         case Op.NOT_IN:
             return val not in f.value
+        case Op.OVERLAPS:
+            return isinstance(val, (list, tuple, set)) and bool(set(val) & set(f.value))
         case Op.LIKE:
             return _like(val, f.value)
         case Op.IS_NULL:
@@ -244,6 +253,14 @@ def to_sql_where(
                 placeholders = ", ".join(["?"] * len(f.value))
                 clauses.append(f'"{f.field}" NOT IN ({placeholders})')
                 params.extend(f.value)
+            case Op.OVERLAPS:
+                # Array overlap is only defined for JSON-array fields, which are
+                # skipped above and post-filtered via ``matches``.  Reaching here
+                # means the field is a scalar column — refuse rather than
+                # silently dropping the condition.
+                raise ValueError(
+                    f"overlaps filter on non-JSON field {f.field!r} is not supported"
+                )
             case Op.LIKE:
                 clauses.append(f'"{f.field}" LIKE ?')
                 params.append(f.value)
