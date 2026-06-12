@@ -142,6 +142,10 @@ class ShortTermMemory:
             if session_id is not None and session_id in self._sessions:
                 state = self._sessions[session_id]
                 self._touch_locked(state)
+                logger.info(
+                    "[short_term] app=%s session=%s resumed (cached)",
+                    state.app_id, state.session_id,
+                )
                 return state.session_id
             state = SessionState(
                 app_id=app_id,
@@ -150,6 +154,9 @@ class ShortTermMemory:
             )
             self._touch_locked(state)
             self._sessions[state.session_id] = state
+            logger.info(
+                "[short_term] app=%s session=%s started", app_id, state.session_id
+            )
             return state.session_id
 
     async def get(self, session_id: str) -> SessionState | None:
@@ -181,7 +188,11 @@ class ShortTermMemory:
         deletion is episodic memory's concern — retention / erasure).
         """
         async with self._lock:
-            self._sessions.pop(session_id, None)
+            state = self._sessions.pop(session_id, None)
+            logger.info(
+                "[short_term] app=%s session=%s cached context evicted",
+                state.app_id if state else None, session_id,
+            )
 
     # ------------------------------------------------------------------
     # Context assembly
@@ -229,6 +240,13 @@ class ShortTermMemory:
             }
             self._touch_locked(state)
             self._sessions[session_id] = state
+
+            logger.info(
+                "[short_term] app=%s session=%s context built: %d message(s), "
+                "summarized=%d, has_summary=%s, budget=%d",
+                state.app_id, session_id, len(messages), summarized,
+                summary is not None, budget,
+            )
 
             context: list[ChatMessage] = []
             if summary:
@@ -344,6 +362,13 @@ class ShortTermMemory:
             summary=new_summary,
             replaces_through=covered,
             token_stats={"thread_tokens": thread_tokens, "budget": budget},
+        )
+        state = self._get_live_locked(session_id)
+        logger.info(
+            "[short_term] app=%s session=%s compacted %d turn(s) into summary "
+            "(thread_tokens=%d > budget=%d), replaces_through=%d, %d turn(s) kept",
+            state.app_id if state else None, session_id, len(overflow),
+            thread_tokens, budget, covered, len(kept),
         )
         return new_summary, kept, len(overflow)
 

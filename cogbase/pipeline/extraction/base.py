@@ -22,6 +22,8 @@ class ExtractorBase(abc.ABC):
         max_retries: Number of additional attempts after the first failure.
                      Sleep between attempts is ``2^(attempt-1)`` seconds
                      (1 s, 2 s, 4 s, …).  Default: 2.
+        app_id:      Stable internal id of the owning application, included in
+                     log lines for attribution.  ``""`` when used standalone.
 
     Example::
 
@@ -30,8 +32,9 @@ class ExtractorBase(abc.ABC):
                 ...
     """
 
-    def __init__(self, max_retries: int = 2) -> None:
+    def __init__(self, max_retries: int = 2, app_id: str = "") -> None:
         self._max_retries = max_retries
+        self._app_id = app_id
 
     @abc.abstractmethod
     async def _extract_once(self, doc: Document) -> list[dict] | None:
@@ -69,5 +72,8 @@ class ExtractorBase(abc.ABC):
             if result is not None:
                 return result
 
-        logger.error("failed to extract, doc_id=%s", doc.doc_id)
+        logger.error(
+            "extractor.extract.exhausted app_id=%s doc_id=%s attempts=%d",
+            self._app_id, doc.doc_id, self._max_retries + 1,
+        )
         return None

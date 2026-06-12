@@ -207,6 +207,11 @@ class LongTermMemory:
             )
         )
         self._ensured = True
+        logger.info(
+            "[long_term] app=%s collections ready: structured=%s vector=%s (dims=%d)",
+            self._app_id, self._structured_collection,
+            self._vector_collection, dimensions,
+        )
 
     # ------------------------------------------------------------------
     # Recall (online, query-time)
@@ -237,7 +242,12 @@ class LongTermMemory:
         records = await self._load_records(ordered_ids)
         by_id = {r.memory_id: r for r in records}
         # Preserve vector-relevance order; drop any record that no longer exists.
-        return [by_id[mid] for mid in ordered_ids if mid in by_id]
+        results = [by_id[mid] for mid in ordered_ids if mid in by_id]
+        logger.info(
+            "[long_term] app=%s recall: query=%r limit=%d -> %d active record(s)",
+            self._app_id, query, limit, len(results),
+        )
+        return results
 
     # ------------------------------------------------------------------
     # Lookup (the pull path: the memory_lookup tool)
@@ -282,7 +292,13 @@ class LongTermMemory:
             if not ordered_ids:
                 return []
             by_id = {r.memory_id: r for r in await self._load_records(ordered_ids)}
-            return [by_id[mid] for mid in ordered_ids if mid in by_id]
+            results = [by_id[mid] for mid in ordered_ids if mid in by_id]
+            logger.info(
+                "[long_term] app=%s lookup: query=%r kind=%s entities=%s -> %d record(s)",
+                self._app_id, query, kind.value if kind else None,
+                sorted(wanted_entities) or None, len(results),
+            )
+            return results
 
         # No query: a structured scan filtered by kind/status/entity overlap,
         # all pushed down to the store.
@@ -294,6 +310,11 @@ class LongTermMemory:
         rows = await self._structured.query(self._structured_collection, filters)
         records = [LongTermRecord.model_validate(row) for row in rows]
         records.sort(key=lambda r: r.updated_at, reverse=True)
+        logger.info(
+            "[long_term] app=%s lookup: kind=%s entities=%s -> %d record(s)",
+            self._app_id, kind.value if kind else None,
+            sorted(wanted_entities) or None, len(records[:limit]),
+        )
         return records[:limit]
 
     # ------------------------------------------------------------------
@@ -330,8 +351,9 @@ class LongTermMemory:
         )
         await self._save_record(record)
         logger.info(
-            "[long_term] promote memory_id=%s kind=%s status=%s",
-            record.memory_id, record.kind.value, record.status.value,
+            "[long_term] app=%s promote memory_id=%s kind=%s status=%s confidence=%.2f",
+            self._app_id, record.memory_id, record.kind.value,
+            record.status.value, record.confidence,
         )
         return record.memory_id
 
@@ -350,14 +372,25 @@ class LongTermMemory:
         related = await self._related_records(candidate)
 
         if not related:
+            logger.info(
+                "[long_term] app=%s reconcile: no related records for kind=%s; "
+                "promoting as new", self._app_id, candidate.kind.value,
+            )
             return await self.promote(candidate=candidate)
 
         decision = await self._decide(candidate, related)
         op = decision.op
         target = next((r for r in related if r.memory_id == decision.target_memory_id), None)
+        logger.info(
+            "[long_term] app=%s reconcile: kind=%s vs %d related -> %s (target=%s)",
+            self._app_id, candidate.kind.value, len(related), op.value,
+            target.memory_id if target else None,
+        )
 
         if op is ReconcileOp.NOOP:
-            logger.info("[long_term] reconcile NOOP (%s)", decision.reasoning)
+            logger.info(
+                "[long_term] app=%s reconcile NOOP (%s)", self._app_id, decision.reasoning
+            )
             return target.memory_id if target else related[0].memory_id
 
         if op is ReconcileOp.UPDATE and target is not None:
@@ -390,8 +423,8 @@ class LongTermMemory:
             target.content = revised  # type: ignore[assignment]
         await self._save_record(target)
         logger.info(
-            "[long_term] reconcile UPDATE memory_id=%s confidence=%.2f revised=%s",
-            target.memory_id, target.confidence, content_changed,
+            "[long_term] app=%s reconcile UPDATE memory_id=%s confidence=%.2f revised=%s",
+            self._app_id, target.memory_id, target.confidence, content_changed,
         )
         return target.memory_id
 
@@ -413,8 +446,9 @@ class LongTermMemory:
         )
         if not _outranks(candidate.kind, cand_conf, target):
             logger.info(
-                "[long_term] reconcile DELETE rejected: candidate does not outrank "
-                "memory_id=%s; keeping existing belief", target.memory_id,
+                "[long_term] app=%s reconcile DELETE rejected: candidate does not "
+                "outrank memory_id=%s; keeping existing belief",
+                self._app_id, target.memory_id,
             )
             return target.memory_id
         target.status = MemoryStatus.SUPERSEDED
@@ -422,8 +456,8 @@ class LongTermMemory:
         await self._save_record(target)
         new_id = await self.promote(candidate=candidate)
         logger.info(
-            "[long_term] reconcile DELETE superseded=%s replaced_by=%s",
-            target.memory_id, new_id,
+            "[long_term] app=%s reconcile DELETE superseded=%s replaced_by=%s",
+            self._app_id, target.memory_id, new_id,
         )
         return new_id
 
@@ -455,7 +489,10 @@ class LongTermMemory:
         ]
         parsed = await self._complete_json(messages)
         if parsed is None:
-            logger.warning("[long_term] reconcile decision unparseable; defaulting to ADD")
+            logger.warning(
+                "[long_term] app=%s reconcile decision unparseable; defaulting to ADD",
+                self._app_id,
+            )
             return self._Decision(ReconcileOp.ADD, None, None, "fallback: unparseable")
         try:
             op = ReconcileOp(parsed["operation"])
@@ -480,10 +517,16 @@ class LongTermMemory:
             except (json.JSONDecodeError, jsonschema.ValidationError):
                 if attempt < self._max_retries:
                     continue
-                logger.warning("[long_term] reconcile JSON invalid after retries", exc_info=True)
+                logger.warning(
+                    "[long_term] app=%s reconcile JSON invalid after retries",
+                    self._app_id, exc_info=True,
+                )
                 return None
             except Exception:
-                logger.warning("[long_term] reconcile LLM call failed", exc_info=True)
+                logger.warning(
+                    "[long_term] app=%s reconcile LLM call failed",
+                    self._app_id, exc_info=True,
+                )
                 return None
         return None
 

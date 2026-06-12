@@ -122,10 +122,18 @@ class Distiller:
     async def distill_session(self, *, session_id: str) -> list[str]:
         """Replay, extract candidates, reconcile each; return affected memory ids."""
         events = await self._episodic.replay(session_id=session_id)
+        app_id = next((e.app_id for e in events if e.app_id), None)
         thread = project_thread(events)
         if not thread:
-            logger.info("[distill] session=%s has no thread; nothing to distill", session_id)
+            logger.info(
+                "[distill] app=%s session=%s has no thread; nothing to distill",
+                app_id, session_id,
+            )
             return []
+        logger.info(
+            "[distill] app=%s session=%s distilling %d turn(s) from %d event(s)",
+            app_id, session_id, len(thread), len(events),
+        )
 
         transcript = "\n".join(
             f"[{m.seq} {m.role.value}] {m.content}" for m in thread
@@ -148,12 +156,12 @@ class Distiller:
                 )
             except Exception:
                 logger.warning(
-                    "[distill] reconcile failed for a candidate in session=%s",
-                    session_id, exc_info=True,
+                    "[distill] app=%s reconcile failed for a candidate in session=%s",
+                    app_id, session_id, exc_info=True,
                 )
         logger.info(
-            "[distill] session=%s extracted=%d reconciled=%d",
-            session_id, len(parsed.get("memories", [])), len(memory_ids),
+            "[distill] app=%s session=%s extracted=%d reconciled=%d",
+            app_id, session_id, len(parsed.get("memories", [])), len(memory_ids),
         )
         return memory_ids
 

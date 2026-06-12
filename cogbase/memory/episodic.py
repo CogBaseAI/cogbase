@@ -125,6 +125,9 @@ class EpisodicMemory:
         # Establish the session's app attribution so later events inherit it
         # without the caller re-passing app_id on every record.
         self._app_ids[session_id] = app_id
+        logger.info(
+            "[episodic] app=%s session=%s session started", app_id, session_id
+        )
         return await self.record(
             MemoryEvent(
                 session_id=session_id,
@@ -308,6 +311,14 @@ class EpisodicMemory:
             # Append under the lock: a session has a single writer, so serializing
             # its own appends costs no cross-session concurrency.
             await self._log.append(self._log_type, session_id, lines)
+            logger.info(
+                "[episodic] app=%s session=%s flushed %d event(s) [%s] up to seq=%d",
+                self._app_ids.get(session_id),
+                session_id,
+                len(buffered),
+                ", ".join(sorted({e.event_type.value for e in buffered})),
+                buffered[-1].seq,
+            )
             self._buffers[session_id] = []
 
     def has_pending(self, session_id: str) -> bool:
@@ -347,6 +358,11 @@ class EpisodicMemory:
         """
         lock = await self._lock_for(session_id)
         async with lock:
+            logger.info(
+                "[episodic] app=%s session=%s deleting whole log",
+                self._app_ids.get(session_id),
+                session_id,
+            )
             await self._log.delete(self._log_type, session_id)
             self._buffers.pop(session_id, None)
             self._next_seq.pop(session_id, None)
@@ -409,6 +425,13 @@ class EpisodicMemory:
                     exc_info=True,
                 )
         self._next_seq[session_id] = next_seq
+        if next_seq > 0:
+            logger.info(
+                "[episodic] app=%s session=%s resumed from log; next seq=%d",
+                self._app_ids.get(session_id),
+                session_id,
+                next_seq,
+            )
 
     def _fill_app_locked(self, event: MemoryEvent) -> None:
         """Inherit app_id from the session's recorded attribution."""

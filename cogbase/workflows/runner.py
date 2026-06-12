@@ -39,12 +39,16 @@ class WorkflowRunner:
         self,
         workflow: "WorkflowConfig",
         *,
+        app_id: str | None = None,
         structured_store: StructuredStoreBase | None = None,
         vector_store: VectorStoreBase | None = None,
         embedder: EmbeddingBase | None = None,
         llm: LLMBase | None = None,
     ) -> None:
         self.workflow = workflow
+        # Stable app id, included in every log line so a workflow run can be
+        # traced back to the application that owns it.
+        self.app_id = app_id
         self._structured_store = structured_store
         self._vector_store = vector_store
         self._embedder = embedder
@@ -52,9 +56,19 @@ class WorkflowRunner:
 
     async def run(self, params: dict[str, Any]) -> AsyncGenerator[dict, None]:
         """Execute the workflow with *params* and yield each saved record."""
+        logger.info(
+            "workflow.run.start app=%s workflow=%s steps=%d params=%s",
+            self.app_id, self.workflow.name, len(self.workflow.steps), params,
+        )
         ctx: dict[str, Any] = {"input": params, "steps": {}}
+        saved = 0
         async for record in self._run_steps(self.workflow.steps, ctx):
+            saved += 1
             yield record
+        logger.info(
+            "workflow.run.done app=%s workflow=%s saved_records=%d",
+            self.app_id, self.workflow.name, saved,
+        )
 
     async def _run_steps(
         self,
@@ -69,27 +83,47 @@ class WorkflowRunner:
                         f"Workflow step '{step.id}' foreach resolved to "
                         f"{type(items).__name__!r}, expected list"
                     )
-                for item in items:
+                logger.info(
+                    "workflow.foreach.start app=%s workflow=%s step=%s items=%d",
+                    self.app_id, self.workflow.name, step.id, len(items),
+                )
+                for idx, item in enumerate(items):
+                    logger.info(
+                        "workflow.foreach.iter app=%s workflow=%s step=%s iter=%d/%d",
+                        self.app_id, self.workflow.name, step.id, idx + 1, len(items),
+                    )
                     # Fresh steps namespace per iteration so outputs don't cross-contaminate.
                     iter_ctx = {**ctx, "item": item, "steps": dict(ctx["steps"])}
                     async for record in self._run_steps(step.steps, iter_ctx):
                         yield record
+                logger.info(
+                    "workflow.foreach.done app=%s workflow=%s step=%s items=%d",
+                    self.app_id, self.workflow.name, step.id, len(items),
+                )
             else:
                 logger.info(
-                    "workflow.step.start workflow=%s step=%s tool=%s",
-                    self.workflow.name, step.id, step.tool,
+                    "workflow.step.start app=%s workflow=%s step=%s tool=%s",
+                    self.app_id, self.workflow.name, step.id, step.tool,
                 )
-                output = await run_tool(
-                    step, ctx,
-                    self._structured_store,
-                    self._vector_store,
-                    self._embedder,
-                    self._llm,
-                )
+                try:
+                    output = await run_tool(
+                        step, ctx,
+                        self._structured_store,
+                        self._vector_store,
+                        self._embedder,
+                        self._llm,
+                    )
+                except Exception:
+                    logger.exception(
+                        "workflow.step.failed app=%s workflow=%s step=%s tool=%s",
+                        self.app_id, self.workflow.name, step.id, step.tool,
+                    )
+                    raise
                 ctx["steps"][step.id] = output
                 logger.info(
-                    "workflow.step.done workflow=%s step=%s tool=%s",
-                    self.workflow.name, step.id, step.tool,
+                    "workflow.step.done app=%s workflow=%s step=%s tool=%s result_keys=%s",
+                    self.app_id, self.workflow.name, step.id, step.tool,
+                    list(output.keys()),
                 )
                 if isinstance(step, StructuredSaveStepConfig):
                     for record in output.get("records", []):

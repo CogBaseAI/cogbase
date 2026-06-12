@@ -67,6 +67,12 @@ async def run(
         try:
             parsed = json.loads(content)
             jsonschema.validate(instance=parsed, schema=schema)
+            logger.info(
+                "workflow.tool.llm_structured.ok attempt=%d/%d output_keys=%s",
+                attempt + 1,
+                _MAX_RETRIES + 1,
+                list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__,
+            )
             return {"output": parsed}
         except Exception as exc:
             last_exc = exc

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, TYPE_CHECKING
 
 from cogbase.stores import StructuredStoreBase
@@ -10,6 +11,8 @@ from cogbase.workflows.context import render_value
 
 if TYPE_CHECKING:
     from cogbase.config.config import StructuredQueryStepConfig
+
+logger = logging.getLogger(__name__)
 
 
 async def run(
@@ -25,4 +28,8 @@ async def run(
         for field, val_template in step.filters.items()
     ]
     records = await structured_store.query(step.collection, filters or None)
+    logger.info(
+        "workflow.tool.structured_query collection=%s filters=%d records=%d",
+        step.collection, len(filters), len(records),
+    )
     return {"records": records}

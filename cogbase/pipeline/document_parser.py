@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import io
+import logging
 import pathlib
+
+logger = logging.getLogger(__name__)
 
 
 def parse_to_markdown(content: bytes, filename: str) -> str:
@@ -30,9 +33,17 @@ def parse_to_markdown(content: bytes, filename: str) -> str:
         raise ImportError("markitdown is required: pip install 'markitdown[all]'") from exc
 
     suffix = pathlib.Path(filename).suffix.lower()
+    logger.info(
+        "document_parser.parse.start filename=%s suffix=%s bytes=%d",
+        filename, suffix, len(content),
+    )
     md = MarkItDown()
     result = md.convert(
         io.BytesIO(content),
         stream_info=StreamInfo(extension=suffix, filename=filename),
+    )
+    logger.info(
+        "document_parser.parse.done filename=%s chars=%d",
+        filename, len(result.text_content),
     )
     return result.text_content

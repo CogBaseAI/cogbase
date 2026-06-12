@@ -140,6 +140,10 @@ class IngestionPipeline:
                                 key/value pairs.  ``None`` matches all documents.
         parallel:               When ``True``, all steps run concurrently via
                                 ``asyncio.gather`` instead of sequentially.
+        app_id:                 Stable internal id of the owning application.
+                                Threaded into every log line so ingestion
+                                activity can be attributed to an app; ``""`` when
+                                the pipeline is used standalone (e.g. in tests).
     """
 
     match: dict[str, str] | None = None
@@ -153,11 +157,13 @@ class IngestionPipeline:
         match: dict[str, str] | None = None,
         parallel: bool = False,
         description: str = "",
+        app_id: str = "",
     ) -> None:
         self.name = name
         self.description = description or name
         self.match = match
         self.parallel = parallel
+        self.app_id = app_id
 
         _vcs: list[VectorCollection] = list(vector_collections or [])
         _scs: list[StructuredCollection] = list(structured_collections or [])
@@ -183,7 +189,8 @@ class IngestionPipeline:
             await self._run_document_embed_upsert(doc, step)
             return 0, False
         logger.warning(
-            "ingestion_pipeline.ingest.unknown_tool name=%s tool=%s", self.name, step.tool
+            "ingestion_pipeline.ingest.unknown_tool app_id=%s name=%s tool=%s",
+            self.app_id, self.name, step.tool,
         )
         return 0, False
 
@@ -194,7 +201,10 @@ class IngestionPipeline:
             ``(records_extracted, extraction_failed)`` — ``extraction_failed`` is
             ``True`` if any ``extract-structured`` step failed after all retries.
         """
-        logger.info("ingestion_pipeline.ingest.start name=%s doc_id=%s", self.name, doc.doc_id)
+        logger.info(
+            "ingestion_pipeline.ingest.start app_id=%s name=%s doc_id=%s steps=%d parallel=%s",
+            self.app_id, self.name, doc.doc_id, len(self._steps), self.parallel,
+        )
 
         if self.parallel:
             results = await asyncio.gather(*[self._run_step(doc, step) for step in self._steps])
@@ -209,8 +219,8 @@ class IngestionPipeline:
                 extraction_failed = extraction_failed or failed
 
         logger.info(
-            "ingestion_pipeline.ingest.done name=%s doc_id=%s records_extracted=%d extraction_failed=%s",
-            self.name, doc.doc_id, records_extracted, extraction_failed,
+            "ingestion_pipeline.ingest.done app_id=%s name=%s doc_id=%s records_extracted=%d extraction_failed=%s",
+            self.app_id, self.name, doc.doc_id, records_extracted, extraction_failed,
         )
         return records_extracted, extraction_failed
 
@@ -218,21 +228,21 @@ class IngestionPipeline:
         vc = self._vector_by_name.get(step.collection)
         if vc is None:
             logger.warning(
-                "ingestion_pipeline.chunk_embed_upsert.unknown_collection name=%s collection=%s",
-                self.name, step.collection,
+                "ingestion_pipeline.chunk_embed_upsert.unknown_collection app_id=%s name=%s collection=%s",
+                self.app_id, self.name, step.collection,
             )
             return 0
         if step.chunker is None:
             logger.warning(
-                "ingestion_pipeline.chunk_embed_upsert.no_chunker name=%s collection=%s",
-                self.name, step.collection,
+                "ingestion_pipeline.chunk_embed_upsert.no_chunker app_id=%s name=%s collection=%s",
+                self.app_id, self.name, step.collection,
             )
             return 0
 
         chunks = step.chunker.chunk(doc)
         logger.info(
-            "ingestion_pipeline.chunk_embed_upsert.chunked name=%s doc_id=%s collection=%s chunks=%d",
-            self.name, doc.doc_id, step.collection, len(chunks),
+            "ingestion_pipeline.chunk_embed_upsert.chunked app_id=%s name=%s doc_id=%s collection=%s chunks=%d",
+            self.app_id, self.name, doc.doc_id, step.collection, len(chunks),
         )
         if not chunks:
             return 0
@@ -249,8 +259,8 @@ class IngestionPipeline:
         ]
         await vc.store.upsert(vc.name, embedded)
         logger.info(
-            "ingestion_pipeline.chunk_embed_upsert.upserted name=%s doc_id=%s collection=%s count=%d",
-            self.name, doc.doc_id, step.collection, len(embedded),
+            "ingestion_pipeline.chunk_embed_upsert.upserted app_id=%s name=%s doc_id=%s collection=%s count=%d",
+            self.app_id, self.name, doc.doc_id, step.collection, len(embedded),
         )
         return 0
 
@@ -258,35 +268,35 @@ class IngestionPipeline:
         sc = self._structured_by_name.get(step.collection)
         if sc is None:
             logger.warning(
-                "ingestion_pipeline.extract_structured.unknown_collection name=%s collection=%s",
-                self.name, step.collection,
+                "ingestion_pipeline.extract_structured.unknown_collection app_id=%s name=%s collection=%s",
+                self.app_id, self.name, step.collection,
             )
             return 0, False
         if step.extractor is None:
             logger.warning(
-                "ingestion_pipeline.extract_structured.no_extractor name=%s collection=%s",
-                self.name, step.collection,
+                "ingestion_pipeline.extract_structured.no_extractor app_id=%s name=%s collection=%s",
+                self.app_id, self.name, step.collection,
             )
             return 0, False
 
         records = await step.extractor.extract(doc)
         if records is None:
             logger.warning(
-                "ingestion_pipeline.extract_structured.failed name=%s doc_id=%s collection=%s",
-                self.name, doc.doc_id, step.collection,
+                "ingestion_pipeline.extract_structured.failed app_id=%s name=%s doc_id=%s collection=%s",
+                self.app_id, self.name, doc.doc_id, step.collection,
             )
             return 0, True
         if not records:
             logger.debug(
-                "ingestion_pipeline.extract_structured.no_records name=%s doc_id=%s collection=%s",
-                self.name, doc.doc_id, step.collection,
+                "ingestion_pipeline.extract_structured.no_records app_id=%s name=%s doc_id=%s collection=%s",
+                self.app_id, self.name, doc.doc_id, step.collection,
             )
             return 0, False
 
         await sc.store.save(sc.schema.name, records)
         logger.info(
-            "ingestion_pipeline.extract_structured.saved name=%s doc_id=%s collection=%s count=%d",
-            self.name, doc.doc_id, step.collection, len(records),
+            "ingestion_pipeline.extract_structured.saved app_id=%s name=%s doc_id=%s collection=%s count=%d",
+            self.app_id, self.name, doc.doc_id, step.collection, len(records),
         )
         return len(records), False
 
@@ -294,16 +304,16 @@ class IngestionPipeline:
         vc = self._vector_by_name.get(step.collection)
         if vc is None:
             logger.warning(
-                "ingestion_pipeline.document_embed_upsert.unknown_collection name=%s collection=%s",
-                self.name, step.collection,
+                "ingestion_pipeline.document_embed_upsert.unknown_collection app_id=%s name=%s collection=%s",
+                self.app_id, self.name, step.collection,
             )
             return
 
         text = await self._get_document_text(doc, step)
         if not text:
             logger.info(
-                "ingestion_pipeline.document_embed_upsert.empty_text name=%s doc_id=%s",
-                self.name, doc.doc_id,
+                "ingestion_pipeline.document_embed_upsert.empty_text app_id=%s name=%s doc_id=%s",
+                self.app_id, self.name, doc.doc_id,
             )
             return
 
@@ -318,8 +328,8 @@ class IngestionPipeline:
         )
         await vc.store.upsert(vc.name, [chunk])
         logger.info(
-            "ingestion_pipeline.document_embed_upsert.upserted name=%s doc_id=%s collection=%s",
-            self.name, doc.doc_id, step.collection,
+            "ingestion_pipeline.document_embed_upsert.upserted app_id=%s name=%s doc_id=%s collection=%s",
+            self.app_id, self.name, doc.doc_id, step.collection,
         )
 
     async def _get_document_text(self, doc: Document, step: PipelineStep) -> str | None:
@@ -334,8 +344,8 @@ class IngestionPipeline:
             return result.get("content") or None
         except Exception:
             logger.exception(
-                "ingestion_pipeline.get_document_text.failed name=%s doc_id=%s collection=%s",
-                self.name, doc.doc_id, step.collection,
+                "ingestion_pipeline.get_document_text.failed app_id=%s name=%s doc_id=%s collection=%s",
+                self.app_id, self.name, doc.doc_id, step.collection,
             )
             return None
 
@@ -361,7 +371,8 @@ class IngestionPipeline:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
-                    "ingestion_pipeline.ingest_documents.failed name=%s doc_id=%s",
+                    "ingestion_pipeline.ingest_documents.failed app_id=%s name=%s doc_id=%s",
+                    self.app_id,
                     self.name,
                     doc.doc_id,
                 )
@@ -369,6 +380,17 @@ class IngestionPipeline:
 
         if not documents:
             return []
+        logger.info(
+            "ingestion_pipeline.ingest_documents.start app_id=%s name=%s documents=%d",
+            self.app_id, self.name, len(documents),
+        )
         if len(documents) == 1:
-            return [await _ingest_one(documents[0])]
-        return list(await asyncio.gather(*(_ingest_one(d) for d in documents)))
+            results = [await _ingest_one(documents[0])]
+        else:
+            results = list(await asyncio.gather(*(_ingest_one(d) for d in documents)))
+        failures = sum(1 for r in results if not r.success)
+        logger.info(
+            "ingestion_pipeline.ingest_documents.done app_id=%s name=%s documents=%d failures=%d",
+            self.app_id, self.name, len(results), failures,
+        )
+        return results

@@ -202,6 +202,7 @@ async def build_app(
                 extraction_schema=extraction_schema,
                 config=ext_cfg,
                 record_schema=record_schema,
+                app_id=app_id,
             )
             extractors_by_col[sc_cfg.name] = extractor
 
@@ -244,6 +245,7 @@ async def build_app(
             structured_collections=structured_collections or None,
             match=p_cfg.match.metadata if p_cfg.match else None,
             parallel=p_cfg.parallel,
+            app_id=app_id,
         ))
         logger.info(
             "registered pipeline=%s app=%s match=%s steps=%d",
@@ -332,6 +334,7 @@ async def build_app(
     for wf_cfg in config.workflows:
         workflow_runners[wf_cfg.name] = WorkflowRunner(
             wf_cfg,
+            app_id=app_id,
             structured_store=structured_store,
             vector_store=vector_store,
             embedder=embedder,

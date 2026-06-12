@@ -55,6 +55,8 @@ class LLMExtractor(ExtractorBase):
         record_schema:     JSON Schema dict for the final stored record (includes injected
                            fields such as ``doc_id`` and optional item id).
         max_retries:       Retries on unparseable JSON.
+        app_id:            Stable internal id of the owning application, included
+                           in log lines for attribution.
     """
 
     def __init__(
@@ -65,8 +67,9 @@ class LLMExtractor(ExtractorBase):
         config: ExtractorConfig,
         record_schema: dict,
         max_retries: int = 2,
+        app_id: str = "",
     ) -> None:
-        super().__init__(max_retries=max_retries)
+        super().__init__(max_retries=max_retries, app_id=app_id)
         self._llm = llm
         self._extraction_schema = extraction_schema
         self._record_schema = record_schema
@@ -145,7 +148,8 @@ class LLMExtractor(ExtractorBase):
         content = result.get("content")
         if not content:
             logger.error(
-                "extract returns no content, doc_id=%s, elapsed=%.3fs, system_prompt=%s, result=%s",
+                "llm_extractor.no_content app_id=%s doc_id=%s elapsed=%.3fs system_prompt=%s result=%s",
+                self._app_id,
                 doc.doc_id,
                 time.monotonic() - t0,
                 self._system_prompt,
@@ -154,7 +158,8 @@ class LLMExtractor(ExtractorBase):
             return None
 
         logger.info(
-            "llm.complete doc_id=%s elapsed=%.3fs, content=%s",
+            "llm_extractor.complete app_id=%s doc_id=%s elapsed=%.3fs content=%s",
+            self._app_id,
             doc.doc_id,
             time.monotonic() - t0,
             content[:50],
@@ -196,14 +201,16 @@ class LLMExtractor(ExtractorBase):
             extraction = self._try_unwrap_single_item_list(content)
             if extraction is None:
                 logger.exception(
-                    "llm_extractor.parse_failed doc_id=%s, system_prompt=%s, result=%s",
+                    "llm_extractor.parse_failed app_id=%s doc_id=%s system_prompt=%s result=%s",
+                    self._app_id,
                     doc.doc_id,
                     self._system_prompt,
                     raw_result,
                 )
                 return None
             logger.info(
-                "llm_extractor.unwrapped_single_item_list doc_id=%s", doc.doc_id
+                "llm_extractor.unwrapped_single_item_list app_id=%s doc_id=%s",
+                self._app_id, doc.doc_id,
             )
         injected = {k: fn(doc, extraction, 0) for k, fn in self._injected_fields.items()}
         return [{**extraction, **injected}]
@@ -213,7 +220,8 @@ class LLMExtractor(ExtractorBase):
             parsed = json.loads(content)
         except json.JSONDecodeError:
             logger.exception(
-                "llm_extractor.parse_failed doc_id=%s, system_prompt=%s, result=%s",
+                "llm_extractor.parse_failed app_id=%s doc_id=%s system_prompt=%s result=%s",
+                self._app_id,
                 doc.doc_id,
                 self._system_prompt,
                 raw_result,
@@ -221,7 +229,8 @@ class LLMExtractor(ExtractorBase):
             return None
         if not isinstance(parsed, dict) or self._response_field not in parsed:
             logger.error(
-                "llm_extractor.parse_failed doc_id=%s missing response_field=%s, result=%s",
+                "llm_extractor.parse_failed app_id=%s doc_id=%s missing response_field=%s result=%s",
+                self._app_id,
                 doc.doc_id,
                 self._response_field,
                 raw_result,
@@ -230,7 +239,8 @@ class LLMExtractor(ExtractorBase):
         items: Any = parsed[self._response_field]
         if not isinstance(items, list):
             logger.error(
-                "llm_extractor.parse_failed doc_id=%s response_field not a list, result=%s",
+                "llm_extractor.parse_failed app_id=%s doc_id=%s response_field not a list, result=%s",
+                self._app_id,
                 doc.doc_id,
                 raw_result,
             )
