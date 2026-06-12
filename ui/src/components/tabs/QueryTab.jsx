@@ -11,20 +11,45 @@ export default function QueryTab({ active }) {
   const [chunks, setChunks] = useState([])
   const [structuredRecords, setStructuredRecords] = useState([])
   const msgsRef = useRef(null)
-  const historyRef = useRef([])
+  const sessionIdRef = useRef(null)
   const textareaRef = useRef(null)
   const hasApp = !!currentApp
   const prevAppRef = useRef(currentApp)
 
   useEffect(() => {
     if (currentApp !== prevAppRef.current) {
+      const prevApp = prevAppRef.current
       prevAppRef.current = currentApp
-      historyRef.current = []
+      closeSession(prevApp)
       if (currentApp) {
         setMsgs(prev => [...prev, { role: 'sys', text: `Connected to "${currentApp}".` }])
       }
     }
   }, [currentApp])
+
+  // Close the session bound to `appName`, fire-and-forget, and clear the local handle.
+  function closeSession(appName) {
+    const sid = sessionIdRef.current
+    sessionIdRef.current = null
+    if (!sid || !appName) return
+    fetch(`${apiUrl}/applications/${encodeURIComponent(appName)}/sessions/${encodeURIComponent(sid)}/close`, {
+      method: 'POST',
+    }).catch(() => {})
+  }
+
+  // Open a session for the current app if one isn't already open; returns its id.
+  async function ensureSession() {
+    if (sessionIdRef.current) return sessionIdRef.current
+    const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    if (!resp.ok) throw new Error(`failed to start session: HTTP ${resp.status}`)
+    const data = await resp.json()
+    sessionIdRef.current = data.session_id
+    return data.session_id
+  }
 
   function scrollMsgs() { if (msgsRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight }
 
@@ -49,10 +74,11 @@ export default function QueryTab({ active }) {
     let answer = ''
     let started = false
     try {
+      const sessionId = await ensureSession()
       const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/query/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, history: historyRef.current }),
+        body: JSON.stringify({ text, session_id: sessionId }),
       })
       if (!resp.ok) {
         const errText = await resp.text()
@@ -82,8 +108,6 @@ export default function QueryTab({ active }) {
         }
       }
 
-      historyRef.current.push({ role: 'user', content: text })
-      historyRef.current.push({ role: 'assistant', content: answer })
       if (!started) setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: '(no response)', muted: true }])
     } catch (e) {
       setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: 'Network error: ' + e.message, error: true }])
@@ -92,11 +116,13 @@ export default function QueryTab({ active }) {
     }
   }
 
-  function clearHistory() {
-    historyRef.current = []
+  // Refresh: close the current session (triggering distillation) and start fresh.
+  // A new session is opened lazily on the next question.
+  function refreshSession() {
+    closeSession(currentApp)
     setChunks([])
     setStructuredRecords([])
-    setMsgs([{ role: 'sys', text: 'History cleared.' + (currentApp ? ` Connected to "${currentApp}".` : '') }])
+    setMsgs([{ role: 'sys', text: 'Session refreshed.' + (currentApp ? ` Connected to "${currentApp}".` : '') }])
   }
 
   const totalRefs = chunks.length + structuredRecords.length
@@ -133,7 +159,7 @@ export default function QueryTab({ active }) {
               onChange={e => { setInput(e.target.value); autoResize(e.target) }}
               disabled={querying || !hasApp}
             />
-            <button className="btn btn-ghost" title="Clear history" onClick={clearHistory}>↺</button>
+            <button className="btn btn-ghost" title="Refresh session" onClick={refreshSession}>↺</button>
             <button className="btn btn-primary" disabled={querying || !hasApp} onClick={sendQuery}>Send</button>
           </div>
         </div>

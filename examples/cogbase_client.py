@@ -166,17 +166,19 @@ class CogBaseClient:
         self.api_base = api_base.rstrip("/")
         self._http = httpx.AsyncClient()
         self.app_name = ""
-        self._history: list[dict] = []
+        self._session_id: str | None = None
 
     async def __aenter__(self) -> "CogBaseClient":
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        await self.close_session()
         await self._http.aclose()
 
     def use_app(self, app_name: str) -> None:
         self.app_name = app_name
-        self._history = []
+        # Drop the session handle; the next query opens a fresh session for the new app.
+        self._session_id = None
 
     async def list_apps(self) -> list[dict]:
         resp = await self._http.get(f"{self.api_base}/applications", timeout=10)
@@ -274,17 +276,60 @@ class CogBaseClient:
                 all_results.extend(results)
         return all_results
 
-    def clear_query_history(self) -> None:
-        """Reset the chat history."""
-        self._history = []
+    async def start_session(self) -> str:
+        """Open a conversation session for the current app and return its id."""
+        resp = await self._http.post(
+            f"{self.api_base}/applications/{self.app_name}/sessions",
+            json={},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        self._session_id = resp.json()["session_id"]
+        return self._session_id
+
+    async def _ensure_session(self) -> str:
+        """Return the active session id, opening one on first use."""
+        if self._session_id is None:
+            await self.start_session()
+        return self._session_id
+
+    async def close_session(self) -> None:
+        """Settle the active session (evicts cache + enqueues distillation server-side).
+
+        Best-effort: failures are swallowed so teardown never raises.
+        """
+        sid = self._session_id
+        self._session_id = None
+        if not sid or not self.app_name:
+            return
+        try:
+            resp = await self._http.post(
+                f"{self.api_base}/applications/{self.app_name}/sessions/{sid}/close",
+                timeout=30,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError:
+            pass
+
+    async def clear_query_history(self) -> None:
+        """Refresh the conversation: close the current session and start fresh.
+
+        The next query lazily opens a new session, so prior turns no longer
+        influence the conversation. Mirrors the UI's refresh button.
+        """
+        await self.close_session()
 
     async def query_stream(self, text: str) -> None:
-        """Stream a query using accumulated chat history, printing tokens as they arrive."""
-        answer_parts: list[str] = []
+        """Stream a query within the current session, printing tokens as they arrive.
+
+        The conversational thread is held server-side and keyed by ``session_id``;
+        no client-side history is sent. A session is opened on the first query.
+        """
+        session_id = await self._ensure_session()
         async with self._http.stream(
             "POST",
             f"{self.api_base}/applications/{self.app_name}/query/stream",
-            json={"text": text, "history": self._history},
+            json={"text": text, "session_id": session_id},
             timeout=120,
         ) as resp:
             resp.raise_for_status()
@@ -301,19 +346,14 @@ class CogBaseClient:
                     continue
                 if "token" in data:
                     print(data["token"], end="", flush=True)
-                    answer_parts.append(data["token"])
                 elif "result" in data:
                     result = data["result"]
                     if result.get("passthrough") and result.get("structured_records"):
                         formatted = json.dumps(result["structured_records"], indent=2)
                         print(formatted)
-                        answer_parts.append(formatted)
                 elif "error" in data:
                     print(f"\n  ERROR: {data['error']}")
             print()
-        answer = "".join(answer_parts)
-        self._history.append({"role": "user", "content": text})
-        self._history.append({"role": "assistant", "content": answer})
 
     async def list_collections(self) -> dict:
         """Returns {"structured": [...], "vector": [...]}."""
@@ -688,8 +728,8 @@ async def run_interactive_loop(
             continue
 
         if lower == "/clear_query_history":
-            client.clear_query_history()
-            print("  Chat history cleared.")
+            await client.clear_query_history()
+            print("  Session closed; a new one starts on your next query.")
             continue
 
         if lower.startswith("/query_app"):
