@@ -682,7 +682,12 @@ class QueryRunner:
         # prompt is written there below) and before the conversation turns.
         if long_term_on:
             # TODO add long-term memory reference in response
-            memory_block = await self._recall_memory_block(user_input)
+            # Recall against the conversation tail, not the bare input: a short
+            # follow-up ("what about the second one?") carries no retrievable
+            # signal on its own.
+            prior = context if memory_active else (history or [])
+            recall_query = self._compose_recall_query(user_input, prior)
+            memory_block = await self._recall_memory_block(recall_query)
             if memory_block:
                 messages.insert(1, {"role": "system", "content": memory_block})
 
@@ -1064,14 +1069,57 @@ class QueryRunner:
             "evidence, do not present these as sourced facts):\n" + lines
         )
 
-    async def _recall_memory_block(self, user_input: str) -> str | None:
-        """Recall relevant memories and format them as a system block.
+    @staticmethod
+    def _compose_recall_query(
+        user_input: str, prior_messages: list[ChatMessage]
+    ) -> str:
+        """Build the recall query from the current input plus the last exchange.
+
+        A short follow-up ("what about the second one?") embeds poorly on its
+        own, so the previous user message and assistant answer are prepended,
+        truncated so a long answer doesn't drown the follow-up's signal. The
+        answer keeps its head, where the topic statement usually lives. With no
+        prior exchange this is just ``user_input``.
+        """
+        # build_context threads the current input in as the trailing user
+        # message; drop it so the walk below only sees completed turns.
+        if (
+            prior_messages
+            and prior_messages[-1].get("role") == "user"
+            and prior_messages[-1].get("content") == user_input
+        ):
+            prior_messages = prior_messages[:-1]
+
+        prev_user: str | None = None
+        prev_answer: str | None = None
+        for msg in reversed(prior_messages):
+            content = msg.get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue  # tool results / tool-call-only assistant messages
+            role = msg.get("role")
+            if role == "assistant" and prev_answer is None:
+                prev_answer = content
+            elif role == "user" and prev_user is None:
+                prev_user = content
+            if prev_user is not None and prev_answer is not None:
+                break
+
+        parts: list[str] = []
+        if prev_user:
+            parts.append(prev_user[:300])
+        if prev_answer:
+            parts.append(prev_answer[:500])
+        parts.append(user_input)
+        return "\n".join(parts)
+
+    async def _recall_memory_block(self, query: str) -> str | None:
+        """Recall memories relevant to *query* and format them as a system block.
 
         Returns ``None`` (inject nothing) when nothing is recalled or recall
         fails — long-term recall is an enrichment, never allowed to break a turn.
         """
         try:
-            memories = await self._long_term.recall(query=user_input)
+            memories = await self._long_term.recall(query=query)
         except Exception:
             logger.warning("[runner] long-term recall failed", exc_info=True)
             return None

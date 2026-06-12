@@ -86,6 +86,54 @@ async def test_no_recall_when_nothing_relevant_injects_no_block():
     assert "memory-derived" not in system_blocks
 
 
+@pytest.mark.asyncio
+async def test_recall_query_includes_previous_exchange_for_follow_ups():
+    """A bare follow-up recalls via the prior exchange folded into the query."""
+    lt = await _long_term()
+    await lt.promote(
+        candidate=MemoryCandidate(
+            content="user prefers dark mode", kind=MemoryKind.PREFERENCE
+        ),
+    )
+    llm, captured = _capturing_llm("ok")
+    runner = QueryRunner(
+        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
+    )
+
+    history = [
+        {"role": "user", "content": "what theme do I like?"},
+        {"role": "assistant", "content": "You prefer dark mode."},
+    ]
+    # On its own, "and on mobile?" recalls nothing under the hashing embedding.
+    await _drain(runner, user_input="and on mobile?", history=history)
+
+    system_blocks = [m["content"] for m in captured[0] if m["role"] == "system"]
+    assert any("memory-derived" in b and "dark mode" in b for b in system_blocks)
+
+
+def test_compose_recall_query_shapes():
+    compose = QueryRunner._compose_recall_query
+    # No prior conversation: the input passes through unchanged.
+    assert compose("hello", []) == "hello"
+    # Trailing current-input user message (build_context's shape) is dropped;
+    # tool messages and tool-call-only assistant messages are skipped.
+    prior = [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": None},
+        {"role": "tool", "content": "raw tool output"},
+        {"role": "assistant", "content": "first answer"},
+        {"role": "user", "content": "follow-up"},
+    ]
+    assert compose("follow-up", prior) == "first question\nfirst answer\nfollow-up"
+    # Long previous turns are truncated; the current input never is.
+    prior = [
+        {"role": "user", "content": "q" * 1000},
+        {"role": "assistant", "content": "a" * 1000},
+    ]
+    composed = compose("follow-up", prior)
+    assert composed == "q" * 300 + "\n" + "a" * 500 + "\nfollow-up"
+
+
 # ---------------------------------------------------------------------------
 # memory_lookup tool (the pull path)
 # ---------------------------------------------------------------------------
