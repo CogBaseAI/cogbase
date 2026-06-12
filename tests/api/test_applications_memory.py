@@ -29,7 +29,7 @@ from api.main import app
 from api.system_resources import SystemResources
 from api.system_store import SystemStore
 from cogbase.core.app import CogBaseApp
-from cogbase.core.query_runner import QueryRunner
+from cogbase.core.query_runner import MemoryTiers, QueryRunner, RetrievalResources
 from cogbase.memory import EpisodicMemory, ShortTermMemory
 from cogbase.skills.registry import SkillRegistry
 from cogbase.stores.log.local_fs import LocalFSLogStore
@@ -79,9 +79,8 @@ def _real_app(name: str, mem: ShortTermMemory, episodic: EpisodicMemory, llm: Ma
     runner = QueryRunner(
         app_id=name,
         llm=llm,
-        document_store=MagicMock(),
-        short_term=mem,
-        episodic=episodic,
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(short_term=mem, episodic=episodic),
     )
     return CogBaseApp(
         name=name,

@@ -43,7 +43,23 @@ def embedder():
     return _embedder
 
 
-_MAX_ROUNDS = 5  # initial turn + up to 4 confirmations
+_MAX_ROUNDS = 8  # initial turn + up to 7 confirmations
+
+
+def _confirm_text(round_num: int) -> str:
+    """Confirmation reply for the generation loop.
+
+    Early rounds give a gentle ack. After a couple of rounds, weaker/older
+    models tend to keep asking clarifying questions instead of finalizing, so
+    escalate to an explicit directive to call propose_app_config now.
+    """
+    if round_num >= 2:
+        return (
+            "Yes — everything is confirmed and complete. "
+            "Do not ask any more questions. Call propose_app_config now "
+            "with the fields above to finalize the configuration."
+        )
+    return "Yes"
 
 _CONTRACT_CONVERSATION: list[dict] = [
     {
@@ -133,7 +149,7 @@ class TestChatEndpointLive:
                     "Please generate the extraction schema and the full app config now."
                 )
             else:
-                text = "Yes"
+                text = _confirm_text(round_num)
 
             response = await chat(
                 GenerateChatRequest(text=text, history=history),
@@ -217,7 +233,7 @@ class TestChatEndpointLive:
             final_response = response
             if final_response.config_yaml:
                 break
-            text = 'Yes'
+            text = _confirm_text(round_num + 1)
 
         assert final_response is not None
         assert final_response.config_yaml, (
@@ -369,7 +385,7 @@ IN WITNESS WHEREOF, the parties have executed this Agreement as of the Effective
             final_response = response
             if final_response.config_yaml:
                 break
-            text = "Yes"
+            text = _confirm_text(round_num + 1)
 
         assert final_response is not None
         assert final_response.config_yaml, (
@@ -655,7 +671,7 @@ This Agreement is governed by the laws of the State of Texas.
             final_response = response
             if final_response.config_yaml:
                 break
-            text = "Yes"
+            text = _confirm_text(round_num + 1)
 
         assert final_response is not None
         assert final_response.config_yaml, (

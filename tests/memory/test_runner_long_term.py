@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cogbase.core.query_runner import QueryRunner
+from cogbase.core.query_runner import MemoryTiers, QueryRunner, RetrievalResources
 from cogbase.llms.base import CompletionResult
 from cogbase.memory.long_term import LongTermMemory
 from cogbase.memory.models import MemoryCandidate, MemoryKind
@@ -63,7 +63,9 @@ async def test_recall_injects_memory_block():
     )
     llm, captured = _capturing_llm("ok")
     runner = QueryRunner(
-        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
+        app_id="app1", llm=llm,
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(long_term=lt),
     )
 
     await _drain(runner, user_input="what theme do I like?")
@@ -78,7 +80,9 @@ async def test_no_recall_when_nothing_relevant_injects_no_block():
     lt = await _long_term()
     llm, captured = _capturing_llm("ok")
     runner = QueryRunner(
-        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
+        app_id="app1", llm=llm,
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(long_term=lt),
     )
 
     await _drain(runner, user_input="anything")
@@ -97,7 +101,9 @@ async def test_recall_query_includes_previous_exchange_for_follow_ups():
     )
     llm, captured = _capturing_llm("ok")
     runner = QueryRunner(
-        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
+        app_id="app1", llm=llm,
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(long_term=lt),
     )
 
     history = [
@@ -143,9 +149,11 @@ async def test_memory_lookup_tool_registered_only_when_long_term_wired():
     lt = await _long_term()
     llm, _ = _capturing_llm("ok")
     with_lt = QueryRunner(
-        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
+        app_id="app1", llm=llm,
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(long_term=lt),
     )
-    without_lt = QueryRunner(app_id="app1", llm=llm, document_store=MagicMock())
+    without_lt = QueryRunner(app_id="app1", llm=llm, resources=RetrievalResources(document_store=MagicMock()))
     assert "memory_lookup" in [t["name"] for t in with_lt._tool_defs]
     assert "memory_lookup" not in [t["name"] for t in without_lt._tool_defs]
 
@@ -161,7 +169,9 @@ async def test_memory_lookup_tool_returns_matching_memories():
     )
     llm, _ = _capturing_llm("ok")
     runner = QueryRunner(
-        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
+        app_id="app1", llm=llm,
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(long_term=lt),
     )
 
     output = await runner._run_memory_lookup({"entities": ["Acme Corp"]})
@@ -176,7 +186,9 @@ async def test_memory_lookup_tool_rejects_empty_and_bad_arguments():
     lt = await _long_term()
     llm, _ = _capturing_llm("ok")
     runner = QueryRunner(
-        app_id="app1", llm=llm, document_store=MagicMock(), long_term=lt
+        app_id="app1", llm=llm,
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(long_term=lt),
     )
     assert "error" in await runner._run_memory_lookup({})
     assert "error" in await runner._run_memory_lookup({"kind": "nonsense"})

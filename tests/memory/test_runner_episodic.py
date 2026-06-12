@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cogbase.core.query_runner import QueryResult, QueryRunner
+from cogbase.core.query_runner import MemoryTiers, QueryResult, QueryRunner, RetrievalResources
 from cogbase.llms.base import CompletionResult, SystemTool
 from cogbase.memory import EpisodicMemory, EventType
 from cogbase.stores.log.local_fs import LocalFSLogStore
@@ -65,8 +65,8 @@ def _runner(llm, episodic=None, system_tools=None) -> QueryRunner:
     return QueryRunner(
         app_id="testapp",
         llm=llm,
-        document_store=MagicMock(),
-        episodic=episodic,
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(episodic=episodic),
         system_tools=system_tools,
     )
 

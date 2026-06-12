@@ -890,9 +890,8 @@ async def query_collection(
 
     if collection in sc_names:
         app = await _get_active_app(app_name, app_cache, system_store, system_resources)
-        runner = app.query_runner
         filters = [_to_filter(f) for f in body.filters]
-        records = await runner.structured_store.query(collection, filters or None, body.fields or None)
+        records = await app.query_runner.query_collection(collection, filters or None, body.fields or None)
         return CollectionQueryResponse(collection=collection, records=records, total=len(records))
 
     if collection in vc_names:

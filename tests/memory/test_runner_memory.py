@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cogbase.core.query_runner import QueryResult, QueryRunner
+from cogbase.core.query_runner import MemoryTiers, QueryResult, QueryRunner, RetrievalResources
 from cogbase.llms.base import CompletionResult
 from cogbase.memory import EpisodicMemory, MemoryRole, ShortTermMemory
 from cogbase.skills.skill import Skill
@@ -67,9 +67,8 @@ def _runner(llm, *, short_term=None, episodic=None, skills=None) -> QueryRunner:
     return QueryRunner(
         app_id="testapp",
         llm=llm,
-        document_store=MagicMock(),
-        short_term=short_term,
-        episodic=episodic,
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(short_term=short_term, episodic=episodic),
         skills=skills,
     )
 

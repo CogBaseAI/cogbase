@@ -28,7 +28,7 @@ from cogbase.stores import (
     build_vector_store as _build_vector_store,
 )
 from cogbase.core.app import CogBaseApp
-from cogbase.core.query_runner import QueryRunner
+from cogbase.core.query_runner import MemoryTiers, QueryRunner, RetrievalResources
 from cogbase.memory import Distiller, EpisodicMemory, LongTermMemory, ShortTermMemory
 from cogbase.stores.schema import FieldSchema, FieldType
 from cogbase.pipeline.extraction.llm import LLMExtractor
@@ -317,15 +317,15 @@ async def build_app(
     qrunner = QueryRunner(
         app_id=app_id,
         llm=llm,
-        document_store=document_store,
-        structured_store=structured_store,
-        vector_store=vector_store,
-        embedder=embedder,
-        vector_schemas=vc_schemas or None,
-        structured_schemas=structured_schemas or None,
-        short_term=short_term,
-        episodic=episodic,
-        long_term=long_term,
+        resources=RetrievalResources(
+            document_store=document_store,
+            structured_store=structured_store,
+            vector_store=vector_store,
+            embedder=embedder,
+            structured_schemas=structured_schemas or None,
+            vector_schemas=vc_schemas or None,
+        ),
+        memory=MemoryTiers(short_term=short_term, episodic=episodic, long_term=long_term),
         skills=skills or None,
     )
 

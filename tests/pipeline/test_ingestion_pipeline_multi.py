@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from cogbase.core.app import CogBaseApp
 from cogbase.core.models import Document
-from cogbase.core.query_runner import QueryRunner
+from cogbase.core.query_runner import MemoryTiers, QueryRunner, RetrievalResources
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import LLMBase
 from cogbase.pipeline.extraction.base import ExtractorBase
@@ -508,7 +508,7 @@ class TestWhenConditionRouting:
         llm = MagicMock()
         llm.complete = AsyncMock(return_value={"content": "ok", "tool_calls": None})
         doc_store = InMemoryDocumentStore()
-        runner = QueryRunner(app_id="app", llm=llm, document_store=doc_store, structured_store=store)
+        runner = QueryRunner(app_id="app", llm=llm, resources=RetrievalResources(document_store=doc_store, structured_store=store))
         return CogBaseApp(
             "app", pipelines, runner,
             app_id="app",

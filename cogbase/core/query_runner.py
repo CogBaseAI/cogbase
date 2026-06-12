@@ -57,6 +57,7 @@ import sys
 import tempfile
 import time
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 
 from pydantic import BaseModel
 
@@ -125,6 +126,43 @@ class QueryResult(BaseModel):
     output_tokens: int = 0
 
     model_config = {"arbitrary_types_allowed": True}
+
+
+# ---------------------------------------------------------------------------
+# Dependency bundles
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RetrievalResources:
+    """Stores, embedder, and schemas the runner retrieves evidence from.
+
+    ``document_store`` is required (it backs ``read_document`` and is scoped by
+    ``app_id``); the rest are optional and each enables its corresponding tool
+    when present: ``structured_schemas`` → ``structured_lookup``,
+    ``vector_schemas`` (+ ``vector_store`` + ``embedder``) → ``vector_search``.
+    """
+
+    document_store: DocumentStoreBase
+    structured_store: StructuredStoreBase | None = None
+    vector_store: VectorStoreBase | None = None
+    embedder: EmbeddingBase | None = None
+    structured_schemas: list[CollectionSchema] | None = None
+    vector_schemas: list[VectorCollectionSchema] | None = None
+
+
+@dataclass
+class MemoryTiers:
+    """The three persistent memory tiers; any subset may be wired.
+
+    ``short_term`` and ``episodic`` engage only when a ``session_id`` is passed
+    to ``run()`` and must share a log store (see ``QueryRunner`` docstring);
+    ``long_term`` is session-independent and drives recall + ``memory_lookup``.
+    """
+
+    short_term: ShortTermMemory | None = None
+    episodic: EpisodicMemory | None = None
+    long_term: LongTermMemory | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -436,16 +474,21 @@ class QueryRunner:
     Args:
         app_id:                      Stable internal application id; used to scope document store reads.
         llm:                         LLM backend.
-        document_store:              Document store; enables the ``read_document`` tool.
-        structured_store:            Structured store; enables the ``structured_lookup`` tool.
-        vector_store:                Vector store; enables the ``vector_search`` tool
-                                     (requires *embedder*).
-        embedder:                    Embedder for ``vector_search``.
-        vector_schemas:              ``VectorCollectionSchema`` list for all vector
-                                     collections, injected into the retrieval system
-                                     prompt so the LLM can choose the right one.
-        structured_schemas:          Schema list injected into the retrieval system prompt
-                                     so the LLM knows available collections and field types.
+        resources:                   ``RetrievalResources`` bundle: document store (required),
+                                     optional structured/vector stores, embedder, and the
+                                     structured/vector schemas injected into the retrieval
+                                     system prompt. Each store/schema enables its tool when
+                                     present (``structured_lookup``, ``vector_search``,
+                                     ``read_document``).
+        memory:                      ``MemoryTiers`` bundle: short-term (session working
+                                     context, projected from the episodic log), episodic
+                                     (durable append-only event log), and long-term (curated
+                                     cross-session memory driving recall + ``memory_lookup``).
+                                     Short-term and episodic must share a log store and engage
+                                     only when a ``session_id`` is passed to ``run()``; long-term
+                                     recall is injected as memory-derived context, kept distinct
+                                     from document-backed evidence by the evidence policy.
+                                     Defaults to an empty bundle (no memory).
         skills:                      Skills available for routing. Pass ``None`` or ``[]``
                                      to skip skill selection and use the retrieval system prompt.
         system_tools:                Custom store-backed or service tools injected by the
@@ -455,86 +498,76 @@ class QueryRunner:
         passthrough_token_threshold: Estimated token count of ``structured_lookup`` results
                                      above which records are returned directly without LLM
                                      synthesis. None means disabled. Defaults None.
-        episodic:                    Durable append-only event log. When present and a
-                                     ``session_id`` is passed, the runner emits user_message,
-                                     tool_called/tool_result, and final_answer events to the
-                                     session's log (flushed at the turn boundary).
-        short_term:                  Session-local working context, projected from the episodic
-                                     log. Engaged only when a ``session_id`` is passed to
-                                     ``run()``. Must share *episodic*'s log store so the
-                                     continuity thread it assembles and the events the runner
-                                     records are the same stream; the runner's turn-boundary
-                                     flush also persists any ``session_compacted`` summary
-                                     short-term appends during context assembly.
-        long_term:                   Curated cross-session memory. When present, ``run()``
-                                     recalls relevant records and injects them into the
-                                     context marked as memory-derived (kept distinct from
-                                     document-backed evidence by the evidence policy).
     """
 
     def __init__(
         self,
         app_id: str,
         llm: LLMBase,
-        document_store: DocumentStoreBase,
-        structured_store: StructuredStoreBase | None = None,
-        vector_store: VectorStoreBase | None = None,
-        embedder: EmbeddingBase | None = None,
-        vector_schemas: list[VectorCollectionSchema] | None = None,
-        structured_schemas: list[CollectionSchema] | None = None,
+        resources: RetrievalResources,
+        memory: MemoryTiers | None = None,
+        *,
         skills: list | None = None,
         system_tools: list[SystemTool] | None = None,
         max_calls: int = 10,
         passthrough_token_threshold: int | None = None,
-        short_term: ShortTermMemory | None = None,
-        episodic: EpisodicMemory | None = None,
-        long_term: LongTermMemory | None = None,
         context_token_budget: int | None = None,
     ) -> None:
         self._app_id = app_id
         self._llm = llm
-        self._document_store = document_store
-        self._structured_store = structured_store
-        self._vector_store = vector_store
-        self._embedder = embedder
+
+        # Unpack the bundles into flat attrs so the rest of the class reads
+        # them directly; the bundles are only an assembly-boundary convenience.
+        self._document_store = resources.document_store
+        self._structured_store = resources.structured_store
+        self._vector_store = resources.vector_store
+        self._embedder = resources.embedder
+
+        mem = memory or MemoryTiers()
+        self._short_term = mem.short_term
+        self._episodic = mem.episodic
+        self._long_term = mem.long_term
+
         self._retrieval_system_prompt = _build_retrieval_prompt(
-            structured_schemas, vector_schemas
+            resources.structured_schemas, resources.vector_schemas
         )
         self._skills: list = skills or []
         self._system_tools: dict[str, SystemTool] = {t.name: t for t in (system_tools or [])}
         self._max_calls = max_calls
         self._passthrough_token_threshold = passthrough_token_threshold
-        self._short_term = short_term
-        self._episodic = episodic
-        self._long_term = long_term
         # In-loop compaction stays opt-in: None leaves the guard off. When a
         # budget is wanted but unspecified, derive it from the model window.
         self._context_token_budget = context_token_budget
 
         # Retrieval tool definitions — exposed as _tool_defs for introspection.
         self._tool_defs: list[ToolDefinition] = []
-        if structured_schemas:
+        if resources.structured_schemas:
             self._tool_defs.append(_STRUCTURED_LOOKUP_DEF)
-        if vector_schemas:
+        if resources.vector_schemas:
             self._tool_defs.append(_VECTOR_SEARCH_DEF)
-        if document_store is not None and app_id is not None:
+        if resources.document_store is not None and app_id is not None:
             self._tool_defs.append(_READ_DOCUMENT_DEF)
-        if long_term is not None:
+        if mem.long_term is not None:
             self._tool_defs.append(_MEMORY_LOOKUP_DEF)
 
     # ------------------------------------------------------------------
-    # Accessors
+    # Direct collection access (bypasses the agent loop)
     # ------------------------------------------------------------------
 
-    @property
-    def structured_store(self):
-        """The structured store, if configured."""
-        return self._structured_store
+    async def query_collection(
+        self,
+        collection: str,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
+    ) -> list[dict]:
+        """Query a structured collection directly, bypassing the agent loop.
 
-    @property
-    def vector_store(self):
-        """The vector store, if configured."""
-        return self._vector_store
+        Backs the direct collection-query endpoint. Raises ``RuntimeError`` when
+        no structured store is configured.
+        """
+        if self._structured_store is None:
+            raise RuntimeError("structured store not configured")
+        return await self._structured_store.query(collection, filters or None, fields or None)
 
     # ------------------------------------------------------------------
     # Skill selection helpers (used when skills are provided to run())

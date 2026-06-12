@@ -15,7 +15,7 @@ from cogbase.config.config import (
 )
 from cogbase.core.app import CogBaseApp
 from cogbase.core.models import Document
-from cogbase.core.query_runner import QueryRunner
+from cogbase.core.query_runner import MemoryTiers, QueryRunner, RetrievalResources
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline
 from cogbase.stores.document.memory import InMemoryDocumentStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -41,7 +41,7 @@ def _minimal_app(workflow_runners: dict | None = None) -> CogBaseApp:
     llm = MagicMock()
     llm.complete = AsyncMock(return_value={"content": "ok", "tool_calls": None})
     doc_store = InMemoryDocumentStore()
-    runner = QueryRunner(app_id="test-app", llm=llm, document_store=doc_store, structured_store=store)
+    runner = QueryRunner(app_id="test-app", llm=llm, resources=RetrievalResources(document_store=doc_store, structured_store=store))
     return CogBaseApp(
         "test-app",
         [pipeline],
@@ -198,7 +198,7 @@ class TestAfterIngestTrigger:
         llm = MagicMock()
         llm.complete = AsyncMock(return_value={"content": "ok", "tool_calls": None})
         doc_store = InMemoryDocumentStore()
-        qrunner = QueryRunner(app_id="test-app", llm=llm, document_store=doc_store, structured_store=store)
+        qrunner = QueryRunner(app_id="test-app", llm=llm, resources=RetrievalResources(document_store=doc_store, structured_store=store))
 
         runner = _make_wf_runner(
             "check",

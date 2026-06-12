@@ -1459,9 +1459,7 @@ def _mock_query_store_app(structured_records: list[dict] | None = None) -> Magic
     inst = MagicMock()
     runner = MagicMock()
     inst.query_runner = runner
-    store = MagicMock()
-    store.query = AsyncMock(return_value=structured_records or [])
-    runner.structured_store = store
+    runner.query_collection = AsyncMock(return_value=structured_records or [])
     return inst
 
 
@@ -1559,7 +1557,7 @@ class TestQueryCollection:
         )
 
         assert resp.status_code == 200
-        call_args = mock_app.query_runner.structured_store.query.call_args[0]
+        call_args = mock_app.query_runner.query_collection.call_args[0]
         filters_passed = call_args[1]
         assert len(filters_passed) == 1
         assert filters_passed[0].field == "type"
@@ -1576,7 +1574,7 @@ class TestQueryCollection:
         )
 
         assert resp.status_code == 200
-        call_args = mock_app.query_runner.structured_store.query.call_args[0]
+        call_args = mock_app.query_runner.query_collection.call_args[0]
         assert call_args[2] == ["type"]
 
     @pytest.mark.asyncio
@@ -1590,7 +1588,7 @@ class TestQueryCollection:
         )
 
         assert resp.status_code == 200
-        call_args = mock_app.query_runner.structured_store.query.call_args[0]
+        call_args = mock_app.query_runner.query_collection.call_args[0]
         assert call_args[1] is None  # empty filters → None
         assert call_args[2] is None  # absent fields → None
 

@@ -10,7 +10,7 @@ import pytest
 
 from cogbase.config.config import RoutingStrategy
 from cogbase.core.app import CogBaseApp
-from cogbase.core.query_runner import QueryResult, QueryRunner
+from cogbase.core.query_runner import MemoryTiers, QueryResult, QueryRunner, RetrievalResources
 from cogbase.stores.document.base import DocumentStoreBase
 from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
@@ -181,12 +181,14 @@ async def _make_app(
     runner = QueryRunner(
         app_id=name,
         llm=llm,
-        document_store=doc_store,
-        structured_store=store,
-        vector_store=vector_store,
-        embedder=embedder,
-        vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None,
-        structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None,
+        resources=RetrievalResources(
+            document_store=doc_store,
+            structured_store=store,
+            vector_store=vector_store,
+            embedder=embedder,
+            structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None,
+            vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None,
+        ),
     )
     return CogBaseApp(
         name, [pipeline], runner,
@@ -224,7 +226,7 @@ class TestCogBaseAppConstruction:
     async def test_pipeline_wired_to_app(self):
         store = InMemoryStructuredStore()
         pipeline = await _make_pipeline(_make_llm("{}"), store)
-        runner = QueryRunner(app_id="test", llm=_make_llm("{}"), document_store=InMemoryDocumentStore(), structured_store=store, structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None)
+        runner = QueryRunner(app_id="test", llm=_make_llm("{}"), resources=RetrievalResources(document_store=InMemoryDocumentStore(), structured_store=store, structured_schemas=[sc.schema for sc in pipeline._structured_by_name.values()] or None))
         llm = _make_llm("{}")
         app = CogBaseApp(
             "test", [pipeline], runner,
@@ -458,10 +460,12 @@ class TestVectorOnlyMode:
         runner = QueryRunner(
             app_id="vector-only",
             llm=llm,
-            document_store=doc_store,
-            vector_store=vc_store,
-            embedder=vc_embedder,
-            vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None,
+            resources=RetrievalResources(
+                document_store=doc_store,
+                vector_store=vc_store,
+                embedder=vc_embedder,
+                vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None,
+            ),
         )
         return CogBaseApp(
             "vector-only", [pipeline], runner,
@@ -507,7 +511,7 @@ class TestVectorOnlyMode:
             vector_collections=[vc],
         )
         doc_store = InMemoryDocumentStore()
-        runner = QueryRunner(app_id="testapp", llm=_make_llm("{}"), document_store=doc_store, vector_store=vector_store, embedder=StubEmbedding(dim=4), vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None)
+        runner = QueryRunner(app_id="testapp", llm=_make_llm("{}"), resources=RetrievalResources(document_store=doc_store, vector_store=vector_store, embedder=StubEmbedding(dim=4), vector_schemas=[c.schema for c in pipeline._vector_by_name.values()] or None))
         app = CogBaseApp(
             "testapp", [pipeline], runner,
             document_store=doc_store,
