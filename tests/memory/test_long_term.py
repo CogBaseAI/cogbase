@@ -128,6 +128,38 @@ async def test_reconcile_add_when_no_related():
 
 
 @pytest.mark.asyncio
+async def test_embed_contents_caches_candidate_content_across_reconcile():
+    # Batch-embedding a session's candidates up front and passing the cache to
+    # reconcile must collapse the per-candidate double-embed (search query +
+    # promote write) so each distinct content is embedded exactly once.
+    svc = await _make_service(llm=_llm_returning({"operation": "NOOP"}))
+    embed_calls: list[list[str]] = []
+    original_embed = svc._embedder.embed
+
+    async def _counting_embed(texts):
+        embed_calls.append(list(texts))
+        return await original_embed(texts)
+
+    svc._embedder.embed = _counting_embed
+
+    candidates = [
+        _candidate("user prefers dark mode", kind=MemoryKind.PREFERENCE),
+        _candidate("user works at Acme", kind=MemoryKind.FACT),
+    ]
+    cache = await svc.embed_contents(candidates)
+    assert set(cache) == {c.content for c in candidates}
+    # One batch call for both contents.
+    assert embed_calls == [[c.content for c in candidates]]
+
+    embed_calls.clear()
+    for candidate in candidates:
+        await svc.reconcile(candidate=candidate, embeddings=cache)
+    # Two ADDs (no related records), and the candidate content for each was
+    # served from the cache for both the search and the save — zero new embeds.
+    assert embed_calls == []
+
+
+@pytest.mark.asyncio
 async def test_reconcile_update_reinforces_confidence_and_merges_provenance():
     svc = await _make_service()
     mid = await svc.promote(
@@ -291,7 +323,7 @@ async def test_related_records_unions_entity_overlap_past_vector_miss():
         status=MemoryStatus.ACTIVE,
     )
 
-    async def _no_vector_hits(query, *, top_k):
+    async def _no_vector_hits(query, *, top_k, embeddings=None):
         return []
 
     svc._search_content = _no_vector_hits

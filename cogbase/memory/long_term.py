@@ -321,18 +321,41 @@ class LongTermMemory:
     # Promote (the ADD path)
     # ------------------------------------------------------------------
 
+    async def embed_contents(
+        self, candidates: list[MemoryCandidate]
+    ) -> dict[str, list[float]]:
+        """Batch-embed candidate contents once for reuse across reconcile.
+
+        Distillation reconciles a whole session's candidates in one pass; each
+        reconcile would otherwise embed the candidate ``content`` twice — once as
+        the related-records search query, once on the promote write.  Embedding
+        all distinct contents up front in a single call collapses those N×2
+        round-trips into one.  Returns a ``content -> embedding`` map; pass it
+        straight back to :meth:`reconcile` as its ``embeddings`` argument, where
+        the embed helpers reuse it on a hit and embed normally on a miss.
+        """
+        texts = list(dict.fromkeys(c.content for c in candidates if c.content))
+        if not texts:
+            return {}
+        vectors = await self._embedder.embed(texts)
+        await self._ensure(len(vectors[0]))
+        return dict(zip(texts, vectors))
+
     async def promote(
         self,
         *,
         candidate: MemoryCandidate,
         status: MemoryStatus | None = None,
+        embeddings: dict[str, list[float]] | None = None,
     ) -> str:
         """Write *candidate* as a new active/pending record; returns its id.
 
         Embeds ``content`` and writes both the structured record and its content
         vector with the provenance snapshot populated.  ``status`` defaults to
         the kind's promotion gate (preferences/hints auto-active, facts/
-        corrections held for review).
+        corrections held for review).  ``embeddings`` is an optional
+        ``content -> vector`` cache (see :meth:`embed_contents`) reused for the
+        content embedding.
         """
         confidence = (
             candidate.confidence
@@ -349,7 +372,7 @@ class LongTermMemory:
             source_event_ids=list(candidate.source_event_ids),
             evidence_snapshot=dict(candidate.evidence_snapshot),
         )
-        await self._save_record(record)
+        await self._save_record(record, embeddings=embeddings)
         logger.info(
             "[long_term] app=%s promote memory_id=%s kind=%s status=%s confidence=%.2f",
             self._app_id, record.memory_id, record.kind.value,
@@ -361,22 +384,31 @@ class LongTermMemory:
     # Reconcile (the crux)
     # ------------------------------------------------------------------
 
-    async def reconcile(self, *, candidate: MemoryCandidate) -> str:
+    async def reconcile(
+        self,
+        *,
+        candidate: MemoryCandidate,
+        embeddings: dict[str, list[float]] | None = None,
+    ) -> str:
         """Merge *candidate* against accumulated belief; return the affected id.
 
         Vector-recalls related records, asks the LLM for one
         ``ReconcileOp``, and applies it.  ADD with no related records skips the
         LLM entirely.  On any LLM/parse failure the candidate is conservatively
         ADDed rather than dropped — never silently lose a candidate.
+
+        ``embeddings`` is an optional ``content -> vector`` cache (see
+        :meth:`embed_contents`) reused for the candidate's search query and
+        promote write, so distilling a session embeds each content once.
         """
-        related = await self._related_records(candidate)
+        related = await self._related_records(candidate, embeddings=embeddings)
 
         if not related:
             logger.info(
                 "[long_term] app=%s reconcile: no related records for kind=%s; "
                 "promoting as new", self._app_id, candidate.kind.value,
             )
-            return await self.promote(candidate=candidate)
+            return await self.promote(candidate=candidate, embeddings=embeddings)
 
         decision = await self._decide(candidate, related)
         op = decision.op
@@ -394,20 +426,27 @@ class LongTermMemory:
             return target.memory_id if target else related[0].memory_id
 
         if op is ReconcileOp.UPDATE and target is not None:
-            return await self._apply_update(target, candidate, decision.revised_content)
+            return await self._apply_update(
+                target, candidate, decision.revised_content, embeddings=embeddings
+            )
 
         if op is ReconcileOp.DELETE and target is not None:
-            return await self._apply_delete(target, candidate)
+            return await self._apply_delete(target, candidate, embeddings=embeddings)
 
         # ADD, or UPDATE/DELETE that named no resolvable target.
-        return await self.promote(candidate=candidate)
+        return await self.promote(candidate=candidate, embeddings=embeddings)
 
     # ------------------------------------------------------------------
     # Reconcile internals
     # ------------------------------------------------------------------
 
     async def _apply_update(
-        self, target: LongTermRecord, candidate: MemoryCandidate, revised: str | None
+        self,
+        target: LongTermRecord,
+        candidate: MemoryCandidate,
+        revised: str | None,
+        *,
+        embeddings: dict[str, list[float]] | None = None,
     ) -> str:
         """Reinforce *target*: bump confidence, merge provenance, optionally revise."""
         target.confidence = min(1.0, target.confidence + CONFIDENCE_REINFORCE)
@@ -421,7 +460,7 @@ class LongTermMemory:
         content_changed = bool(revised) and revised != target.content
         if content_changed:
             target.content = revised  # type: ignore[assignment]
-        await self._save_record(target)
+        await self._save_record(target, embeddings=embeddings)
         logger.info(
             "[long_term] app=%s reconcile UPDATE memory_id=%s confidence=%.2f revised=%s",
             self._app_id, target.memory_id, target.confidence, content_changed,
@@ -429,7 +468,11 @@ class LongTermMemory:
         return target.memory_id
 
     async def _apply_delete(
-        self, target: LongTermRecord, candidate: MemoryCandidate
+        self,
+        target: LongTermRecord,
+        candidate: MemoryCandidate,
+        *,
+        embeddings: dict[str, list[float]] | None = None,
     ) -> str:
         """Supersede *target* and promote *candidate* — but only if it outranks.
 
@@ -454,7 +497,7 @@ class LongTermMemory:
         target.status = MemoryStatus.SUPERSEDED
         target.updated_at = _utcnow()
         await self._save_record(target)
-        new_id = await self.promote(candidate=candidate)
+        new_id = await self.promote(candidate=candidate, embeddings=embeddings)
         logger.info(
             "[long_term] app=%s reconcile DELETE superseded=%s replaced_by=%s",
             self._app_id, target.memory_id, new_id,
@@ -531,7 +574,10 @@ class LongTermMemory:
         return None
 
     async def _related_records(
-        self, candidate: MemoryCandidate
+        self,
+        candidate: MemoryCandidate,
+        *,
+        embeddings: dict[str, list[float]] | None = None,
     ) -> list[LongTermRecord]:
         """Active records related to the candidate: vector ∪ entity overlap.
 
@@ -539,7 +585,9 @@ class LongTermMemory:
         (the contradiction then lands as a duplicate ADD), so records sharing a
         normalized entity are unioned in after the vector hits.
         """
-        hits = await self._search_content(candidate.content, top_k=_RECONCILE_CANDIDATES * 3)
+        hits = await self._search_content(
+            candidate.content, top_k=_RECONCILE_CANDIDATES * 3, embeddings=embeddings
+        )
         ids = [
             c.doc_id
             for c in hits
@@ -572,18 +620,24 @@ class LongTermMemory:
     # Store helpers
     # ------------------------------------------------------------------
 
-    async def _save_record(self, record: LongTermRecord) -> None:
+    async def _save_record(
+        self,
+        record: LongTermRecord,
+        *,
+        embeddings: dict[str, list[float]] | None = None,
+    ) -> None:
         """Upsert the structured row and its content vector.
 
         The vector is always re-upserted so its metadata (``status`` /
         ``kind``) tracks the structured record — recall and reconcile filter on
         that metadata, so a superseded record must carry ``status=superseded`` in
-        the index too.  ``content`` is re-embedded each time; on a status-only
-        change this re-embeds identical text (correct, just not free) — a
-        worthwhile simplicity trade for a store written at distillation cadence,
-        not on the request path.
+        the index too.  ``content`` is re-embedded each time unless a precomputed
+        embedding for it is supplied via ``embeddings``; on a status-only change
+        this re-embeds identical text (correct, just not free) — a worthwhile
+        simplicity trade for a store written at distillation cadence, not on the
+        request path.
         """
-        embedding = (await self._embedder.embed([record.content]))[0]
+        embedding = await self._embed_text(record.content, embeddings)
         await self._ensure(len(embedding))
         await self._structured.save(self._structured_collection, [self._to_row(record)])
         await self._vector.upsert(
@@ -599,12 +653,28 @@ class LongTermMemory:
             ],
         )
 
-    async def _search_content(self, query: str, *, top_k: int) -> list[Chunk]:
-        embedding = (await self._embedder.embed([query]))[0]
+    async def _search_content(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        embeddings: dict[str, list[float]] | None = None,
+    ) -> list[Chunk]:
+        embedding = await self._embed_text(query, embeddings)
         await self._ensure(len(embedding))
         return await self._vector.search(
             self._vector_collection, query, embedding, top_k
         )
+
+    async def _embed_text(
+        self, text: str, cache: dict[str, list[float]] | None
+    ) -> list[float]:
+        """Embed *text*, reusing *cache* on a hit and embedding on a miss."""
+        if cache is not None:
+            cached = cache.get(text)
+            if cached is not None:
+                return cached
+        return (await self._embedder.embed([text]))[0]
 
     async def _load_records(self, memory_ids: list[str]) -> list[LongTermRecord]:
         rows = await self._structured.query(

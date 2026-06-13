@@ -145,14 +145,25 @@ class Distiller:
         seq_to_ref = {e.seq: e.ref for e in events}
         seq_to_event = {e.seq: e for e in events}
 
-        memory_ids: list[str] = []
+        candidates: list[MemoryCandidate] = []
         for item in parsed.get("memories", []):
             candidate = self._build_candidate(item, seq_to_ref, seq_to_event)
-            if candidate is None:
-                continue
+            if candidate is not None:
+                candidates.append(candidate)
+
+        # Reconcile is order-dependent (each candidate sees what prior ones
+        # wrote), so it stays a sequential loop — but every candidate's content
+        # is embedded the same way regardless of order, so embed them all in one
+        # call up front and thread the cache through.
+        embeddings = await self._long_term.embed_contents(candidates)
+
+        memory_ids: list[str] = []
+        for candidate in candidates:
             try:
                 memory_ids.append(
-                    await self._long_term.reconcile(candidate=candidate)
+                    await self._long_term.reconcile(
+                        candidate=candidate, embeddings=embeddings
+                    )
                 )
             except Exception:
                 logger.warning(
