@@ -18,7 +18,9 @@ Four operations make up the surface:
   ``kind`` / ``entities`` filters, for when the per-turn injection isn't enough
   ("what do you know about project X?").
 - :meth:`promote` — the ADD path: embed, write the structured record and its
-  content vector with a provenance snapshot.
+  content vector with a provenance snapshot.  Behaviour-affecting kinds land at
+  ``pending_review``; :meth:`list_pending` / :meth:`review_many` are the gate
+  that promotes them to ``active`` (or supersedes them on reject).
 - :meth:`reconcile` — **the crux, no analog in the document pipeline.**  Merge a
   new observation against accumulated belief: vector-recall related
   records, let an LLM emit one ``ReconcileOp`` (ADD / UPDATE / DELETE / NOOP),
@@ -47,6 +49,9 @@ from cogbase.memory.models import (
     MemoryKind,
     MemoryStatus,
     ReconcileOp,
+    ReviewDecision,
+    ReviewOutcome,
+    ReviewResult,
     normalize_entities,
 )
 from cogbase.stores.filters import Col
@@ -79,6 +84,10 @@ _AUTO_ACTIVE_KINDS: frozenset[MemoryKind] = frozenset(
 
 # How many related records to surface to the reconcile LLM.
 _RECONCILE_CANDIDATES = 5
+
+# Upper bound on a single review batch — the loop issues two store writes per
+# accepted/rejected record, so cap it to keep one call's fan-out bounded.
+MAX_REVIEW_BATCH = 500
 
 _RECONCILE_SCHEMA: dict = {
     "type": "object",
@@ -316,6 +325,99 @@ class LongTermMemory:
             sorted(wanted_entities) or None, len(records[:limit]),
         )
         return records[:limit]
+
+    # ------------------------------------------------------------------
+    # Promotion review (the pending_review -> active gate)
+    # ------------------------------------------------------------------
+
+    async def list_pending(
+        self,
+        *,
+        kind: MemoryKind | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[LongTermRecord]:
+        """Return the gated records awaiting review, oldest first.
+
+        The only reader of ``pending_review`` records: ``recall`` and ``lookup``
+        are deliberately active-only, so a reviewer reaches gated facts/
+        corrections here.  Ordered oldest-first so the queue is FIFO, and the
+        full record is returned (``source_event_ids`` / ``evidence_snapshot``
+        included) so the evidence can be audited before promotion.
+        """
+        if limit <= 0:
+            return []
+        filters = [Col("status") == MemoryStatus.PENDING_REVIEW.value]
+        if kind:
+            filters.append(Col("kind") == kind.value)
+        rows = await self._structured.query(self._structured_collection, filters)
+        records = [LongTermRecord.model_validate(row) for row in rows]
+        records.sort(key=lambda r: r.created_at)
+        page = records[offset : offset + limit]
+        logger.info(
+            "[long_term] app=%s list_pending: kind=%s -> %d of %d pending record(s)",
+            self._app_id, kind.value if kind else None, len(page), len(records),
+        )
+        return page
+
+    async def review_many(
+        self, *, decisions: list[ReviewDecision]
+    ) -> list[ReviewResult]:
+        """Apply a batch of reviewer verdicts; return a per-item result.
+
+        Accept promotes a record to ``active``; reject marks it ``superseded`` (a
+        retraction marker consistent with reconcile's DELETE, keeping the audit
+        trail rather than hard-deleting).  Idempotent: a record that is not
+        currently ``pending_review`` is left untouched and reported ``skipped``,
+        so a re-submitted decision can't resurrect a superseded record or
+        re-promote one.
+
+        Order-preserving and one result per decision.  All records are loaded in
+        a single query and the survivors written in one batched pass (see
+        :meth:`_save_records`) — the vector's ``status`` metadata flips alongside
+        the structured row because ``recall`` filters on that metadata.  Decisions
+        are evaluated in order against a shared in-memory view, so a duplicate id
+        decides once and then reports ``skipped`` — the first flip is visible to
+        the later occurrence.  Raises ``ValueError`` over :data:`MAX_REVIEW_BATCH`
+        rather than silently truncating.
+        """
+        if len(decisions) > MAX_REVIEW_BATCH:
+            raise ValueError(
+                f"review batch of {len(decisions)} exceeds the maximum of {MAX_REVIEW_BATCH}"
+            )
+        if not decisions:
+            return []
+        records = await self._load_records(
+            list(dict.fromkeys(d.memory_id for d in decisions))
+        )
+        by_id = {r.memory_id: r for r in records}
+        results: list[ReviewResult] = []
+        to_save: list[LongTermRecord] = []
+        for decision in decisions:
+            record = by_id.get(decision.memory_id)
+            if record is None:
+                outcome = ReviewOutcome.NOT_FOUND
+            elif record.status is not MemoryStatus.PENDING_REVIEW:
+                outcome = ReviewOutcome.SKIPPED
+            else:
+                record.status = (
+                    MemoryStatus.ACTIVE if decision.accept else MemoryStatus.SUPERSEDED
+                )
+                record.updated_at = _utcnow()
+                to_save.append(record)
+                outcome = (
+                    ReviewOutcome.ACCEPTED if decision.accept else ReviewOutcome.REJECTED
+                )
+            results.append(
+                ReviewResult(memory_id=decision.memory_id, outcome=outcome)
+            )
+        if to_save:
+            await self._save_records(to_save)
+        logger.info(
+            "[long_term] app=%s review_many: %d decision(s) applied, %d written",
+            self._app_id, len(results), len(to_save),
+        )
+        return results
 
     # ------------------------------------------------------------------
     # Promote (the ADD path)
@@ -650,6 +752,37 @@ class LongTermMemory:
                     embedding=embedding,
                     metadata=record.vector_metadata(),
                 )
+            ],
+        )
+
+    async def _save_records(self, records: list[LongTermRecord]) -> None:
+        """Batch-upsert structured rows and content vectors for *records*.
+
+        The batched mirror of :meth:`_save_record` for the review path, where a
+        whole gated batch flips status in one pass.  ``content`` is embedded in a
+        single call rather than once per record; review only changes ``status``,
+        so this re-embeds unchanged text — but one batch embed beats N round-trips
+        and the vector still has to be re-upserted because ``recall`` filters on
+        its ``status`` metadata and the store offers no metadata-only update.
+        """
+        if not records:
+            return
+        embeddings = await self._embedder.embed([r.content for r in records])
+        await self._ensure(len(embeddings[0]))
+        await self._structured.save(
+            self._structured_collection, [self._to_row(r) for r in records]
+        )
+        await self._vector.upsert(
+            self._vector_collection,
+            [
+                Chunk(
+                    chunk_id=r.memory_id,
+                    doc_id=r.memory_id,
+                    text=r.content,
+                    embedding=embedding,
+                    metadata=r.vector_metadata(),
+                )
+                for r, embedding in zip(records, embeddings)
             ],
         )
 

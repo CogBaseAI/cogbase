@@ -419,3 +419,43 @@ class MemoryCandidate(BaseModel):
     source_event_ids: list[EventRef] = Field(default_factory=list)
     evidence_snapshot: dict = Field(default_factory=dict)
     confidence: float | None = None
+
+
+# ---------------------------------------------------------------------------
+# Promotion review: the pending_review -> active gate for behaviour-affecting
+# kinds (docs/long-term-memory.md, build order step 6).  A reviewer clears the
+# pending queue in batches; these model one decision and its applied outcome.
+# ---------------------------------------------------------------------------
+
+
+class ReviewDecision(BaseModel):
+    """A reviewer's verdict on one gated record: accept (-> active) or reject."""
+
+    memory_id: str
+    # True accepts (promotes to ``active``); False rejects (marks ``superseded``).
+    accept: bool
+
+
+class ReviewOutcome(str, Enum):
+    """What :meth:`LongTermMemory.review` did with one decision.
+
+    ``accepted`` / ``rejected`` are the two terminal transitions; ``skipped``
+    and ``not_found`` make the batch path honest about decisions that did not
+    apply (a record already decided, or one that no longer exists) instead of
+    pretending the whole batch is atomic — there is no cross-record transaction
+    across the structured + vector stores anyway.
+    """
+
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    # The record exists but is not pending_review (already accepted/rejected) —
+    # the guard that keeps review idempotent and can't resurrect a superseded one.
+    SKIPPED = "skipped"
+    NOT_FOUND = "not_found"
+
+
+class ReviewResult(BaseModel):
+    """The applied outcome for one :class:`ReviewDecision` in a batch."""
+
+    memory_id: str
+    outcome: ReviewOutcome

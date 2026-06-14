@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -132,6 +133,54 @@ class SessionCloseResponse(BaseModel):
     task_id: str | None = Field(
         default=None, description="The distillation task id when one was enqueued."
     )
+
+
+class MemoryRecordResponse(BaseModel):
+    """A long-term memory record surfaced to a reviewer.
+
+    Includes the provenance (``source_event_ids`` / ``evidence_snapshot``) so a
+    reviewer can audit the evidence before promoting a gated record to active.
+    """
+
+    memory_id: str
+    kind: str
+    content: str
+    entities: list[str] = []
+    confidence: float
+    status: str
+    source_event_ids: list[dict] = []
+    evidence_snapshot: dict = {}
+    created_at: datetime
+    updated_at: datetime
+    expires_at: datetime | None = None
+
+
+class PendingMemoriesResponse(BaseModel):
+    memories: list[MemoryRecordResponse]
+
+
+class MemoryReviewItem(BaseModel):
+    memory_id: str
+    decision: Literal["accept", "reject"] = Field(
+        description="'accept' promotes the gated record to active; 'reject' marks it superseded."
+    )
+
+
+class MemoryReviewRequest(BaseModel):
+    decisions: list[MemoryReviewItem] = Field(
+        description="Per-record verdicts applied in one batch (server-capped)."
+    )
+
+
+class MemoryReviewResultItem(BaseModel):
+    memory_id: str
+    outcome: str = Field(
+        description="One of 'accepted' / 'rejected' / 'skipped' (not pending) / 'not_found'."
+    )
+
+
+class MemoryReviewResponse(BaseModel):
+    results: list[MemoryReviewResultItem]
 
 
 class ChunkResponse(BaseModel):

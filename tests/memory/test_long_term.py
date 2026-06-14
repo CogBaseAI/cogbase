@@ -16,12 +16,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from cogbase.embeddings.base import EmbeddingBase
-from cogbase.memory.long_term import LongTermMemory
+from cogbase.memory.long_term import MAX_REVIEW_BATCH, LongTermMemory
 from cogbase.memory.models import (
     EventRef,
     MemoryCandidate,
     MemoryKind,
     MemoryStatus,
+    ReviewDecision,
+    ReviewOutcome,
 )
 from cogbase.stores.scope import AppScope
 from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -406,3 +408,129 @@ async def test_recall_isolated_across_apps():
     # Different app partition → must not leak.
     hits = await svc_b.recall(query="tenant a secret preference")
     assert hits == []
+
+
+# ---------------------------------------------------------------------------
+# promotion review (pending_review -> active / superseded)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_list_pending_returns_gated_records_oldest_first():
+    svc = await _make_service()
+    first = await svc.promote(candidate=_candidate("user works at Acme"))
+    second = await svc.promote(candidate=_candidate("user is based in Berlin"))
+    # A preference auto-actives, so it must NOT appear in the pending queue.
+    await svc.promote(
+        candidate=_candidate("prefers concise answers", kind=MemoryKind.PREFERENCE),
+    )
+    pending = await svc.list_pending()
+    assert [r.memory_id for r in pending] == [first, second]
+    assert all(r.status is MemoryStatus.PENDING_REVIEW for r in pending)
+
+
+@pytest.mark.asyncio
+async def test_list_pending_filters_by_kind():
+    svc = await _make_service()
+    fact = await svc.promote(candidate=_candidate("user works at Acme", kind=MemoryKind.FACT))
+    await svc.promote(
+        candidate=_candidate("user corrected the spelling", kind=MemoryKind.CORRECTION),
+    )
+    pending = await svc.list_pending(kind=MemoryKind.FACT)
+    assert [r.memory_id for r in pending] == [fact]
+
+
+@pytest.mark.asyncio
+async def test_review_accept_makes_record_recallable():
+    svc = await _make_service()
+    mid = await svc.promote(candidate=_candidate("user works at Acme"))
+    # Gated → not recalled yet.
+    assert await svc.recall(query="user works at Acme") == []
+
+    [result] = await svc.review_many(
+        decisions=[ReviewDecision(memory_id=mid, accept=True)]
+    )
+    assert result.outcome is ReviewOutcome.ACCEPTED
+    assert (await svc._load_records([mid]))[0].status is MemoryStatus.ACTIVE
+    # The vector metadata flipped too, so recall now surfaces it.
+    hits = await svc.recall(query="user works at Acme")
+    assert [h.memory_id for h in hits] == [mid]
+
+
+@pytest.mark.asyncio
+async def test_review_reject_supersedes_and_stays_hidden():
+    svc = await _make_service()
+    mid = await svc.promote(candidate=_candidate("user works at Acme"))
+    [result] = await svc.review_many(
+        decisions=[ReviewDecision(memory_id=mid, accept=False)]
+    )
+    assert result.outcome is ReviewOutcome.REJECTED
+    assert (await svc._load_records([mid]))[0].status is MemoryStatus.SUPERSEDED
+    assert await svc.recall(query="user works at Acme") == []
+
+
+@pytest.mark.asyncio
+async def test_review_already_decided_is_skipped_and_idempotent():
+    svc = await _make_service()
+    mid = await svc.promote(candidate=_candidate("user works at Acme"))
+    await svc.review_many(decisions=[ReviewDecision(memory_id=mid, accept=True)])
+    # A re-submitted reject must not resurrect/supersede an already-active record.
+    [result] = await svc.review_many(
+        decisions=[ReviewDecision(memory_id=mid, accept=False)]
+    )
+    assert result.outcome is ReviewOutcome.SKIPPED
+    assert (await svc._load_records([mid]))[0].status is MemoryStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_review_unknown_id_is_not_found():
+    svc = await _make_service()
+    [result] = await svc.review_many(
+        decisions=[ReviewDecision(memory_id="nope", accept=True)]
+    )
+    assert result.outcome is ReviewOutcome.NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_review_many_applies_mixed_decisions():
+    svc = await _make_service()
+    accept_id = await svc.promote(candidate=_candidate("user works at Acme"))
+    reject_id = await svc.promote(candidate=_candidate("user is based in Berlin"))
+    results = await svc.review_many(
+        decisions=[
+            ReviewDecision(memory_id=accept_id, accept=True),
+            ReviewDecision(memory_id=reject_id, accept=False),
+            ReviewDecision(memory_id="missing", accept=True),
+        ]
+    )
+    assert [(r.memory_id, r.outcome) for r in results] == [
+        (accept_id, ReviewOutcome.ACCEPTED),
+        (reject_id, ReviewOutcome.REJECTED),
+        ("missing", ReviewOutcome.NOT_FOUND),
+    ]
+    assert (await svc._load_records([accept_id]))[0].status is MemoryStatus.ACTIVE
+    assert (await svc._load_records([reject_id]))[0].status is MemoryStatus.SUPERSEDED
+
+
+@pytest.mark.asyncio
+async def test_review_many_duplicate_id_decides_once():
+    svc = await _make_service()
+    mid = await svc.promote(candidate=_candidate("user works at Acme"))
+    results = await svc.review_many(
+        decisions=[
+            ReviewDecision(memory_id=mid, accept=True),
+            ReviewDecision(memory_id=mid, accept=False),
+        ]
+    )
+    assert [r.outcome for r in results] == [ReviewOutcome.ACCEPTED, ReviewOutcome.SKIPPED]
+    assert (await svc._load_records([mid]))[0].status is MemoryStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_review_many_over_cap_raises():
+    svc = await _make_service()
+    decisions = [
+        ReviewDecision(memory_id=f"m{i}", accept=True)
+        for i in range(MAX_REVIEW_BATCH + 1)
+    ]
+    with pytest.raises(ValueError):
+        await svc.review_many(decisions=decisions)

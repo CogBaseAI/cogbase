@@ -36,6 +36,11 @@ from api.models import (
     DocWorkflowResponse,
     FilterRequest,
     IngestDocumentsAcceptedResponse,
+    MemoryRecordResponse,
+    MemoryReviewRequest,
+    MemoryReviewResponse,
+    MemoryReviewResultItem,
+    PendingMemoriesResponse,
     QueryRequest,
     QueryResponse,
     SessionStartRequest,
@@ -760,6 +765,92 @@ async def close_session(
     return SessionCloseResponse(
         session_id=session_id, distillation="enqueued", task_id=task_id
     )
+
+
+# ---------------------------------------------------------------------------
+# Long-term memory review endpoints (the pending_review -> active gate)
+# ---------------------------------------------------------------------------
+
+
+def _to_memory_response(record) -> MemoryRecordResponse:
+    """Serialize a ``LongTermRecord`` (provenance included) for a reviewer."""
+    return MemoryRecordResponse.model_validate(record.model_dump(mode="json"))
+
+
+@router.get("/{app_name}/memory/pending", response_model=PendingMemoriesResponse)
+async def list_pending_memories(
+    app_name: str,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+    kind: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> PendingMemoriesResponse:
+    """List the gated long-term memories awaiting review (oldest first).
+
+    Behaviour-affecting kinds (facts, corrections) are promoted to
+    ``pending_review`` and stay out of recall until accepted here.
+    """
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    parsed_kind = _parse_memory_kind(kind)
+    try:
+        records = await app.pending_memories(kind=parsed_kind, limit=limit, offset=offset)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    return PendingMemoriesResponse(memories=[_to_memory_response(r) for r in records])
+
+
+@router.post("/{app_name}/memory/review", response_model=MemoryReviewResponse)
+async def review_memories(
+    app_name: str,
+    body: MemoryReviewRequest,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+) -> MemoryReviewResponse:
+    """Accept (-> active) or reject (-> superseded) gated memories in one batch.
+
+    Returns a per-item outcome: 'accepted' / 'rejected' / 'skipped' (a record no
+    longer pending) / 'not_found'.  The batch is server-capped; an over-cap
+    request is rejected with 422.
+    """
+    from cogbase.memory import ReviewDecision
+
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    decisions = [
+        ReviewDecision(memory_id=item.memory_id, accept=item.decision == "accept")
+        for item in body.decisions
+    ]
+    try:
+        results = await app.review_memories(decisions=decisions)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
+    return MemoryReviewResponse(
+        results=[
+            MemoryReviewResultItem(memory_id=r.memory_id, outcome=r.outcome.value)
+            for r in results
+        ]
+    )
+
+
+def _parse_memory_kind(kind: str | None):
+    """Resolve an optional ``kind`` query param to a ``MemoryKind`` or 422."""
+    if kind is None:
+        return None
+    from cogbase.memory import MemoryKind
+
+    try:
+        return MemoryKind(kind)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"invalid memory kind: {kind!r}",
+        )
 
 
 # ---------------------------------------------------------------------------

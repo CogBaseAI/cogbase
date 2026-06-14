@@ -21,7 +21,16 @@ from cogbase.stores.filters import Col
 from cogbase.workflows.context import render_value
 
 if TYPE_CHECKING:
-    from cogbase.memory import Distiller, EpisodicMemory, LongTermMemory, ShortTermMemory
+    from cogbase.memory import (
+        Distiller,
+        EpisodicMemory,
+        LongTermMemory,
+        LongTermRecord,
+        MemoryKind,
+        ReviewDecision,
+        ReviewResult,
+        ShortTermMemory,
+    )
     from cogbase.workflows.runner import WorkflowRunner
 
 logger = logging.getLogger(__name__)
@@ -362,6 +371,34 @@ class CogBaseApp:
     def distiller(self) -> "Distiller | None":
         """The offline distiller, if long-term memory is wired."""
         return self._distiller
+
+    async def pending_memories(
+        self,
+        *,
+        kind: "MemoryKind | None" = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> "list[LongTermRecord]":
+        """The gated long-term records awaiting review (oldest first).
+
+        Raises if long-term memory is not configured — the review surface is
+        meaningless without the store the gated records live in.
+        """
+        if self._long_term is None:
+            raise RuntimeError("long-term memory is not configured")
+        return await self._long_term.list_pending(kind=kind, limit=limit, offset=offset)
+
+    async def review_memories(
+        self, *, decisions: "list[ReviewDecision]"
+    ) -> "list[ReviewResult]":
+        """Apply a batch of accept/reject verdicts to gated records.
+
+        Raises ``RuntimeError`` when long-term memory is unconfigured and
+        ``ValueError`` when the batch exceeds the service's cap.
+        """
+        if self._long_term is None:
+            raise RuntimeError("long-term memory is not configured")
+        return await self._long_term.review_many(decisions=decisions)
 
     async def start_session(
         self,

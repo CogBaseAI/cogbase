@@ -25,6 +25,9 @@ from cogbase.memory.models import (
     MemoryRole,
     MemoryStatus,
     ReconcileOp,
+    ReviewDecision,
+    ReviewOutcome,
+    ReviewResult,
     RetrievalHit,
     RetrievalResultPayload,
     SessionCompactedPayload,
@@ -66,4 +69,7 @@ __all__ = [
     "MemoryKind",
     "MemoryStatus",
     "ReconcileOp",
+    "ReviewDecision",
+    "ReviewOutcome",
+    "ReviewResult",
 ]
