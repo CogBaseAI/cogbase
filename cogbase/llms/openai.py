@@ -61,6 +61,18 @@ class OpenAILLM(LLMBase):
         self._reasoning_effort = reasoning_effort
         self._context_window = context_window
         self._mini_context_window = mini_context_window or context_window
+        self._use_flex_tier = False
+
+    def enable_flex_tier(self) -> None:
+        """Use the cheaper "flex" service tier for gpt-5.4*/gpt-5.5* calls.
+
+        Tests/benchmarks only — call this explicitly to halve model price on the
+        eligible model families. Not wired into production config on purpose.
+        """
+        self._use_flex_tier = True
+
+    def is_flex_tier_enabled(self, model: str) -> bool:
+        return self._use_flex_tier and model.startswith(("gpt-5.4", "gpt-5.5"))
 
     def context_window(self, model: str | None = None) -> int:
         return self._mini_context_window if model == "mini" else self._context_window
@@ -203,7 +215,10 @@ class OpenAILLM(LLMBase):
         effective_reasoning_effort = reasoning_effort or self._reasoning_effort
         if effective_reasoning_effort is not None:
             kwargs["reasoning_effort"] = effective_reasoning_effort
-        # for benchmarks, when using gpt-5.4+ models, manually set service_tier to "flex" (half model price).
-        # gpt-4o-mini does not recognize "flex", don't set it.
-        # kwargs["service_tier"] = "flex"
+        # For tests/benchmarks only (opt-in via use_flex_tier): when using
+        # gpt-5.4*/gpt-5.5* models, set service_tier to "flex" (half model
+        # price). gpt-4o-mini and other models do not recognize "flex", so it is
+        # only applied to those model families.
+        if self.is_flex_tier_enabled(resolved_model):
+            kwargs["service_tier"] = "flex"
         return kwargs

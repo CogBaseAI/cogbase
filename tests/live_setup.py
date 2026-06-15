@@ -42,12 +42,14 @@ _system_cfg = _load_system_config()
 def make_llm():
     """Return a live LLM instance from .env.yaml, or None if not configured."""
     from cogbase.llms.factory import build_llm
-    if _system_cfg is not None and _system_cfg.llm is not None:
-        return build_llm(_system_cfg.llm)
-    if os.environ.get("OPENAI_API_KEY"):
-        from cogbase.config.models import LLMConfig
-        return build_llm(LLMConfig(model="gpt-5.4-mini", mini_model="gpt-5.4-mini", api_key=os.environ["OPENAI_API_KEY"]))
-    return None
+    if _system_cfg is None or _system_cfg.llm is None:
+        return None
+    llm = build_llm(_system_cfg.llm)
+
+    from cogbase.llms.openai import OpenAILLM
+    if isinstance(llm, OpenAILLM):
+        llm.enable_flex_tier()
+    return llm
 
 
 def make_embedding(*, dimensions: int | None = None):
@@ -56,13 +58,9 @@ def make_embedding(*, dimensions: int | None = None):
     Pass ``dimensions`` to override the vector size (e.g. for truncation tests).
     """
     from cogbase.embeddings.factory import build_embedding
-    if _system_cfg is not None and _system_cfg.embedding is not None:
-        cfg = _system_cfg.embedding
-    elif os.environ.get("OPENAI_API_KEY"):
-        from cogbase.config.models import EmbeddingConfig
-        cfg = EmbeddingConfig(model="text-embedding-3-small", api_key=os.environ["OPENAI_API_KEY"])
-    else:
+    if _system_cfg is None or _system_cfg.embedding is None:
         return None
+    cfg = _system_cfg.embedding
     if dimensions is not None:
         cfg = cfg.model_copy(update={"dimensions": dimensions})
     return build_embedding(cfg)
