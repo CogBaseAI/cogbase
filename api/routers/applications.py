@@ -41,6 +41,7 @@ from api.models import (
     MemoryReviewResponse,
     MemoryReviewResultItem,
     PendingMemoriesResponse,
+    QueryMemoryResponse,
     QueryRequest,
     QueryResponse,
     SessionStartRequest,
@@ -653,6 +654,7 @@ async def query_application(
         structured_records=result.structured_records,
         chunks=[ChunkResponse(**c.model_dump(exclude={"embedding"})) for c in result.chunks],
         document_slices=[DocumentSliceResponse(**s.model_dump()) for s in result.document_slices],
+        memories=[_to_query_memory(m) for m in result.memories],
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         session_id=body.session_id,
@@ -670,7 +672,7 @@ async def query_application_stream(
     """Stream a natural-language query response as Server-Sent Events.
 
     Token events: ``{"token": "<text>"}``
-    Final event:  ``{"result": {answer, structured_records, chunks}}``
+    Final event:  ``{"result": {answer, structured_records, chunks, memories}}``
     Sentinel:     ``data: [DONE]``
     """
     app = await _get_active_app(app_name, app_cache, system_store, system_resources)
@@ -687,6 +689,7 @@ async def query_application_stream(
                             "answer": item.answer,
                             "structured_records": item.structured_records,
                             "chunks": [c.model_dump(exclude={"embedding"}) for c in item.chunks],
+                            "memories": [_to_query_memory(m).model_dump() for m in item.memories],
                             "input_tokens": item.input_tokens,
                             "output_tokens": item.output_tokens,
                         }
@@ -775,6 +778,16 @@ async def close_session(
 def _to_memory_response(record) -> MemoryRecordResponse:
     """Serialize a ``LongTermRecord`` (provenance included) for a reviewer."""
     return MemoryRecordResponse.model_validate(record.model_dump(mode="json"))
+
+
+def _to_query_memory(record) -> QueryMemoryResponse:
+    """Project a ``LongTermRecord`` the answer drew on for a query response."""
+    return QueryMemoryResponse(
+        memory_id=record.memory_id,
+        kind=record.kind.value,
+        content=record.content,
+        entities=list(record.entities),
+    )
 
 
 @router.get("/{app_name}/memory/pending", response_model=PendingMemoriesResponse)

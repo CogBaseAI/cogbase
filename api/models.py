@@ -199,11 +199,26 @@ class DocumentSliceResponse(BaseModel):
     text: str
 
 
+class QueryMemoryResponse(BaseModel):
+    """A long-term memory the answer drew on.
+
+    A query-facing projection of ``LongTermRecord`` — only the fields useful for
+    explaining the answer, without the reviewer-facing provenance carried by
+    ``MemoryRecordResponse``.
+    """
+
+    memory_id: str
+    kind: str
+    content: str
+    entities: list[str] = []
+
+
 class QueryResponse(BaseModel):
     answer: str
     structured_records: list[dict] = []
     chunks: list[ChunkResponse] = []
     document_slices: list[DocumentSliceResponse] = []
+    memories: list[QueryMemoryResponse] = []
     input_tokens: int = 0
     output_tokens: int = 0
     session_id: str | None = Field(

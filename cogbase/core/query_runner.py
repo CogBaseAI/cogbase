@@ -72,7 +72,7 @@ from cogbase.llms.compaction import (
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, CompletionResult, LLMBase, SystemTool, ToolDefinition
-from cogbase.memory import EpisodicMemory, EventRef, LongTermMemory, MemoryKind, ShortTermMemory
+from cogbase.memory import EpisodicMemory, EventRef, LongTermMemory, LongTermRecord, MemoryKind, ShortTermMemory
 from cogbase.stores import CollectionSchema, DocumentStoreBase, Filter, Op, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 
 logger = logging.getLogger(__name__)
@@ -111,6 +111,9 @@ class QueryResult(BaseModel):
         structured_records:  All records returned by structured_lookup calls.
         chunks:              All chunks returned by vector_search calls.
         document_slices:     Document text slices fetched by read_document calls.
+        memories:            Long-term memories that informed the answer — those
+                             recalled into context and any fetched via
+                             memory_lookup. Empty when no memory was used.
         passthrough:         True when records were returned directly without
                              LLM synthesis (token threshold exceeded).
         input_tokens:        Total prompt tokens consumed across all LLM calls.
@@ -121,6 +124,7 @@ class QueryResult(BaseModel):
     structured_records: list[dict] = []
     chunks: list[Chunk] = []
     document_slices: list[DocumentSlice] = []
+    memories: list[LongTermRecord] = []
     passthrough: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
@@ -710,24 +714,29 @@ class QueryRunner:
             messages.extend(history or [])
             messages.append({"role": "user", "content": user_input})
 
+        # Memories that informed this answer: recalled (push) below, plus any
+        # fetched by memory_lookup (pull) during the loop.  Surfaced on the final
+        # QueryResult so the caller can show what memory the answer drew on.
+        all_records: list[dict] = []
+        all_chunks: list[Chunk] = []
+        all_slices: list[DocumentSlice] = []
+        all_memories: list[LongTermRecord] = []
+
         # Long-term recall: relevant curated memories injected as a system
         # block marked memory-derived, so the evidence policy keeps them distinct
         # from document-backed claims.  Placed right after slot 0 (the system
         # prompt is written there below) and before the conversation turns.
         if long_term_on:
-            # TODO add long-term memory reference in response
             # Recall against the conversation tail, not the bare input: a short
             # follow-up ("what about the second one?") carries no retrievable
             # signal on its own.
             prior = context if memory_active else (history or [])
             recall_query = self._compose_recall_query(user_input, prior)
-            memory_block = await self._recall_memory_block(recall_query)
+            memory_block, recalled = await self._recall_memory_block(recall_query)
             if memory_block:
                 messages.insert(1, {"role": "system", "content": memory_block})
+                self._merge_memories(all_memories, recalled)
 
-        all_records: list[dict] = []
-        all_chunks: list[Chunk] = []
-        all_slices: list[DocumentSlice] = []
         total_input_tokens: int = 0
         total_output_tokens: int = 0
 
@@ -784,6 +793,7 @@ class QueryRunner:
                     structured_records=all_records,
                     chunks=_filter_cited_chunks(all_chunks, cited_ids),
                     document_slices=_filter_cited_slices(all_slices, cited_ids),
+                    memories=all_memories,
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                 )
@@ -835,6 +845,7 @@ class QueryRunner:
                             structured_records=all_records,
                             chunks=all_chunks,
                             document_slices=all_slices,
+                            memories=all_memories,
                             passthrough=True,
                             input_tokens=total_input_tokens,
                             output_tokens=total_output_tokens,
@@ -849,7 +860,8 @@ class QueryRunner:
                     if doc_slice is not None:
                         all_slices.append(doc_slice)
                 elif name == "memory_lookup":
-                    tool_output = await self._run_memory_lookup(inputs)
+                    tool_output, looked_up = await self._run_memory_lookup(inputs)
+                    self._merge_memories(all_memories, looked_up)
                 else:
                     tool_output = await self._execute_tool(name, inputs, current_skill)
                     logger.info("[runner] execute_tool done: %s", tool_output[:300])
@@ -876,6 +888,7 @@ class QueryRunner:
             structured_records=all_records[:2],
             chunks=all_chunks[:2],
             document_slices=all_slices[:2],
+            memories=all_memories[:2],
             input_tokens=total_input_tokens,
             output_tokens=total_output_tokens,
         )
@@ -1060,14 +1073,16 @@ class QueryRunner:
     # Long-term memory recall
     # ------------------------------------------------------------------
 
-    async def _run_memory_lookup(self, inputs: dict) -> str:
+    async def _run_memory_lookup(self, inputs: dict) -> tuple[str, list[LongTermRecord]]:
         """Execute the memory_lookup tool against the long-term store.
 
+        Returns the formatted tool output and the records it surfaced (empty on
+        error or no match), so the caller can attach them to the QueryResult.
         ``status=active`` filtering is enforced inside ``LongTermMemory.lookup``,
         never from LLM-supplied arguments.
         """
         if self._long_term is None:
-            return "memory_lookup is unavailable (no long-term memory configured)"
+            return "memory_lookup is unavailable (no long-term memory configured)", []
 
         kind: MemoryKind | None = None
         raw_kind = inputs.get("kind")
@@ -1075,12 +1090,12 @@ class QueryRunner:
             try:
                 kind = MemoryKind(raw_kind)
             except ValueError:
-                return f"memory_lookup error: unknown kind '{raw_kind}'"
+                return f"memory_lookup error: unknown kind '{raw_kind}'", []
         query = str(inputs.get("query") or "") or None
         entities = [str(e) for e in (inputs.get("entities") or [])]
         limit = min(int(inputs.get("limit") or 10), 20)
         if not query and not kind and not entities:
-            return "memory_lookup error: provide at least one of query / kind / entities"
+            return "memory_lookup error: provide at least one of query / kind / entities", []
 
         try:
             memories = await self._long_term.lookup(
@@ -1088,11 +1103,11 @@ class QueryRunner:
             )
         except Exception as exc:
             logger.exception("[runner] memory_lookup.error")
-            return f"memory_lookup error: {exc}"
+            return f"memory_lookup error: {exc}", []
 
         logger.info("[runner] memory_lookup.result memories=%d", len(memories))
         if not memories:
-            return "(no matching memories)"
+            return "(no matching memories)", []
         lines = "\n".join(
             f"- [{m.kind.value}] {m.content}"
             + (f" (entities: {', '.join(m.entities)})" if m.entities else "")
@@ -1100,8 +1115,18 @@ class QueryRunner:
         )
         return (
             "Memories (memory-derived background knowledge — NOT cited document "
-            "evidence, do not present these as sourced facts):\n" + lines
+            "evidence, do not present these as sourced facts):\n" + lines,
+            memories,
         )
+
+    @staticmethod
+    def _merge_memories(acc: list[LongTermRecord], new: list[LongTermRecord]) -> None:
+        """Append *new* memories to *acc*, skipping ones already present by id."""
+        seen = {m.memory_id for m in acc}
+        for m in new:
+            if m.memory_id not in seen:
+                acc.append(m)
+                seen.add(m.memory_id)
 
     @staticmethod
     def _compose_recall_query(
@@ -1146,25 +1171,28 @@ class QueryRunner:
         parts.append(user_input)
         return "\n".join(parts)
 
-    async def _recall_memory_block(self, query: str) -> str | None:
+    async def _recall_memory_block(self, query: str) -> tuple[str | None, list[LongTermRecord]]:
         """Recall memories relevant to *query* and format them as a system block.
 
-        Returns ``None`` (inject nothing) when nothing is recalled or recall
-        fails — long-term recall is an enrichment, never allowed to break a turn.
+        Returns the block (or ``None`` to inject nothing) together with the
+        recalled records, so the caller can surface them on the QueryResult.
+        Yields ``(None, [])`` when nothing is recalled or recall fails —
+        long-term recall is an enrichment, never allowed to break a turn.
         """
         try:
             memories = await self._long_term.recall(query=query)
         except Exception:
             logger.warning("[runner] long-term recall failed", exc_info=True)
-            return None
+            return None, []
         if not memories:
-            return None
+            return None, []
         lines = "\n".join(f"- [{m.kind.value}] {m.content}" for m in memories)
         logger.info("[runner] long-term recall injected %d memories", len(memories))
         return (
             "Relevant long-term memory about the user/project (recalled; "
             "memory-derived background knowledge — NOT cited document evidence, "
-            "do not present these as sourced facts):\n" + lines
+            "do not present these as sourced facts):\n" + lines,
+            memories,
         )
 
     # ------------------------------------------------------------------

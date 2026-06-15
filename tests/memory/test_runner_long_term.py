@@ -14,7 +14,7 @@ import pytest
 from cogbase.core.query_runner import MemoryTiers, QueryRunner, RetrievalResources
 from cogbase.llms.base import CompletionResult
 from cogbase.memory.long_term import LongTermMemory
-from cogbase.memory.models import MemoryCandidate, MemoryKind
+from cogbase.memory.models import LongTermRecord, MemoryCandidate, MemoryKind
 from cogbase.stores.scope import AppScope
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSMemoryVectorStore
@@ -174,11 +174,14 @@ async def test_memory_lookup_tool_returns_matching_memories():
         memory=MemoryTiers(long_term=lt),
     )
 
-    output = await runner._run_memory_lookup({"entities": ["Acme Corp"]})
+    output, memories = await runner._run_memory_lookup({"entities": ["Acme Corp"]})
     assert "user works at Acme Corp" in output
     assert "memory-derived" in output
+    assert [m.content for m in memories] == ["user works at Acme Corp"]
 
-    assert await runner._run_memory_lookup({"query": "unrelated topic"}) is not None
+    output, memories = await runner._run_memory_lookup({"query": "unrelated topic"})
+    assert output is not None
+    assert all(isinstance(m, LongTermRecord) for m in memories)
 
 
 @pytest.mark.asyncio
@@ -190,5 +193,5 @@ async def test_memory_lookup_tool_rejects_empty_and_bad_arguments():
         resources=RetrievalResources(document_store=MagicMock()),
         memory=MemoryTiers(long_term=lt),
     )
-    assert "error" in await runner._run_memory_lookup({})
-    assert "error" in await runner._run_memory_lookup({"kind": "nonsense"})
+    assert "error" in (await runner._run_memory_lookup({}))[0]
+    assert "error" in (await runner._run_memory_lookup({"kind": "nonsense"}))[0]
