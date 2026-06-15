@@ -50,8 +50,11 @@ class ScopedVectorStore(VectorStoreBase):
     async def delete_collection(self, collection: str) -> None:
         await self._inner.delete_collection(self._c(collection))
 
-    async def delete(self, collection: str, doc_id: str) -> None:
-        await self._inner.delete(self._c(collection), doc_id)
+    async def delete(self, collection: str, chunk_ids: list[str]) -> None:
+        await self._inner.delete(self._c(collection), chunk_ids)
+
+    async def delete_doc(self, collection: str, doc_id: str) -> None:
+        await self._inner.delete_doc(self._c(collection), doc_id)
 
 
 class ScopedStructuredStore(StructuredStoreBase):

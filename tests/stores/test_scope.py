@@ -225,7 +225,22 @@ async def test_faiss_scoped_delete_isolated():
     await a.upsert("chunks", [Chunk(chunk_id="ca", doc_id="d1", text="t", embedding=[1.0, 0.0])])
     await b.upsert("chunks", [Chunk(chunk_id="cb", doc_id="d1", text="t", embedding=[0.0, 1.0])])
 
-    await a.delete("chunks", "d1")
+    await a.delete("chunks", ["ca"])
+
+    assert raw.ntotal("app_a__chunks") == 0
+    assert raw.ntotal("app_b__chunks") == 1
+
+
+async def test_faiss_scoped_delete_doc_isolated():
+    raw = FAISSMemoryVectorStore()
+    a = raw.with_scope(AppScope(app_id="app_a"))
+    b = raw.with_scope(AppScope(app_id="app_b"))
+    await a.create_collection(VSCHEMA)
+    await b.create_collection(VSCHEMA)
+    await a.upsert("chunks", [Chunk(chunk_id="ca", doc_id="d1", text="t", embedding=[1.0, 0.0])])
+    await b.upsert("chunks", [Chunk(chunk_id="cb", doc_id="d1", text="t", embedding=[0.0, 1.0])])
+
+    await a.delete_doc("chunks", "d1")
 
     assert raw.ntotal("app_a__chunks") == 0
     assert raw.ntotal("app_b__chunks") == 1

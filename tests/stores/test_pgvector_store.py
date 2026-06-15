@@ -220,42 +220,74 @@ async def test_upsert_does_not_duplicate(store):
 
 
 # ---------------------------------------------------------------------------
-# Delete
+# delete (record-level)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_delete_removes_doc_chunks(store):
+async def test_delete_removes_only_listed_chunks(store):
+    await store.upsert(COLLECTION, [
+        make_chunk(doc_id="doc-1", chunk_id="m1", embedding=[1.0, 0.0, 0.0, 0.0]),
+        make_chunk(doc_id="doc-1", chunk_id="m2", embedding=[0.9, 0.1, 0.0, 0.0]),
+        make_chunk(doc_id="doc-2", chunk_id="m3", embedding=[0.0, 1.0, 0.0, 0.0]),
+    ])
+    await store.delete(COLLECTION, ["m1", "m3"])
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=10)
+    assert [r.chunk_id for r in results] == ["m2"]
+
+
+@pytest.mark.asyncio
+async def test_delete_unknown_id_is_a_no_op(store):
+    await store.upsert(COLLECTION, [make_chunk(chunk_id="m1", embedding=[1.0, 0.0, 0.0, 0.0])])
+    await store.delete(COLLECTION, ["nonexistent"])
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5)
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_empty_list_is_a_no_op(store):
+    await store.upsert(COLLECTION, [make_chunk(chunk_id="m1", embedding=[1.0, 0.0, 0.0, 0.0])])
+    await store.delete(COLLECTION, [])
+    results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5)
+    assert len(results) == 1
+
+
+# ---------------------------------------------------------------------------
+# delete_doc (document-level)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_delete_doc_removes_doc_chunks(store):
     await store.upsert(COLLECTION, [
         make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0]),
         make_chunk(doc_id="doc-1", embedding=[0.9, 0.1, 0.0, 0.0]),
         make_chunk(doc_id="doc-2", embedding=[0.0, 1.0, 0.0, 0.0]),
     ])
-    await store.delete(COLLECTION, "doc-1")
+    await store.delete_doc(COLLECTION, "doc-1")
     results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=10)
     assert all(r.doc_id == "doc-2" for r in results)
     assert len(results) == 1
 
 
 @pytest.mark.asyncio
-async def test_delete_unknown_doc_is_a_no_op(store):
+async def test_delete_doc_unknown_doc_is_a_no_op(store):
     chunk = make_chunk(embedding=[1.0, 0.0, 0.0, 0.0])
     await store.upsert(COLLECTION, [chunk])
-    await store.delete(COLLECTION, "nonexistent-doc")
+    await store.delete_doc(COLLECTION, "nonexistent-doc")
     results = await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5)
     assert len(results) == 1
 
 
 @pytest.mark.asyncio
-async def test_delete_all_chunks_leaves_empty_store(store):
+async def test_delete_doc_all_chunks_leaves_empty_store(store):
     await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0])])
-    await store.delete(COLLECTION, "doc-1")
+    await store.delete_doc(COLLECTION, "doc-1")
     assert await store.search(COLLECTION, "", [1.0, 0.0, 0.0, 0.0], top_k=5) == []
 
 
 @pytest.mark.asyncio
-async def test_upsert_after_delete_works(store):
+async def test_upsert_after_delete_doc_works(store):
     await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0])])
-    await store.delete(COLLECTION, "doc-1")
+    await store.delete_doc(COLLECTION, "doc-1")
     new_chunk = make_chunk(doc_id="doc-2", embedding=[0.0, 1.0, 0.0, 0.0])
     await store.upsert(COLLECTION, [new_chunk])
     results = await store.search(COLLECTION, "", [0.0, 1.0, 0.0, 0.0], top_k=1)

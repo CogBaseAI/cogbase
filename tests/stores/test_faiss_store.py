@@ -52,7 +52,13 @@ async def test_search_without_create_collection_raises():
 async def test_delete_without_create_collection_raises():
     store = FAISSMemoryVectorStore()
     with pytest.raises(KeyError, match=COLLECTION):
-        await store.delete(COLLECTION, "doc-1")
+        await store.delete(COLLECTION, ["m1"])
+
+
+async def test_delete_doc_without_create_collection_raises():
+    store = FAISSMemoryVectorStore()
+    with pytest.raises(KeyError, match=COLLECTION):
+        await store.delete_doc(COLLECTION, "doc-1")
 
 
 async def test_create_collection_is_idempotent():
@@ -175,7 +181,47 @@ async def test_upsert_replaces_existing_chunk():
 # Delete
 # ------------------------------------------------------------------
 
-async def test_delete_removes_doc_chunks():
+async def test_delete_removes_only_listed_chunks():
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(COLLECTION, dim=2))
+    c1 = make_chunk(doc_id="doc-1", chunk_id="m1", embedding=[1.0, 0.0])
+    c2 = make_chunk(doc_id="doc-1", chunk_id="m2", embedding=[0.9, 0.1])
+    c3 = make_chunk(doc_id="doc-2", chunk_id="m3", embedding=[0.0, 1.0])
+    await store.upsert(COLLECTION, [c1, c2, c3])
+    await store.delete(COLLECTION, ["m1", "m3"])
+    assert store.ntotal(COLLECTION) == 1
+    results = await store.search(COLLECTION, "q", [1.0, 0.0], top_k=5)
+    assert [r.chunk_id for r in results] == ["m2"]
+
+
+async def test_delete_ignores_unknown_ids():
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(COLLECTION, dim=2))
+    await store.upsert(COLLECTION, [make_chunk(chunk_id="m1", embedding=[1.0, 0.0])])
+    await store.delete(COLLECTION, ["does-not-exist"])
+    assert store.ntotal(COLLECTION) == 1
+
+
+async def test_delete_empty_list_is_a_no_op():
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(COLLECTION, dim=2))
+    await store.upsert(COLLECTION, [make_chunk(chunk_id="m1", embedding=[1.0, 0.0])])
+    await store.delete(COLLECTION, [])
+    assert store.ntotal(COLLECTION) == 1
+
+
+async def test_upsert_after_delete_works():
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(COLLECTION, dim=2))
+    await store.upsert(COLLECTION, [make_chunk(chunk_id="m1", embedding=[1.0, 0.0])])
+    await store.delete(COLLECTION, ["m1"])
+    new_chunk = make_chunk(chunk_id="m2", embedding=[0.0, 1.0])
+    await store.upsert(COLLECTION, [new_chunk])
+    results = await store.search(COLLECTION, "q", [0.0, 1.0], top_k=1)
+    assert results[0].chunk_id == "m2"
+
+
+async def test_delete_doc_removes_doc_chunks():
     store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [
@@ -183,34 +229,34 @@ async def test_delete_removes_doc_chunks():
         make_chunk(doc_id="doc-1", embedding=[0.9, 0.1]),
         make_chunk(doc_id="doc-2", embedding=[0.0, 1.0]),
     ])
-    await store.delete(COLLECTION, "doc-1")
+    await store.delete_doc(COLLECTION, "doc-1")
     assert store.ntotal(COLLECTION) == 1
     results = await store.search(COLLECTION, "q", [1.0, 0.0], top_k=5)
     assert all(r.doc_id == "doc-2" for r in results)
 
 
-async def test_delete_unknown_doc_is_a_no_op():
+async def test_delete_doc_unknown_doc_is_a_no_op():
     store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(embedding=[1.0, 0.0])])
-    await store.delete(COLLECTION, "nonexistent-doc")
+    await store.delete_doc(COLLECTION, "nonexistent-doc")
     assert store.ntotal(COLLECTION) == 1
 
 
-async def test_delete_all_chunks_leaves_empty_store():
+async def test_delete_doc_all_chunks_leaves_empty_store():
     store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])])
-    await store.delete(COLLECTION, "doc-1")
+    await store.delete_doc(COLLECTION, "doc-1")
     assert store.ntotal(COLLECTION) == 0
     assert await store.search(COLLECTION, "q", [1.0, 0.0], top_k=5) == []
 
 
-async def test_upsert_after_delete_works():
+async def test_upsert_after_delete_doc_works():
     store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [make_chunk(doc_id="doc-1", embedding=[1.0, 0.0])])
-    await store.delete(COLLECTION, "doc-1")
+    await store.delete_doc(COLLECTION, "doc-1")
     new_chunk = make_chunk(doc_id="doc-2", embedding=[0.0, 1.0])
     await store.upsert(COLLECTION, [new_chunk])
     results = await store.search(COLLECTION, "q", [0.0, 1.0], top_k=1)
@@ -361,7 +407,7 @@ async def test_load_restores_search_order(tmp_path):
     assert results[1].doc_id == "b"
 
 
-async def test_delete_after_load(tmp_path):
+async def test_delete_doc_after_load(tmp_path):
     store = FAISSVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await store.upsert(COLLECTION, [
@@ -372,10 +418,32 @@ async def test_delete_after_load(tmp_path):
 
     loaded = FAISSVectorStore()
     await loaded.load(tmp_path / "store")
-    await loaded.delete(COLLECTION, "doc-1")
+    await loaded.delete_doc(COLLECTION, "doc-1")
     assert loaded.ntotal(COLLECTION) == 1
     results = await loaded.search(COLLECTION, "q", [0.0, 1.0], top_k=1)
     assert results[0].doc_id == "doc-2"
+
+
+async def test_delete_after_load_persists(tmp_path):
+    store = FAISSVectorStore()
+    await store.create_collection(make_schema(COLLECTION, dim=2))
+    await store.upsert(COLLECTION, [
+        make_chunk(doc_id="doc-1", chunk_id="m1", embedding=[1.0, 0.0]),
+        make_chunk(doc_id="doc-1", chunk_id="m2", embedding=[0.0, 1.0]),
+    ])
+    await store.save(tmp_path / "store")
+
+    # Constructed with the path so mutations persist back to the same dir.
+    loaded = FAISSVectorStore(tmp_path / "store")
+    await loaded.delete(COLLECTION, ["m1"])
+    assert loaded.ntotal(COLLECTION) == 1
+
+    # The deletion must survive a reload from disk.
+    reloaded = FAISSVectorStore()
+    await reloaded.load(tmp_path / "store")
+    assert reloaded.ntotal(COLLECTION) == 1
+    results = await reloaded.search(COLLECTION, "q", [0.0, 1.0], top_k=5)
+    assert [r.chunk_id for r in results] == ["m2"]
 
 
 async def test_upsert_after_load(tmp_path):

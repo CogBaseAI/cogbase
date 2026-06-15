@@ -402,7 +402,8 @@ async def test_run_retrieval_vector_search_populates_chunks():
         async def upsert(self, collection, chunks): pass
         async def search(self, collection, query_text, embedding, top_k):
             return [Chunk(chunk_id="c1", doc_id="d1", text="relevant passage", embedding=[0.1]*4)]
-        async def delete(self, collection, doc_id): pass
+        async def delete(self, collection, chunk_ids): pass
+        async def delete_doc(self, collection, doc_id): pass
         async def delete_collection(self, collection): pass
         async def create_collection(self, schema): pass
 
@@ -454,7 +455,8 @@ def test_tool_defs_vector_only():
     class _V(VectorStoreBase):
         async def upsert(self, c, chunks): pass
         async def search(self, c, e, k): return []
-        async def delete(self, c, d): pass
+        async def delete(self, c, ids): pass
+        async def delete_doc(self, c, d): pass
         async def delete_collection(self, c): pass
         async def create_collection(self, s): pass
 
@@ -805,7 +807,8 @@ def _fake_vector_store_tracking(return_chunks):
             _Store.called_top_k.append(top_k)
             return return_chunks[:top_k]
 
-        async def delete(self, collection, doc_id): pass
+        async def delete(self, collection, chunk_ids): pass
+        async def delete_doc(self, collection, doc_id): pass
         async def delete_collection(self, collection): pass
         async def create_collection(self, schema): pass
 
@@ -886,7 +889,8 @@ async def test_run_retrieval_second_vector_search_skips_first_results():
                 return [seen_chunk]
             # Second call: return both so we can verify seen_chunk is excluded.
             return [seen_chunk, new_chunk]
-        async def delete(self, c, d): pass
+        async def delete(self, c, ids): pass
+        async def delete_doc(self, c, d): pass
         async def delete_collection(self, c): pass
         async def create_collection(self, s): pass
 
@@ -998,7 +1002,8 @@ def _fake_vector_store_with_chunks(return_chunks):
         async def upsert(self, collection, chunks): pass
         async def search(self, collection, query_text, embedding, top_k):
             return return_chunks
-        async def delete(self, collection, doc_id): pass
+        async def delete(self, collection, chunk_ids): pass
+        async def delete_doc(self, collection, doc_id): pass
         async def delete_collection(self, collection): pass
         async def create_collection(self, schema): pass
 

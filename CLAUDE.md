@@ -89,7 +89,8 @@ class StructuredStoreBase:
 class VectorStoreBase:
     async def upsert(self, collection: str, chunks: list[Chunk]) -> None: ...
     async def search(self, collection: str, query: str, query_embedding: list[float], top_k: int) -> list[Chunk]: ...
-    async def delete(self, collection: str, doc_id: str) -> None: ...
+    async def delete(self, collection: str, chunk_ids: list[str]) -> None: ...  # record-level: a list of chunks
+    async def delete_doc(self, collection: str, doc_id: str) -> None: ...        # document-level: all chunks of a doc
 ```
 
 All public/abstract methods are async. CPU-bound implementations use `run_in_executor`.

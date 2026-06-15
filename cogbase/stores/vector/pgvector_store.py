@@ -237,7 +237,21 @@ class PGVectorStore(VectorStoreBase):
             rows = await conn.fetch(sql, *params)
         return [_from_row(row, include_embedding, include_metadata) for row in rows]
 
-    async def delete(self, collection: str, doc_id: str) -> None:
+    async def delete(self, collection: str, chunk_ids: list[str]) -> None:
+        """Remove the chunks identified by ``chunk_ids`` from ``collection``.
+
+        ``chunk_id`` values not present are ignored; an empty list is a no-op.
+        """
+        if not chunk_ids:
+            return
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                f'DELETE FROM "{self._c(collection)}" WHERE chunk_id = ANY($1)',
+                list(chunk_ids),
+            )
+
+    async def delete_doc(self, collection: str, doc_id: str) -> None:
         """Remove all chunks for ``doc_id`` from ``collection``."""
         pool = self._get_pool()
         async with pool.acquire() as conn:

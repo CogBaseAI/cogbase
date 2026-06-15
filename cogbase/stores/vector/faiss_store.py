@@ -163,25 +163,31 @@ class FAISSMemoryVectorStore(VectorStoreBase):
                 break
         return results
 
-    async def delete(self, collection: str, doc_id: str) -> None:
-        """Remove all chunks belonging to ``doc_id`` and rebuild the index.
+    async def delete(self, collection: str, chunk_ids: list[str]) -> None:
+        """Remove the chunks identified by ``chunk_ids``.
+
+        ``chunk_id`` values not present in the collection are ignored; an empty
+        list is a no-op.
+
+        Raises:
+            KeyError: If *collection* has not been created via ``create_collection``.
+        """
+        if not chunk_ids:
+            return
+        state = self._get_collection(collection)
+        if _remove_chunk_ids(state, chunk_ids):
+            await self._after_mutation()
+
+    async def delete_doc(self, collection: str, doc_id: str) -> None:
+        """Remove all chunks belonging to ``doc_id``.
 
         Raises:
             KeyError: If *collection* has not been created via ``create_collection``.
         """
         state = self._get_collection(collection)
         targets = [cid for cid, c in state.chunks.items() if c.doc_id == doc_id]
-        if not targets:
-            return
-
-        faiss_ids = [state.id_map.pop(cid) for cid in targets]
-        for fid in faiss_ids:
-            state.id_rev.pop(fid, None)
-        for cid in targets:
-            state.chunks.pop(cid)
-
-        _rebuild(state)
-        await self._after_mutation()
+        if _remove_chunk_ids(state, targets):
+            await self._after_mutation()
 
     # ------------------------------------------------------------------
     # Properties
@@ -262,9 +268,13 @@ class FAISSVectorStore(FAISSMemoryVectorStore):
         await self._ensure_loaded()
         return await super().search(collection, query, query_embedding, top_k, filters, fields)
 
-    async def delete(self, collection: str, doc_id: str) -> None:
+    async def delete(self, collection: str, chunk_ids: list[str]) -> None:
         await self._ensure_loaded()
-        await super().delete(collection, doc_id)
+        await super().delete(collection, chunk_ids)
+
+    async def delete_doc(self, collection: str, doc_id: str) -> None:
+        await self._ensure_loaded()
+        await super().delete_doc(collection, doc_id)
 
     async def save(self, path: str | Path | None = None) -> None:
         """Persist all collections (FAISS indices + chunk metadata) to disk.
@@ -348,25 +358,24 @@ def _remove_faiss_ids(state: _CollectionState, faiss_ids: list[int]) -> None:
     state.index.remove_ids(faiss.IDSelectorBatch(ids_arr))
 
 
-def _rebuild(state: _CollectionState) -> None:
-    state.index = _make_index(state.schema.dimensions)
-    state.id_map.clear()
-    state.id_rev.clear()
-    state.next_id = 0
+def _remove_chunk_ids(state: _CollectionState, chunk_ids: list[str]) -> list[int]:
+    """Drop the given ``chunk_ids`` from *state* and its FAISS index.
 
-    chunks_with_emb = [c for c in state.chunks.values() if c.embedding is not None]
-    if not chunks_with_emb:
-        return
-
-    vectors = np.array([c.embedding for c in chunks_with_emb], dtype=np.float32)
-    faiss.normalize_L2(vectors)
-    faiss_ids = np.arange(len(chunks_with_emb), dtype=np.int64)
-    state.index.add_with_ids(vectors, faiss_ids)
-
-    for chunk, fid in zip(chunks_with_emb, faiss_ids.tolist()):
-        state.id_map[chunk.chunk_id] = fid
-        state.id_rev[fid] = chunk.chunk_id
-    state.next_id = len(chunks_with_emb)
+    Unknown ``chunk_id`` values are ignored. Returns the FAISS ids that were
+    actually removed (empty when nothing matched), so callers can skip the
+    persistence hook on a no-op.
+    """
+    faiss_ids: list[int] = []
+    for cid in chunk_ids:
+        fid = state.id_map.pop(cid, None)
+        if fid is None:
+            continue
+        state.id_rev.pop(fid, None)
+        state.chunks.pop(cid, None)
+        faiss_ids.append(fid)
+    if faiss_ids:
+        _remove_faiss_ids(state, faiss_ids)
+    return faiss_ids
 
 
 def _make_index(dim: int) -> faiss.Index:

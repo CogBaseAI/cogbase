@@ -756,7 +756,7 @@ class LongTermMemory:
         if record.status is MemoryStatus.PENDING_REVIEW:
             return
         if record.status is MemoryStatus.SUPERSEDED:
-            await self._vector.delete(self._vector_collection, record.memory_id)
+            await self._vector.delete(self._vector_collection, [record.memory_id])
             return
         await self._vector.upsert(
             self._vector_collection,
@@ -792,9 +792,10 @@ class LongTermMemory:
             self._structured_collection, [self._to_row(r) for r in records]
         )
         chunks: list[Chunk] = []
+        superseded_ids: list[str] = []
         for record, embedding in zip(records, embeddings):
             if record.status is MemoryStatus.SUPERSEDED:
-                await self._vector.delete(self._vector_collection, record.memory_id)
+                superseded_ids.append(record.memory_id)
                 continue
             if record.status is MemoryStatus.PENDING_REVIEW:
                 continue
@@ -807,6 +808,8 @@ class LongTermMemory:
                     metadata=record.vector_metadata(),
                 )
             )
+        if superseded_ids:
+            await self._vector.delete(self._vector_collection, superseded_ids)
         if chunks:
             await self._vector.upsert(self._vector_collection, chunks)
 

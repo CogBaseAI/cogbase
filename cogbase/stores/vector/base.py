@@ -66,7 +66,8 @@ class VectorStoreBase(abc.ABC):
         await store.create_collection(schema)
         await store.upsert("legal_chunks", chunks)
         results = await store.search("legal_chunks", "notice period", query_embedding, top_k=5)
-        await store.delete("legal_chunks", doc_id="doc-42")
+        await store.delete("memories", chunk_ids=["mem-1", "mem-2"])
+        await store.delete_doc("legal_chunks", doc_id="doc-42")
     """
 
     def __init__(self, scope: AppScope | None = None) -> None:
@@ -142,6 +143,24 @@ class VectorStoreBase(abc.ABC):
         """Drop ``collection`` and all its chunks permanently."""
 
     @abc.abstractmethod
-    async def delete(self, collection: str, doc_id: str) -> None:
-        """Delete all chunks for ``doc_id`` from ``collection``."""
+    async def delete(self, collection: str, chunk_ids: list[str]) -> None:
+        """Delete the chunks identified by ``chunk_ids`` from ``collection``.
+
+        Record-level deletion (the counterpart of ``upsert``): removes exactly
+        the chunks whose ``chunk_id`` is listed, regardless of which document
+        they belong to. This is the right call for collections whose records are
+        addressed individually rather than by document (e.g. long-term memory
+        records). ``chunk_id`` values that are not present are silently ignored;
+        an empty list is a no-op. To remove every chunk of a source document,
+        use :meth:`delete_doc`.
+        """
+
+    @abc.abstractmethod
+    async def delete_doc(self, collection: str, doc_id: str) -> None:
+        """Delete all chunks for ``doc_id`` from ``collection``.
+
+        Document-level deletion: removes every chunk produced from a single
+        source document. For record-level deletion (e.g. individual memory
+        records) use :meth:`delete` instead.
+        """
 
