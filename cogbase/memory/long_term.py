@@ -66,21 +66,22 @@ DEFAULT_VECTOR_COLLECTION = "long_term_memory_content"
 # How much an UPDATE (reinforce) bumps confidence, capped at 1.0.
 CONFIDENCE_REINFORCE = 0.1
 
-# Default confidence on first promotion, by kind: a confirmed correction is
-# trusted most, an inferred fact least (it outranks nothing on a tie).
-_DEFAULT_CONFIDENCE: dict[MemoryKind, float] = {
-    MemoryKind.CORRECTION: 0.9,
-    MemoryKind.PREFERENCE: 0.7,
-    MemoryKind.FACT: 0.6,
-    MemoryKind.RETRIEVAL_HINT: 0.6,
+# Promotion gate by kind + confidence (docs/long-term-memory.md#promotion-confidence-and-review):
+# a record auto-promotes to ``active`` only when its confidence is at/above its
+# kind's threshold here, otherwise it waits at ``pending_review`` for a reviewer.
+# Low-risk interaction signals (preferences, hints) use a 0.0 threshold so they
+# always auto-promote; a fact auto-promotes only when strongly supported; a
+# correction overrides existing belief, so its threshold is unreachable (>1.0) —
+# it always waits for review regardless of how confident the LLM is.
+AUTO_PROMOTE_CONFIDENCE: dict[MemoryKind, float] = {
+    MemoryKind.PREFERENCE: 0.0,
+    MemoryKind.RETRIEVAL_HINT: 0.0,
+    MemoryKind.FACT: 0.85,
+    MemoryKind.CORRECTION: 1.01,
 }
 
-# Promotion gate by kind (docs/long-term-memory.md#promotion-confidence-and-review):
-# low-risk interaction signals auto-promote to ``active``; behaviour-affecting
-# facts/corrections wait at ``pending_review`` until a reviewer accepts them.
-_AUTO_ACTIVE_KINDS: frozenset[MemoryKind] = frozenset(
-    {MemoryKind.PREFERENCE, MemoryKind.RETRIEVAL_HINT}
-)
+# Threshold for a kind missing from the table (defensive): hold for review.
+_FALLBACK_AUTO_PROMOTE = 1.01
 
 # How many related records to surface to the reconcile LLM.
 _RECONCILE_CANDIDATES = 5
@@ -454,23 +455,19 @@ class LongTermMemory:
 
         Embeds ``content`` and writes both the structured record and its content
         vector with the provenance snapshot populated.  ``status`` defaults to
-        the kind's promotion gate (preferences/hints auto-active, facts/
-        corrections held for review).  ``embeddings`` is an optional
-        ``content -> vector`` cache (see :meth:`embed_contents`) reused for the
-        content embedding.
+        the kind+confidence promotion gate (:data:`AUTO_PROMOTE_CONFIDENCE`):
+        preferences/hints auto-active, a strongly-supported fact auto-active, and
+        weaker facts / all corrections held for review.  ``embeddings`` is an
+        optional ``content -> vector`` cache (see :meth:`embed_contents`) reused
+        for the content embedding.
         """
-        confidence = (
-            candidate.confidence
-            if candidate.confidence is not None
-            else _DEFAULT_CONFIDENCE.get(candidate.kind, 0.6)
-        )
         record = LongTermRecord(
             app_id=self._app_id,
             kind=candidate.kind,
             content=candidate.content,
             entities=normalize_entities(candidate.entities),
-            confidence=confidence,
-            status=status or self._default_status(candidate.kind),
+            confidence=candidate.confidence,
+            status=status or self._default_status(candidate.kind, candidate.confidence),
             source_event_ids=list(candidate.source_event_ids),
             evidence_snapshot=dict(candidate.evidence_snapshot),
         )
@@ -584,12 +581,7 @@ class LongTermMemory:
         does not outrank the target, the contradiction is *not* applied — the
         existing belief stands and the candidate is dropped as the weaker claim.
         """
-        cand_conf = (
-            candidate.confidence
-            if candidate.confidence is not None
-            else _DEFAULT_CONFIDENCE.get(candidate.kind, 0.6)
-        )
-        if not _outranks(candidate.kind, cand_conf, target):
+        if not _outranks(candidate.kind, candidate.confidence, target):
             logger.info(
                 "[long_term] app=%s reconcile DELETE rejected: candidate does not "
                 "outrank memory_id=%s; keeping existing belief",
@@ -848,10 +840,12 @@ class LongTermMemory:
         return record.model_dump(mode="json")
 
     @staticmethod
-    def _default_status(kind: MemoryKind) -> MemoryStatus:
+    def _default_status(kind: MemoryKind, confidence: float) -> MemoryStatus:
+        """Auto-active iff the score clears the kind's auto-promote threshold."""
+        threshold = AUTO_PROMOTE_CONFIDENCE.get(kind, _FALLBACK_AUTO_PROMOTE)
         return (
             MemoryStatus.ACTIVE
-            if kind in _AUTO_ACTIVE_KINDS
+            if confidence >= threshold
             else MemoryStatus.PENDING_REVIEW
         )
 

@@ -408,8 +408,11 @@ class MemoryCandidate(BaseModel):
 
     Carries everything reconciliation needs to ADD / UPDATE / DELETE / NOOP it
     against accumulated belief, including the provenance to snapshot on
-    promotion.  ``confidence`` is optional: reconciliation assigns a
-    kind-dependent default when the distiller does not set one.
+    promotion.  ``confidence`` is required (0..1): the distiller scores every
+    candidate, and it also gates promotion — a record auto-activates only when
+    its score clears the kind's auto-promote threshold (see
+    :data:`cogbase.memory.long_term.AUTO_PROMOTE_CONFIDENCE`), otherwise it waits
+    for review.
     """
 
     content: str
@@ -418,7 +421,8 @@ class MemoryCandidate(BaseModel):
     entities: list[str] = Field(default_factory=list)
     source_event_ids: list[EventRef] = Field(default_factory=list)
     evidence_snapshot: dict = Field(default_factory=dict)
-    confidence: float | None = None
+    # 0..1 — how strongly the source supports the claim; weighed in reconciliation.
+    confidence: float
 
 
 # ---------------------------------------------------------------------------

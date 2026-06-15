@@ -41,6 +41,27 @@ from cogbase.memory.projection import project_thread
 
 logger = logging.getLogger(__name__)
 
+# Per-kind confidence floor: a candidate the LLM scores below its kind's floor
+# is abandoned before reconcile — too weak a belief to be worth embedding,
+# recalling, and persisting.  A candidate whose score is missing or non-numeric
+# is abandoned the same way (an unreliable extraction is not salvaged with a
+# fabricated default).
+#
+# These floors sit above the kind's stakes-scaled minimum because for the
+# auto-promoting kinds (preference, retrieval_hint) the auto-promote threshold is
+# 0.0 (see long_term.AUTO_PROMOTE_CONFIDENCE) — so the floor *is* the de facto
+# auto-active bar: anything that survives goes straight to ``active`` with no
+# review.  A weak (e.g. 0.5) preference should be abandoned, not auto-promoted.
+DEFAULT_MIN_CONFIDENCE: dict[MemoryKind, float] = {
+    MemoryKind.CORRECTION: 0.7,
+    MemoryKind.FACT: 0.6,
+    MemoryKind.PREFERENCE: 0.7,
+    MemoryKind.RETRIEVAL_HINT: 0.6,
+}
+
+# Floor applied to a kind missing from the table (defensive).
+_FALLBACK_MIN_CONFIDENCE = 0.5
+
 _EXTRACTION_SCHEMA: dict = {
     "type": "object",
     "properties": {
@@ -62,8 +83,12 @@ _EXTRACTION_SCHEMA: dict = {
                         "type": "array",
                         "items": {"type": "integer"},
                     },
+                    # Bounds are enforced by clamping in _parse_confidence rather
+                    # than the schema: an out-of-range value should be clamped,
+                    # not fail validation and drop the whole extraction batch.
+                    "confidence": {"type": "number"},
                 },
-                "required": ["content", "kind"],
+                "required": ["content", "kind", "confidence"],
                 "additionalProperties": False,
             },
         }
@@ -89,6 +114,10 @@ _SYSTEM_PROMPT = (
     "- Set entities to the named entities the memory is about (people, projects, "
     "organizations, systems), lowercase; empty array when there are none.\n"
     "- Set source_seqs to the turn numbers the memory was derived from.\n"
+    "- Set confidence in [0.0, 1.0] to how strongly the transcript supports the "
+    "claim: ~0.9+ for something the user explicitly stated or confirmed, ~0.6-0.8 "
+    "for a clearly implied claim, lower when it is an uncertain inference. Omit it "
+    "only when you genuinely cannot judge.\n"
     "- Return an empty array when nothing is worth remembering.\n"
     "- Return ONLY the JSON object — no explanation, no markdown fences.\n\n"
     "Return a single JSON object matching this JSON Schema:\n\n"
@@ -104,6 +133,9 @@ class Distiller:
         long_term: The service candidates are reconciled into.
         llm:       Extraction LLM (the candidate-generation step).
         max_retries: Retries on an unparseable/invalid extraction response.
+        min_confidence: Per-kind confidence floor; candidates scored below their
+            kind's floor (or without a usable score) are abandoned before
+            reconcile (see :data:`DEFAULT_MIN_CONFIDENCE`).
     """
 
     def __init__(
@@ -113,11 +145,13 @@ class Distiller:
         llm: LLMBase,
         *,
         max_retries: int = 2,
+        min_confidence: dict[MemoryKind, float] | None = None,
     ) -> None:
         self._episodic = episodic
         self._long_term = long_term
         self._llm = llm
         self._max_retries = max_retries
+        self._min_confidence = min_confidence or DEFAULT_MIN_CONFIDENCE
 
     async def distill_session(self, *, session_id: str) -> list[str]:
         """Replay, extract candidates, reconcile each; return affected memory ids."""
@@ -195,6 +229,16 @@ class Distiller:
         if not content:
             return None
 
+        confidence = self._parse_confidence(item.get("confidence"))
+        floor = self._min_confidence.get(kind, _FALLBACK_MIN_CONFIDENCE)
+        if confidence is None or confidence < floor:
+            logger.info(
+                "[distill] dropping low/unscored %s candidate "
+                "(confidence=%s < floor=%.2f): %.80s",
+                kind.value, confidence, floor, content,
+            )
+            return None
+
         source_seqs = [s for s in item.get("source_seqs", []) if s in seq_to_ref]
         source_event_ids = [seq_to_ref[s] for s in source_seqs]
         snapshot = self._snapshot(source_seqs, seq_to_event)
@@ -204,7 +248,19 @@ class Distiller:
             entities=normalize_entities(item.get("entities", [])),
             source_event_ids=source_event_ids,
             evidence_snapshot=snapshot,
+            confidence=confidence,
         )
+
+    @staticmethod
+    def _parse_confidence(value: object) -> float | None:
+        """Clamp the LLM's confidence to [0, 1]; ``None`` if not a usable number.
+
+        A non-numeric value signals an unreliable extraction; the caller
+        abandons such a candidate rather than salvaging it with a default.
+        """
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return None
+        return max(0.0, min(1.0, float(value)))
 
     @staticmethod
     def _snapshot(

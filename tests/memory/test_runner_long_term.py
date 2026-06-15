@@ -58,7 +58,8 @@ async def test_recall_injects_memory_block():
     lt = await _long_term()
     await lt.promote(
         candidate=MemoryCandidate(
-            content="user prefers dark mode", kind=MemoryKind.PREFERENCE
+            content="user prefers dark mode", kind=MemoryKind.PREFERENCE,
+            confidence=0.7,
         ),
     )
     llm, captured = _capturing_llm("ok")
@@ -96,7 +97,8 @@ async def test_recall_query_includes_previous_exchange_for_follow_ups():
     lt = await _long_term()
     await lt.promote(
         candidate=MemoryCandidate(
-            content="user prefers dark mode", kind=MemoryKind.PREFERENCE
+            content="user prefers dark mode", kind=MemoryKind.PREFERENCE,
+            confidence=0.7,
         ),
     )
     llm, captured = _capturing_llm("ok")
@@ -164,7 +166,7 @@ async def test_memory_lookup_tool_returns_matching_memories():
     await lt.promote(
         candidate=MemoryCandidate(
             content="user works at Acme Corp", kind=MemoryKind.PREFERENCE,
-            entities=["acme corp"],
+            entities=["acme corp"], confidence=0.7,
         ),
     )
     llm, _ = _capturing_llm("ok")

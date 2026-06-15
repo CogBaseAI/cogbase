@@ -25,6 +25,15 @@ from cogbase.memory.models import (
     ReviewDecision,
     ReviewOutcome,
 )
+
+# Sensible per-kind candidate confidence for hand-built test candidates: a
+# correction outranks an inferred fact, matching the reconcile precedence rules.
+_TEST_CONFIDENCE = {
+    MemoryKind.CORRECTION: 0.9,
+    MemoryKind.PREFERENCE: 0.7,
+    MemoryKind.FACT: 0.6,
+    MemoryKind.RETRIEVAL_HINT: 0.6,
+}
 from cogbase.stores.scope import AppScope
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSMemoryVectorStore
@@ -79,13 +88,14 @@ async def _make_service(llm=None, *, app_id="app1") -> LongTermMemory:
     return svc
 
 
-def _candidate(content, *, kind=MemoryKind.FACT, seqs=(), entities=()):
+def _candidate(content, *, kind=MemoryKind.FACT, seqs=(), entities=(), confidence=None):
     return MemoryCandidate(
         content=content,
         kind=kind,
         entities=list(entities),
         source_event_ids=[EventRef(session_id="s1", seq=s, ulid=f"u{s}") for s in seqs],
         evidence_snapshot={"turns": list(seqs)},
+        confidence=confidence if confidence is not None else _TEST_CONFIDENCE[kind],
     )
 
 
@@ -112,6 +122,26 @@ async def test_promote_fact_is_gated_pending_review():
     )
     recs = await svc._load_records([mid])
     assert recs[0].status is MemoryStatus.PENDING_REVIEW
+
+
+@pytest.mark.asyncio
+async def test_promote_strongly_supported_fact_is_auto_active():
+    svc = await _make_service()
+    # A fact at/above the fact auto-promote threshold (0.85) skips review.
+    mid = await svc.promote(
+        candidate=_candidate("user works at Acme", kind=MemoryKind.FACT, confidence=0.9),
+    )
+    assert (await svc._load_records([mid]))[0].status is MemoryStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_promote_correction_always_waits_for_review():
+    svc = await _make_service()
+    # Even a maximally confident correction overrides belief, so it is gated.
+    mid = await svc.promote(
+        candidate=_candidate("user is in Munich", kind=MemoryKind.CORRECTION, confidence=1.0),
+    )
+    assert (await svc._load_records([mid]))[0].status is MemoryStatus.PENDING_REVIEW
 
 
 @pytest.mark.asyncio
