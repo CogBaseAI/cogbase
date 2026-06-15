@@ -728,20 +728,36 @@ class LongTermMemory:
         *,
         embeddings: dict[str, list[float]] | None = None,
     ) -> None:
-        """Upsert the structured row and its content vector.
+        """Upsert the structured row; keep the vector index active-only.
 
-        The vector is always re-upserted so its metadata (``status`` /
-        ``kind``) tracks the structured record — recall and reconcile filter on
-        that metadata, so a superseded record must carry ``status=superseded`` in
-        the index too.  ``content`` is re-embedded each time unless a precomputed
-        embedding for it is supplied via ``embeddings``; on a status-only change
-        this re-embeds identical text (correct, just not free) — a worthwhile
-        simplicity trade for a store written at distillation cadence, not on the
-        request path.
+        The vector index holds only ``active`` records, because every vector
+        reader (``recall``, ``lookup``, ``reconcile``'s ``_related_records``) is
+        active-only.  Two statuses therefore stay out of it:
+
+        - ``pending_review``: never indexed.  A gated record's vector is never
+          read, and ``review`` embeds and upserts it on promotion to active — so
+          writing it here is pure waste that gets overwritten.
+        - ``superseded``: deleted from the index.  A record that *was* active and
+          is now superseded must leave the vector store, or recall/reconcile keep
+          matching it.  ``delete`` is a no-op when the record was never indexed
+          (e.g. a rejected ``pending_review`` record), so it is safe for both
+          paths into ``superseded``.
+
+        ``content`` is still embedded on every path — not to be stored, but
+        because the lazy ``_ensure`` learns the collection dimension from it (a
+        cold process may not have created the structured collection yet, and the
+        row below needs it).  The embed reuses a precomputed vector from
+        ``embeddings`` when supplied, so on the distillation path it is a cache
+        hit, not an API call.
         """
         embedding = await self._embed_text(record.content, embeddings)
         await self._ensure(len(embedding))
         await self._structured.save(self._structured_collection, [self._to_row(record)])
+        if record.status is MemoryStatus.PENDING_REVIEW:
+            return
+        if record.status is MemoryStatus.SUPERSEDED:
+            await self._vector.delete(self._vector_collection, record.memory_id)
+            return
         await self._vector.upsert(
             self._vector_collection,
             [
@@ -756,14 +772,17 @@ class LongTermMemory:
         )
 
     async def _save_records(self, records: list[LongTermRecord]) -> None:
-        """Batch-upsert structured rows and content vectors for *records*.
+        """Batch-write structured rows and reconcile the vector index for *records*.
 
         The batched mirror of :meth:`_save_record` for the review path, where a
-        whole gated batch flips status in one pass.  ``content`` is embedded in a
-        single call rather than once per record; review only changes ``status``,
-        so this re-embeds unchanged text — but one batch embed beats N round-trips
-        and the vector still has to be re-upserted because ``recall`` filters on
-        its ``status`` metadata and the store offers no metadata-only update.
+        whole gated batch flips ``pending_review`` to ``active`` (accept) or
+        ``superseded`` (reject) in one pass.  Following the same active-only
+        invariant: accepted records are embedded and upserted into the index;
+        rejected (``superseded``) records are deleted from it — a no-op here, since
+        a gated record was never indexed, but kept for consistency with the
+        active-only rule.  ``content`` is embedded in a single batch call (to
+        learn the collection dimension and to feed the accepted upserts); one
+        batch embed beats N round-trips.
         """
         if not records:
             return
@@ -772,19 +791,24 @@ class LongTermMemory:
         await self._structured.save(
             self._structured_collection, [self._to_row(r) for r in records]
         )
-        await self._vector.upsert(
-            self._vector_collection,
-            [
+        chunks: list[Chunk] = []
+        for record, embedding in zip(records, embeddings):
+            if record.status is MemoryStatus.SUPERSEDED:
+                await self._vector.delete(self._vector_collection, record.memory_id)
+                continue
+            if record.status is MemoryStatus.PENDING_REVIEW:
+                continue
+            chunks.append(
                 Chunk(
-                    chunk_id=r.memory_id,
-                    doc_id=r.memory_id,
-                    text=r.content,
+                    chunk_id=record.memory_id,
+                    doc_id=record.memory_id,
+                    text=record.content,
                     embedding=embedding,
-                    metadata=r.vector_metadata(),
+                    metadata=record.vector_metadata(),
                 )
-                for r, embedding in zip(records, embeddings)
-            ],
-        )
+            )
+        if chunks:
+            await self._vector.upsert(self._vector_collection, chunks)
 
     async def _search_content(
         self,

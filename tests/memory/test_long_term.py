@@ -114,6 +114,37 @@ async def test_promote_fact_is_gated_pending_review():
     assert recs[0].status is MemoryStatus.PENDING_REVIEW
 
 
+@pytest.mark.asyncio
+async def test_promote_pending_skips_vector_upsert_until_accepted():
+    """A gated record's vector is never read, so promote must not write it.
+
+    Every vector reader is active-only, and ``review`` re-embeds + upserts the
+    record on accept (see ``LongTermMemory._save_record``), so writing the vector
+    at promote time would be pure waste that gets overwritten.  An auto-active
+    preference, by contrast, is indexed immediately.
+    """
+    svc = await _make_service()
+    real_upsert = svc._vector.upsert
+    svc._vector.upsert = AsyncMock(side_effect=real_upsert)
+
+    # Gated fact: the structured row is written, but no vector upsert.
+    mid = await svc.promote(candidate=_candidate("user works at Acme"))
+    assert (await svc._load_records([mid]))[0].status is MemoryStatus.PENDING_REVIEW
+    svc._vector.upsert.assert_not_called()
+
+    # Auto-active preference: indexed immediately.
+    await svc.promote(
+        candidate=_candidate("prefers concise answers", kind=MemoryKind.PREFERENCE)
+    )
+    assert svc._vector.upsert.call_count == 1
+
+    # Review accept creates the gated record's vector, so recall now surfaces it.
+    await svc.review_many(decisions=[ReviewDecision(memory_id=mid, accept=True)])
+    assert svc._vector.upsert.call_count == 2
+    hits = await svc.recall(query="user works at Acme")
+    assert mid in [h.memory_id for h in hits]
+
+
 # ---------------------------------------------------------------------------
 # reconcile — each ReconcileOp
 # ---------------------------------------------------------------------------
@@ -215,6 +246,10 @@ async def test_reconcile_delete_supersedes_when_candidate_outranks():
     new_rec = (await svc._load_records([new]))[0]
     assert old_rec.status is MemoryStatus.SUPERSEDED
     assert "Munich" in new_rec.content
+    # The superseded record is purged from the vector index itself — not merely
+    # filtered out by status — so a raw content search no longer returns it.
+    raw = await svc._search_content("user is based in Berlin", top_k=50)
+    assert old not in [c.doc_id for c in raw]
 
 
 @pytest.mark.asyncio
