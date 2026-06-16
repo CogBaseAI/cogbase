@@ -379,6 +379,29 @@ Filter operators: =, !=, <, >, <=, >=, like, in, not_in, overlaps, is_null, is_n
 _VECTOR_COLLECTIONS_HEADER = "\nAvailable vector collections (pass name to vector_search 'collection' param):\n"
 
 
+# Precedence policy carried with any injected long-term memory.  Memory is
+# framed as dated, user-attributed claims; on a conflict with retrieved
+# documents the model prefers the documents (the fresher, authoritative source
+# for subject-matter facts) but surfaces the discrepancy — which keeps a user
+# correction (memory that contradicts the corpus because the corpus was wrong)
+# from being silently buried.  See docs/long-term-memory.md.
+_MEMORY_EVIDENCE_POLICY = (
+    "Each item is dated, memory-derived background the user asserted or confirmed "
+    "as of the given date — NOT cited document evidence; do not present it as a "
+    "sourced fact. When a memory conflicts with what the documents currently say, "
+    "prefer the document evidence as the fresher, authoritative source and note "
+    "the discrepancy, rather than relying on the older memory."
+)
+
+
+def _format_memory_line(m: LongTermRecord) -> str:
+    """One recalled memory as a dated, attributed line for an injected block."""
+    line = f"- [{m.kind.value}, as of {m.updated_at.date().isoformat()}] {m.content}"
+    if m.entities:
+        line += f" (entities: {', '.join(m.entities)})"
+    return line
+
+
 def _build_retrieval_prompt(
     schemas: list[CollectionSchema] | None,
     vector_schemas: list[VectorCollectionSchema] | None = None,
@@ -1108,14 +1131,10 @@ class QueryRunner:
         logger.info("[runner] memory_lookup.result memories=%d", len(memories))
         if not memories:
             return "(no matching memories)", []
-        lines = "\n".join(
-            f"- [{m.kind.value}] {m.content}"
-            + (f" (entities: {', '.join(m.entities)})" if m.entities else "")
-            for m in memories
-        )
+        lines = "\n".join(_format_memory_line(m) for m in memories)
         return (
-            "Memories (memory-derived background knowledge — NOT cited document "
-            "evidence, do not present these as sourced facts):\n" + lines,
+            "Memories (recalled from long-term memory):\n"
+            + _MEMORY_EVIDENCE_POLICY + "\n" + lines,
             memories,
         )
 
@@ -1186,12 +1205,11 @@ class QueryRunner:
             return None, []
         if not memories:
             return None, []
-        lines = "\n".join(f"- [{m.kind.value}] {m.content}" for m in memories)
+        lines = "\n".join(_format_memory_line(m) for m in memories)
         logger.info("[runner] long-term recall injected %d memories", len(memories))
         return (
-            "Relevant long-term memory about the user/project (recalled; "
-            "memory-derived background knowledge — NOT cited document evidence, "
-            "do not present these as sourced facts):\n" + lines,
+            "Relevant long-term memory about the user/project (recalled):\n"
+            + _MEMORY_EVIDENCE_POLICY + "\n" + lines,
             memories,
         )
 
