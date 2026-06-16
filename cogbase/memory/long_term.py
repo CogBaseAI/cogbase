@@ -94,7 +94,7 @@ _RECONCILE_SCHEMA: dict = {
     "type": "object",
     "properties": {
         "operation": {"type": "string", "enum": ["ADD", "UPDATE", "DELETE", "NOOP"]},
-        "target_memory_id": {"type": ["string", "null"]},
+        "target_memory_id": {"type": ["integer", "string", "null"]},
         "revised_content": {"type": ["string", "null"]},
         "reasoning": {"type": "string"},
     },
@@ -107,14 +107,17 @@ _RECONCILE_SYSTEM_PROMPT = (
     "list of EXISTING related memories.  Decide how the new "
     "observation reconciles against accumulated belief, and return exactly one "
     "operation as a JSON object.\n\n"
+    "Each EXISTING memory is labelled with a small integer id.  When an operation "
+    "refers to one, set target_memory_id to that integer — do NOT invent or echo "
+    "any other identifier.\n\n"
     "Operations:\n"
     "- ADD: the observation is genuinely new; no existing memory covers it.\n"
     "- UPDATE: an existing memory already says this — reinforce it, or refine its "
-    "wording.  Set target_memory_id to that memory; set revised_content only if "
-    "the wording should change.\n"
+    "wording.  Set target_memory_id to that memory's id; set revised_content only "
+    "if the wording should change.\n"
     "- DELETE: the observation CONTRADICTS an existing memory and should replace "
-    "it.  Set target_memory_id to the contradicted memory (it will be superseded "
-    "and the new observation promoted in its place).\n"
+    "it.  Set target_memory_id to the contradicted memory's id (it will be "
+    "superseded and the new observation promoted in its place).\n"
     "- NOOP: already fully known and correctly stated; nothing to change.\n\n"
     "Rules:\n"
     "- Prefer UPDATE over ADD when an existing memory expresses the same claim.\n"
@@ -499,6 +502,39 @@ class LongTermMemory:
         ``embeddings`` is an optional ``content -> vector`` cache (see
         :meth:`embed_contents`) reused for the candidate's search query and
         promote write, so distilling a session embeds each content once.
+
+        Scaling note — single-call additive extract+reconcile
+        -----------------------------------------------------
+        The current design is two-phase: ``Distiller`` makes one LLM call to
+        extract N candidate facts from a session, then ``distill`` calls
+        :meth:`reconcile` per candidate, and each candidate with related
+        records spends one more LLM call in :meth:`_decide`.  That is **N+1
+        LLM calls per session** (worst case), which is fine at design-partner
+        volume but grows linearly with facts-per-session.
+
+        mem0's V3 pipeline collapses this into a *single* additive call:
+        before extraction it vector-recalls the top-K existing memories, then
+        one LLM call sees ``(new turn, existing memories)`` and emits the
+        extracted facts **together with** their ADD / UPDATE / DELETE / NOOP
+        op against those memories — extraction and reconciliation in one shot.
+        Net effect: one call per session instead of N+1, and the model
+        reconciles the whole batch holistically rather than one fact at a time.
+
+        Trade-offs if we adopt it:
+          - Cost/latency drop from O(N) to O(1) calls — the reason to do it.
+          - Lose the per-candidate audit point: today each :meth:`_decide`
+            yields one ``ReconcileOp`` + reasoning for one (candidate, target)
+            pair, which is easy to log and review; the batched call mixes all
+            decisions into one response.
+          - Anti-hallucination matters more: when many existing memories are
+            shown at once, mask their UUIDs as small integers in the prompt
+            and resolve back afterwards so the LLM can't invent/typo an id.
+          - The pending-review gate and confidence reinforcement still apply,
+            but must be re-derived from a batched response shape.
+
+        Recommendation: keep the controllable per-candidate path as default;
+        introduce the single-call mode as an opt-in for high-volume apps where
+        per-session LLM cost dominates.  Revisit when that cost actually bites.
         """
         related = await self._related_records(candidate, embeddings=embeddings)
 
@@ -610,11 +646,19 @@ class LongTermMemory:
     async def _decide(
         self, candidate: MemoryCandidate, related: list[LongTermRecord]
     ) -> "LongTermMemory._Decision":
-        """Ask the LLM which ``ReconcileOp`` applies; ADD on any failure."""
+        """Ask the LLM which ``ReconcileOp`` applies; ADD on any failure.
+
+        Real ``memory_id`` UUIDs are masked to small integer ids (0, 1, 2…) in
+        the prompt and resolved back afterwards: an LLM asked to echo a 36-char
+        UUID will eventually typo or invent one, which would silently break the
+        ``target_memory_id`` → record lookup downstream.
+        """
+        # index -> real memory_id; the LLM only ever sees the index.
+        id_by_index = {i: r.memory_id for i, r in enumerate(related)}
         related_block = "\n".join(
-            f"- id={r.memory_id} kind={r.kind.value} confidence={r.confidence:.2f} "
+            f"- id={i} kind={r.kind.value} confidence={r.confidence:.2f} "
             f"entities={r.entities} content={r.content!r}"
-            for r in related
+            for i, r in enumerate(related)
         )
         user = (
             f"NEW observation (kind={candidate.kind.value}):\n{candidate.content}\n\n"
@@ -637,10 +681,38 @@ class LongTermMemory:
             return self._Decision(ReconcileOp.ADD, None, None, "fallback: bad operation")
         return self._Decision(
             op,
-            parsed.get("target_memory_id"),
+            self._resolve_target(parsed.get("target_memory_id"), id_by_index, op),
             parsed.get("revised_content"),
             parsed.get("reasoning", ""),
         )
+
+    def _resolve_target(
+        self, raw: object, id_by_index: dict[int, str], op: ReconcileOp
+    ) -> str | None:
+        """Map a masked integer id back to its real ``memory_id``.
+
+        Returns ``None`` for anything that isn't a valid index, so an
+        out-of-range or hallucinated value degrades to "no target" rather than
+        pointing at the wrong record.  A non-null id that fails to resolve is
+        logged: it means the LLM named an id we never showed it (so an
+        UPDATE/DELETE silently degrades to ADD), which is worth seeing in
+        telemetry rather than masking as a clean decision.
+        """
+        if raw is None:
+            return None
+        index: int | None
+        try:
+            index = int(raw)
+        except (TypeError, ValueError):
+            index = None
+        resolved = id_by_index.get(index) if index is not None else None
+        if resolved is None:
+            logger.info(
+                "[long_term] app=%s reconcile %s named unresolvable target id %r "
+                "(valid 0..%d); degrading to ADD",
+                self._app_id, op.value, raw, len(id_by_index) - 1,
+            )
+        return resolved
 
     async def _complete_json(self, messages: list[dict]) -> dict | None:
         """LLM call → parsed+validated JSON, retrying on failure (extraction pattern)."""

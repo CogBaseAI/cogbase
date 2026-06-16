@@ -74,6 +74,13 @@ def _llm_returning(payload: dict) -> MagicMock:
     return llm
 
 
+# Real memory_id UUIDs are masked to small integer ids before the reconcile
+# prompt and resolved back afterwards (anti-hallucination), so a fake LLM
+# targets a related record by its position.  These tests each surface exactly
+# one related record, so the only valid target index is 0.
+_FIRST_RELATED = 0
+
+
 async def _make_service(llm=None, *, app_id="app1") -> LongTermMemory:
     structured = InMemoryStructuredStore().with_scope(AppScope(app_id=app_id))
     vector = FAISSMemoryVectorStore().with_scope(AppScope(app_id=app_id))
@@ -230,7 +237,7 @@ async def test_reconcile_update_reinforces_confidence_and_merges_provenance():
     )
     before = (await svc._load_records([mid]))[0].confidence
 
-    svc._llm = _llm_returning({"operation": "UPDATE", "target_memory_id": mid})
+    svc._llm = _llm_returning({"operation": "UPDATE", "target_memory_id": _FIRST_RELATED})
     out = await svc.reconcile(
         candidate=_candidate("user likes concise answers", kind=MemoryKind.PREFERENCE, seqs=[5]),
     )
@@ -248,7 +255,7 @@ async def test_reconcile_update_revises_content():
         candidate=_candidate("user prefers concise answers", kind=MemoryKind.PREFERENCE),
     )
     svc._llm = _llm_returning(
-        {"operation": "UPDATE", "target_memory_id": mid,
+        {"operation": "UPDATE", "target_memory_id": _FIRST_RELATED,
          "revised_content": "user strongly prefers concise answers with citations"}
     )
     await svc.reconcile(
@@ -267,7 +274,7 @@ async def test_reconcile_delete_supersedes_when_candidate_outranks():
         status=MemoryStatus.ACTIVE,
     )
     # A confirmed correction contradicts it.
-    svc._llm = _llm_returning({"operation": "DELETE", "target_memory_id": old})
+    svc._llm = _llm_returning({"operation": "DELETE", "target_memory_id": _FIRST_RELATED})
     new = await svc.reconcile(
         candidate=_candidate("user is based in Munich", kind=MemoryKind.CORRECTION),
     )
@@ -291,7 +298,7 @@ async def test_reconcile_delete_rejected_when_candidate_does_not_outrank():
         status=MemoryStatus.ACTIVE,
     )
     # A weaker inferred fact tries to contradict it.
-    svc._llm = _llm_returning({"operation": "DELETE", "target_memory_id": strong})
+    svc._llm = _llm_returning({"operation": "DELETE", "target_memory_id": _FIRST_RELATED})
     out = await svc.reconcile(
         candidate=_candidate("user is based in Berlin", kind=MemoryKind.FACT),
     )
@@ -367,7 +374,7 @@ async def test_reconcile_update_merges_entities():
             entities=["user"],
         ),
     )
-    svc._llm = _llm_returning({"operation": "UPDATE", "target_memory_id": mid})
+    svc._llm = _llm_returning({"operation": "UPDATE", "target_memory_id": _FIRST_RELATED})
     await svc.reconcile(
         candidate=_candidate(
             "user likes concise answers", kind=MemoryKind.PREFERENCE,
