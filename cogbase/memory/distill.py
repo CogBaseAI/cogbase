@@ -97,19 +97,61 @@ _EXTRACTION_SCHEMA: dict = {
     "additionalProperties": False,
 }
 
-_SYSTEM_PROMPT = (
+def _strip_code_fence(content: str) -> str:
+    """Drop a leading/trailing ```...``` fence the model adds despite the prompt."""
+    text = content.strip()
+    if not text.startswith("```"):
+        return text
+    # Drop the opening fence line (``` or ```json) and a closing fence if present.
+    lines = text.splitlines()
+    lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _coerce_memories(parsed: object) -> list | None:
+    """Normalize the model's output to the ``memories`` array, or ``None``.
+
+    Mirrors the pipeline extractor's tolerance (see
+    ``llm._try_unwrap_single_item_list``): ``model="mini"`` occasionally wraps
+    the result one level too deep, e.g. ``{"memories": {"memories": [...]}}``,
+    which is valid JSON but fails the array schema and drops the whole batch.
+    Drill through such nested ``memories`` wrappers, and accept a bare top-level
+    list, before validation.
+    """
+    # Drill through nested {"memories": {"memories": ...}} wrappers (bounded).
+    for _ in range(5):
+        if isinstance(parsed, dict) and "memories" in parsed:
+            parsed = parsed["memories"]
+        else:
+            break
+    return parsed if isinstance(parsed, list) else None
+
+
+_PROMPT_INTRO_AND_KINDS = (
     "You distill durable, long-term memories from a conversation transcript "
     "between a user and an assistant.  Each transcript line is prefixed with its "
     "turn number, e.g. [3 user] or [4 assistant].\n\n"
     "Extract only knowledge worth remembering across future sessions:\n"
     "- preference: a stable interaction preference (e.g. 'prefers concise "
     "answers', 'always wants citations').\n"
-    "- fact: a stable fact about the user, their project, or their organization.\n"
+    "- fact: a stable, reusable fact worth recalling in a future session — about "
+    "the user, their project or organization, OR a subject-matter fact the USER "
+    "asserted, supplied, or affirmed (not one the assistant merely retrieved and "
+    "restated from the source documents).\n"
     "- correction: a fact the user explicitly corrected or confirmed.\n"
     "- retrieval_hint: a recurring intent-to-tool-chain or routing pattern worth "
     "recalling at query time.\n\n"
+)
+
+_PROMPT_RULES_AND_SCHEMA = (
     "Rules:\n"
-    "- Do NOT extract ephemeral, one-off, or task-local details.\n"
+    "- Do NOT extract trivial chit-chat or transient task mechanics.\n"
+    "- A subject-matter fact is durable only when the USER is its source — they "
+    "asserted it, corrected the assistant, or confirmed a claim. Do NOT distill a "
+    "fact that originates solely in an assistant turn derived from document "
+    "retrieval; the source documents already own that knowledge.\n"
     "- Write each memory as a single self-contained natural-language claim.\n"
     "- Set entities to the named entities the memory is about (people, projects, "
     "organizations, systems), lowercase; empty array when there are none.\n"
@@ -125,6 +167,33 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _build_system_prompt(domain_fact_guidance: str | None = None) -> str:
+    """Assemble the extraction system prompt, optionally scoped to a domain.
+
+    ``domain_fact_guidance`` is an *additive* slot inserted between the kind
+    definitions and the rules: it narrows what subject matter counts as a
+    durable ``fact``/``correction`` for one application, but is deliberately
+    placed *above* the provenance rule and framed as topic-scoping only, so it
+    cannot relax the rule that a subject-matter fact is durable only when the
+    USER is its source.  Empty/omitted reproduces the generic prompt.
+    """
+    domain_block = ""
+    if domain_fact_guidance and domain_fact_guidance.strip():
+        domain_block = (
+            "Subject-matter scope for this application — treat a `fact` or "
+            "`correction` as durable only when it is knowledge of the kind "
+            "described here. This narrows the topic; it does NOT relax the "
+            "provenance rule below (the USER must still be the source):\n"
+            + domain_fact_guidance.strip()
+            + "\n\n"
+        )
+    return _PROMPT_INTRO_AND_KINDS + domain_block + _PROMPT_RULES_AND_SCHEMA
+
+
+# Default (generic) prompt, used when no domain guidance is supplied.
+_SYSTEM_PROMPT = _build_system_prompt()
+
+
 class Distiller:
     """Promotes durable records out of one session log on settle.
 
@@ -136,6 +205,10 @@ class Distiller:
         min_confidence: Per-kind confidence floor; candidates scored below their
             kind's floor (or without a usable score) are abandoned before
             reconcile (see :data:`DEFAULT_MIN_CONFIDENCE`).
+        domain_fact_guidance: Optional application-specific description of which
+            subject-matter facts are durable, injected as an additive topic
+            scope in the extraction prompt (see :func:`_build_system_prompt`).
+            ``None`` uses the generic prompt.
     """
 
     def __init__(
@@ -146,12 +219,14 @@ class Distiller:
         *,
         max_retries: int = 2,
         min_confidence: dict[MemoryKind, float] | None = None,
+        domain_fact_guidance: str | None = None,
     ) -> None:
         self._episodic = episodic
         self._long_term = long_term
         self._llm = llm
         self._max_retries = max_retries
         self._min_confidence = min_confidence or DEFAULT_MIN_CONFIDENCE
+        self._system_prompt = _build_system_prompt(domain_fact_guidance)
 
     async def distill_session(self, *, session_id: str) -> list[str]:
         """Replay, extract candidates, reconcile each; return affected memory ids."""
@@ -306,17 +381,24 @@ class Distiller:
     async def _extract(self, transcript: str) -> dict | None:
         """LLM extraction → parsed+validated JSON, retrying (extraction pattern)."""
         messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": self._system_prompt},
             {"role": "user", "content": transcript},
         ]
+        content = ""
         for attempt in range(self._max_retries + 1):
             try:
                 result = await self._llm.complete(messages, model="mini")
                 content = (result.get("content") or "").strip()
-                parsed = json.loads(content)
-                jsonschema.validate(instance=parsed, schema=_EXTRACTION_SCHEMA)
-                return parsed
-            except (json.JSONDecodeError, jsonschema.ValidationError):
+                parsed = json.loads(_strip_code_fence(content))
+                memories = _coerce_memories(parsed)
+                if memories is None:
+                    raise ValueError("no `memories` array in extraction output")
+                normalized = {"memories": memories}
+                jsonschema.validate(instance=normalized, schema=_EXTRACTION_SCHEMA)
+                logger.debug("[distill] parsed=%s messages=%s", normalized, messages)
+                return normalized
+            except (json.JSONDecodeError, jsonschema.ValidationError, ValueError):
+                logger.error("[distill] extraction JSON invalid, attempt=%d content=%s", attempt, content)
                 if attempt < self._max_retries:
                     continue
                 logger.warning("[distill] extraction JSON invalid after retries", exc_info=True)

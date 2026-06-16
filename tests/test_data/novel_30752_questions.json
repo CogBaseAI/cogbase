@@ -1,0 +1,785 @@
+[
+  {
+    "id": "Novel-ac9a05e7",
+    "source": "Novel-30752",
+    "question": "According to the narrative in 'Vestiges of the Mayas,' where is the territory known as Tierra de Guerra located?",
+    "answer": "Tierra de Guerra is located between Guatemala, Tabasco, Chiapas and Yucatan.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Tierra de Guerra is located between Guatemala, Tabasco, Chiapas, and Yucatan.",
+    "evidence_triple": "(Tierra de Guerra, is located between, Guatemala, Tabasco, Chiapas and Yucatan)"
+  },
+  {
+    "id": "Novel-1d9d11e6",
+    "source": "Novel-30752",
+    "question": "Which archaeological site is noted for its Maya inscriptions in the text?",
+    "answer": "Uxmal has inscriptions of the Mayas.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Uxmal contains inscriptions created by the Mayas.",
+    "evidence_triple": "(Uxmal, has inscriptions of, Mayas)"
+  },
+  {
+    "id": "Novel-b841f56a",
+    "source": "Novel-30752",
+    "question": "According to the narrative, with which distant region did the inhabitants of Mayab have early communications?",
+    "answer": "Mayab had communications with Asia.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Mayab maintained communications with Asia in very remote times.",
+    "evidence_triple": "(Mayab, had communications with, Asia)"
+  },
+  {
+    "id": "Novel-ef65fa4f",
+    "source": "Novel-30752",
+    "question": "Which group is described in the narrative as having customs similar to those of the inhabitants of Yucatan?",
+    "answer": "The Carians had customs similar to those of the inhabitants of Yucatan.",
+    "question_type": "Fact Retrieval",
+    "evidence": "The Carians have customs similar to those of the inhabitants of Yucatan.",
+    "evidence_triple": "(CARIANS,had customs similar to those of the inhabitants of,Yucatan)"
+  },
+  {
+    "id": "Novel-f6061ea6",
+    "source": "Novel-30752",
+    "question": "According to the text, which bodies of water are separated by the Yucatan peninsula?",
+    "answer": "Yucatan divides the Gulf of Mexico and Caribbean Sea.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Yucatan divides the Gulf of Mexico and the Caribbean Sea.",
+    "evidence_triple": "(Yucatan, divides, Gulf of Mexico and Caribbean Sea)"
+  },
+  {
+    "id": "Novel-bba0d522",
+    "source": "Novel-30752",
+    "question": "Which group or people does Du Chaillu focus on in his observations within the narrative?",
+    "answer": "Du Chaillu describes the Fans.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Du Chaillu describes the Fans.",
+    "evidence_triple": "(Du Chaillu, describes, Fans)"
+  },
+  {
+    "id": "Novel-3c458c47",
+    "source": "Novel-30752",
+    "question": "Which region is described as having notable vegetation in the narrative?",
+    "answer": "Vegetation is luxuriant in Yucatan.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Vegetation is luxuriant in Yucatan.",
+    "evidence_triple": "(vegetation,is luxuriant in,Yucatan)"
+  },
+  {
+    "id": "Novel-c007b84b",
+    "source": "Novel-30752",
+    "question": "What is described as having disappeared from America in the historical account within the text?",
+    "answer": "Lands of the West disappeared from America.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Lands of the West disappeared from America.",
+    "evidence_triple": "(Lands of the West, disappeared from, America)"
+  },
+  {
+    "id": "Novel-d35616b2",
+    "source": "Novel-30752",
+    "question": "At which archaeological site is Chaacmol's funeral chamber described in the narrative?",
+    "answer": "Chaacmol had a funeral chamber in Chichen-Itza.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Chaacmol had a funeral chamber in Chichen-Itza.",
+    "evidence_triple": "(Chaacmol, had funeral chamber in, Chichen-Itza)"
+  },
+  {
+    "id": "Novel-614f723d",
+    "source": "Novel-30752",
+    "question": "Which group is described as wearing leopard skin in the narrative?",
+    "answer": "African warriors wear leopard skin.",
+    "question_type": "Fact Retrieval",
+    "evidence": "African warriors wear leopard skin.",
+    "evidence_triple": "(leopard,skin is worn by,African warriors)"
+  },
+  {
+    "id": "Novel-16920d74",
+    "source": "Novel-30752",
+    "question": "At which Maya site are mysteries associated with the Dwarf's House in the narrative?",
+    "answer": "Mysteries existed in Uxmal in relation to the Dwarf's House.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Mysteries existed in Uxmal in relation to the Dwarf's House.",
+    "evidence_triple": "(Dwarf's House, mysteries existed in, Uxmal)"
+  },
+  {
+    "id": "Novel-05910147",
+    "source": "Novel-30752",
+    "question": "In which region is variation in the thermometer discussed in the narrative?",
+    "answer": "The thermometer varies in Yucatan.",
+    "question_type": "Fact Retrieval",
+    "evidence": "The thermometer varies in Yucatan.",
+    "evidence_triple": "(thermometer,varies in,Yucatan)"
+  },
+  {
+    "id": "Novel-19840e69",
+    "source": "Novel-30752",
+    "question": "In which region are epidemics mentioned in the narrative?",
+    "answer": "Epidemics occur in Yucatan.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Epidemics occur in Yucatan.",
+    "evidence_triple": "(epidemics,occur in,Yucatan)"
+  },
+  {
+    "id": "Novel-11c6c323",
+    "source": "Novel-30752",
+    "question": "Which region is described as having similarities with Mayab in the narrative?",
+    "answer": "Siam has similarity with Mayab.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Siam has similarity with Mayab.",
+    "evidence_triple": "(Siam,has similarity with,Mayab)"
+  },
+  {
+    "id": "Novel-e60920e2",
+    "source": "Novel-30752",
+    "question": "Who is described as the son of Nut in the mythological context of the narrative?",
+    "answer": "Osiris is the son of Nut.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Osiris is the son of Nut.",
+    "evidence_triple": "(Osiris,son of,Nut)"
+  },
+  {
+    "id": "Novel-12799fe0",
+    "source": "Novel-30752",
+    "question": "According to the description of the afterlife in the text, who is described as King over Amenti?",
+    "answer": "Osiris sat as King over Amenti.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Osiris sat as King over Amenti.; Amenti is the land of the dead.",
+    "evidence_triple": "(Osiris,sat as King over,Amenti)"
+  },
+  {
+    "id": "Novel-7e2ac41f",
+    "source": "Novel-30752",
+    "question": "What is another name given to Nephthis in the account of Egyptian mythology within the narrative?",
+    "answer": "Nephthis is also named Nike.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Nephthis is also named Nike.",
+    "evidence_triple": "(Nephthis, also named, Nike)"
+  },
+  {
+    "id": "Novel-5c651ccc",
+    "source": "Novel-30752",
+    "question": "Who is credited with civilizing Egypt in the historical and mythological narrative of the text?",
+    "answer": "Osiris civilized Egypt.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Osiris civilized Egypt.",
+    "evidence_triple": "(Osiris,civilized,Egypt)"
+  },
+  {
+    "id": "Novel-0f0d4401",
+    "source": "Novel-30752",
+    "question": "According to the narrative's discussion of symbolism, what number was regarded as a mystic number among the Egyptians?",
+    "answer": "SEVEN was a mystic number among Egyptians.",
+    "question_type": "Fact Retrieval",
+    "evidence": "SEVEN was a mystic number among Egyptians.",
+    "evidence_triple": "(SEVEN,was a _mystic number_ among,Egyptians)"
+  },
+  {
+    "id": "Novel-37909b08",
+    "source": "Novel-30752",
+    "question": "Within the familial relationships described in the text, who is identified as the brother of Typho?",
+    "answer": "Osiris is the brother of Typho.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Osiris is the brother of Typho.",
+    "evidence_triple": "(Osiris,brother of,Typho)"
+  },
+  {
+    "id": "Novel-bf1c3282",
+    "source": "Novel-30752",
+    "question": "According to the narrative recounting ancient conflicts, who is described as having vanquished the Khati?",
+    "answer": "Rameses vanquished the Khati.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Rameses vanquished the Khati.",
+    "evidence_triple": "(Khati, were vanquished by, Rameses)"
+  },
+  {
+    "id": "Novel-476e6cd0",
+    "source": "Novel-30752",
+    "question": "What city is identified as the capital of the Chaldeans in the narrative's discussion of ancient Mesopotamia?",
+    "answer": "Ur is the capital of the Chaldeans.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Ur is the capital of the Chaldeans.",
+    "evidence_triple": "(Ur,is the capital of,Chaldeans)"
+  },
+  {
+    "id": "Novel-4e8cfeb0",
+    "source": "Novel-30752",
+    "question": "Which musical instrument is specifically mentioned in the narrative as having been used by the Egyptians during religious rites?",
+    "answer": "The Egyptians used the sistrum.",
+    "question_type": "Fact Retrieval",
+    "evidence": "The Egyptians used the sistrum during religious rites.",
+    "evidence_triple": "(Egyptians,used,sistrum)"
+  },
+  {
+    "id": "Novel-872af6b3",
+    "source": "Novel-30752",
+    "question": "According to the narrative, whose effigy is held by the National Museum of Mexico, as discussed in connection with Maya discoveries?",
+    "answer": "The National Museum of Mexico has the effigy of Chaacmol.",
+    "question_type": "Fact Retrieval",
+    "evidence": "The National Museum of Mexico has the effigy of Chaacmol.",
+    "evidence_triple": "(National Museum of Mexico,has the effigy of,CHAACMOL)"
+  },
+  {
+    "id": "Novel-c97388ab",
+    "source": "Novel-30752",
+    "question": "In the mythological narrative, who is described as the sister of Osiris?",
+    "answer": "Isis is the sister of Osiris.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Isis is the sister of Osiris.",
+    "evidence_triple": "(ISIS,was the sister of,OSIRIS)"
+  },
+  {
+    "id": "Novel-1edadd2a",
+    "source": "Novel-30752",
+    "question": "In the context of the Maya language as discussed in the narrative, to what does the word 'MOO' refer?",
+    "answer": "MOO is a word for macaw.",
+    "question_type": "Fact Retrieval",
+    "evidence": "MOO is a word for macaw.",
+    "evidence_triple": "(MOO,is a word for,macaw)."
+  },
+  {
+    "id": "Novel-59292b3b",
+    "source": "Novel-30752",
+    "question": "Who is credited in the narrative with describing the monuments of the Mayas, particularly regarding their accurate depiction?",
+    "answer": "Mrs. Le Plongeon described the monuments of Mayas.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Mrs. Le Plongeon described the monuments of the Mayas.",
+    "evidence_triple": "(Mrs. Le Plongeon, described the monuments of, Mayas)"
+  },
+  {
+    "id": "Novel-fa73ec7c",
+    "source": "Novel-30752",
+    "question": "Which individual is described as being associated with Cay in the narrative, particularly in relation to temple service or priestly duties among the Mayas?",
+    "answer": "Nicte was associated with Cay.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Nicte was associated with Cay.",
+    "evidence_triple": "(Nicte, was associated with, Cay)"
+  },
+  {
+    "id": "Novel-385b6182",
+    "source": "Novel-30752",
+    "question": "According to the narrative, into which Native American tribe did Mr. Cushing arrange to be adopted as part of his ethnological studies?",
+    "answer": "Mr. Cushing has caused his adoption in the tribe of Zunis.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Mr. Cushing has caused his adoption in the tribe of Zunis.",
+    "evidence_triple": "(Mr. Cushing,has caused his adoption in the tribe of,Zunis)."
+  },
+  {
+    "id": "Novel-7ee9b77f",
+    "source": "Novel-30752",
+    "question": "Where are the Pueblo Indians located, as specified in the context of the narrative's discussion of indigenous North American groups?",
+    "answer": "The Pueblo Indians are located in New Mexico.",
+    "question_type": "Fact Retrieval",
+    "evidence": "The Pueblo Indians are located in New Mexico.",
+    "evidence_triple": "(Pueblo Indians,located in,New Mexico)."
+  },
+  {
+    "id": "Novel-2cabebe5",
+    "source": "Novel-30752",
+    "question": "Who is described in the narrative as having customs and attainments identical to those of the Egyptians, particularly in relation to religious practices and architecture?",
+    "answer": "The Mayas had customs and attainments identical to those of Egyptians.",
+    "question_type": "Fact Retrieval",
+    "evidence": "The Mayas had customs and attainments identical to those of Egyptians.",
+    "evidence_triple": "(Mayas,had customs and attainments identical to those of,Egyptians)."
+  },
+  {
+    "id": "Novel-c87c6baf",
+    "source": "Novel-30752",
+    "question": "According to the account of familial relationships among the Maya royal family in the narrative, who was loved by Aac?",
+    "answer": "Moo was loved by Aac.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Moo was loved by Aac.",
+    "evidence_triple": "(Moo,was loved by,Aac)."
+  },
+  {
+    "id": "Novel-350fb80a",
+    "source": "Novel-30752",
+    "question": "What notable archaeological discovery did the author make at Chichen-Itza, as described in the narrative?",
+    "answer": "Chichen-Itza has a statue discovered by the author, Chaacmol.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Chichen-Itza has a statue discovered by the author.; The statue discovered by the author is named Chaacmol.",
+    "evidence_triple": "(Chichen-Itza, has a statue discovered by the author, Chaacmol)"
+  },
+  {
+    "id": "Novel-0c8340a1",
+    "source": "Novel-30752",
+    "question": "According to the narrative's reference to biblical events, who interpreted King Nebuchadnezzar's dream?",
+    "answer": "Daniel interpreted King Nebuchadnezzar's dream.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Daniel interpreted King Nebuchadnezzar's dream.",
+    "evidence_triple": "(King Nebuchadnezzar,had a dream interpreted by,Daniel)."
+  },
+  {
+    "id": "Novel-9b293f2c",
+    "source": "Novel-30752",
+    "question": "Who is identified in the narrative as being the king of the Chaldeans, particularly in the context of early Mesopotamian history?",
+    "answer": "King Urukh was king of the Chaldeans.",
+    "question_type": "Fact Retrieval",
+    "evidence": "King Urukh was king of the Chaldeans.",
+    "evidence_triple": "(King Urukh, was king of, Chaldeans)"
+  },
+  {
+    "id": "Novel-4b530497",
+    "source": "Novel-30752",
+    "question": "According to the environmental and economic description in the narrative, what natural product is said to abound in Yucatan?",
+    "answer": "Copal abounds in Yucatan.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Copal abounds in Yucatan.",
+    "evidence_triple": "(copal,abounds in,Yucatan)."
+  },
+  {
+    "id": "Novel-88315294",
+    "source": "Novel-30752",
+    "question": "Who are described as the primary inhabitants of Yucatan in the narrative's account of regional history?",
+    "answer": "The Mayas inhabited Yucatan.",
+    "question_type": "Fact Retrieval",
+    "evidence": "The Mayas inhabited Yucatan.",
+    "evidence_triple": "(Mayas,inhabited,Yucatan)."
+  },
+  {
+    "id": "Novel-fad73295",
+    "source": "Novel-30752",
+    "question": "Whose works had Mrs. Le Plongeon read, as mentioned in the narrative's discussion of sources consulted before exploring Maya ruins?",
+    "answer": "Mrs. Le Plongeon had read the works of Norman.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Mrs. Le Plongeon had read the works of Norman.",
+    "evidence_triple": "(Mrs. Le Plongeon,had read the works of,Norman)."
+  },
+  {
+    "id": "Novel-77457615",
+    "source": "Novel-30752",
+    "question": "What does the narrative state about the religious rites and habits of the Mayas in comparison to those of the Egyptians, highlighting any unique practices?",
+    "answer": "The Mayas had religious rites and habits unknown to Egyptians.",
+    "question_type": "Fact Retrieval",
+    "evidence": "The Mayas had religious rites and habits unknown to Egyptians.",
+    "evidence_triple": "(Mayas,had religious rites and habits unknown to,Egyptians)."
+  },
+  {
+    "id": "Novel-164736c9",
+    "source": "Novel-30752",
+    "question": "According to the description of seasonal climate in the narrative, during which month is it noted to be hot in Yucatan?",
+    "answer": "August is hot in Yucatan.",
+    "question_type": "Fact Retrieval",
+    "evidence": "August is hot in Yucatan.",
+    "evidence_triple": "(August,is hot in,Yucatan)."
+  },
+  {
+    "id": "Novel-e78b5a2b",
+    "source": "Novel-30752",
+    "question": "Who is described as vanquishing the Khati, according to the narrative's recounting of historical events in the ancient Near East?",
+    "answer": "Rameses vanquished the Khati.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Rameses vanquished the Khati.",
+    "evidence_triple": "(Rameses,vanquished,Khati)."
+  },
+  {
+    "id": "Novel-99082e88",
+    "source": "Novel-30752",
+    "question": "Where did the Mayas live, as identified in the narrative's description of their primary geographic location?",
+    "answer": "The Mayas lived in Central America.",
+    "question_type": "Fact Retrieval",
+    "evidence": "The Mayas lived in Central America.",
+    "evidence_triple": "(Mayas,lived in,Central America)."
+  },
+  {
+    "id": "Novel-ac0ad73f",
+    "source": "Novel-30752",
+    "question": "Who was king of Amenti according to the narrative's account of Egyptian mythology and the afterlife?",
+    "answer": "Osiris was king of Amenti.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Osiris was king of Amenti.",
+    "evidence_triple": "(Osiris,was king of,Amenti)."
+  },
+  {
+    "id": "Novel-2fc64004",
+    "source": "Novel-30752",
+    "question": "With which regions did the Mayas have relations, as discussed in the narrative's account of their contact with foreign lands?",
+    "answer": "The Mayas had relations with Asiatic peninsulas.",
+    "question_type": "Fact Retrieval",
+    "evidence": "The Mayas had relations with Asiatic peninsulas.",
+    "evidence_triple": "(Mayas,had relations with,Asiatic peninsulas)."
+  },
+  {
+    "id": "Novel-7a47e19b",
+    "source": "Novel-30752",
+    "question": "In the context of the ancient Yucatan as described in the novel, why might chroniclers and historians include detailed descriptions of caves in their accounts?",
+    "answer": "Chroniclers might be interested in describing caves because they are adorned with stalactites, have springs and streams inhabited by fishes and shrimps, and provide an outlet for the escape of gases.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Chroniclers might be interested in describing caves because they are adorned with stalactites.; Chroniclers might be interested in describing caves because they have springs and streams inhabited by fishes and shrimps.; Chroniclers might be interested in describing caves because they provide an outlet for the escape of gases.",
+    "evidence_triple": "(caves,are adorned with,stalactites); (caves,have,springs); (streams,are inhabited by,fishes); (streams,are inhabited by,shrimps); (caves,afford an outlet for the escape of,gases)"
+  },
+  {
+    "id": "Novel-2aca169f",
+    "source": "Novel-30752",
+    "question": "According to the narrative's description of the coastal ecosystem in Yucatan, how do forests that line the shores of lakes contribute to the environment?",
+    "answer": "Forests afford shelter to sea birds and water fowls, which are attracted to lakes.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Forests provide shelter to sea birds.; Forests provide shelter to water fowls.; Sea birds and water fowls are attracted to lakes.",
+    "evidence_triple": "(forests,afford shelter to,sea birds); (forests,afford shelter to,water fowls); (water fowls,are attracted to,lakes); (sea birds,are attracted to,lakes)"
+  },
+  {
+    "id": "Novel-7a312363",
+    "source": "Novel-30752",
+    "question": "What similarities between the customs of the CARIANS of Asia Minor and those of the inhabitants of Yucatan does the narrative describe?",
+    "answer": "The CARIANS had customs similar to those of the inhabitants of Yucatan.",
+    "question_type": "Complex Reasoning",
+    "evidence": "The CARIANS had customs similar to those of the inhabitants of Yucatan.",
+    "evidence_triple": "(CARIANS,had customs similar to those of the inhabitants of,Yucatan)"
+  },
+  {
+    "id": "Novel-de84fa2c",
+    "source": "Novel-30752",
+    "question": "What evidence does the narrative provide of Chaacmol's historical significance in Yucatan?",
+    "answer": "Chaacmol's significance in Yucatan is indicated by the presence of his funeral chamber in Yucatan and at Chichen-Itza.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Chaacmol's significance in Yucatan is indicated by the presence of his funeral chamber in Yucatan.; Chaacmol's funeral chamber is located at Chichen-Itza.",
+    "evidence_triple": "(Chaacmol,had funeral chamber in,Yucatan); (Chaacmol,has funeral chamber at,Chichen-Itza)"
+  },
+  {
+    "id": "Novel-f97ce566",
+    "source": "Novel-30752",
+    "question": "How is the climate of Yucatan characterized in the text?",
+    "answer": "The climate of Yucatan is mild and healthy, with temperature variations and occurrences of epidemics.",
+    "question_type": "Complex Reasoning",
+    "evidence": "The climate of Yucatan is mild.; The climate of Yucatan is healthy.; Yucatan experiences temperature variations.; Yucatan has occurrences of epidemics.",
+    "evidence_triple": "(climate,is mild and healthy in,Yucatan); (thermometer,varies in,Yucatan); (epidemics,occur in,Yucatan)"
+  },
+  {
+    "id": "Novel-da931eb1",
+    "source": "Novel-30752",
+    "question": "Which agricultural products are said to be abundant in Yucatan?",
+    "answer": "Yucatan is abundant in sugar cane, coffee, vanilla, india-rubber, and rosins.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Yucatan is abundant in sugar cane.; Yucatan is abundant in coffee.; Yucatan is abundant in vanilla.; Yucatan is abundant in india-rubber.; Yucatan is abundant in rosins.",
+    "evidence_triple": "(sugar cane,is cultivated in,Yucatan); (coffee,abounds in,Yucatan); (vanilla,abounds in,Yucatan); (india-rubber,abounds in,Yucatan); (rosins,abound in,Yucatan)"
+  },
+  {
+    "id": "Novel-0f2360eb",
+    "source": "Novel-30752",
+    "question": "Based on the historical accounts presented in the novel, why are the Khati considered significant in the context of ancient conflicts?",
+    "answer": "The Khati are considered significant because they were vanquished by Rameses, are celebrated for their wars against the Assyrians, and are mentioned in the Scriptures as the Hittites.",
+    "question_type": "Complex Reasoning",
+    "evidence": "The Khati are celebrated for their wars against the Assyrians.; The Khati were vanquished by Rameses.; The Khati are mentioned in the Scriptures as the Hittites.",
+    "evidence_triple": "(Khati,were vanquished by,Rameses); (Khati,are celebrated on account of their wars against,Assyrians); (Khati,are mentioned in the Scriptures as,Hittites)"
+  },
+  {
+    "id": "Novel-31952295",
+    "source": "Novel-30752",
+    "question": "Within the narrative's discussion of ancient Egypt, what roles did Osiris fulfill?",
+    "answer": "Osiris applied himself toward civilizing his countrymen in Egypt and sat as King over Amenti.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Osiris applied himself toward civilizing his countrymen in Egypt.; Osiris sat as King over Amenti.; Amenti is referred to as the land of the dead.",
+    "evidence_triple": "(Osiris,applied himself toward civilizing,his countrymen in Egypt); (Osiris,sat as King over,Amenti)"
+  },
+  {
+    "id": "Novel-9be8db74",
+    "source": "Novel-30752",
+    "question": "How does the narrative connect the names of Egypt, Tyre, and Khati (the Hittites) to etymological roots in the Maya language?",
+    "answer": "The names of Egypt, Tyre, and Khati have etymology in the Maya language.",
+    "question_type": "Complex Reasoning",
+    "evidence": "The names of Egypt, Tyre, and Khati have etymology in the Maya language.",
+    "evidence_triple": "(Egypt,has a name with etymology in,Maya language); (Tyre,has a name with etymology in,Maya language); (Khati,has a name with etymology in,Maya language)"
+  },
+  {
+    "id": "Novel-5a6b98a7",
+    "source": "Novel-30752",
+    "question": "According to the narrative, in what ways did the customs and achievements of the Mayas compare to those of the Egyptians?",
+    "answer": "The Mayas had customs and attainments identical to those of the Egyptians, but had religious rites and habits unknown to the Egyptians.",
+    "question_type": "Complex Reasoning",
+    "evidence": "The Mayas had customs identical to those of the Egyptians.; The Mayas had attainments identical to those of the Egyptians.; The Mayas had religious rites unknown to the Egyptians.; The Mayas had habits unknown to the Egyptians.",
+    "evidence_triple": "(Mayas,had customs and attainments identical to those of,Egyptians); (Mayas,had religious rites and habits unknown to,Egyptians)"
+  },
+  {
+    "id": "Novel-1c53b384",
+    "source": "Novel-30752",
+    "question": "What is the historical significance of Chaacmol in Maya history as described in the narrative?",
+    "answer": "Chaacmol had a funeral chamber at Chichen, was studied by Augustus Le Plongeon, and was killed by Aac.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Chaacmol had a funeral chamber at Chichen.; Chaacmol was studied by Augustus Le Plongeon.; Chaacmol was killed by Aac.",
+    "evidence_triple": "(Nicte,was associated with,Cay); (Chaacmol,funeral chamber at,Chichen); (Chaacmol,was studied by,Augustus Le Plongeon); (Chaacmol,was killed by,Aac)"
+  },
+  {
+    "id": "Novel-ff2105ab",
+    "source": "Novel-30752",
+    "question": "How is the climate of Yucatan characterized throughout the year according to the text?",
+    "answer": "The climate of Yucatan is mild and comparatively healthy, with hot weather in August, cool weather in December, and dry conditions in May.",
+    "question_type": "Complex Reasoning",
+    "evidence": "The climate of Yucatan is mild.; The climate of Yucatan is comparatively healthy.; Yucatan experiences hot weather in August.; Yucatan experiences cool weather in December.; Yucatan has dry conditions in May.",
+    "evidence_triple": "(climate,is mild and comparatively healthy in,Yucatan); (August,is hot in,Yucatan); (December,is cool in,Yucatan); (May,is dry in,Yucatan)"
+  },
+  {
+    "id": "Novel-6a90b47e",
+    "source": "Novel-30752",
+    "question": "Which agricultural products are abundant or commonly cultivated in Yucatan, as mentioned in the text?",
+    "answer": "Copal, sugar cane, vanilla, india-rubber, coffee, rosins, and tobacco are abundant or cultivated in Yucatan.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Copal is abundant in Yucatan.; Sugar cane is commonly cultivated in Yucatan.; Vanilla is abundant in Yucatan.; India-rubber is cultivated in Yucatan.; Coffee is abundant in Yucatan.; Rosins are cultivated in Yucatan.; Tobacco is abundant in Yucatan.",
+    "evidence_triple": "(copal,abounds in,Yucatan); (sugar cane,is cultivated in,Yucatan); (vanilla,abounds in,Yucatan); (india-rubber,abounds in,Yucatan); (coffee,abounds in,Yucatan); (rosins,abound in,Yucatan); (tobacco,abounds in,Yucatan)"
+  },
+  {
+    "id": "Novel-4a67a916",
+    "source": "Novel-30752",
+    "question": "What similarities and historical actions between the Carians and the Mayas of Yucatan are described in the narrative?",
+    "answer": "The Carians had customs similar to those of the inhabitants of Yucatan, where the Mayas lived, and spread terror among the populations bordering on the Mediterranean.",
+    "question_type": "Complex Reasoning",
+    "evidence": "The Carians had customs similar to those of the inhabitants of Yucatan.; The Mayas lived in Yucatan.; The Carians spread terror among populations bordering the Mediterranean.",
+    "evidence_triple": "(Carians,had customs similar to those of the inhabitants of,Yucatan); (Mayas,lived in,Yucatan); (Carians,spread terror among the populations bordering on,Mediterranean)"
+  },
+  {
+    "id": "Novel-cfab4b2d",
+    "source": "Novel-30752",
+    "question": "How does the narrative describe the relationship between the Mayas and the Asiatic peninsulas such as Burmah and Siam, particularly in terms of cultural interactions and the assertion that the Mayas did not receive their civilization from these regions?",
+    "answer": "The Mayas had relations with the Asiatic peninsulas, including Burmah and Siam, but did not receive their civilization from them.",
+    "question_type": "Complex Reasoning",
+    "evidence": "The Mayas had relations with the Asiatic peninsulas.; Burmah is one of the Asiatic peninsulas the Mayas had relations with.; Siam is one of the Asiatic peninsulas the Mayas had relations with.; The Mayas did not receive their civilization from the Asiatic peninsulas.",
+    "evidence_triple": "(Mayas,had relations with,Asiatic peninsulas); (Asiatic peninsula,has,Burmah); (Asiatic peninsula,has,Siam); (Mayas,did not receive civilization from,Asiatic peninsulas)"
+  },
+  {
+    "id": "Novel-7b422282",
+    "source": "Novel-30752",
+    "question": "What is the described relationship between the Mayas and the Khati (Hittites) in the narrative?",
+    "answer": "The Khati, also known as Hittites in the Scriptures, were vanquished by Egyptians and Assyrians and placed obstacles in the way of the Egyptians, while the Mayas had customs and attainments identical to those of the Egyptians.",
+    "question_type": "Complex Reasoning",
+    "evidence": "The Khati are also known as Hittites in the Scriptures.; The Khati were vanquished by the Egyptians.; The Khati were vanquished by the Assyrians.; The Khati placed obstacles in the way of the Egyptians.; The Mayas had customs identical to those of the Egyptians.; The Mayas had attainments identical to those of the Egyptians.",
+    "evidence_triple": "(Khati,are mentioned in the Scriptures as,Hittites); (Khati,were vanquished by,Egyptians); (Khati,were vanquished by,Assyrians); (Khati,always placed obstacles on the way of,Egyptians); (Mayas,had customs and attainments identical to those of,Egyptians)"
+  },
+  {
+    "id": "Novel-969f68c4",
+    "source": "Novel-30752",
+    "question": "How is the movement of the Itzaes described in relation to the Nahualt and MAYAB in the narrative?",
+    "answer": "The Itzaes, who spoke Maya, retreated before the Nahualt, who later invaded MAYAB.",
+    "question_type": "Complex Reasoning",
+    "evidence": "The Itzaes spoke Maya.; The Itzaes retreated before the Nahualt.; The Nahualt later invaded MAYAB.",
+    "evidence_triple": "(Maya,spoken by,Itzaes); (Itzaes,retreating before,Nahualt); (Nahualt,invaded,MAYAB)"
+  },
+  {
+    "id": "Novel-77129c82",
+    "source": "Novel-30752",
+    "question": "How does the narrative trace the spread of the Maya language to the Itzaes in Yucatan?",
+    "answer": "Hindostan has Maya, which is spoken by the Itzaes, who are associated with Yucatan.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Hindostan has the Maya language.; The Itzaes speak the Maya language.; The Itzaes are associated with Yucatan.",
+    "evidence_triple": "(Hindostan,has,Maya); (Maya,spoken by,Itzaes); (Yucatan,named after,Mayab)"
+  },
+  {
+    "id": "Novel-b61d38b6",
+    "source": "Novel-30752",
+    "question": "How does the narrative describe the relationship between Mayab and Hindostan?",
+    "answer": "Mayab is described as having similarity with Hindostan, which possesses the Mayas language spoken by the Itzaes.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Mayab is described as having similarity with Hindostan.; Hindostan possesses the Maya language.; The Maya language is spoken by the Itzaes.",
+    "evidence_triple": "(Mayab,has similarity with,Hindostan); (Hindostan,has,Mayas); (Maya,spoken by,Itzaes)"
+  },
+  {
+    "id": "Novel-aa3fdffc",
+    "source": "Novel-30752",
+    "question": "How does the narrative explain the outcome of the Nahualt's actions in relation to Mayab?",
+    "answer": "The Itzaes, who spoke Maya, retreated before the Nahualt, who then invaded MAYAB.",
+    "question_type": "Complex Reasoning",
+    "evidence": "The Itzaes spoke Maya.; The Itzaes retreated before the Nahualt.; The Nahualt then invaded MAYAB.",
+    "evidence_triple": "(Itzaes,retreating before,Nahualt); (Nahualt,invaded,MAYAB); (Maya,spoken by,Itzaes)"
+  },
+  {
+    "id": "Novel-5aa1b84d",
+    "source": "Novel-30752",
+    "question": "How does the narrative connect Mayab to the conquest of Yucatan by the Spanish?",
+    "answer": "Mayab is a country of the Mayas, the Mayas fought the Spanish, and the Spanish conquered Yucatan.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Mayab is a country of the Mayas.; The Mayas fought the Spanish.; The Spanish conquered Yucatan.",
+    "evidence_triple": "(Mayab,is a country of,Mayas); (Mayas,fought,Spanish); (Spanish,conquered,Yucatan)"
+  },
+  {
+    "id": "Novel-107a01f3",
+    "source": "Novel-30752",
+    "question": "What is the relationship between the Itzaes and the later invasion of Mayab?",
+    "answer": "The Itzaes, who spoke Maya, retreated before the Nahualt, who then invaded MAYAB.",
+    "question_type": "Complex Reasoning",
+    "evidence": "The Itzaes spoke Maya.; The Itzaes retreated before the Nahualt.; The Nahualt invaded MAYAB.",
+    "evidence_triple": "(Maya,spoken by,Itzaes); (Itzaes,retreating before,Nahualt); (Nahualt,invaded,MAYAB)"
+  },
+  {
+    "id": "Novel-ed6db2db",
+    "source": "Novel-30752",
+    "question": "Trace the reasoning path from Mayab’s similarity with Hindostan to the Mayas' conflict with the Spanish.",
+    "answer": "Mayab has similarity with Hindostan; Hindostan has Mayas; Mayab is a country of the Mayas, who fought the Spanish.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Mayab has similarity with Hindostan.; Hindostan has Mayas.; Mayab is a country of the Mayas.; The Mayas fought the Spanish.",
+    "evidence_triple": "(Mayab,has similarity with,Hindostan); (Hindostan,has,Mayas); (Maya,spoken by,Itzaes); (MAYAB,is a country,Mayas); (Mayas,fought,Spanish)"
+  },
+  {
+    "id": "Novel-8f82adb1",
+    "source": "Novel-30752",
+    "question": "How is the movement of the Itzaes and the arrival of the Nahualt situated within the broader history of Mayab?",
+    "answer": "The Itzaes, speakers of Maya, retreated before the Nahualt, who then invaded Mayab, which is a country of the Mayas.",
+    "question_type": "Complex Reasoning",
+    "evidence": "The Itzaes spoke Maya.; The Itzaes retreated before the Nahualt.; The Nahualt invaded Mayab.; Mayab is a country of the Mayas.",
+    "evidence_triple": "(Maya,spoken by,Itzaes); (Itzaes,retreating before,Nahualt); (Nahualt,invaded,MAYAB); (MAYAB,is a country,Mayas)"
+  },
+  {
+    "id": "Novel-f3260fdf",
+    "source": "Novel-30752",
+    "question": "Describe the reasoning path that links Mayab to the goddess Maia of Greece.",
+    "answer": "Mayab is a country of the Mayas, who are said to have originated from Mayab. Atlantis is the birthplace of Maia, a goddess in Greece.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Mayab is a country of the Mayas.; The Mayas are said to have originated from Mayab.; Atlantis is the birthplace of Maia.; Maia is a goddess in Greece.",
+    "evidence_triple": "(MAYAB, is a country of, Mayas); (Mayas, are said to have originated from, Mayab); (Atlantis, is the birthplace of, Maia); (Maia, is a goddess in, Greece)"
+  },
+  {
+    "id": "Novel-2bc096bc",
+    "source": "Novel-30752",
+    "question": "How does the narrative establish that the Mayas were present in both Babylon and Mayab?",
+    "answer": "Mayab is a country of the Mayas, and the Mayas established themselves in Babylon.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Mayab is a country of the Mayas.; The Mayas established themselves in Babylon.",
+    "evidence_triple": "(MAYAB,is a country,Mayas); (Mayas,established themselves in,Babylon)"
+  },
+  {
+    "id": "Novel-6410b3ef",
+    "source": "Novel-30752",
+    "question": "How does the narrative link Mayab to the origins of the Mayas and their presence in Babylon?",
+    "answer": "Mayab is a country of the Mayas, who are said to have originated from Mayab and established themselves in Babylon.",
+    "question_type": "Complex Reasoning",
+    "evidence": "Mayab is a country of the Mayas.; The Mayas are said to have originated from Mayab.; The Mayas established themselves in Babylon.",
+    "evidence_triple": "(MAYAB, is a country of, Mayas); (Mayas, are said to have originated from, Mayab); (Mayas, established themselves in, Babylon)"
+  },
+  {
+    "id": "Novel-403bb394",
+    "source": "Novel-30752",
+    "question": "In the context of Augustus Le Plongeon's discussion of ancient civilizations in 'Vestiges of the Mayas,' how was the number SEVEN regarded as a mystic or significant number among the Egyptians, Chaldeans, Hindoos, and Aryans, and what examples or symbolic uses of this number are described for these societies?",
+    "answer": "The number SEVEN held a profound mystic significance among the Egyptians, Chaldeans, Hindoos, and Aryans, woven deeply into the fabric of their spiritual and cultural traditions. For the Egyptians, this reverence was made tangible in the very stones of the great pyramid, where the grand gallery was constructed with seven courses of finely polished stones on each wall, and the gallery itself rose to seven times the height of other passages. This septenary symbolism extended to the architecture of sacred spaces, with seven-sided rooms and references to the Pleiades, or Seven Stars, believed by some to align with the pyramid’s meridian. Across these ancient civilizations, the recurrence of the number seven in sacred structures and cosmological associations underscored its enduring role as a symbol of mystery, order, and cosmic harmony.",
+    "question_type": "Contextual Summarize",
+    "evidence": "The number SEVEN was regarded as a mystic number among the Egyptians.; The number SEVEN was regarded as a mystic number among the Chaldeans.; The number SEVEN was regarded as a mystic number among the Hindoos.; The number SEVEN was regarded as a mystic number among the Aryans.; The number SEVEN reflects special cultural and symbolic importance in these societies.",
+    "evidence_triple": "(SEVEN,was a _mystic number_ among,Egyptians).; (SEVEN,was a _mystic number_ among,Chaldeans).; (SEVEN,was a _mystic number_ among,Hindoos).; (SEVEN,was a _mystic number_ among,Aryans)."
+  },
+  {
+    "id": "Novel-f6dc40fb",
+    "source": "Novel-30752",
+    "question": "According to the chroniclers' descriptions in 'Vestiges of the Mayas,' what ecological features characterize caves in the Yucatan Peninsula, and how do these caves interact with their surrounding environments, including their relationship to streams, springs, gases, stalactites, stalagmites, lowlands, lakes, sloughs, forests, and the wildlife such as sea birds and water fowls?",
+    "answer": "According to the chroniclers' vivid accounts, the caves of the Yucatan Peninsula are remarkable for their hidden streams and inexhaustible springs of clear, cold water, often inhabited by shrimps and fishes whose origins and destinations remain mysterious. These subterranean waters provide rare and precious sources of life in a landscape otherwise devoid of surface rivers or lakes. The caves themselves are adorned with dramatic stalactites and stalagmites, and serve as natural outlets for escaping gases. Surrounding these caves, the lowlands have given rise to lakes and sloughs, while the dense forests above offer sanctuary to sea birds and water fowls. The roots of trees, in their desperate search for water, can be seen plunging down the sheer brinks of the senotes, sometimes reaching a hundred feet to touch the hidden waters below, illustrating the profound and intricate relationship between the caves and the living world around them.",
+    "question_type": "Fact Retrieval",
+    "evidence": "Caves in the Yucatan Peninsula have streams.; Caves in the Yucatan Peninsula have springs.; Caves provide outlets for the escape of gases.; Caves are adorned with stalactites supported by stalagmites.; Caves interact with surrounding environments.; Lowlands have formed lakes and sloughs.; Forests provide shelter to sea birds and water fowls.",
+    "evidence_triple": "(chroniclers,write about,caves).; (caves,have,streams).; (caves,have,springs).; (caves,afford an outlet for the escape of,gases).; (caves,are adorned with,stalactites).; (stalactites,depend from,caves).; (stalagmites,support,stalactites).; (lowlands,have formed,lakes).; (lowlands,have formed,sloughs).; (forests,afford shelter to,sea birds).; (forests,afford shelter to,water fowls)."
+  },
+  {
+    "id": "Novel-82d548d7",
+    "source": "Novel-30752",
+    "question": "Drawing from Augustus Le Plongeon's analysis in 'Vestiges of the Mayas,' what evidence is presented for connections between the Mayas and the Egyptians, and what relationships or comparisons are described between the Mayas and the civilizations of the Asiatic peninsulas?",
+    "answer": "Augustus Le Plongeon presents evidence that the Mayas shared many customs and achievements with the Egyptians, noting striking similarities in their religious rites and cultural attainments. However, he argues that while these parallels exist, the Mayas also possessed unique religious practices unknown to the Egyptians. Le Plongeon further observes that the connections between the Mayas and the civilizations of the Asiatic peninsulas are more nuanced: although there are some shared customs and artistic features—such as the Asiatic type discernible in the obelisks of Copan and American features in the statues of Hindostan—these are not sufficient to suggest that the Mayas received their civilization from Asia. Instead, he suggests that occasional contact and the exchange of ideas occurred between these distant cultures, resulting in a tapestry of similarities and differences rather than direct descent or cultural transmission.",
+    "question_type": "Contextual Summarize",
+    "evidence": "The Mayas had many customs identical to those of the Egyptians.; The Mayas were compared to the Egyptians.; The Mayas had relations with Asiatic peninsulas.",
+    "evidence_triple": "(Mayas, had many customs and attainments identical to those of, Egyptians).; (Mayas, were compared to, Egyptians).; (Mayas, had relations with, Asiatic peninsulas)."
+  },
+  {
+    "id": "Novel-0ae62420",
+    "source": "Novel-30752",
+    "question": "In 'Vestiges of the Mayas,' how does Augustus Le Plongeon illustrate the connection between the Mayas and the Egyptians in terms of religious practices?",
+    "answer": "Augustus Le Plongeon describes a striking connection between the Mayas and the Egyptians through their shared use of the sistrum in religious ceremonies. He notes that this sacred instrument, integral to acts of worship, was not only present in ancient Egyptian rituals but also played a significant role in Maya religious practices. Le Plongeon emphasizes having witnessed the sistrum still in use among the natives of Yucatan during sun worship dances, underscoring the continuity and deep-rooted significance of this tradition. This parallel, he suggests, points to a profound similarity in the spiritual expressions of both civilizations.",
+    "question_type": "Contextual Summarize",
+    "evidence": "Both the Mayas and the Egyptians used the sistrum in their religious rites.; The use of the sistrum indicates a shared practice between the Mayas and the Egyptians.",
+    "evidence_triple": "(Mayas,used,sistrum).; (Egyptians,used,sistrum)."
+  },
+  {
+    "id": "Novel-35e77a1a",
+    "source": "Novel-30752",
+    "question": "According to the account in 'Vestiges of the Mayas,' what were Mrs. Le Plongeon's main contributions to the study of the Mayas?",
+    "answer": "Mrs. Le Plongeon played a vital and multifaceted role in advancing the study of the Mayas. She meticulously created accurate plans of Maya monuments, ensuring that their architectural details were faithfully recorded for future scholarship. Her keen intellect and dedication also led her to interpret the complex ideographic writings found on these ancient structures, helping to unlock the meanings behind their enigmatic symbols. Furthermore, she was deeply involved in the study of Chaacmol, contributing her insights and observations to the understanding of this significant figure in Maya history. Through her careful documentation and interpretive work, Mrs. Le Plongeon helped lay the groundwork for a more thorough and scientific exploration of Maya civilization.",
+    "question_type": "Contextual Summarize",
+    "evidence": "Mrs. Le Plongeon made accurate plans of Maya monuments.; Mrs. Le Plongeon interpreted ideographic writings of the Mayas.; Mrs. Le Plongeon studied Chaacmol.",
+    "evidence_triple": "(Mrs. Le Plongeon, made accurate plans of, Maya monuments).; (Mrs. Le Plongeon, interpreted the ideographic writings of, Mayas).; (Chaacmol, was studied by, Mrs. Le Plongeon)."
+  },
+  {
+    "id": "Novel-fe85502c",
+    "source": "Novel-30752",
+    "question": "Based on the descriptions in 'Vestiges of the Mayas,' what does the evidence suggest about the Mayas' interaction with the natural environment of Yucatan?",
+    "answer": "The evidence from 'Vestiges of the Mayas' paints a vivid picture of the Mayas as deeply engaged with the lush natural environment of Yucatan. Surrounded by immense forests of mahogany, cedar, and zapotillo, and with the land teeming with valuable plants like coffee, vanilla, and tobacco, the Mayas actively cultivated crops such as sugar cane, making use of the region’s remarkable fertility. The description of Yucatan as an 'immense sea of verdure' and the abundance of both wild and cultivated plants suggest that the Mayas not only adapted to but also shaped their environment, drawing sustenance and wealth from its luxuriant vegetation.",
+    "question_type": "Contextual Summarize",
+    "evidence": "The Mayas cultivated sugar cane in Yucatan.; Coffee and vanilla abounded in Yucatan.; The vegetation in Yucatan was characterized as luxuriant.; The evidence suggests the Mayas actively interacted with their environment.",
+    "evidence_triple": "(sugar cane,is cultivated in,Yucatan).; (coffee,abounds in,Yucatan).; (vanilla,abounds in,Yucatan).; (vegetation,is luxuriant in,Yucatan)."
+  },
+  {
+    "id": "Novel-67b7cadd",
+    "source": "Novel-30752",
+    "question": "According to the narrative in 'Vestiges of the Mayas,' how did military interactions with other groups, such as the conflicts between the Mayas and the Spanish and the invasion of Yucatan by the Nahualt, impact Maya civilization?",
+    "answer": "The Mayas' civilization was shaped by their conflicts with the Spanish and invasions by the Nahualt, such as the Nahualt invasion of Yucatan.",
+    "question_type": "Contextual Summarize",
+    "evidence": "The Mayas' civilization was shaped by conflicts with the Spanish.; The Mayas' civilization was impacted by invasions by the Nahualt.; The Nahualt invaded Yucatan.",
+    "evidence_triple": "(Mayas,fought,Spanish).; (Nahualt,invaded,Yucatan)."
+  },
+  {
+    "id": "Novel-890d94d9",
+    "source": "Novel-30752",
+    "question": "In the narrative detailing the history of the Mayas, how is the sequence of invasions and conflicts faced by the Mayas illustrated?",
+    "answer": "The narrative traces a vivid sequence of upheavals faced by the Mayas: first, the Nahualt invasion shattered their high civilization, introducing new religious symbols and disrupting their established order. Later, the Mayas found themselves in fierce conflict with the Spanish, whose arrival brought yet another wave of conquest and transformation. Ultimately, the Spanish succeeded in conquering Yucatan, marking the culmination of a relentless series of invasions and conflicts that profoundly shaped the fate of the Maya people.",
+    "question_type": "Contextual Summarize",
+    "evidence": "The Nahualt invaded Mayab.; The Mayas fought the Spanish.; The Spanish conquered Yucatan.; These events show a sequence of invasions and conflicts involving the Mayas.",
+    "evidence_triple": "(Nahualt, invaded, Mayab); (Mayas, fought, Spanish); (Spanish, conquered, Yucatan)"
+  },
+  {
+    "id": "Novel-25a4b381",
+    "source": "Novel-30752",
+    "question": "Within the broader historical context presented in the novel, how are the Maya language and its speakers portrayed in relation to the invasions and cultural shifts in the region?",
+    "answer": "The Maya language, resilient and ancient, is preserved by the Itzaes—a people who, after the Nahualt invasion and the destruction of their cities, retreated into the remote islands of Lake Peten and the nearly inaccessible mountain valleys. Despite the waves of conquest and cultural upheaval, the Itzaes have steadfastly maintained the customs, manners, and language of their ancestors, serving as living guardians of Maya heritage amid the shifting tides of history.",
+    "question_type": "Contextual Summarize",
+    "evidence": "The Maya language is spoken by the Itzaes.; The Itzaes retreated before the Nahualt.; The Nahualt invaded Mayab.",
+    "evidence_triple": "(Maya,spoken by,Itzaes).; (Itzaes,retreating before,Nahualt).; (Nahualt,invaded,MAYAB)."
+  },
+  {
+    "id": "Novel-6e3efa6e",
+    "source": "Novel-30752",
+    "question": "According to the narrative, how is the relationship between Mayab and Hindostan described, particularly in terms of their similarity and the presence of Maya in Hindostan, and how does this relate to the cultural or historical connections with the Mayas?",
+    "answer": "The narrative describes a striking similarity between Mayab and Hindostan, noting that not only do both regions share certain customs and beliefs, but the very presence of 'Maya' in Hindostan echoes the cultural and spiritual legacy of Mayab. This connection is further deepened by the observation that traditions, such as the deification of ancestors and specific rituals, appear in both places, suggesting a historical thread of interaction or shared heritage between the Mayas and the peoples of Hindostan.",
+    "question_type": "Contextual Summarize",
+    "evidence": "Mayab is said to have similarity with Hindostan.; Hindostan has Maya.",
+    "evidence_triple": "(Mayab,has similarity with,Hindostan).; (Hindostan,has,Maya)."
+  },
+  {
+    "id": "Novel-6c90555e",
+    "source": "Novel-30752",
+    "question": "How does the storyline in the novel construct the movement of the Itzaes and their interactions with other groups during periods of invasion?",
+    "answer": "The storyline vividly portrays the Itzaes, speakers of the ancient Maya tongue, as they are forced to abandon their cities and ancestral lands in the face of the advancing Nahualt invaders. Driven from Mayab, the Itzaes seek refuge in the remote islands of Lake Peten and the nearly inaccessible mountain valleys, where they strive to preserve their customs, language, and way of life. This movement not only highlights the resilience of the Itzaes but also reveals the complex and often tumultuous interactions between different groups vying for survival and identity in the region.",
+    "question_type": "Contextual Summarize",
+    "evidence": "The Itzaes speak the Maya language.; The Itzaes retreated before the Nahualt.; The Nahualt invaded Mayab.",
+    "evidence_triple": "(Maya,spoken by,Itzaes).; (Itzaes,retreating before,Nahualt).; (Nahualt,invaded,MAYAB)."
+  },
+  {
+    "id": "Novel-a631a017",
+    "source": "Novel-30752",
+    "question": "In the context of the novel's account of regional history, what patterns emerge in the way territorial changes of the Mayas are described?",
+    "answer": "The novel depicts a recurring pattern of upheaval and resilience in the history of the Mayas: first, the Nahualt invaders swept into Mayab, forcing the Itzaes—guardians of Maya language and tradition—to abandon their cities and seek refuge in remote islands and mountain valleys. Despite the destruction and displacement brought by the Nahualt, the Itzaes managed to preserve their ancestral customs and language in isolation. Later, the Mayas themselves faced a new wave of conflict as they fiercely resisted the Spanish, who, despite their efforts to erase Maya culture, could not extinguish the enduring spirit and language of the people.",
+    "question_type": "Contextual Summarize",
+    "evidence": "Mayab was invaded by the Nahualt.; The Itzaes retreated before the Nahualt.; The Mayas fought the Spanish.",
+    "evidence_triple": "(Nahualt,invaded,MAYAB).; (Itzaes,retreating before,Nahualt).; (Mayas,fought,Spanish)."
+  },
+  {
+    "id": "Novel-c6e6aba1",
+    "source": "Novel-30752",
+    "question": "What sequence of cultural or territorial succession is depicted in the novel among the Itzaes and the Nahualt?",
+    "answer": "The sequence unfolds as the Nahualt invaders descend upon Mayab, prompting the Itzaes—speakers of the ancient Maya tongue—to retreat from their devastated cities. Driven from their homeland, the Itzaes sought sanctuary in the secluded islands of Lake Peten and the rugged, mountain-guarded valleys, where they continued to uphold the customs and language of their ancestors, even as the world around them changed.",
+    "question_type": "Contextual Summarize",
+    "evidence": "The Itzaes speak the Maya language.; The Itzaes retreated before the Nahualt.; The Nahualt invaded Mayab.",
+    "evidence_triple": "(Maya,spoken by,Itzaes).; (Itzaes,retreating before,Nahualt).; (Nahualt,invaded,MAYAB)."
+  },
+  {
+    "id": "Novel-c64292d6",
+    "source": "Novel-30752",
+    "question": "How is the role of the Spanish described in the historical progression affecting the Mayas?",
+    "answer": "The Spanish, upon their arrival in Yucatan, were both astonished and impressed by the advanced civilization of the Mayas, with their grand stone cities and refined customs. Yet, despite this admiration, the Spanish engaged in fierce conflicts with the Mayas, ultimately overpowering them and conquering Yucatan. In the process, they sought to erase the high civilization they encountered, altering monuments and striving to suppress Maya culture and language—though, tellingly, the Maya tongue endured, outlasting even the Spanish efforts to eradicate it.",
+    "question_type": "Contextual Summarize",
+    "evidence": "The Spanish fought the Mayas.; The Spanish conquered Yucatan.",
+    "evidence_triple": "(Mayas,fought,Spanish); (Spanish,conquered,Yucatan)"
+  },
+  {
+    "id": "Novel-34e4b969",
+    "source": "Novel-30752",
+    "question": "Based on the interactions among the Itzaes, Nahualt, and Mayas described in the novel—where the Itzaes retreated before the Nahualt, the Nahualt invaded Mayab, and the Mayas fought the Spanish—what do these events reveal about the societal shifts and patterns of successive invasions in the region?",
+    "answer": "The evidence shows that the Itzaes retreated before the Nahualt, the Nahualt invaded Mayab, and the Mayas fought the Spanish, indicating a pattern of successive invasions and conflicts among these groups.",
+    "question_type": "Contextual Summarize",
+    "evidence": "The Itzaes retreated before the Nahualt.; The Nahualt invaded Mayab.; The Mayas fought the Spanish.; These events indicate a pattern of successive invasions and conflicts among these groups.",
+    "evidence_triple": "(Itzaes,retreating before,Nahualt).; (Nahualt,invaded,MAYAB).; (Mayas,fought,Spanish)."
+  },
+  {
+    "id": "Novel-34e7cea9",
+    "source": "Novel-30752",
+    "question": "Write a diary entry from the perspective of an Itzae reflecting on the similarity between Mayab and Hindostan and their shared language.",
+    "answer": "Diary Entry — Lately, the elders have gathered beneath the ceiba tree, their voices hushed as they speak of the uncanny likeness between our homeland, Mayab, and the far-off land of Hindostan. It stirs something deep within me to hear that our Maya tongue echoes in the valleys of that distant place, and that their customs—carrying children on the hip, the red handprints on sacred walls—mirror our own. As I, an Itzae, watch our people withdraw before the advance of the Nahualt, I cannot help but wonder if our kin in Hindostan have also been forced to yield, or if their language, like ours, clings to survival. The stories we share seem to spring from the same ancient root, and I find myself longing to know if, across the oceans and the years, our words and memories will endure.",
+    "question_type": "Creative Generation",
+    "evidence": "Elders have spoken of a similarity between Mayab and Hindostan.; The Maya language is spoken in the valleys of Hindostan.; The stories told by the Itzaes share a common root with those in Hindostan.; The Itzaes have retreated before the Nahualt.; The Itzae wonders if their kin in Hindostan face the same fate.",
+    "evidence_triple": "(Mayab, has similarity with, Hindostan).; (Hindostan, has, Maya).; (Maya, is spoken by, Itzaes).; (Itzaes, retreated before, Nahualt).; (Nahualt, invaded, Mayab).; (Mayab, is a country of, Mayas)."
+  }
+]
