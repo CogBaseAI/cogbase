@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 
 import jsonschema
 
@@ -153,6 +154,11 @@ _PROMPT_RULES_AND_SCHEMA = (
     "fact that originates solely in an assistant turn derived from document "
     "retrieval; the source documents already own that knowledge.\n"
     "- Write each memory as a single self-contained natural-language claim.\n"
+    "- Resolve every relative time reference (e.g. 'yesterday', 'last week', "
+    "'recently', 'two months ago') to an absolute date, computed against the "
+    "observation date given above the transcript — NOT against today's date. "
+    "Never store a vague or relative temporal reference; if a date cannot be "
+    "resolved, drop the temporal qualifier rather than guessing.\n"
     "- Set entities to the named entities the memory is about (people, projects, "
     "organizations, systems), lowercase; empty array when there are none.\n"
     "- Set source_seqs to the turn numbers the memory was derived from.\n"
@@ -192,6 +198,38 @@ def _build_system_prompt(domain_fact_guidance: str | None = None) -> str:
 
 # Default (generic) prompt, used when no domain guidance is supplied.
 _SYSTEM_PROMPT = _build_system_prompt()
+
+
+def _session_observation_date(events: list[MemoryEvent]) -> datetime | None:
+    """When the conversation took place — the anchor for relative time refs.
+
+    Distillation runs offline, often long after the session settled, so "today"
+    at distill time is the wrong anchor for a turn that said "yesterday".  We
+    pin every relative reference to *when the conversation happened*: the
+    ``session_started`` event if present, else the earliest event's timestamp.
+    Returns ``None`` only for an empty log (no anchor to offer).
+    """
+    started = next(
+        (e for e in events if e.event_type is EventType.SESSION_STARTED), None
+    )
+    if started is not None:
+        return started.created_at
+    return min((e.created_at for e in events), default=None)
+
+
+def _observation_header(observation_date: datetime | None) -> str:
+    """The transcript preamble that anchors relative time references.
+
+    Empty when there is no date to offer, so the transcript is unchanged and the
+    prompt's temporal rule simply has nothing to resolve against.
+    """
+    if observation_date is None:
+        return ""
+    return (
+        "Observation date (when this conversation took place): "
+        f"{observation_date:%Y-%m-%d (%A)}.\n"
+        "Resolve relative time references in the transcript against this date.\n\n"
+    )
 
 
 class Distiller:
@@ -247,7 +285,8 @@ class Distiller:
         transcript = "\n".join(
             f"[{m.seq} {m.role.value}] {m.content}" for m in thread
         )
-        parsed = await self._extract(transcript)
+        observation_date = _session_observation_date(events)
+        parsed = await self._extract(transcript, observation_date=observation_date)
         if not parsed:
             return []
 
@@ -378,11 +417,14 @@ class Distiller:
             snapshot["cited"] = cited
         return snapshot
 
-    async def _extract(self, transcript: str) -> dict | None:
+    async def _extract(
+        self, transcript: str, *, observation_date: datetime | None = None
+    ) -> dict | None:
         """LLM extraction → parsed+validated JSON, retrying (extraction pattern)."""
+        user_content = _observation_header(observation_date) + transcript
         messages = [
             {"role": "system", "content": self._system_prompt},
-            {"role": "user", "content": transcript},
+            {"role": "user", "content": user_content},
         ]
         content = ""
         for attempt in range(self._max_retries + 1):

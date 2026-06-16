@@ -170,6 +170,30 @@ async def test_distill_empty_thread_returns_nothing(episodic):
 
 
 @pytest.mark.asyncio
+async def test_distill_anchors_transcript_to_session_observation_date(episodic):
+    # The conversation happened when the log was written; distillation runs
+    # offline, so the prompt must anchor relative time refs ("yesterday") to the
+    # session date — not to whenever distill happens to run.
+    sid = "sess-temporal"
+    await _seed_turn(episodic, sid, "I met the investor yesterday", "Noted.")
+    events = await episodic.replay(session_id=sid)
+    session_date = min(e.created_at for e in events)
+
+    lt = await _long_term()
+    llm = _extracting_llm([
+        {"content": "user met the investor", "kind": "fact",
+         "source_seqs": [0], "confidence": 0.8},
+    ])
+    distiller = Distiller(episodic, lt, llm)
+    await distiller.distill_session(session_id=sid)
+
+    # The user message carries the session's observation date as the anchor.
+    user_msg = llm.complete.call_args.args[0][1]["content"]
+    assert f"{session_date:%Y-%m-%d}" in user_msg
+    assert "Observation date" in user_msg
+
+
+@pytest.mark.asyncio
 async def test_distill_drops_candidate_with_bad_kind(episodic):
     sid = "sess-2"
     await _seed_turn(episodic, sid, "hello", "hi")
