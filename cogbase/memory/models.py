@@ -337,6 +337,13 @@ class LongTermRecord(BaseModel):
     # 0..1; reinforced on repeat observation, weighed in reconciliation.
     confidence: float = 0.5
     status: MemoryStatus = MemoryStatus.ACTIVE
+    # Directed edges to other records this memory relates to (same entity/topic, a
+    # follow-up event, an update, or a contradiction).  A lightweight memory graph
+    # over the curated store — recall expands the neighborhood of its hits along
+    # these edges (see docs/long-term-memory.md).  Stored as ``memory_id`` strings;
+    # edges to a superseded/missing record are simply skipped on traversal, so no
+    # referential integrity is enforced.
+    linked_memory_ids: list[str] = Field(default_factory=list)
     source_event_ids: list[EventRef] = Field(default_factory=list)
     evidence_snapshot: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_utcnow)
@@ -374,6 +381,7 @@ class LongTermRecord(BaseModel):
                 "entities": FieldSchema(type=FieldType.JSON),
                 "confidence": FieldSchema(type=FieldType.FLOAT, index=True),
                 "status": s(index=True),
+                "linked_memory_ids": FieldSchema(type=FieldType.JSON),
                 "source_event_ids": FieldSchema(type=FieldType.JSON),
                 "evidence_snapshot": FieldSchema(type=FieldType.JSON),
                 "created_at": s(index=True),
@@ -419,6 +427,10 @@ class MemoryCandidate(BaseModel):
     kind: MemoryKind = MemoryKind.FACT
     # Normalized entity mentions the claim is about (see LongTermRecord.entities).
     entities: list[str] = Field(default_factory=list)
+    # Resolved ``memory_id``s of existing records this candidate relates to, lifted
+    # from the extractor's links against the existing-memory context and carried
+    # onto the promoted record (see LongTermRecord.linked_memory_ids).
+    linked_memory_ids: list[str] = Field(default_factory=list)
     source_event_ids: list[EventRef] = Field(default_factory=list)
     evidence_snapshot: dict = Field(default_factory=dict)
     # 0..1 — how strongly the source supports the claim; weighed in reconciliation.

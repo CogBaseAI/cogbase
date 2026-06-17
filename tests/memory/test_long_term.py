@@ -606,3 +606,81 @@ async def test_review_many_over_cap_raises():
     ]
     with pytest.raises(ValueError):
         await svc.review_many(decisions=decisions)
+
+
+# ---------------------------------------------------------------------------
+# recall neighborhood traversal (the memory graph)
+# ---------------------------------------------------------------------------
+
+async def _promote_active(svc, content, *, links=()):
+    return await svc.promote(
+        candidate=MemoryCandidate(
+            content=content,
+            kind=MemoryKind.FACT,
+            confidence=0.9,
+            linked_memory_ids=list(links),
+        ),
+        status=MemoryStatus.ACTIVE,
+    )
+
+
+# limit=1 isolates the primary hit to the single best vector match, so the
+# second record can only appear via graph expansion — the deterministic hashing
+# embedder otherwise returns every record in so small a store.
+
+
+@pytest.mark.asyncio
+async def test_recall_expands_forward_links():
+    svc = await _make_service()
+    a = await _promote_active(svc, "alpha apples orchard cider")
+    b = await _promote_active(svc, "beta bananas plantation tropical", links=[a])
+
+    # The query matches B by content; A is pulled in via B's forward edge.
+    results = await svc.recall(query="beta bananas plantation tropical", limit=1)
+    ids = [r.memory_id for r in results]
+    assert ids[0] == b
+    assert a in ids
+
+
+@pytest.mark.asyncio
+async def test_recall_expands_reverse_links():
+    svc = await _make_service()
+    a = await _promote_active(svc, "alpha apples orchard cider")
+    b = await _promote_active(svc, "beta bananas plantation tropical", links=[a])
+
+    # The query matches A; B is pulled in because it links back to A.
+    results = await svc.recall(query="alpha apples orchard cider", limit=1)
+    ids = [r.memory_id for r in results]
+    assert ids[0] == a
+    assert b in ids
+
+
+@pytest.mark.asyncio
+async def test_recall_neighbors_disabled():
+    structured = InMemoryStructuredStore().with_scope(AppScope(app_id="app1"))
+    vector = FAISSMemoryVectorStore().with_scope(AppScope(app_id="app1"))
+    svc = LongTermMemory(
+        structured, vector, MagicMock(), HashingEmbedding(),
+        app_id="app1", recall_neighbors=0,
+    )
+    await svc.setup()
+    a = await _promote_active(svc, "alpha apples orchard cider")
+    await _promote_active(svc, "beta bananas plantation tropical", links=[a])
+
+    results = await svc.recall(query="alpha apples orchard cider", limit=1)
+    assert [r.memory_id for r in results] == [a]
+
+
+@pytest.mark.asyncio
+async def test_recall_skips_superseded_neighbor():
+    svc = await _make_service()
+    a = await _promote_active(svc, "alpha apples orchard cider")
+    b = await _promote_active(svc, "beta bananas plantation tropical", links=[a])
+    # Supersede the forward-linked neighbor; the dangling edge is skipped.
+    recs = {r.memory_id: r for r in await svc._load_records([a])}
+    recs[a].status = MemoryStatus.SUPERSEDED
+    await svc._save_record(recs[a])
+
+    results = await svc.recall(query="beta bananas plantation tropical", limit=1)
+    ids = [r.memory_id for r in results]
+    assert ids == [b]

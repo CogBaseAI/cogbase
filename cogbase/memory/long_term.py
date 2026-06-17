@@ -160,6 +160,7 @@ class LongTermMemory:
         structured_collection: str = DEFAULT_STRUCTURED_COLLECTION,
         vector_collection: str = DEFAULT_VECTOR_COLLECTION,
         max_retries: int = 2,
+        recall_neighbors: int = 5,
     ) -> None:
         self._structured = structured_store
         self._vector = vector_store
@@ -168,6 +169,7 @@ class LongTermMemory:
         self._app_id = app_id
         self._structured_collection = structured_collection
         self._vector_collection = vector_collection
+        self._recall_neighbors = recall_neighbors
         # Learned lazily: from the embedder at ``setup`` or the first real
         # embedding, then cached so ``_ensure`` only creates collections once.
         self._dimensions: int | None = None
@@ -233,10 +235,14 @@ class LongTermMemory:
     async def recall(
         self, *, query: str, limit: int = 10
     ) -> list[LongTermRecord]:
-        """Return active memories relevant to *query*.
+        """Return active memories relevant to *query*, plus their neighborhood.
 
-        The app partition is enforced by the scoped store, not here.  Results
-        are ordered by vector relevance.
+        The app partition is enforced by the scoped store, not here.  The first
+        ``limit`` results are the vector-relevance hits; up to ``recall_neighbors``
+        more are appended by following the memory graph one hop out from those
+        hits (see :meth:`_neighbors`) — linked context the vector query alone
+        would miss (a follow-up event, the other side of a contradiction).  Set
+        ``recall_neighbors=0`` to disable and return only the relevance hits.
         """
         if not query.strip() or limit <= 0:
             return []
@@ -256,11 +262,51 @@ class LongTermMemory:
         by_id = {r.memory_id: r for r in records}
         # Preserve vector-relevance order; drop any record that no longer exists.
         results = [by_id[mid] for mid in ordered_ids if mid in by_id]
+        neighbors = await self._neighbors(results, self._recall_neighbors)
         logger.info(
-            "[long_term] app=%s recall: query=%r limit=%d -> %d active record(s)",
-            self._app_id, query, limit, len(results),
+            "[long_term] app=%s recall: query=%r limit=%d -> %d active record(s) "
+            "+ %d neighbor(s)",
+            self._app_id, query, limit, len(results), len(neighbors),
         )
-        return results
+        return results + neighbors
+
+    async def _neighbors(
+        self, primary: list[LongTermRecord], budget: int
+    ) -> list[LongTermRecord]:
+        """Active records one hop out from *primary* along the memory graph.
+
+        The edges are bidirectional in effect: ``forward`` follows each primary
+        record's own ``linked_memory_ids``; ``reverse`` finds records that link
+        *to* a primary one (an overlaps scan pushed to the store), so a freshly
+        recalled older memory still surfaces the newer memories that point back at
+        it.  Excludes the primary set itself, dedupes, and caps at *budget*.
+        """
+        if budget <= 0 or not primary:
+            return []
+        primary_ids = {r.memory_id for r in primary}
+        forward_ids = [
+            mid
+            for r in primary
+            for mid in r.linked_memory_ids
+            if mid not in primary_ids
+        ]
+        reverse_rows = await self._structured.query(
+            self._structured_collection,
+            [
+                Col("status") == MemoryStatus.ACTIVE.value,
+                Col("linked_memory_ids").overlaps(sorted(primary_ids)),
+            ],
+        )
+        neighbors: dict[str, LongTermRecord] = {}
+        if forward_ids:
+            for rec in await self._load_records(list(dict.fromkeys(forward_ids))):
+                if rec.status is MemoryStatus.ACTIVE and rec.memory_id not in primary_ids:
+                    neighbors[rec.memory_id] = rec
+        for row in reverse_rows:
+            rec = LongTermRecord.model_validate(row)
+            if rec.memory_id not in primary_ids:
+                neighbors.setdefault(rec.memory_id, rec)
+        return list(neighbors.values())[:budget]
 
     # ------------------------------------------------------------------
     # Lookup (the pull path: the memory_lookup tool)
@@ -471,6 +517,7 @@ class LongTermMemory:
             entities=normalize_entities(candidate.entities),
             confidence=candidate.confidence,
             status=status or self._default_status(candidate.kind, candidate.confidence),
+            linked_memory_ids=list(dict.fromkeys(candidate.linked_memory_ids)),
             source_event_ids=list(candidate.source_event_ids),
             evidence_snapshot=dict(candidate.evidence_snapshot),
         )
@@ -586,6 +633,13 @@ class LongTermMemory:
         """Reinforce *target*: bump confidence, merge provenance, optionally revise."""
         target.confidence = min(1.0, target.confidence + CONFIDENCE_REINFORCE)
         target.entities = normalize_entities(target.entities + candidate.entities)
+        # Merge the candidate's edges in, minus a self-edge to the record it is
+        # reinforcing (the extractor may link the duplicate back to its target).
+        target.linked_memory_ids = [
+            mid
+            for mid in dict.fromkeys(target.linked_memory_ids + candidate.linked_memory_ids)
+            if mid != target.memory_id
+        ]
         target.source_event_ids = _merge_refs(
             target.source_event_ids, candidate.source_event_ids
         )

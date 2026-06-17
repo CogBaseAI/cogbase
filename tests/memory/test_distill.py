@@ -261,3 +261,54 @@ async def test_distill_no_existing_memory_block_when_disabled(episodic):
 
     user_msg = llm.complete.call_args.args[0][1]["content"]
     assert "## Existing memories" not in user_msg
+
+
+@pytest.mark.asyncio
+async def test_distill_links_new_memory_to_existing(episodic):
+    # The extractor references the masked id from the existing-memories block;
+    # the distiller resolves it to the real memory_id and stores the edge.
+    from cogbase.memory.models import MemoryCandidate, MemoryKind
+
+    lt = await _long_term()
+    target_id = await lt.promote(
+        candidate=MemoryCandidate(
+            content="user has a dog named Max",
+            kind=MemoryKind.FACT,
+            confidence=0.9,
+            entities=["max"],
+        )
+    )
+
+    sid = "sess-link"
+    await _seed_turn(episodic, sid, "Max and I went camping and hiked", "Nice!")
+
+    llm = _extracting_llm([
+        {"content": "user went camping with Max and hiked", "kind": "fact",
+         "source_seqs": [0], "confidence": 0.8, "entities": ["max"],
+         "linked_memory_ids": [0]},
+    ])
+    distiller = Distiller(episodic, lt, llm)
+    ids = await distiller.distill_session(session_id=sid)
+
+    # The existing memory's id was shown as [id=0] in the prompt.
+    user_msg = llm.complete.call_args.args[0][1]["content"]
+    assert "[id=0] user has a dog named Max" in user_msg
+
+    new = (await lt._load_records(ids))[0]
+    assert new.linked_memory_ids == [target_id]
+
+
+@pytest.mark.asyncio
+async def test_distill_drops_unresolvable_link_id(episodic):
+    # A link id the extractor never saw (out of range / hallucinated) degrades to
+    # no edge rather than a dangling reference.
+    sid = "sess-badlink"
+    await _seed_turn(episodic, sid, "I work at Acme", "Got it.")
+    lt = await _long_term()  # empty store -> no existing memories, no valid ids
+    llm = _extracting_llm([
+        {"content": "user works at Acme", "kind": "fact", "source_seqs": [0],
+         "confidence": 0.8, "linked_memory_ids": [3]},
+    ])
+    distiller = Distiller(episodic, lt, llm)
+    ids = await distiller.distill_session(session_id=sid)
+    assert (await lt._load_records(ids))[0].linked_memory_ids == []

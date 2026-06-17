@@ -85,6 +85,12 @@ _EXTRACTION_SCHEMA: dict = {
                         "type": "array",
                         "items": {"type": "integer"},
                     },
+                    # Masked integer ids referencing the `## Existing memories`
+                    # block; resolved back to real memory_ids in _build_candidate.
+                    "linked_memory_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                    },
                     # Bounds are enforced by clamping in _parse_confidence rather
                     # than the schema: an out-of-range value should be clamped,
                     # not fail validation and drop the whole extraction batch.
@@ -150,12 +156,18 @@ _PROMPT_INTRO_AND_KINDS = (
 _PROMPT_RULES_AND_SCHEMA = (
     "Rules:\n"
     "- If an `## Existing memories` block appears below the transcript, it lists "
-    "durable memories already captured from prior sessions. Use it ONLY to avoid "
-    "duplicates: do NOT re-extract a claim already stated there. Still extract "
-    "genuinely new claims, including a new fact about an entity that already "
-    "appears in an existing memory (a known entity does not mean every fact about "
-    "it is captured). Never extract a memory FROM the existing-memories block — "
-    "every extraction must come from the transcript.\n"
+    "durable memories already captured from prior sessions, each tagged with an "
+    "id (e.g. [id=0]). Use it for two things only: (a) deduplication — do NOT "
+    "re-extract a claim already stated there; and (b) linking — see below. Still "
+    "extract genuinely new claims, including a new fact about an entity that "
+    "already appears in an existing memory (a known entity does not mean every "
+    "fact about it is captured). Never extract a memory FROM the existing-memories "
+    "block — every extraction must come from the transcript.\n"
+    "- Set linked_memory_ids to the ids of existing memories a new memory is "
+    "specifically related to: the same entity or topic, a follow-up or "
+    "continuation event, an update to it, or a contradiction of it. Use only ids "
+    "shown in the `## Existing memories` block; omit it (or use an empty array) "
+    "when nothing is related. Do NOT link on a vague shared theme.\n"
     "- Do NOT extract trivial chit-chat or transient task mechanics.\n"
     "- A subject-matter fact is durable only when the USER is its source — they "
     "asserted it, corrected the assistant, or confirmed a claim. Do NOT distill a "
@@ -241,25 +253,26 @@ def _observation_header(observation_date: datetime | None) -> str:
 
 
 def _existing_memories_block(records: list[LongTermRecord]) -> str:
-    """The transcript suffix listing already-captured memories for dedup.
+    """The transcript suffix listing already-captured memories for dedup + linking.
 
     Front-loading the related existing memories into the extraction prompt lets
-    the extractor skip claims already in the store, instead of generating
+    the extractor (a) skip claims already in the store, instead of generating
     duplicate candidates that only get caught (after an embed + a reconcile LLM
-    call) in :meth:`LongTermMemory.reconcile`.  Empty when there are no related
-    records, so the prompt's dedup rule simply has nothing to match against.
+    call) in :meth:`LongTermMemory.reconcile`; and (b) emit ``linked_memory_ids``
+    edges from a new memory to the related existing ones, building the memory
+    graph that recall traverses.  Empty when there are no related records, so the
+    prompt's dedup/linking rules simply have nothing to match against.
 
-    Only ``content`` is shown: the block is a dedup reference, not extractable
-    source material, so the prompt forbids extracting from it and we deliberately
-    omit ids — there is nothing here to link or target back to (cf. mem0's V3
-    pipeline, which masks ids for the *single-call* extract+reconcile variant
-    discussed in :meth:`LongTermMemory.reconcile`).
+    Records are tagged with their *position* (``[id=0]``, ``[id=1]``…), not their
+    real ``memory_id``: an LLM asked to echo a 36-char UUID eventually invents or
+    typos one (the same anti-hallucination masking :meth:`LongTermMemory._decide`
+    uses).  The position maps back to the real id in :meth:`Distiller._build_candidate`.
     """
     if not records:
         return ""
-    lines = "\n".join(f"- {r.content}" for r in records)
+    lines = "\n".join(f"- [id={i}] {r.content}" for i, r in enumerate(records))
     return (
-        "\n\n## Existing memories (already captured; for deduplication only)\n"
+        "\n\n## Existing memories (already captured; for deduplication and linking)\n"
         + lines
     )
 
@@ -333,10 +346,15 @@ class Distiller:
 
         seq_to_ref = {e.seq: e.ref for e in events}
         seq_to_event = {e.seq: e for e in events}
+        # Position -> real memory_id, mirroring the masked ids in the existing-
+        # memories block, to resolve the extractor's linked_memory_ids.
+        link_id_map = {i: r.memory_id for i, r in enumerate(existing)}
 
         candidates: list[MemoryCandidate] = []
         for item in parsed.get("memories", []):
-            candidate = self._build_candidate(item, seq_to_ref, seq_to_event)
+            candidate = self._build_candidate(
+                item, seq_to_ref, seq_to_event, link_id_map
+            )
             if candidate is not None:
                 candidates.append(candidate)
 
@@ -374,6 +392,7 @@ class Distiller:
         item: dict,
         seq_to_ref: dict[int, EventRef],
         seq_to_event: dict[int, MemoryEvent],
+        link_id_map: dict[int, str],
     ) -> MemoryCandidate | None:
         try:
             kind = MemoryKind(item["kind"])
@@ -401,10 +420,36 @@ class Distiller:
             content=content,
             kind=kind,
             entities=normalize_entities(item.get("entities", [])),
+            linked_memory_ids=self._resolve_links(
+                item.get("linked_memory_ids", []), link_id_map
+            ),
             source_event_ids=source_event_ids,
             evidence_snapshot=snapshot,
             confidence=confidence,
         )
+
+    @staticmethod
+    def _resolve_links(
+        raw: object, link_id_map: dict[int, str]
+    ) -> list[str]:
+        """Map the extractor's masked link ids back to real ``memory_id``s.
+
+        Drops anything that isn't an index we showed (an out-of-range or
+        hallucinated value), order-preserving and deduped, so a bad id degrades
+        to "no edge" rather than a dangling reference.
+        """
+        if not isinstance(raw, list):
+            return []
+        out: list[str] = []
+        for value in raw:
+            try:
+                index = int(value)
+            except (TypeError, ValueError):
+                continue
+            mid = link_id_map.get(index)
+            if mid is not None and mid not in out:
+                out.append(mid)
+        return out
 
     @staticmethod
     def _parse_confidence(value: object) -> float | None:
