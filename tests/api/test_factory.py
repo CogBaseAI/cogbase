@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,6 +16,7 @@ from cogbase.stores.schema import FieldType
 from cogbase.pipeline.ingestion_pipeline import VectorCollection, PipelineStep
 from cogbase.stores.document.local_fs import LocalFSDocumentStore
 from cogbase.stores.document.memory import InMemoryDocumentStore
+from cogbase.stores.log.local_fs import LocalFSLogStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.structured.sqlite import SQLiteStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSVectorStore
@@ -1042,3 +1044,71 @@ class TestBuildAppQueryPrompt:
             task_store=_mock_task_store(),
         )
         assert app._query_prompt is None
+
+
+# ---------------------------------------------------------------------------
+# build_app — memory config wiring (MemoryConfig -> LongTermMemory + Distiller)
+# ---------------------------------------------------------------------------
+
+_MEMORY_CONFIG_YAML = _FULL_CONFIG_YAML + textwrap.dedent("""\
+    memory:
+      domain_fact_guidance: Durable facts are deal terms and valuations.
+      existing_memory_limit: 3
+      reconcile_guidance: Clauses with different effective dates are distinct.
+      recall_neighbors: 2
+    """)
+
+
+def _memory_system(tmp_path):
+    return SystemResources(
+        structured_store=InMemoryStructuredStore(),
+        vector_store=FAISSVectorStore(),
+        document_store=InMemoryDocumentStore(),
+        log_store=LocalFSLogStore(tmp_path),
+    )
+
+
+class TestBuildAppMemoryConfig:
+    @patch("api.factory._build_llm")
+    async def test_memory_config_threaded_into_long_term_and_distiller(
+        self, mock_build_llm, tmp_path
+    ):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_MEMORY_CONFIG_YAML)
+        with patch("api.factory._build_embedder") as mock_emb:
+            mock_emb.return_value = MagicMock()
+            app = await build_app(
+                cfg,
+                system=_memory_system(tmp_path),
+                app_id=cfg.name, app_status="initializing",
+                task_store=_mock_task_store(),
+            )
+
+        lt = app._long_term
+        assert lt is not None
+        assert lt._recall_neighbors == 2
+        assert "Clauses with different effective dates are distinct." in lt._reconcile_prompt
+
+        dist = app._distiller
+        assert dist is not None
+        assert dist._existing_memory_limit == 3
+        assert "Durable facts are deal terms and valuations." in dist._system_prompt
+
+    @patch("api.factory._build_llm")
+    async def test_memory_defaults_when_section_omitted(self, mock_build_llm, tmp_path):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_FULL_CONFIG_YAML)
+        with patch("api.factory._build_embedder") as mock_emb:
+            mock_emb.return_value = MagicMock()
+            app = await build_app(
+                cfg,
+                system=_memory_system(tmp_path),
+                app_id=cfg.name, app_status="initializing",
+                task_store=_mock_task_store(),
+            )
+
+        # Defaults match the LongTermMemory / Distiller constructor defaults, and
+        # the generic prompts carry no injected domain block.
+        assert app._long_term._recall_neighbors == 5
+        assert app._distiller._existing_memory_limit == 10
+        assert "Domain reconciliation guidance" not in app._long_term._reconcile_prompt

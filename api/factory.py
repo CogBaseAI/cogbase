@@ -294,12 +294,20 @@ async def build_app(
             llm,
             embedder,
             app_id=app_id,
+            reconcile_guidance=config.memory.reconcile_guidance,
+            recall_neighbors=config.memory.recall_neighbors,
         )
 
     # Distiller: offline promotion of durable records out of a settled session
     # log.  Needs both the log to read and the long-term store to write into.
     distiller = (
-        Distiller(episodic, long_term, llm)
+        Distiller(
+            episodic,
+            long_term,
+            llm,
+            domain_fact_guidance=config.memory.domain_fact_guidance,
+            existing_memory_limit=config.memory.existing_memory_limit,
+        )
         if episodic is not None and long_term is not None
         else None
     )

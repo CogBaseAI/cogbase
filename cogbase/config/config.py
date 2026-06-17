@@ -522,6 +522,55 @@ class PipelineRoutingConfig(BaseModel):
     )
 
 
+class MemoryConfig(ConfigPromptMixin, BaseModel):
+    """Long-term memory tuning for one app (distillation + reconciliation).
+
+    Advanced, opt-in knobs the app generator deliberately does not author — every
+    field is ``prompt_skip`` so a user sets them manually in ``config.yaml`` when
+    they want to scope or tune the memory pipeline; omitting the section keeps the
+    generic defaults.
+    """
+
+    domain_fact_guidance: str | None = Field(
+        default=None,
+        description=(
+            "Application-specific description of which subject-matter facts are "
+            "durable, injected as an additive topic scope into the distiller's "
+            "extraction prompt. Narrows what counts as a `fact`/`correction`; it "
+            "cannot relax the rule that the user must be the fact's source."
+        ),
+        json_schema_extra={"prompt_skip": True},
+    )
+    existing_memory_limit: int = Field(
+        default=10,
+        description=(
+            "How many related existing memories the distiller vector-recalls and "
+            "injects into the extraction prompt as a deduplication + linking "
+            "reference. 0 disables the lookup (blind extraction)."
+        ),
+        json_schema_extra={"prompt_skip": True},
+    )
+    reconcile_guidance: str | None = Field(
+        default=None,
+        description=(
+            "Application-specific guidance injected as an additive domain block "
+            "into the long-term reconcile prompt — domain judgement about when two "
+            "observations are the same claim versus a genuine contradiction. It "
+            "cannot change the ADD/UPDATE/DELETE/NOOP operation set or output."
+        ),
+        json_schema_extra={"prompt_skip": True},
+    )
+    recall_neighbors: int = Field(
+        default=5,
+        description=(
+            "How many extra memories recall appends by following the memory graph "
+            "one hop out from its relevance hits (linked context the vector query "
+            "alone would miss). 0 disables neighborhood expansion."
+        ),
+        json_schema_extra={"prompt_skip": True},
+    )
+
+
 class AppConfig(ConfigPromptMixin, BaseModel):
     name: str = Field(
         description="Application name, kebab-case (lowercase, alphanumeric, hyphens only).",
@@ -580,6 +629,11 @@ class AppConfig(ConfigPromptMixin, BaseModel):
     workflows: list[WorkflowConfig] = Field(
         default_factory=list,
         description="Configured workflows.",
+    )
+    memory: MemoryConfig = Field(
+        default_factory=MemoryConfig,
+        description="Long-term memory tuning (distillation + reconciliation).",
+        json_schema_extra={"prompt_skip": True},
     )
 
     @field_validator("name")
