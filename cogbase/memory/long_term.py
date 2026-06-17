@@ -102,7 +102,7 @@ _RECONCILE_SCHEMA: dict = {
     "additionalProperties": False,
 }
 
-_RECONCILE_SYSTEM_PROMPT = (
+_RECONCILE_INTRO_AND_OPS = (
     "You curate a long-term memory store.  You are given a NEW observation and a "
     "list of EXISTING related memories.  Decide how the new "
     "observation reconciles against accumulated belief, and return exactly one "
@@ -119,6 +119,9 @@ _RECONCILE_SYSTEM_PROMPT = (
     "it.  Set target_memory_id to the contradicted memory's id (it will be "
     "superseded and the new observation promoted in its place).\n"
     "- NOOP: already fully known and correctly stated; nothing to change.\n\n"
+)
+
+_RECONCILE_RULES_AND_SCHEMA = (
     "Rules:\n"
     "- Prefer UPDATE over ADD when an existing memory expresses the same claim.\n"
     "- Use DELETE only for a real contradiction, not a mere refinement.\n"
@@ -126,6 +129,36 @@ _RECONCILE_SYSTEM_PROMPT = (
     "Return a single JSON object matching this JSON Schema:\n\n"
     + json.dumps(_RECONCILE_SCHEMA, indent=2)
 )
+
+
+def _build_reconcile_prompt(reconcile_guidance: str | None = None) -> str:
+    """Assemble the reconcile system prompt, optionally scoped to a domain.
+
+    The consolidation-side analog of distill's ``domain_fact_guidance`` (and of
+    mem0's ``custom_update_memory_prompt``): ``reconcile_guidance`` is an
+    *additive* slot inserted between the operation definitions and the rules.  It
+    lets one application inject domain judgement about *when* two observations are
+    the same claim, a genuine contradiction, or merely a refinement — e.g.
+    "two contract clauses with different effective dates are distinct records,
+    not a contradiction" — without being able to change the ADD/UPDATE/DELETE/
+    NOOP operation set or the JSON output format, which the rules below fix.
+    Empty/omitted reproduces the generic prompt.
+    """
+    guidance_block = ""
+    if reconcile_guidance and reconcile_guidance.strip():
+        guidance_block = (
+            "Domain reconciliation guidance for this application — weigh it when "
+            "choosing the operation (in particular, what counts as the same claim "
+            "versus a genuine contradiction). It adds domain judgement; it does "
+            "NOT change the operation set or the output format below:\n"
+            + reconcile_guidance.strip()
+            + "\n\n"
+        )
+    return _RECONCILE_INTRO_AND_OPS + guidance_block + _RECONCILE_RULES_AND_SCHEMA
+
+
+# Default (generic) prompt, used when no domain guidance is supplied.
+_RECONCILE_SYSTEM_PROMPT = _build_reconcile_prompt()
 
 
 def _utcnow() -> datetime:
@@ -147,6 +180,11 @@ class LongTermMemory:
         structured_collection / vector_collection: Collection names within the
                            scoped stores.
         max_retries:       Retries on an unparseable/invalid reconcile response.
+        reconcile_guidance: Optional application-specific guidance injected as an
+                           additive domain block in the reconcile prompt (see
+                           :func:`_build_reconcile_prompt`).  The consolidation-
+                           side analog of distill's ``domain_fact_guidance``;
+                           ``None`` uses the generic prompt.
     """
 
     def __init__(
@@ -161,6 +199,7 @@ class LongTermMemory:
         vector_collection: str = DEFAULT_VECTOR_COLLECTION,
         max_retries: int = 2,
         recall_neighbors: int = 5,
+        reconcile_guidance: str | None = None,
     ) -> None:
         self._structured = structured_store
         self._vector = vector_store
@@ -170,6 +209,7 @@ class LongTermMemory:
         self._structured_collection = structured_collection
         self._vector_collection = vector_collection
         self._recall_neighbors = recall_neighbors
+        self._reconcile_prompt = _build_reconcile_prompt(reconcile_guidance)
         # Learned lazily: from the embedder at ``setup`` or the first real
         # embedding, then cached so ``_ensure`` only creates collections once.
         self._dimensions: int | None = None
@@ -719,7 +759,7 @@ class LongTermMemory:
             f"EXISTING related memories:\n{related_block}"
         )
         messages = [
-            {"role": "system", "content": _RECONCILE_SYSTEM_PROMPT},
+            {"role": "system", "content": self._reconcile_prompt},
             {"role": "user", "content": user},
         ]
         parsed = await self._complete_json(messages)

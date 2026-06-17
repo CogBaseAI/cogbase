@@ -684,3 +684,49 @@ async def test_recall_skips_superseded_neighbor():
     results = await svc.recall(query="beta bananas plantation tropical", limit=1)
     ids = [r.memory_id for r in results]
     assert ids == [b]
+
+
+# ---------------------------------------------------------------------------
+# reconcile domain guidance (the consolidation-side analog of distill's
+# domain_fact_guidance / mem0's custom_update_memory_prompt)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reconcile_guidance_injected_into_decide_prompt():
+    structured = InMemoryStructuredStore().with_scope(AppScope(app_id="app1"))
+    vector = FAISSMemoryVectorStore().with_scope(AppScope(app_id="app1"))
+    llm = _llm_returning({"operation": "NOOP"})
+    svc = LongTermMemory(
+        structured, vector, llm, HashingEmbedding(),
+        app_id="app1",
+        reconcile_guidance="Clauses with different effective dates are distinct.",
+    )
+    await svc.setup()
+    # Seed a related active record (shared entity) so reconcile reaches _decide.
+    await svc.promote(
+        candidate=_candidate("contract clause on liability", entities=("acme",)),
+        status=MemoryStatus.ACTIVE,
+    )
+    await svc.reconcile(
+        candidate=_candidate("contract clause on liability cap", entities=("acme",)),
+    )
+
+    system_prompt = llm.complete.call_args.args[0][0]["content"]
+    assert "Domain reconciliation guidance" in system_prompt
+    assert "different effective dates are distinct" in system_prompt
+    # The guidance is additive — it sits above the operation rules, not replacing them.
+    assert system_prompt.index("Domain reconciliation guidance") < system_prompt.index("Rules:")
+
+
+@pytest.mark.asyncio
+async def test_reconcile_without_guidance_uses_generic_prompt():
+    svc = await _make_service(llm=_llm_returning({"operation": "NOOP"}))
+    await svc.promote(
+        candidate=_candidate("contract clause on liability", entities=("acme",)),
+        status=MemoryStatus.ACTIVE,
+    )
+    await svc.reconcile(
+        candidate=_candidate("contract clause on liability cap", entities=("acme",)),
+    )
+    system_prompt = svc._llm.complete.call_args.args[0][0]["content"]
+    assert "Domain reconciliation guidance" not in system_prompt
