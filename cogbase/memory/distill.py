@@ -33,6 +33,7 @@ from cogbase.memory.long_term import LongTermMemory
 from cogbase.memory.models import (
     EventRef,
     EventType,
+    LongTermRecord,
     MemoryCandidate,
     MemoryEvent,
     MemoryKind,
@@ -148,6 +149,13 @@ _PROMPT_INTRO_AND_KINDS = (
 
 _PROMPT_RULES_AND_SCHEMA = (
     "Rules:\n"
+    "- If an `## Existing memories` block appears below the transcript, it lists "
+    "durable memories already captured from prior sessions. Use it ONLY to avoid "
+    "duplicates: do NOT re-extract a claim already stated there. Still extract "
+    "genuinely new claims, including a new fact about an entity that already "
+    "appears in an existing memory (a known entity does not mean every fact about "
+    "it is captured). Never extract a memory FROM the existing-memories block — "
+    "every extraction must come from the transcript.\n"
     "- Do NOT extract trivial chit-chat or transient task mechanics.\n"
     "- A subject-matter fact is durable only when the USER is its source — they "
     "asserted it, corrected the assistant, or confirmed a claim. Do NOT distill a "
@@ -232,6 +240,30 @@ def _observation_header(observation_date: datetime | None) -> str:
     )
 
 
+def _existing_memories_block(records: list[LongTermRecord]) -> str:
+    """The transcript suffix listing already-captured memories for dedup.
+
+    Front-loading the related existing memories into the extraction prompt lets
+    the extractor skip claims already in the store, instead of generating
+    duplicate candidates that only get caught (after an embed + a reconcile LLM
+    call) in :meth:`LongTermMemory.reconcile`.  Empty when there are no related
+    records, so the prompt's dedup rule simply has nothing to match against.
+
+    Only ``content`` is shown: the block is a dedup reference, not extractable
+    source material, so the prompt forbids extracting from it and we deliberately
+    omit ids — there is nothing here to link or target back to (cf. mem0's V3
+    pipeline, which masks ids for the *single-call* extract+reconcile variant
+    discussed in :meth:`LongTermMemory.reconcile`).
+    """
+    if not records:
+        return ""
+    lines = "\n".join(f"- {r.content}" for r in records)
+    return (
+        "\n\n## Existing memories (already captured; for deduplication only)\n"
+        + lines
+    )
+
+
 class Distiller:
     """Promotes durable records out of one session log on settle.
 
@@ -247,6 +279,10 @@ class Distiller:
             subject-matter facts are durable, injected as an additive topic
             scope in the extraction prompt (see :func:`_build_system_prompt`).
             ``None`` uses the generic prompt.
+        existing_memory_limit: How many related existing memories to vector-recall
+            and inject into the extraction prompt as a dedup reference (see
+            :func:`_existing_memories_block`).  ``0`` disables the lookup and
+            reproduces the blind-extract behaviour.
     """
 
     def __init__(
@@ -258,6 +294,7 @@ class Distiller:
         max_retries: int = 2,
         min_confidence: dict[MemoryKind, float] | None = None,
         domain_fact_guidance: str | None = None,
+        existing_memory_limit: int = 10,
     ) -> None:
         self._episodic = episodic
         self._long_term = long_term
@@ -265,6 +302,7 @@ class Distiller:
         self._max_retries = max_retries
         self._min_confidence = min_confidence or DEFAULT_MIN_CONFIDENCE
         self._system_prompt = _build_system_prompt(domain_fact_guidance)
+        self._existing_memory_limit = existing_memory_limit
 
     async def distill_session(self, *, session_id: str) -> list[str]:
         """Replay, extract candidates, reconcile each; return affected memory ids."""
@@ -286,7 +324,10 @@ class Distiller:
             f"[{m.seq} {m.role.value}] {m.content}" for m in thread
         )
         observation_date = _session_observation_date(events)
-        parsed = await self._extract(transcript, observation_date=observation_date)
+        existing = await self._recall_existing(transcript)
+        parsed = await self._extract(
+            transcript, observation_date=observation_date, existing=existing
+        )
         if not parsed:
             return []
 
@@ -417,11 +458,41 @@ class Distiller:
             snapshot["cited"] = cited
         return snapshot
 
+    async def _recall_existing(self, transcript: str) -> list[LongTermRecord]:
+        """Vector-recall the active memories most related to this session.
+
+        Front-loaded into the extraction prompt so the extractor dedups against
+        accumulated belief up front (see :func:`_existing_memories_block`).  The
+        whole transcript is the recall query — the same semantic surface the
+        candidates will be drawn from.  Best-effort: a recall failure must not
+        sink the distillation, so it degrades to no context (blind extract).
+        """
+        if self._existing_memory_limit <= 0:
+            return []
+        try:
+            return await self._long_term.recall(
+                query=transcript, limit=self._existing_memory_limit
+            )
+        except Exception:
+            logger.warning(
+                "[distill] existing-memory recall failed; extracting without it",
+                exc_info=True,
+            )
+            return []
+
     async def _extract(
-        self, transcript: str, *, observation_date: datetime | None = None
+        self,
+        transcript: str,
+        *,
+        observation_date: datetime | None = None,
+        existing: list[LongTermRecord] | None = None,
     ) -> dict | None:
         """LLM extraction → parsed+validated JSON, retrying (extraction pattern)."""
-        user_content = _observation_header(observation_date) + transcript
+        user_content = (
+            _observation_header(observation_date)
+            + transcript
+            + _existing_memories_block(existing or [])
+        )
         messages = [
             {"role": "system", "content": self._system_prompt},
             {"role": "user", "content": user_content},

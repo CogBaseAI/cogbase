@@ -209,3 +209,55 @@ async def test_distill_drops_candidate_with_bad_kind(episodic):
     distiller = Distiller(episodic, lt, llm)
     ids = await distiller.distill_session(session_id=sid)
     assert ids == []
+
+
+@pytest.mark.asyncio
+async def test_distill_injects_existing_memories_for_dedup(episodic):
+    # Front-loaded existing memories appear in the extraction prompt as a dedup
+    # reference so the extractor can skip already-captured claims, instead of the
+    # duplicate only being caught later in reconcile.
+    lt = await _long_term()
+    # Seed an active memory the recall will surface.
+    from cogbase.memory.models import MemoryCandidate, MemoryKind
+
+    await lt.promote(
+        candidate=MemoryCandidate(
+            content="user prefers concise answers",
+            kind=MemoryKind.PREFERENCE,
+            confidence=0.9,
+        )
+    )
+
+    sid = "sess-existing"
+    await _seed_turn(episodic, sid, "remember I like concise answers", "Noted.")
+
+    llm = _extracting_llm([])
+    distiller = Distiller(episodic, lt, llm)
+    await distiller.distill_session(session_id=sid)
+
+    user_msg = llm.complete.call_args.args[0][1]["content"]
+    assert "## Existing memories" in user_msg
+    assert "user prefers concise answers" in user_msg
+
+
+@pytest.mark.asyncio
+async def test_distill_no_existing_memory_block_when_disabled(episodic):
+    lt = await _long_term()
+    from cogbase.memory.models import MemoryCandidate, MemoryKind
+
+    await lt.promote(
+        candidate=MemoryCandidate(
+            content="user prefers concise answers",
+            kind=MemoryKind.PREFERENCE,
+            confidence=0.9,
+        )
+    )
+    sid = "sess-disabled"
+    await _seed_turn(episodic, sid, "remember I like concise answers", "Noted.")
+
+    llm = _extracting_llm([])
+    distiller = Distiller(episodic, lt, llm, existing_memory_limit=0)
+    await distiller.distill_session(session_id=sid)
+
+    user_msg = llm.complete.call_args.args[0][1]["content"]
+    assert "## Existing memories" not in user_msg
