@@ -8,6 +8,7 @@ query runner would.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -212,3 +213,84 @@ async def test_compaction_failure_serves_full_thread(episodic):
     assert ctx[-1]["content"] == "new"
     assert all(m["role"] != "system" for m in ctx)
     assert not episodic.has_pending("s1")  # no session_compacted appended
+
+
+# ---------------------------------------------------------------------------
+# Per-session locking (a slow compaction must not stall other sessions)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_slow_compaction_does_not_block_other_sessions(episodic):
+    # The summary LLM call must run *outside* the per-session lock, and the lock
+    # is per session — so one session stuck mid-summary cannot stall another's
+    # context build.
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking_complete(*_a, **_k):
+        entered.set()
+        await release.wait()
+        return {"content": "COMPACTED", "tool_calls": None}
+
+    llm = _summarizing_llm()
+    llm.complete = AsyncMock(side_effect=blocking_complete)
+    mem = ShortTermMemory(episodic=episodic, compaction_token_budget=20, llm=llm)
+
+    big = "x" * 200  # ~50 tokens each, over the budget → session "slow" compacts
+    await _seed_turn(episodic, "slow", big + " one", big + " two")
+    await _seed_turn(episodic, "slow", big + " three", big + " four")
+
+    slow = asyncio.create_task(
+        mem.build_context(session_id="slow", current_user_message="a", token_budget=20)
+    )
+    # Wait until "slow" is parked inside the LLM — at which point its session lock
+    # is released (the summary runs outside it).
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    assert not slow.done()
+
+    # A different session builds context to completion while "slow" is still
+    # blocked. With a global lock this would deadlock until release.
+    ctx_other = await asyncio.wait_for(
+        mem.build_context(session_id="other", current_user_message="b"), timeout=1
+    )
+    assert ctx_other[-1]["content"] == "b"
+
+    release.set()
+    ctx_slow = await asyncio.wait_for(slow, timeout=1)
+    assert "COMPACTED" in ctx_slow[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_commit_rechecks_log_and_skips_double_compaction(episodic):
+    # If a compaction lands (and flushes) while the LLM summary is running, the
+    # recheck in _commit_compaction must honour it rather than fold a second time.
+    async def inject_then_summarise(*_a, **_k):
+        # Simulate a concurrent compaction covering the whole thread landing
+        # durably while this summary call is in flight.
+        await episodic.record_compaction(
+            session_id="s1", summary="OTHER", replaces_through=999, token_stats={}
+        )
+        await episodic.flush("s1")
+        return {"content": "MINE", "tool_calls": None}
+
+    llm = _summarizing_llm()
+    llm.complete = AsyncMock(side_effect=inject_then_summarise)
+    mem = ShortTermMemory(episodic=episodic, compaction_token_budget=20, llm=llm)
+
+    big = "x" * 200
+    await _seed_turn(episodic, "s1", big + " one", big + " two")
+    await _seed_turn(episodic, "s1", big + " three", big + " four")
+
+    ctx = await mem.build_context(
+        session_id="s1", current_user_message="latest", token_budget=20
+    )
+
+    # The already-landed summary wins; this build does not append its own.
+    assert "OTHER" in ctx[0]["content"]
+    assert all("MINE" not in m["content"] for m in ctx)
+    assert not episodic.has_pending("s1")  # no second session_compacted buffered
+    compactions = [
+        e for e in await episodic.replay(session_id="s1")
+        if e.event_type is EventType.SESSION_COMPACTED
+    ]
+    assert len(compactions) == 1
