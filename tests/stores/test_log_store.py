@@ -3,6 +3,7 @@
 import pytest
 
 from cogbase.stores import LogStoreBase
+from cogbase.stores.log.base import LogFenced
 from cogbase.stores.log.local_fs import LocalFSLogStore
 
 LOG_TYPE = "episodic"
@@ -89,3 +90,56 @@ async def test_rejects_path_escape(tmp_path):
     store = LocalFSLogStore(tmp_path)
     with pytest.raises(ValueError, match="escapes the store root"):
         await store.append(LOG_TYPE, "../../outside", ["bad"])
+
+
+# -- compare-and-append / fencing -------------------------------------------
+
+
+async def test_size_reports_bytes_and_zero_when_missing(tmp_path):
+    store = LocalFSLogStore(tmp_path)
+    assert await store.size(LOG_TYPE, "never-written") == 0
+    await store.append(LOG_TYPE, LOG, ["abc"])  # "abc\n" == 4 bytes
+    assert await store.size(LOG_TYPE, LOG) == 4
+
+
+async def test_append_returns_new_byte_offset(tmp_path):
+    store = LocalFSLogStore(tmp_path)
+    off1 = await store.append(LOG_TYPE, LOG, ["abc"])  # 4 bytes
+    assert off1 == 4
+    off2 = await store.append(LOG_TYPE, LOG, ["de", "f"])  # "de\n" + "f\n" == 5
+    assert off2 == 9
+    assert await store.size(LOG_TYPE, LOG) == 9
+
+
+async def test_empty_append_returns_current_size_without_fencing(tmp_path):
+    store = LocalFSLogStore(tmp_path)
+    await store.append(LOG_TYPE, LOG, ["abc"])
+    # An empty batch is a no-op even with a stale expected_offset.
+    assert await store.append(LOG_TYPE, LOG, [], expected_offset=999) == 4
+
+
+async def test_conditional_append_succeeds_on_matching_offset(tmp_path):
+    store = LocalFSLogStore(tmp_path)
+    off = await store.append(LOG_TYPE, LOG, ["a"], expected_offset=0)  # create
+    off = await store.append(LOG_TYPE, LOG, ["b"], expected_offset=off)
+    assert await store.load_lines(LOG_TYPE, LOG) == ["a", "b"]
+
+
+async def test_conditional_append_fences_a_stale_writer(tmp_path):
+    store = LocalFSLogStore(tmp_path)
+    # Two writers cold-start the same session and both observe offset 0.
+    first_off = await store.append(LOG_TYPE, LOG, ["live"], expected_offset=0)
+    assert first_off > 0
+    # The deposed writer still holds the stale offset and is rejected — its
+    # colliding line never lands.
+    with pytest.raises(LogFenced):
+        await store.append(LOG_TYPE, LOG, ["straggler"], expected_offset=0)
+    assert await store.load_lines(LOG_TYPE, LOG) == ["live"]
+
+
+async def test_conditional_create_fences_second_session_owner(tmp_path):
+    store = LocalFSLogStore(tmp_path)
+    await store.append(LOG_TYPE, LOG, ["owner"], expected_offset=0)
+    # A second writer that also thinks the log is brand-new (offset 0) loses.
+    with pytest.raises(LogFenced):
+        await store.append(LOG_TYPE, LOG, ["intruder"], expected_offset=0)

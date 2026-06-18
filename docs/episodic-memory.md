@@ -264,30 +264,46 @@ Single-writer and append safety:
   failover window can briefly produce two owners, and a paused old owner can wake
   after handoff (a lease alone does not prevent this; only a **fencing token** the
   store rejects when stale does).
-- So the append leans on the backend's own serialization as the safety net, not on
-  affinity: **local_fs** `O_APPEND` is atomic for line-sized writes; **s3
-  directory buckets** use the **append offset** (`WriteOffsetBytes` must equal the
-  current object size), itself a conditional on object length, and create-if-absent
-  uses `If-None-Match: *`. (We target directory buckets specifically for native
-  append; standard buckets, lacking it, would force a read-modify-write of the
-  whole object under `If-Match` CAS and could not fence a stuck writer.)
-- These guard *byte-level* integrity and *overwrite*, but the backends differ on
-  the **stuck-writer** case. `O_APPEND` has **no fencing**: if a deposed or stalled
-  old writer wakes and appends after the new owner has advanced, both appends
-  succeed, so the log can hold an out-of-order, `seq`-colliding straggler (two
-  distinct events both stamped `seq=6`). local_fs cannot *prevent* this — only
-  *detect* it, which is exactly the `ulid` witness's job (see
-  [Event identity](#event-identity)): the two records carry different ULIDs, so the
-  straggler is identifiable instead of silently masking one. The s3 directory
-  bucket, by contrast, can **reject** the stale writer — its `WriteOffsetBytes` no
-  longer matches the object length, so the conditional append fails; the offset is
-  the fencing token. So local_fs *detects*, s3 *prevents*.
-- A retry (the same logical event again) is the simpler duplicate, caught by the
-  `ulid` dedupe key regardless of backend — `O_APPEND` will happily write the same
-  line twice, so identity, not the append primitive, makes recording idempotent. On
-  read/rehydrate, prefer the contiguous monotonic `seq` run from the active writer
-  and quarantine an out-of-order straggler (flag it for debugging, don't thread it
-  into the conversation).
+- The fencing token is the log's **byte offset**, plumbed through the store
+  contract as a **compare-and-append**: `append(..., expected_offset)` writes only
+  if the object's current length equals `expected_offset` and raises `LogFenced`
+  otherwise (`cogbase/stores/log/base.py`). The writer (`EpisodicMemory`) seeds
+  the offset from `store.size(...)` on cold start — alongside recovering the next
+  `seq` from the tail — and threads each flush's returned new length into the next
+  `expected_offset`. Recovering `seq` alone is *not* enough: two cold-starting
+  owners read the same tail and both stamp `seq=N`. The offset is what catches it
+  — the first owner's flush advances the object, the second's `expected_offset`
+  goes stale, and its append is fenced before the colliding `seq` is ever
+  persisted.
+- Both backends honor the same contract (byte-level integrity and overwrite were
+  always covered; fencing the stuck writer is what this adds):
+  - **local_fs** appends under `flock` and checks the on-disk size against
+    `expected_offset` before writing (`O_APPEND` still keeps the batch write
+    atomic). Single-host fencing is therefore *real*, not merely detectable after
+    the fact. On a non-POSIX host without `flock` the check degrades to
+    best-effort.
+  - **s3 directory buckets** map `expected_offset` onto `WriteOffsetBytes` (and
+    `expected_offset == 0` onto create-with-`If-None-Match: *`). A
+    `WriteOffsetBytes`/precondition conflict raises `LogFenced` — the deposed
+    writer is **not** retried into success by re-reading the new size (an earlier
+    bug that silently defeated the fence). (We target directory buckets for native
+    append; standard buckets, lacking it, would force a read-modify-write of the
+    whole object under `If-Match` CAS.)
+- A fenced writer is **deposed**: `flush` drops the session's in-memory state and
+  re-raises; the query runner treats `LogFenced` as fatal and fails the turn
+  rather than acknowledging an answer that never landed (it does *not* retry — the
+  buffer is gone, and re-stamping the rejected `seq` is the very corruption the
+  fence prevents). A later turn on this process re-resolves `seq`+offset from the
+  tail, so affinity legitimately returning the session here continues cleanly.
+- A retry (the same logical event again, e.g. after a transient store error)
+  remains the simpler duplicate, caught by the `ulid` dedupe key on read —
+  identity, not the append primitive, makes recording idempotent. The `ulid`
+  witness also backstops the best-effort paths (`expected_offset=None`, or
+  non-POSIX local_fs): if a `seq` ever still collides, the two records carry
+  distinct ULIDs (see [Event identity](#event-identity)), so the straggler is
+  *detectable*. On read/rehydrate, prefer the contiguous monotonic `seq` run from
+  the active writer and quarantine an out-of-order straggler (flag it for
+  debugging, don't thread it into the conversation).
 
 ## Retention, deletion, and redaction
 

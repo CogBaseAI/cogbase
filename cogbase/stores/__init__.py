@@ -6,7 +6,7 @@ from cogbase.stores.factory import (
     build_vector_store,
 )
 from cogbase.stores.filters import Col, Filter, Op
-from cogbase.stores.log.base import LogStoreBase
+from cogbase.stores.log.base import LogFenced, LogStoreBase
 from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
 from cogbase.stores.scope import AppScope
 from cogbase.stores.structured.base import StructuredStoreBase
@@ -20,6 +20,7 @@ __all__ = [
     "FieldSchema",
     "FieldType",
     "Filter",
+    "LogFenced",
     "LogStoreBase",
     "Op",
     "StructuredStoreBase",

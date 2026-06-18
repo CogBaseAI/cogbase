@@ -73,7 +73,7 @@ from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import ChatMessage, CompletionResult, LLMBase, SystemTool, ToolDefinition
 from cogbase.memory import EpisodicMemory, EventRef, LongTermMemory, LongTermRecord, MemoryKind, ShortTermMemory
-from cogbase.stores import CollectionSchema, DocumentStoreBase, Filter, Op, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
+from cogbase.stores import CollectionSchema, DocumentStoreBase, Filter, LogFenced, Op, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 
 logger = logging.getLogger(__name__)
 
@@ -1291,6 +1291,16 @@ class QueryRunner:
             try:
                 await self._episodic.flush(session_id)
                 return
+            except LogFenced:
+                # Fatal, not transient: another writer owns this session, so the
+                # flush dropped our buffer.  Retrying would no-op the empty buffer
+                # and falsely acknowledge a turn whose answer never landed — fail
+                # the turn immediately instead.
+                logger.error(
+                    "[runner] episodic flush fenced for session=%s; another writer "
+                    "owns it — failing the turn", session_id,
+                )
+                raise
             except Exception as exc:  # noqa: BLE001 — retried, then re-raised below
                 last_exc = exc
                 logger.warning(

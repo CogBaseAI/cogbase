@@ -6,8 +6,13 @@ import asyncio
 import pathlib
 from collections.abc import Sequence
 
-from cogbase.stores.log.base import LogStoreBase
+from cogbase.stores.log.base import LogFenced, LogStoreBase
 from cogbase.stores.scope import AppScope
+
+try:  # POSIX advisory locking; absent on Windows.
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX hosts
+    fcntl = None  # type: ignore[assignment]
 
 
 class LocalFSLogStore(LogStoreBase):
@@ -18,6 +23,14 @@ class LocalFSLogStore(LogStoreBase):
     workers that briefly both own a session (a failover window) cannot interleave
     a partial line — the backend's own write serialization is the safety net, not
     process affinity.
+
+    When the caller passes ``expected_offset`` the append also *fences*: the file
+    is locked with ``flock`` and the write proceeds only if the on-disk size
+    matches, so a deposed writer is rejected with :class:`LogFenced` instead of
+    appending a ``seq``-colliding straggler.  This makes single-host fencing real
+    (not merely detectable after the fact); the cross-node story is the S3
+    directory-bucket backend.  On a non-POSIX host without ``flock`` the size
+    check still runs but is best-effort (no cross-process atomicity).
 
     Args:
         root: Directory that will hold all log files.  Created on first append.
@@ -36,13 +49,29 @@ class LocalFSLogStore(LogStoreBase):
             raise ValueError(f"log_type/log_id {log_type!r}/{log_id!r} escapes the store root")
         return candidate
 
-    async def append(self, log_type: str, log_id: str, lines: Sequence[str]) -> None:
-        if not lines:
-            return
+    async def append(
+        self,
+        log_type: str,
+        log_id: str,
+        lines: Sequence[str],
+        *,
+        expected_offset: int | None = None,
+    ) -> int:
         path = self._path(log_type, log_id)
-        blob = "".join(f"{line}\n" for line in lines)
+        if not lines:
+            # No-op write; report the current size without consulting the offset.
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, self._size, path)
+        blob = "".join(f"{line}\n" for line in lines).encode("utf-8")
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._append, path, blob)
+        return await loop.run_in_executor(
+            None, self._append, path, blob, expected_offset
+        )
+
+    async def size(self, log_type: str, log_id: str) -> int:
+        path = self._path(log_type, log_id)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._size, path)
 
     async def load_lines(
         self, log_type: str, log_id: str, *, tail: int | None = None
@@ -59,11 +88,34 @@ class LocalFSLogStore(LogStoreBase):
     # -- sync helpers -------------------------------------------------------
 
     @staticmethod
-    def _append(path: pathlib.Path, blob: str) -> None:
+    def _size(path: pathlib.Path) -> int:
+        try:
+            return path.stat().st_size
+        except FileNotFoundError:
+            return 0
+
+    @staticmethod
+    def _append(path: pathlib.Path, blob: bytes, expected_offset: int | None) -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
-        # One write() of the whole batch keeps it atomic under O_APPEND.
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(blob)
+        # Open for append in binary; O_APPEND keeps the batch write atomic, and the
+        # flock makes the size-check-then-write atomic across processes so the
+        # offset can fence a deposed writer.
+        with open(path, "ab") as fh:
+            if fcntl is not None:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                size = fh.seek(0, 2)  # current end == byte length
+                if expected_offset is not None and size != expected_offset:
+                    raise LogFenced(
+                        f"append to {path.name!r} fenced: "
+                        f"expected offset {expected_offset}, log is at {size}"
+                    )
+                fh.write(blob)
+                fh.flush()
+                return size + len(blob)
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
     def _read_lines(path: pathlib.Path, tail: int | None) -> list[str]:

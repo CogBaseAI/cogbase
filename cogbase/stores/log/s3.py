@@ -16,10 +16,11 @@ import asyncio
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
-from cogbase.stores.log.base import LogStoreBase
+from cogbase.stores.log.base import LogFenced, LogStoreBase
 from cogbase.stores.scope import AppScope
 
-# Stale-offset / lost-create races: re-read the size and retry against it.
+# Unconditional (expected_offset is None) appends re-read the size and retry on an
+# offset conflict — a benign concurrent appender, not a fence.
 _APPEND_MAX_RETRIES = 8
 _OFFSET_CONFLICT_CODES = {
     "PreconditionFailed",  # IfNoneMatch=* create lost, or offset stale
@@ -67,23 +68,87 @@ class S3LogStore(LogStoreBase):
         parts = [self._prefix, log_type, log_id] if self._prefix else [log_type, log_id]
         return "/".join(parts)
 
-    async def append(self, log_type: str, log_id: str, lines: Sequence[str]) -> None:
-        if not lines:
-            return
+    async def append(
+        self,
+        log_type: str,
+        log_id: str,
+        lines: Sequence[str],
+        *,
+        expected_offset: int | None = None,
+    ) -> int:
         key = self._key(log_type, log_id)
+        if not lines:
+            loop = asyncio.get_event_loop()
+            size = await loop.run_in_executor(self._executor, self._object_size, key)
+            return size or 0
         blob = "".join(f"{line}\n" for line in lines).encode("utf-8")
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(self._executor, self._append, key, blob)
+        return await loop.run_in_executor(
+            self._executor, self._append, key, blob, expected_offset
+        )
 
-    def _append(self, key: str, blob: bytes) -> None:
+    async def size(self, log_type: str, log_id: str) -> int:
+        key = self._key(log_type, log_id)
+        loop = asyncio.get_event_loop()
+        size = await loop.run_in_executor(self._executor, self._object_size, key)
+        return size or 0
+
+    def _append(self, key: str, blob: bytes, expected_offset: int | None) -> int:
+        if expected_offset is not None:
+            return self._append_fenced(key, blob, expected_offset)
+        return self._append_unconditional(key, blob)
+
+    def _append_fenced(self, key: str, blob: bytes, expected_offset: int) -> int:
+        """Conditional append: ``WriteOffsetBytes`` is the fencing token.
+
+        An offset/precondition conflict means another writer appended after a
+        handoff — this writer is deposed, so we raise :class:`LogFenced` rather
+        than re-reading the new size and retrying into success (which is exactly
+        the dual-write the fencing token exists to prevent).  Only genuinely
+        transient errors propagate to the caller as-is.
+        """
+        from botocore.exceptions import ClientError
+
+        try:
+            if expected_offset == 0:
+                # The writer asserts the log does not exist yet; IfNoneMatch=*
+                # makes the create itself conditional, so a second writer racing
+                # to own a brand-new session loses and is fenced.
+                self._s3.put_object(
+                    Bucket=self._bucket,
+                    Key=key,
+                    Body=blob,
+                    IfNoneMatch="*",
+                    ContentType="application/x-ndjson; charset=utf-8",
+                )
+            else:
+                self._s3.put_object(
+                    Bucket=self._bucket,
+                    Key=key,
+                    Body=blob,
+                    WriteOffsetBytes=expected_offset,
+                )
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code")
+            if code in _OFFSET_CONFLICT_CODES:
+                raise LogFenced(
+                    f"append to {key!r} fenced at offset {expected_offset}: {code}"
+                ) from exc
+            raise
+        return expected_offset + len(blob)
+
+    def _append_unconditional(self, key: str, blob: bytes) -> int:
+        """Best-effort append with no fencing: re-read the size and retry on conflict.
+
+        Used when the caller does not track an offset (single-writer-by-affinity).
+        A conflict here is treated as a benign concurrent appender, not a fence.
+        """
         from botocore.exceptions import ClientError
 
         for _ in range(_APPEND_MAX_RETRIES):
             size = self._object_size(key)
             try:
                 if size is None:
-                    # Create; IfNoneMatch=* fails if a racing writer created it
-                    # first, so we never clobber an existing log with a plain put.
                     self._s3.put_object(
                         Bucket=self._bucket,
                         Key=key,
@@ -91,14 +156,14 @@ class S3LogStore(LogStoreBase):
                         IfNoneMatch="*",
                         ContentType="application/x-ndjson; charset=utf-8",
                     )
-                else:
-                    self._s3.put_object(
-                        Bucket=self._bucket,
-                        Key=key,
-                        Body=blob,
-                        WriteOffsetBytes=size,
-                    )
-                return
+                    return len(blob)
+                self._s3.put_object(
+                    Bucket=self._bucket,
+                    Key=key,
+                    Body=blob,
+                    WriteOffsetBytes=size,
+                )
+                return size + len(blob)
             except ClientError as exc:
                 code = exc.response.get("Error", {}).get("Code")
                 if code in _OFFSET_CONFLICT_CODES:

@@ -22,6 +22,21 @@ from collections.abc import Sequence
 from cogbase.stores.scope import AppScope
 
 
+class LogFenced(Exception):
+    """Raised when a conditional ``append`` is rejected because the writer is stale.
+
+    The byte offset of the log object is its **fencing token**: a writer that
+    passes an ``expected_offset`` no longer matching the object's current length
+    has been *deposed* — another owner appended after a session handoff (or a
+    paused owner woke after one).  The store rejects the write rather than
+    re-reading and appending at the new end, so a stuck writer can never inject an
+    out-of-order, ``seq``-colliding straggler.  The caller must treat this as
+    fatal (relinquish the session, do **not** retry the same append) — see
+    ``EpisodicMemory.flush`` and ``docs/episodic-memory.md`` (single-writer and
+    append safety).
+    """
+
+
 class LogStoreBase(abc.ABC):
     """Append-only, line-oriented log keyed by ``log_type`` + ``log_id``.
 
@@ -40,7 +55,9 @@ class LogStoreBase(abc.ABC):
     Example::
 
         log = LocalFSLogStore("/var/cogbase/logs")
-        await log.append("episodic", "session-abc", ['{"seq": 0}', '{"seq": 1}'])
+        offset = await log.append("episodic", "session-abc", ['{"seq": 0}'])
+        # Fence subsequent appends on the offset the writer last observed.
+        await log.append("episodic", "session-abc", ['{"seq": 1}'], expected_offset=offset)
         lines = await log.load_lines("episodic", "session-abc", tail=1)
         await log.delete("episodic", "session-abc")
     """
@@ -59,13 +76,41 @@ class LogStoreBase(abc.ABC):
         return ScopedLogStore(self, scope)
 
     @abc.abstractmethod
-    async def append(self, log_type: str, log_id: str, lines: Sequence[str]) -> None:
-        """Append *lines* to *log_id*, creating it if absent.
+    async def append(
+        self,
+        log_type: str,
+        log_id: str,
+        lines: Sequence[str],
+        *,
+        expected_offset: int | None = None,
+    ) -> int:
+        """Append *lines* to *log_id* (creating it if absent) and return its new size.
 
         Each element becomes one newline-terminated record; the store owns the
         framing.  The whole batch lands as a single ordered, durable append (the
-        episodic writer flushes a turn's events as one call), so an empty *lines*
-        is a no-op.  Never overwrites — content is only ever appended.
+        episodic writer flushes a turn's events as one call).  Never overwrites —
+        content is only ever appended.  Returns the object's byte length *after*
+        the append, which the caller threads back as the next ``expected_offset``.
+
+        ``expected_offset`` makes the append a **compare-and-append**: when given,
+        the store appends only if the object's current byte length equals it, and
+        raises :class:`LogFenced` otherwise — the offset is a fencing token that a
+        deposed/stalled writer cannot satisfy after a handoff (``expected_offset=0``
+        additionally asserts the log does not yet exist, fencing a second writer
+        that races to create a brand-new session's log).  When ``None`` the append
+        is unconditional (legacy / single-writer-by-affinity callers).
+
+        An empty *lines* is a no-op: it performs no write and returns the current
+        size without consulting ``expected_offset``.
+        """
+
+    @abc.abstractmethod
+    async def size(self, log_type: str, log_id: str) -> int:
+        """Return the log's current size in bytes (0 if it does not exist).
+
+        A writer taking over a session reads this once on cold start to seed the
+        ``expected_offset`` it will fence subsequent appends on; it is the byte
+        analogue of recovering the next ``seq`` from the tail.
         """
 
     @abc.abstractmethod

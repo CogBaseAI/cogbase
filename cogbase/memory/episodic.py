@@ -17,6 +17,16 @@ Two design points from the doc shape the implementation:
   ``seq``.  On a cold start the next ``seq`` is recovered from the log tail, so a
   new process that takes over a session continues the sequence without
   duplicating it.
+- **The append is fenced on the log's byte offset.**  Recovering ``seq`` from the
+  tail does not by itself stop two cold-starting owners from both stamping the
+  same ``seq`` — they read the same tail.  So the writer also tracks the log's
+  byte length and passes it as the store's ``expected_offset``: the first owner's
+  flush advances the object, the second's offset goes stale, and its
+  compare-and-append is rejected with :class:`LogFenced` before the colliding
+  ``seq`` is ever persisted.  A fenced writer is *deposed* — :meth:`flush`
+  relinquishes the session rather than retrying (retrying is the bug).  The
+  offset, not affinity, is the correctness mechanism (see
+  ``docs/episodic-memory.md`` — single-writer and append safety).
 
 Read-back (:meth:`replay`, :meth:`tail`) dedupes by ``ulid`` so a retried append
 that double-wrote a line surfaces once.  Quarantining a ``seq``-colliding
@@ -46,7 +56,7 @@ from cogbase.memory.models import (
     ToolResultPayload,
     UserMessagePayload,
 )
-from cogbase.stores.log.base import LogStoreBase
+from cogbase.stores.log.base import LogFenced, LogStoreBase
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +81,7 @@ class EpisodicMemory:
         # from the log on a cold start, so losing it costs at most a re-read.
         self._buffers: dict[str, list[MemoryEvent]] = {}   # unflushed events, in seq order
         self._next_seq: dict[str, int] = {}                # next seq to assign
+        self._expected_offset: dict[str, int] = {}         # log byte length this writer last observed
         self._app_ids: dict[str, str | None] = {}          # app_id per session
         # One lock per session keeps cross-session appends concurrent while
         # serializing a session's own record/flush (it has a single writer).
@@ -296,11 +307,19 @@ class EpisodicMemory:
     async def flush(self, session_id: str) -> None:
         """Append the session's buffered events to the log as one ordered write.
 
-        Called at the turn boundary.  On success the buffer is cleared; on a
-        store failure the buffer is left intact (it *is* the retry buffer) and the
-        error re-raised so the caller can retry or — for continuity-critical
-        events — surface/alert rather than acknowledge the turn.  An empty buffer
-        is a no-op.
+        Called at the turn boundary.  On success the buffer is cleared and the
+        tracked ``expected_offset`` advances to the log's new length.  On a
+        transient store failure the buffer is left intact (it *is* the retry
+        buffer) and the error re-raised so the caller can retry or — for
+        continuity-critical events — surface/alert rather than acknowledge the
+        turn.  An empty buffer is a no-op.
+
+        :class:`LogFenced` is *not* retryable: it means another owner appended to
+        this session after a handoff, so this writer is deposed.  We drop the
+        session's in-memory state (so a later turn re-resolves the tail cleanly if
+        affinity legitimately returns here) and re-raise; the caller must fail the
+        turn rather than acknowledge it.  Retrying would re-stamp the same ``seq``
+        the fence just rejected — the very corruption the offset exists to stop.
         """
         lock = await self._lock_for(session_id)
         async with lock:
@@ -309,15 +328,34 @@ class EpisodicMemory:
                 return
             lines = [e.to_ndjson() for e in buffered]
             # Append under the lock: a session has a single writer, so serializing
-            # its own appends costs no cross-session concurrency.
-            await self._log.append(self._log_type, session_id, lines)
+            # its own appends costs no cross-session concurrency.  The offset fences
+            # a deposed co-owner whose flush would otherwise inject a colliding seq.
+            try:
+                new_offset = await self._log.append(
+                    self._log_type,
+                    session_id,
+                    lines,
+                    expected_offset=self._expected_offset.get(session_id),
+                )
+            except LogFenced:
+                logger.critical(
+                    "[episodic] app=%s session=%s FENCED on flush of %d event(s); "
+                    "another writer owns this session — relinquishing",
+                    self._app_ids.get(session_id),
+                    session_id,
+                    len(buffered),
+                )
+                self._drop_session_locked(session_id)
+                raise
+            self._expected_offset[session_id] = new_offset
             logger.info(
-                "[episodic] app=%s session=%s flushed %d event(s) [%s] up to seq=%d",
+                "[episodic] app=%s session=%s flushed %d event(s) [%s] up to seq=%d (offset=%d)",
                 self._app_ids.get(session_id),
                 session_id,
                 len(buffered),
                 ", ".join(sorted({e.event_type.value for e in buffered})),
                 buffered[-1].seq,
+                new_offset,
             )
             self._buffers[session_id] = []
 
@@ -364,8 +402,7 @@ class EpisodicMemory:
                 session_id,
             )
             await self._log.delete(self._log_type, session_id)
-            self._buffers.pop(session_id, None)
-            self._next_seq.pop(session_id, None)
+            self._drop_session_locked(session_id)
             self._app_ids.pop(session_id, None)
 
     # ------------------------------------------------------------------
@@ -395,6 +432,21 @@ class EpisodicMemory:
             events.append(event)
         return events
 
+    def _drop_session_locked(self, session_id: str) -> None:
+        """Forget this writer's process-local state for *session_id*.
+
+        Used when the session is deleted or when a flush is fenced (this writer
+        was deposed).  Clearing ``_next_seq``/``_expected_offset`` forces the next
+        ``record`` to re-resolve seq and offset from the log tail, so if affinity
+        legitimately returns the session here it continues cleanly; if not, the
+        next flush simply fences again — never corrupts the log.  Assumes the
+        per-session lock is held.  ``_app_ids`` is attribution, not ordering
+        state, so the caller pops it separately only on a true delete.
+        """
+        self._buffers.pop(session_id, None)
+        self._next_seq.pop(session_id, None)
+        self._expected_offset.pop(session_id, None)
+
     async def _lock_for(self, session_id: str) -> asyncio.Lock:
         async with self._locks_guard:
             lock = self._locks.get(session_id)
@@ -414,6 +466,12 @@ class EpisodicMemory:
             return
         self._buffers.setdefault(session_id, [])
         last = await self._log.load_lines(self._log_type, session_id, tail=1)
+        # Seed the fencing offset from the log's current byte length: the first
+        # flush conditions on it, so a co-owner that advanced the log in the
+        # meantime fences us instead of letting both writers stamp the same seq.
+        self._expected_offset[session_id] = await self._log.size(
+            self._log_type, session_id
+        )
         next_seq = 0
         if last:
             try:

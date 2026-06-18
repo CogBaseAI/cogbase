@@ -10,6 +10,7 @@ import pytest
 from cogbase.core.query_runner import MemoryTiers, QueryResult, QueryRunner, RetrievalResources
 from cogbase.llms.base import CompletionResult, SystemTool
 from cogbase.memory import EpisodicMemory, EventType
+from cogbase.stores.log.base import LogFenced
 from cogbase.stores.log.local_fs import LocalFSLogStore
 
 
@@ -185,6 +186,24 @@ async def test_continuity_flush_failure_fails_the_turn(tmp_path):
         await _drain(runner, "q", session_id="s1")
     # The events stay buffered (the retry buffer) for a later attempt.
     assert episodic.pending_continuity("s1")
+
+
+class _FencingLogStore(LocalFSLogStore):
+    """A log store that fences every append — simulates a deposed writer."""
+
+    async def append(self, *args, **kwargs):
+        raise LogFenced("deposed")
+
+
+async def test_continuity_flush_fence_fails_turn_without_retry(tmp_path):
+    # A fence is fatal, not transient: the turn fails and the buffer is dropped
+    # (the writer is deposed), so a retry cannot silently no-op an empty buffer
+    # into a falsely-acknowledged turn.
+    episodic = EpisodicMemory(_FencingLogStore(tmp_path))
+    runner = _runner(_make_llm(_text_result("answer")), episodic=episodic)
+    with pytest.raises(LogFenced):
+        await _drain(runner, "q", session_id="s1")
+    assert not episodic.pending_continuity("s1")  # relinquished, not retained
 
 
 async def test_best_effort_recording_failure_does_not_break_the_turn(episodic, monkeypatch):

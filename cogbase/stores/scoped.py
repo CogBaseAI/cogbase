@@ -141,8 +141,20 @@ class ScopedLogStore(LogStoreBase):
         super().__init__(scope)
         self._inner = inner
 
-    async def append(self, log_type: str, log_id: str, lines: Sequence[str]) -> None:
-        await self._inner.append(self._c(log_type), log_id, lines)
+    async def append(
+        self,
+        log_type: str,
+        log_id: str,
+        lines: Sequence[str],
+        *,
+        expected_offset: int | None = None,
+    ) -> int:
+        return await self._inner.append(
+            self._c(log_type), log_id, lines, expected_offset=expected_offset
+        )
+
+    async def size(self, log_type: str, log_id: str) -> int:
+        return await self._inner.size(self._c(log_type), log_id)
 
     async def load_lines(
         self, log_type: str, log_id: str, *, tail: int | None = None

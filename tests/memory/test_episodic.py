@@ -3,6 +3,7 @@
 import pytest
 
 from cogbase.memory import EpisodicMemory, EventRef, EventType, MemoryEvent
+from cogbase.stores.log.base import LogFenced
 from cogbase.stores.log.local_fs import LocalFSLogStore
 
 SESSION = "session-abc"
@@ -130,6 +131,54 @@ async def test_seq_resumes_from_log_on_cold_start(tmp_path):
     await second.flush(SESSION)
     events = await second.replay(session_id=SESSION)
     assert [e.seq for e in events] == [0, 1, 2]
+
+
+# -- dual-writer fencing ----------------------------------------------------
+
+
+async def test_concurrent_cold_start_owner_is_fenced_on_flush(tmp_path):
+    # Two processes cold-start the same session and both compute next seq=0.
+    store = LocalFSLogStore(tmp_path)
+    owner = EpisodicMemory(store)
+    intruder = EpisodicMemory(store)
+
+    a = await owner.record_user_message(session_id=SESSION, content="from-owner")
+    b = await intruder.record_user_message(session_id=SESSION, content="from-intruder")
+    assert a.seq == b.seq == 0  # the seq collision the offset must catch
+
+    await owner.flush(SESSION)  # owner lands first, advancing the log
+
+    # The intruder's offset is now stale; its flush is fenced, not retried into
+    # success — so its colliding seq=0 event never reaches the log.
+    with pytest.raises(LogFenced):
+        await intruder.flush(SESSION)
+
+    events = await owner.replay(session_id=SESSION)
+    assert len(events) == 1
+    assert events[0].payload["text"] == "from-owner"
+
+
+async def test_fenced_writer_relinquishes_and_can_re_resume(tmp_path):
+    store = LocalFSLogStore(tmp_path)
+    owner = EpisodicMemory(store)
+    intruder = EpisodicMemory(store)
+
+    await intruder.record_user_message(session_id=SESSION, content="doomed")
+    await owner.record_user_message(session_id=SESSION, content="owner-0")
+    await owner.flush(SESSION)
+
+    with pytest.raises(LogFenced):
+        await intruder.flush(SESSION)
+
+    # After fencing, the deposed writer dropped its session state: a fresh record
+    # re-resolves seq + offset from the log, so it continues cleanly (no longer
+    # colliding) if affinity legitimately returns the session to it.
+    ref = await intruder.record_user_message(session_id=SESSION, content="intruder-1")
+    assert ref.seq == 1  # resumed from the owner's seq=0, not a stale 0
+    await intruder.flush(SESSION)
+
+    events = await owner.replay(session_id=SESSION)
+    assert [e.payload["text"] for e in events] == ["owner-0", "intruder-1"]
 
 
 # -- app attribution inheritance & payload contracts -------------------------
