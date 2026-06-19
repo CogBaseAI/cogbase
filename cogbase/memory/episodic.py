@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 
 from ulid import ULID
 
@@ -133,6 +134,7 @@ class EpisodicMemory:
         session_id: str,
         app_id: str | None = None,
         metadata: dict | None = None,
+        observation_date: datetime | None = None,
     ) -> EventRef:
         # Establish the session's app attribution so later events inherit it
         # without the caller re-passing app_id on every record.
@@ -140,14 +142,20 @@ class EpisodicMemory:
         logger.info(
             "[episodic] app=%s session=%s session started", app_id, session_id
         )
-        return await self.record(
-            MemoryEvent(
-                session_id=session_id,
-                event_type=EventType.SESSION_STARTED,
-                app_id=app_id,
-                payload=SessionStartedPayload(metadata=metadata or {}).model_dump(),
-            )
+        # When the conversation happened in the past (e.g. replaying an external
+        # dialogue into memory), pin the event's timestamp to that date so the
+        # distiller anchors relative time references correctly — distillation runs
+        # offline, so wall-clock "now" would be the wrong anchor.  Distiller reads
+        # this via ``_session_observation_date`` (the session_started event).
+        event = MemoryEvent(
+            session_id=session_id,
+            event_type=EventType.SESSION_STARTED,
+            app_id=app_id,
+            payload=SessionStartedPayload(metadata=metadata or {}).model_dump(),
         )
+        if observation_date is not None:
+            event.created_at = observation_date
+        return await self.record(event)
 
     async def record_user_message(
         self,

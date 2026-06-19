@@ -23,6 +23,8 @@ from api.system_resources import SystemResources
 from api.factory import build_app
 from api.app_cache import AppCache
 from api.models import (
+    AddMemoryRequest,
+    AddMemoryResponse,
     AddSkillRequest,
     AppSkillRef,
     AppSkillsResponse,
@@ -767,6 +769,43 @@ async def close_session(
     asyncio.create_task(_run_distill_bg())
     return SessionCloseResponse(
         session_id=session_id, distillation="enqueued", task_id=task_id
+    )
+
+
+# ---------------------------------------------------------------------------
+# Long-term memory add endpoint (ingest a conversation into memory)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{app_name}/memory", response_model=AddMemoryResponse)
+async def add_memory(
+    app_name: str,
+    body: AddMemoryRequest,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+) -> AddMemoryResponse:
+    """Add conversation messages to long-term memory and return what was distilled.
+
+    A self-contained "add memory" call (mem0's ``add`` shape): the batch is
+    appended to a session's episodic log, distilled into durable facts, and
+    everything distilled is activated so it is immediately recallable — no
+    separate session-close or review step.  ``session_id`` is optional; a fresh
+    one is generated and returned when omitted.
+    """
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    try:
+        session_id, records = await app.add_memory(
+            messages=[m.model_dump() for m in body.messages],
+            session_id=body.session_id,
+            metadata=body.metadata,
+            observation_date=body.observation_date,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    return AddMemoryResponse(
+        session_id=session_id,
+        memories=[_to_query_memory(r) for r in records],
     )
 
 

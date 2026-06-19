@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any, Sequence, TYPE_CHECKING
+from uuid import uuid4
 
 from cogbase.config.config import RoutingStrategy
 from cogbase.pipeline.ingestion_pipeline import IngestionPipeline, IngestResult
@@ -399,6 +401,71 @@ class CogBaseApp:
         if self._long_term is None:
             raise RuntimeError("long-term memory is not configured")
         return await self._long_term.review_many(decisions=decisions)
+
+    async def add_memory(
+        self,
+        *,
+        messages: "list[dict]",
+        session_id: str | None = None,
+        metadata: dict | None = None,
+        observation_date: datetime | None = None,
+    ) -> "tuple[str, list[LongTermRecord]]":
+        """Add a batch of conversation messages to long-term memory.
+
+        One self-contained "add memory" operation (mem0's ``add`` shape): append
+        the messages to a session's episodic log, distill durable facts from it,
+        and activate everything distilled so it is immediately recallable —
+        bypassing the pending-review gate (an external conversation has no
+        reviewer in the loop).  No session bookkeeping for the caller: when
+        ``session_id`` is omitted a fresh one is generated and returned, so each
+        call is an isolated, independently-distilled session.
+
+        ``messages`` are ``{"role": "user"|"assistant", "content": str}`` dicts;
+        roles map to the episodic continuity thread (user message / final answer)
+        the distiller reads.  ``observation_date`` pins when the conversation took
+        place so relative time references resolve correctly at distill time.
+
+        Returns ``(session_id, records)`` where ``records`` are the long-term
+        memories this call created or reinforced.  Raises if long-term memory is
+        not configured.
+        """
+        if self._episodic is None or self._distiller is None or self._long_term is None:
+            raise RuntimeError("long-term memory is not configured")
+
+        from cogbase.memory import ReviewDecision
+
+        sid = session_id or f"add-{uuid4().hex}"
+        self._episodic.bind_app(sid, app_id=self.app_id)
+        await self._episodic.record_session_started(
+            session_id=sid,
+            app_id=self.app_id,
+            metadata=metadata,
+            observation_date=observation_date,
+        )
+        for msg in messages:
+            content = msg.get("content", "")
+            if not content:
+                continue
+            if msg.get("role") == "assistant":
+                await self._episodic.record_final_answer(session_id=sid, answer=content)
+            else:
+                await self._episodic.record_user_message(session_id=sid, content=content)
+        await self._episodic.flush(sid)
+
+        memory_ids = await self._distiller.distill_session(session_id=sid)
+        # Activate everything distilled: facts below the auto-promote threshold (and
+        # all corrections) land in pending_review and stay out of recall otherwise.
+        # accept() is a no-op ('skipped') for ids already active, so this is safe.
+        if memory_ids:
+            await self._long_term.review_many(
+                decisions=[ReviewDecision(memory_id=mid, accept=True) for mid in memory_ids]
+            )
+        records = await self._long_term.get_records(memory_ids)
+        logger.info(
+            "app.add_memory session=%s messages=%d -> %d memory record(s)",
+            sid, len(messages), len(records),
+        )
+        return sid, records
 
     async def start_session(
         self,

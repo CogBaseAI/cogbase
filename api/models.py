@@ -213,6 +213,46 @@ class QueryMemoryResponse(BaseModel):
     entities: list[str] = []
 
 
+class AddMemoryMessage(BaseModel):
+    role: Literal["user", "assistant"] = Field(
+        description="Speaker role; maps to the episodic continuity thread the distiller reads."
+    )
+    content: str = Field(description="The message text.")
+
+
+class AddMemoryRequest(BaseModel):
+    """Add a batch of conversation messages to long-term memory (mem0 ``add`` shape)."""
+
+    messages: list[AddMemoryMessage] = Field(
+        description="Conversation messages to distill into durable memories, in order."
+    )
+    session_id: str | None = Field(
+        default=None,
+        description=(
+            "Optional session to append to; a fresh one is generated and returned "
+            "when omitted, so each call is an isolated, independently-distilled session."
+        ),
+    )
+    metadata: dict | None = Field(
+        default=None, description="Arbitrary session metadata seeded onto the session."
+    )
+    observation_date: datetime | None = Field(
+        default=None,
+        description=(
+            "When the conversation took place; pins relative time references so they "
+            "resolve correctly at distill time. Defaults to now."
+        ),
+    )
+
+
+class AddMemoryResponse(BaseModel):
+    session_id: str = Field(description="The session the messages were appended to.")
+    memories: list[QueryMemoryResponse] = Field(
+        default=[],
+        description="The long-term memories this call created or reinforced (now active).",
+    )
+
+
 class QueryResponse(BaseModel):
     answer: str
     structured_records: list[dict] = []

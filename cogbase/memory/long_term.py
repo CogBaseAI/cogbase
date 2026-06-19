@@ -1012,6 +1012,17 @@ class LongTermMemory:
                 return cached
         return (await self._embedder.embed([text]))[0]
 
+    async def get_records(self, memory_ids: list[str]) -> list[LongTermRecord]:
+        """Load records by id, in the order requested (missing ids dropped).
+
+        Public read used to surface the records an ``add`` distilled+activated
+        (the reconcile path returns ids; callers want the records themselves).
+        """
+        if not memory_ids:
+            return []
+        by_id = {r.memory_id: r for r in await self._load_records(memory_ids)}
+        return [by_id[mid] for mid in memory_ids if mid in by_id]
+
     async def _load_records(self, memory_ids: list[str]) -> list[LongTermRecord]:
         rows = await self._structured.query(
             self._structured_collection, [Col("memory_id").in_(memory_ids)]
