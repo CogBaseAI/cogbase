@@ -299,6 +299,103 @@ async def test_distill_links_new_memory_to_existing(episodic):
 
 
 @pytest.mark.asyncio
+async def test_distill_is_idempotent_across_reruns(episodic):
+    # Sessions are resumable / re-closable, so distillation can run more than once
+    # over the same log.  A session_distilled watermark records how far it has
+    # extracted, so a re-run over an unchanged log re-extracts nothing and does
+    # not re-reconcile — which would otherwise reinforce the record and inflate
+    # its confidence with no new evidence.
+    sid = "sess-rerun"
+    await _seed_turn(episodic, sid, "I work at Acme Corp", "Got it.")
+    lt = await _long_term()
+    llm = _extracting_llm([
+        {"content": "user works at Acme Corp", "kind": "fact",
+         "source_seqs": [0], "confidence": 0.9},
+    ])
+    distiller = Distiller(episodic, lt, llm)
+
+    ids = await distiller.distill_session(session_id=sid)
+    assert len(ids) == 1
+    first_conf = (await lt._load_records(ids))[0].confidence
+    calls_after_first = llm.complete.call_count
+
+    # Re-distilling the unchanged log finds no turns past the watermark.
+    assert await distiller.distill_session(session_id=sid) == []
+    # The extraction LLM is not called again (the thread past the watermark is empty).
+    assert llm.complete.call_count == calls_after_first
+    # Confidence was not re-inflated by a re-reconcile.
+    assert (await lt._load_records(ids))[0].confidence == first_conf
+
+
+@pytest.mark.asyncio
+async def test_distill_resumed_session_extracts_only_new_turns(episodic):
+    # A resumed session is re-distilled: only turns appended past the watermark
+    # reach the extractor, not the already-distilled transcript.
+    sid = "sess-resume"
+    await _seed_turn(episodic, sid, "I work at Acme Corp", "Got it.")
+    lt = await _long_term()
+    llm = _extracting_llm([
+        {"content": "user works at Acme Corp", "kind": "fact",
+         "source_seqs": [0], "confidence": 0.9},
+    ])
+    distiller = Distiller(episodic, lt, llm)
+    await distiller.distill_session(session_id=sid)
+
+    # Resume: a new turn (user seq 3, after the watermark event at seq 2) arrives.
+    await _seed_turn(episodic, sid, "I drive a Ferrari 488 GTB", "Nice.")
+    llm.complete = AsyncMock(return_value={"content": json.dumps({"memories": [
+        {"content": "user drives a Ferrari 488 GTB", "kind": "fact",
+         "source_seqs": [3], "confidence": 0.9},
+    ]})})
+    await distiller.distill_session(session_id=sid)
+
+    # Only the new turn is in the second extraction's transcript; the already-
+    # distilled first turn (its transcript line) is gone.
+    user_msg = llm.complete.call_args.args[0][1]["content"]
+    assert "[3 user] I drive a Ferrari 488 GTB" in user_msg
+    assert "[0 user]" not in user_msg
+
+
+@pytest.mark.asyncio
+async def test_distill_advances_watermark_when_nothing_extracted(episodic):
+    # A successful extraction that yields no memories still advances the watermark:
+    # those turns were judged (chit-chat) and must not be re-examined next pass.
+    sid = "sess-empty-extract"
+    await _seed_turn(episodic, sid, "lol nice weather", "Indeed!")
+    lt = await _long_term()
+    llm = _extracting_llm([])
+    distiller = Distiller(episodic, lt, llm)
+
+    assert await distiller.distill_session(session_id=sid) == []
+    events = await episodic.replay(session_id=sid)
+    from cogbase.memory.projection import latest_distillation
+    assert latest_distillation(events) == 1  # the final_answer turn's seq
+
+    # Re-distilling finds nothing new and never calls the extractor again.
+    calls = llm.complete.call_count
+    assert await distiller.distill_session(session_id=sid) == []
+    assert llm.complete.call_count == calls
+
+
+@pytest.mark.asyncio
+async def test_distill_does_not_watermark_on_extraction_failure(episodic):
+    # An unparseable extraction (failure, not "nothing to extract") leaves the
+    # turns un-watermarked so a later pass retries them rather than silently
+    # skipping them forever.
+    sid = "sess-fail"
+    await _seed_turn(episodic, sid, "I work at Acme Corp", "Got it.")
+    lt = await _long_term()
+    llm = MagicMock()
+    llm.complete = AsyncMock(return_value={"content": "not json at all"})
+    distiller = Distiller(episodic, lt, llm)
+
+    assert await distiller.distill_session(session_id=sid) == []
+    events = await episodic.replay(session_id=sid)
+    from cogbase.memory.projection import latest_distillation
+    assert latest_distillation(events) == -1  # no watermark written
+
+
+@pytest.mark.asyncio
 async def test_distill_drops_unresolvable_link_id(episodic):
     # A link id the extractor never saw (out of range / hallucinated) degrades to
     # no edge rather than a dangling reference.

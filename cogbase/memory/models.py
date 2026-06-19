@@ -109,6 +109,7 @@ class EventType(str, Enum):
     FINAL_ANSWER = "final_answer"
     FEEDBACK = "feedback"
     SESSION_COMPACTED = "session_compacted"
+    SESSION_DISTILLED = "session_distilled"
 
 
 # Continuity-critical events: at-least-once durability required before turn-ack.
@@ -209,6 +210,18 @@ class SessionCompactedPayload(BaseModel):
     # event after ``replaces_through``.
     replaces_through: int
     token_stats: dict = Field(default_factory=dict)
+
+
+class SessionDistilledPayload(BaseModel):
+    # Distillation's watermark, symmetric with ``SessionCompactedPayload``'s
+    # ``replaces_through``: the last turn ``seq`` the distiller has extracted
+    # durable memories through.  Sessions are resumable / re-closable, so a
+    # later distill projects only turns *past* ``distilled_through`` instead of
+    # re-reconciling the whole transcript (which would re-inflate confidence by
+    # bumping it on every re-observation).  ``memory_count`` is the number of
+    # records the pass reconciled, kept for observability.
+    distilled_through: int
+    memory_count: int = 0
 
 
 class ToolCalledPayload(BaseModel):

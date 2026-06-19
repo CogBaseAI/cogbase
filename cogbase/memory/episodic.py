@@ -51,6 +51,7 @@ from cogbase.memory.models import (
     RetrievalHit,
     RetrievalResultPayload,
     SessionCompactedPayload,
+    SessionDistilledPayload,
     SessionStartedPayload,
     ToolCalledPayload,
     ToolResultPayload,
@@ -296,6 +297,33 @@ class EpisodicMemory:
                     summary=summary,
                     replaces_through=replaces_through,
                     token_stats=token_stats or {},
+                ).model_dump(),
+            )
+        )
+
+    async def record_distillation(
+        self,
+        *,
+        session_id: str,
+        distilled_through: int,
+        memory_count: int = 0,
+    ) -> EventRef:
+        """Record how far the offline distiller has extracted durable memories.
+
+        The watermark counterpart of :meth:`record_compaction`: the distiller
+        appends one ``session_distilled`` event per pass recording the last turn
+        ``seq`` it covered, so a later distill of a resumed/re-closed session
+        skips turns already distilled rather than re-reconciling them (see
+        ``SessionDistilledPayload``).  Not continuity-critical — if lost, the
+        worst case is a re-distill examining those turns again.
+        """
+        return await self.record(
+            MemoryEvent(
+                session_id=session_id,
+                event_type=EventType.SESSION_DISTILLED,
+                payload=SessionDistilledPayload(
+                    distilled_through=distilled_through,
+                    memory_count=memory_count,
                 ).model_dump(),
             )
         )

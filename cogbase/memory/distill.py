@@ -39,7 +39,7 @@ from cogbase.memory.models import (
     MemoryKind,
     normalize_entities,
 )
-from cogbase.memory.projection import project_thread
+from cogbase.memory.projection import latest_distillation, project_thread
 
 logger = logging.getLogger(__name__)
 
@@ -336,19 +336,29 @@ class Distiller:
         self._existing_memory_limit = existing_memory_limit
 
     async def distill_session(self, *, session_id: str) -> list[str]:
-        """Replay, extract candidates, reconcile each; return affected memory ids."""
+        """Replay, extract candidates, reconcile each; return affected memory ids.
+
+        Idempotent across re-runs: a ``session_distilled`` watermark records how
+        far prior passes extracted, so only turns past it are projected.  Without
+        it a re-distill (sessions are resumable / re-closable) would re-extract
+        the whole transcript and reinforce every already-captured record, drifting
+        confidence toward 1.0 with no new evidence.
+        """
         events = await self._episodic.replay(session_id=session_id)
         app_id = next((e.app_id for e in events if e.app_id), None)
-        thread = project_thread(events)
+        distilled_through = latest_distillation(events)
+        thread = project_thread(events, since_seq=distilled_through)
         if not thread:
             logger.info(
-                "[distill] app=%s session=%s has no thread; nothing to distill",
-                app_id, session_id,
+                "[distill] app=%s session=%s no turns past distilled_through=%d; "
+                "nothing to distill",
+                app_id, session_id, distilled_through,
             )
             return []
         logger.info(
-            "[distill] app=%s session=%s distilling %d turn(s) from %d event(s)",
-            app_id, session_id, len(thread), len(events),
+            "[distill] app=%s session=%s distilling %d turn(s) past "
+            "distilled_through=%d from %d event(s)",
+            app_id, session_id, len(thread), distilled_through, len(events),
         )
 
         transcript = "\n".join(
@@ -399,7 +409,49 @@ class Distiller:
             "[distill] app=%s session=%s extracted=%d reconciled=%d",
             app_id, session_id, len(parsed.get("memories", [])), len(memory_ids),
         )
+        # Advance the watermark past every turn this pass examined — even when it
+        # extracted nothing (those turns were judged and produced no memory).  Only
+        # a successful extraction reaches here: an unparseable/failed ``_extract``
+        # returned ``None`` above, so its turns stay un-watermarked and are retried.
+        await self._record_watermark(
+            session_id=session_id,
+            distilled_through=max(m.seq for m in thread),
+            memory_count=len(memory_ids),
+            app_id=app_id,
+        )
         return memory_ids
+
+    async def _record_watermark(
+        self,
+        *,
+        session_id: str,
+        distilled_through: int,
+        memory_count: int,
+        app_id: str | None,
+    ) -> None:
+        """Append + flush the ``session_distilled`` watermark for this pass.
+
+        Best-effort and symmetric with compaction's ``replaces_through``: the
+        distiller is the sole writer of a settled session, so it appends one
+        ``session_distilled`` event recording the last turn it extracted through
+        and flushes it durably.  A failure here does not undo the records already
+        promoted — it only risks a future re-distill re-examining these turns — so
+        it is logged, not raised (the records are the durable outcome, the
+        watermark only an optimization/guard).
+        """
+        try:
+            await self._episodic.record_distillation(
+                session_id=session_id,
+                distilled_through=distilled_through,
+                memory_count=memory_count,
+            )
+            await self._episodic.flush(session_id=session_id)
+        except Exception:
+            logger.warning(
+                "[distill] app=%s session=%s failed to record distilled_through=%d "
+                "watermark; a later distill may re-examine these turns",
+                app_id, session_id, distilled_through, exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Internals

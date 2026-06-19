@@ -11,7 +11,11 @@ from __future__ import annotations
 
 from cogbase.llms.compaction import estimate_tokens
 from cogbase.memory.models import EventType, MemoryEvent, MemoryRole
-from cogbase.memory.projection import latest_compaction, project_thread
+from cogbase.memory.projection import (
+    latest_compaction,
+    latest_distillation,
+    project_thread,
+)
 
 
 def _event(event_type: EventType, seq: int, **payload) -> MemoryEvent:
@@ -73,6 +77,41 @@ def test_latest_compaction_defaults_replaces_through_when_missing():
     # A malformed compaction payload missing replaces_through falls back to -1.
     event = _event(EventType.SESSION_COMPACTED, 2, summary="S")
     assert latest_compaction([event]) == ("S", -1)
+
+
+# ---------------------------------------------------------------------------
+# latest_distillation
+# ---------------------------------------------------------------------------
+
+def _distillation(seq: int, distilled_through: int) -> MemoryEvent:
+    return _event(
+        EventType.SESSION_DISTILLED, seq, distilled_through=distilled_through
+    )
+
+
+def test_latest_distillation_minus_one_when_never_distilled():
+    events = [_user(0, "hi"), _answer(1, "hello")]
+    assert latest_distillation(events) == -1
+
+
+def test_latest_distillation_empty_log():
+    assert latest_distillation([]) == -1
+
+
+def test_latest_distillation_returns_watermark():
+    events = [_user(0, "hi"), _answer(1, "hello"), _distillation(2, 1)]
+    assert latest_distillation(events) == 1
+
+
+def test_latest_distillation_takes_the_highest_watermark():
+    # Monotonic in practice, but an out-of-order straggler must not drag it back.
+    events = [_distillation(2, 3), _distillation(5, 1)]
+    assert latest_distillation(events) == 3
+
+
+def test_latest_distillation_defaults_when_missing():
+    event = _event(EventType.SESSION_DISTILLED, 2)  # no distilled_through
+    assert latest_distillation([event]) == -1
 
 
 # ---------------------------------------------------------------------------

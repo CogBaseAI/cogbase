@@ -73,6 +73,28 @@ def latest_compaction(events: list[MemoryEvent]) -> tuple[str | None, int]:
     return summary, replaces_through
 
 
+def latest_distillation(events: list[MemoryEvent]) -> int:
+    """Return the highest ``distilled_through`` watermark, or ``-1`` if never distilled.
+
+    The distiller's analog of :func:`latest_compaction`: it appends a
+    ``session_distilled`` event recording the last turn ``seq`` it has extracted
+    durable memories through, so a re-distill (sessions are resumable and
+    re-closable) projects only turns past it — never re-reconciling the whole
+    transcript and re-inflating confidence on every re-observation.  The
+    watermark is monotonic, but we take the max defensively so an out-of-order
+    straggler can't drag it backwards.  ``-1`` (never distilled) makes
+    :func:`project_thread` return the whole thread, reproducing the first-pass
+    behaviour.
+    """
+    watermark = -1
+    for event in events:
+        if event.event_type is EventType.SESSION_DISTILLED:
+            watermark = max(
+                watermark, int(event.payload.get("distilled_through", -1))
+            )
+    return watermark
+
+
 def project_thread(
     events: list[MemoryEvent], *, since_seq: int = -1
 ) -> list[MemoryMessage]:
