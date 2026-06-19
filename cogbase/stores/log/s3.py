@@ -195,6 +195,28 @@ class S3LogStore(LogStoreBase):
         lines = body.decode("utf-8").splitlines()
         return lines[-tail:] if tail is not None else lines
 
+    async def read_since(
+        self, log_type: str, log_id: str, offset: int
+    ) -> tuple[list[str], int]:
+        key = self._key(log_type, log_id)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self._executor, self._read_since, key, offset)
+
+    def _read_since(self, key: str, offset: int) -> tuple[list[str], int]:
+        # A ranged GET fetches only the bytes past the caller's watermark.  Size
+        # is resolved first so an at/past-EOF offset short-circuits without a 416
+        # (an out-of-range Range) and a shrink (size < offset) is reported back.
+        size = self._object_size(key)
+        if size is None:
+            return [], 0
+        if offset >= size:
+            return [], size
+        resp = self._s3.get_object(
+            Bucket=self._bucket, Key=key, Range=f"bytes={offset}-"
+        )
+        body = resp["Body"].read()
+        return body.decode("utf-8").splitlines(), size
+
     def _get(self, key: str) -> bytes | None:
         try:
             resp = self._s3.get_object(Bucket=self._bucket, Key=key)

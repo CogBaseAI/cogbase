@@ -126,6 +126,30 @@ class LogStoreBase(abc.ABC):
         """
 
     @abc.abstractmethod
+    async def read_since(
+        self, log_type: str, log_id: str, offset: int
+    ) -> tuple[list[str], int]:
+        """Return the records appended at/after byte *offset*, plus the log's size.
+
+        The byte analogue of ``tail``: a consumer that already folded the log up
+        to *offset* reads only what was appended since, instead of re-fetching and
+        re-parsing the whole object every turn (short-term memory's projection
+        cache rides on this — see ``cogbase.memory.short_term``).  *offset* must
+        be a **record boundary** — a value previously returned by :meth:`append`
+        or :meth:`size`; appends are whole newline-framed records, so every such
+        value lands between records.
+
+        Returns ``(records, current_size)`` with terminators stripped:
+
+        - ``offset == current_size`` → ``([], current_size)`` (nothing new).
+        - ``offset > current_size`` → ``([], current_size)``.  The log shrank
+          under the caller (deleted/recreated, or a different stream now occupies
+          the id); ``current_size < offset`` is the caller's signal to discard its
+          cache and re-read from ``0``.
+        - a missing log → ``([], 0)``.
+        """
+
+    @abc.abstractmethod
     async def delete(self, log_type: str, log_id: str) -> None:
         """Delete the whole log.  No-op if it does not exist.
 

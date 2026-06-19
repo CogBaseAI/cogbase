@@ -32,6 +32,32 @@ _CONTINUITY_ROLE: dict[EventType, MemoryRole] = {
 }
 
 
+def continuity_role(event_type: EventType) -> MemoryRole | None:
+    """Return the thread role an event projects to, or ``None`` if it is scratch.
+
+    The single authority for "what counts as a conversational turn", shared so an
+    incremental folder (short-term's projection cache) classifies events exactly
+    as :func:`project_thread` does.
+    """
+    return _CONTINUITY_ROLE.get(event_type)
+
+
+def message_from_event(event: MemoryEvent) -> MemoryMessage:
+    """Project one continuity event into a :class:`MemoryMessage`.
+
+    The caller must have established the event is a continuity turn (a non-``None``
+    :func:`continuity_role`).  Token cost is estimated once here so context
+    assembly never re-estimates a projected turn — matching :func:`project_thread`.
+    """
+    text = event.payload.get("text", "")
+    return MemoryMessage(
+        role=_CONTINUITY_ROLE[event.event_type],
+        content=text,
+        seq=event.seq,
+        token_estimate=estimate_tokens(text),
+    )
+
+
 def latest_compaction(events: list[MemoryEvent]) -> tuple[str | None, int]:
     """Return the latest ``session_compacted`` summary and the seq it covers.
 
@@ -61,17 +87,12 @@ def project_thread(
     messages: list[MemoryMessage] = []
     seen_seqs: set[int] = set()
     for event in events:
-        role = _CONTINUITY_ROLE.get(event.event_type)
-        if role is None or event.seq <= since_seq or event.seq in seen_seqs:
+        if (
+            continuity_role(event.event_type) is None
+            or event.seq <= since_seq
+            or event.seq in seen_seqs
+        ):
             continue
         seen_seqs.add(event.seq)
-        text = event.payload.get("text", "")
-        messages.append(
-            MemoryMessage(
-                role=role,
-                content=text,
-                seq=event.seq,
-                token_estimate=estimate_tokens(text),
-            )
-        )
+        messages.append(message_from_event(event))
     return messages

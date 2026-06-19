@@ -63,6 +63,47 @@ async def test_load_lines_tail_returns_last_n(tmp_path):
     assert len(await store.load_lines(LOG_TYPE, LOG, tail=99)) == 5
 
 
+async def test_read_since_returns_records_past_offset_with_size(tmp_path):
+    store = LocalFSLogStore(tmp_path)
+    off1 = await store.append(LOG_TYPE, LOG, ["a", "b"])  # "a\nb\n" == 4 bytes
+    await store.append(LOG_TYPE, LOG, ["c", "d"])
+
+    lines, size = await store.read_since(LOG_TYPE, LOG, off1)
+    assert lines == ["c", "d"]
+    assert size == await store.size(LOG_TYPE, LOG)
+
+
+async def test_read_since_from_zero_returns_everything(tmp_path):
+    store = LocalFSLogStore(tmp_path)
+    await store.append(LOG_TYPE, LOG, ["a", "b", "c"])
+    lines, size = await store.read_since(LOG_TYPE, LOG, 0)
+    assert lines == ["a", "b", "c"]
+    assert size == await store.size(LOG_TYPE, LOG)
+
+
+async def test_read_since_at_end_returns_nothing(tmp_path):
+    store = LocalFSLogStore(tmp_path)
+    end = await store.append(LOG_TYPE, LOG, ["a"])
+    lines, size = await store.read_since(LOG_TYPE, LOG, end)
+    assert lines == []
+    assert size == end
+
+
+async def test_read_since_past_end_reports_shrink(tmp_path):
+    # An offset beyond the log (it was truncated/recreated smaller) reads nothing
+    # and reports the real, smaller size so the caller can detect the shrink.
+    store = LocalFSLogStore(tmp_path)
+    await store.append(LOG_TYPE, LOG, ["a"])  # 2 bytes
+    lines, size = await store.read_since(LOG_TYPE, LOG, 999)
+    assert lines == []
+    assert size == 2 and size < 999
+
+
+async def test_read_since_missing_log_returns_empty_and_zero(tmp_path):
+    store = LocalFSLogStore(tmp_path)
+    assert await store.read_since(LOG_TYPE, "never-written", 0) == ([], 0)
+
+
 async def test_logs_isolated_across_log_types_and_ids(tmp_path):
     store = LocalFSLogStore(tmp_path)
     await store.append("app-a", LOG, ["a"])

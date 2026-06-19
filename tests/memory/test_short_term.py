@@ -149,6 +149,80 @@ async def test_only_continuity_events_are_threaded(episodic):
 
 
 # ---------------------------------------------------------------------------
+# Incremental projection cache (re-read only the tail since the last turn)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingLogStore(LocalFSLogStore):
+    """Local-fs store that records the offsets ``read_since`` is called with."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.read_since_offsets: list[int] = []
+
+    async def read_since(self, log_type, log_id, offset):
+        self.read_since_offsets.append(offset)
+        return await super().read_since(log_type, log_id, offset)
+
+
+@pytest.mark.asyncio
+async def test_build_context_reads_only_the_tail_after_first_turn(tmp_path):
+    store = _RecordingLogStore(tmp_path)
+    ep = EpisodicMemory(store)
+    mem = ShortTermMemory(episodic=ep)
+
+    await _seed_turn(ep, "s1", "q1", "a1")
+    await mem.build_context(session_id="s1", current_user_message="x")
+    # Cold cache: the first rehydrate folds from offset 0 (a full read).
+    assert store.read_since_offsets == [0]
+    watermark = await store.size("episodic", "s1")
+
+    await _seed_turn(ep, "s1", "q2", "a2")
+    store.read_since_offsets.clear()
+    await mem.build_context(session_id="s1", current_user_message="y")
+    # Warm cache: it re-reads only past last turn's watermark — never from 0 again,
+    # so a long session stops re-parsing its whole log every turn.
+    assert store.read_since_offsets == [watermark]
+
+
+@pytest.mark.asyncio
+async def test_incremental_projection_matches_cold_rebuild(tmp_path):
+    # A warm cache folded turn-by-turn must equal a cold full replay of the log.
+    ep = EpisodicMemory(LocalFSLogStore(tmp_path))
+    warm = ShortTermMemory(episodic=ep)
+    for i in range(4):
+        await _seed_turn(ep, "s1", f"q{i}", f"a{i}")
+        await warm.build_context(session_id="s1", current_user_message="cur")
+
+    warm_state = await warm.get("s1")
+    cold_state = await ShortTermMemory(episodic=ep).get("s1")
+    assert [(m.role, m.content, m.seq) for m in warm_state.messages] == [
+        (m.role, m.content, m.seq) for m in cold_state.messages
+    ]
+    assert [(m.role, m.content) for m in warm_state.messages] == [
+        (MemoryRole.USER, "q0"), (MemoryRole.ASSISTANT, "a0"),
+        (MemoryRole.USER, "q1"), (MemoryRole.ASSISTANT, "a1"),
+        (MemoryRole.USER, "q2"), (MemoryRole.ASSISTANT, "a2"),
+        (MemoryRole.USER, "q3"), (MemoryRole.ASSISTANT, "a3"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rehydrate_rebuilds_after_log_shrinks(tmp_path):
+    # If the log is wiped from under a warm cache (retention/erasure), the stale
+    # folded turns must not survive — the smaller size signals a rebuild from 0.
+    ep = EpisodicMemory(LocalFSLogStore(tmp_path))
+    mem = ShortTermMemory(episodic=ep)
+    await _seed_turn(ep, "s1", "q1", "a1")
+    ctx1 = await mem.build_context(session_id="s1", current_user_message="x")
+    assert [m["content"] for m in ctx1] == ["q1", "a1", "x"]
+
+    await ep.delete(session_id="s1")
+    ctx2 = await mem.build_context(session_id="s1", current_user_message="y")
+    assert ctx2 == [{"role": "user", "content": "y"}]
+
+
+# ---------------------------------------------------------------------------
 # Compaction (append-a-session_compacted)
 # ---------------------------------------------------------------------------
 
@@ -182,6 +256,32 @@ async def test_build_context_compacts_overflow_into_session_compacted(episodic):
     fresh = ShortTermMemory(episodic=episodic, llm=llm)
     ctx2 = await fresh.build_context(session_id="s1", current_user_message="again")
     assert ctx2[0]["role"] == "system" and "COMPACTED" in ctx2[0]["content"]
+    assert "one" not in " ".join(m["content"] for m in ctx2[1:])
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_honours_compaction_on_next_turn(episodic):
+    # After compaction the projection cache is dropped, so the next turn on the
+    # same (warm) instance rebuilds and honours the now-flushed summary rather
+    # than folding new events onto a pre-compaction watermark.
+    llm = _summarizing_llm("COMPACTED")
+    mem = ShortTermMemory(episodic=episodic, compaction_token_budget=20, llm=llm)
+
+    big = "x" * 200
+    await _seed_turn(episodic, "s1", big + " one", big + " two")
+    await _seed_turn(episodic, "s1", big + " three", big + " four")
+
+    ctx = await mem.build_context(
+        session_id="s1", current_user_message="latest", token_budget=20
+    )
+    assert "COMPACTED" in ctx[0]["content"]
+    await episodic.flush("s1")  # the turn flush lands the session_compacted
+
+    ctx2 = await mem.build_context(
+        session_id="s1", current_user_message="again", token_budget=20
+    )
+    assert ctx2[0]["role"] == "system" and "COMPACTED" in ctx2[0]["content"]
+    # The folded turns are not re-threaded verbatim.
     assert "one" not in " ".join(m["content"] for m in ctx2[1:])
 
 

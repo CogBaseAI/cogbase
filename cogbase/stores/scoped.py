@@ -161,5 +161,10 @@ class ScopedLogStore(LogStoreBase):
     ) -> list[str]:
         return await self._inner.load_lines(self._c(log_type), log_id, tail=tail)
 
+    async def read_since(
+        self, log_type: str, log_id: str, offset: int
+    ) -> tuple[list[str], int]:
+        return await self._inner.read_since(self._c(log_type), log_id, offset)
+
     async def delete(self, log_type: str, log_id: str) -> None:
         await self._inner.delete(self._c(log_type), log_id)

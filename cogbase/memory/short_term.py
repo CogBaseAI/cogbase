@@ -27,9 +27,18 @@ The three operations the layer performs:
   budget, context assembly is "summary header + the projected turns + the
   current input" — no per-turn newest-first budget walk.
 
-A small per-session cache holds only session metadata (app) and TTL;
-the conversational thread is always projected fresh from the log, so a
-``build_context`` from a warm or a cold process produces the same result.
+Rehydrate does not re-read the whole log every turn.  A per-session projection
+cache holds the folded thread (summary + turns) plus the byte ``offset`` it has
+consumed; each turn reads only the events appended past that watermark
+(``replay_since``) and folds them in, so a long, tool-heavy session no longer
+pays an ever-growing parse cost to rebuild a bounded context.  The cache is a
+pure optimization: a cold process (empty cache) folds from ``offset=0``, which is
+a full replay, and the byte offset is reconciled against the log's real size
+every turn — so a warm and a cold ``build_context`` still produce the same
+result.  Compaction (the rare, over-budget path) drops the cache so the next turn
+rebuilds cleanly rather than reasoning about a half-applied summary.
+
+The cache also holds session metadata (app) and TTL, evicted together.
 
 Concurrency is per session: each session has its own lock, so compacting one
 session (including its slow LLM summary, which runs outside the lock) never
@@ -53,11 +62,17 @@ from cogbase.llms.compaction import (
 from cogbase.llms.base import ChatMessage, LLMBase
 from cogbase.memory.episodic import EpisodicMemory
 from cogbase.memory.models import (
+    EventType,
     MemoryEvent,
     MemoryMessage,
     SessionState,
 )
-from cogbase.memory.projection import latest_compaction, project_thread
+from cogbase.memory.projection import (
+    continuity_role,
+    latest_compaction,
+    message_from_event,
+    project_thread,
+)
 
 # Fallback working-context budget when no LLM is configured (so the model window
 # is unknown and no compaction runs anyway). When an LLM *is* present the budget
@@ -92,6 +107,25 @@ class _CompactionPlan:
     covered: int
     transcript: str
     thread_tokens: int
+
+
+@dataclass
+class _ProjectionCache:
+    """The folded projection of a session's log, plus the watermark it covers.
+
+    Lets :meth:`ShortTermMemory._rehydrate` re-read only the events appended since
+    the last turn instead of replaying the whole log.  ``offset`` is the log byte
+    length already folded (a record boundary); ``folded_seq`` is the highest event
+    ``seq`` folded, the dedup watermark that drops a straggler or a non-fenced
+    retry whose twin is already in the projection.  The remaining fields are the
+    projection itself — identical to what a full :meth:`_project` would yield.
+    """
+
+    offset: int
+    folded_seq: int
+    summary: str | None
+    replaces_through: int
+    messages: list[MemoryMessage]
 
 
 class ShortTermMemory:
@@ -136,9 +170,12 @@ class ShortTermMemory:
             self._compaction_token_budget = context_budget_tokens(llm)
         else:
             self._compaction_token_budget = DEFAULT_COMPACTION_TOKEN_BUDGET
-        # Cache holds only session metadata + TTL; the thread is projected fresh
-        # from the log on every read, so a warm and a cold process agree.
+        # Metadata cache (app + TTL); the thread itself is projected from the log.
         self._sessions: dict[str, SessionState] = {}
+        # Per-session projection cache: the folded thread + the log offset it
+        # covers, so a rehydrate re-reads only the tail appended since (see
+        # ``_rehydrate``).  Evicted alongside ``_sessions`` — same lifetime.
+        self._projections: dict[str, _ProjectionCache] = {}
         # One lock per session serializes that session's own rehydrate/compaction
         # while leaving other sessions concurrent — a slow compaction no longer
         # stalls every session.  The slow LLM summary itself runs *outside* the
@@ -222,10 +259,12 @@ class ShortTermMemory:
         async with lock:
             self._sweep_expired()
             cached = self._get_live(session_id)
-            events = await self._episodic.replay(session_id=session_id)
-            if cached is None and not events:
+            summary, _, messages = await self._rehydrate(session_id)
+            proj = self._projections[session_id]
+            if cached is None and proj.offset == 0 and not messages and summary is None:
+                # Neither cached metadata nor any durable history → unknown session.
+                self._projections.pop(session_id, None)
                 return None
-            summary, _, messages = self._project(events)
             state = cached or SessionState(session_id=session_id)
             state.messages = messages
             state.summary = summary
@@ -242,6 +281,7 @@ class ShortTermMemory:
         lock = await self._lock_for(session_id)
         async with lock:
             state = self._sessions.pop(session_id, None)
+            self._projections.pop(session_id, None)
             logger.info(
                 "[short_term] app=%s session=%s cached context evicted",
                 state.app_id if state else None, session_id,
@@ -277,10 +317,10 @@ class ShortTermMemory:
         # log read plus a token tally), so it is fine to hold the session lock.
         async with lock:
             self._sweep_expired()
-            # replay reads the session log to make sure every query sees the latest messages.
-            # TODO add a cache layer.
-            events = await self._episodic.replay(session_id=session_id)
-            summary, replaces_through, messages = self._project(events)
+            # Re-reads only the log tail appended since last turn and folds it into
+            # the cached projection (full replay only on a cold cache); see
+            # ``_rehydrate``.
+            summary, replaces_through, messages = await self._rehydrate(session_id)
             plan = self._plan_compaction(summary, replaces_through, messages, budget)
 
         # Phase 2 — summarise the overflow *outside* the lock.  This is the slow
@@ -310,6 +350,12 @@ class ShortTermMemory:
                     )
 
         async with lock:
+            if plan is not None:
+                # Compaction (the rare, over-budget path) reshaped the thread and
+                # may have raced a concurrent compaction that flushed mid-summary;
+                # drop the projection cache so the next turn rebuilds from the log
+                # rather than folding new events onto a now-stale watermark.
+                self._projections.pop(session_id, None)
             state = self._get_live(session_id) or SessionState(session_id=session_id)
             state.messages = messages
             state.summary = summary
@@ -349,6 +395,85 @@ class ShortTermMemory:
     # ------------------------------------------------------------------
     # Projection
     # ------------------------------------------------------------------
+
+    async def _rehydrate(
+        self, session_id: str
+    ) -> tuple[str | None, int, list[MemoryMessage]]:
+        """Project the thread, re-reading only the log tail since the last turn.
+
+        Folds the events appended past the cached watermark into the cached
+        projection; on a cold cache — or after the log shrank under us — it folds
+        from ``offset=0``, which is a full replay.  Refreshes the projection cache
+        and returns ``(summary, replaces_through, messages)``: the same triple a
+        full :meth:`_project` yields, so a warm and a cold rehydrate agree.
+
+        Assumes the per-session lock is held (it mutates the projection cache).
+        """
+        cache = self._projections.get(session_id)
+        start = cache.offset if cache else 0
+        events, size = await self._episodic.replay_since(
+            session_id=session_id, offset=start
+        )
+        if cache is not None and size < cache.offset:
+            # The watermark points into a log that no longer exists (deleted /
+            # recreated under us): discard the cache and fold from scratch.
+            cache = None
+            events, size = await self._episodic.replay_since(
+                session_id=session_id, offset=0
+            )
+        if cache is None:
+            summary, replaces_through, messages = self._project(events)
+            folded_seq = max((e.seq for e in events), default=-1)
+        else:
+            summary, replaces_through, messages, folded_seq = self._fold(cache, events)
+        self._projections[session_id] = _ProjectionCache(
+            offset=size,
+            folded_seq=folded_seq,
+            summary=summary,
+            replaces_through=replaces_through,
+            messages=messages,
+        )
+        return summary, replaces_through, messages
+
+    @staticmethod
+    def _fold(
+        cache: _ProjectionCache, new_events: list[MemoryEvent]
+    ) -> tuple[str | None, int, list[MemoryMessage], int]:
+        """Fold events appended past the cache's watermark into its projection.
+
+        Mirrors :meth:`_project` incrementally: a ``session_compacted`` advances
+        the running summary and drops the turns it now covers; a continuity event
+        after the current ``replaces_through`` is appended as a turn.
+        ``folded_seq`` gates re-folding — an event at/below it is a straggler or a
+        non-fenced retry whose twin is already projected, so first occurrence
+        wins (as :func:`project_thread` dedupes by seq).  This leans on the log's
+        single-writer guarantee that ``seq`` is non-decreasing in log order;
+        ``replaces_through`` is likewise monotonic, so a turn dropped by one
+        compaction is never re-added by a later read.  Returns a fresh message
+        list so the cached projection is never mutated through the returned value.
+        """
+        summary = cache.summary
+        replaces_through = cache.replaces_through
+        folded_seq = cache.folded_seq
+        messages = list(cache.messages)
+        for event in new_events:
+            if event.seq <= folded_seq:
+                continue
+            folded_seq = event.seq
+            if event.event_type is EventType.SESSION_COMPACTED:
+                summary = event.payload.get("summary")
+                replaces_through = int(
+                    event.payload.get("replaces_through", replaces_through)
+                )
+                messages = [
+                    m for m in messages if m.seq is None or m.seq > replaces_through
+                ]
+            elif (
+                continuity_role(event.event_type) is not None
+                and event.seq > replaces_through
+            ):
+                messages.append(message_from_event(event))
+        return summary, replaces_through, messages, folded_seq
 
     @staticmethod
     def _project(
@@ -491,3 +616,6 @@ class ShortTermMemory:
         expired = [sid for sid, s in self._sessions.items() if s.is_expired(now)]
         for sid in expired:
             self._sessions.pop(sid, None)
+            # The projection cache shares the session's lifetime — drop it too so
+            # an idle session does not pin its folded thread in memory.
+            self._projections.pop(sid, None)

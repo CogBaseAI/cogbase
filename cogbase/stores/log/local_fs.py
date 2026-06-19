@@ -80,6 +80,13 @@ class LocalFSLogStore(LogStoreBase):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._read_lines, path, tail)
 
+    async def read_since(
+        self, log_type: str, log_id: str, offset: int
+    ) -> tuple[list[str], int]:
+        path = self._path(log_type, log_id)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._read_since, path, offset)
+
     async def delete(self, log_type: str, log_id: str) -> None:
         path = self._path(log_type, log_id)
         loop = asyncio.get_event_loop()
@@ -125,6 +132,23 @@ class LocalFSLogStore(LogStoreBase):
             return []
         lines = text.splitlines()
         return lines[-tail:] if tail is not None else lines
+
+    @staticmethod
+    def _read_since(path: pathlib.Path, offset: int) -> tuple[list[str], int]:
+        # Seek to the caller's watermark and read only the tail bytes.  offset is
+        # a prior size, so it falls on a record boundary; an offset at/past EOF
+        # (nothing new, or the log shrank) reads nothing and reports the real size
+        # so the caller can detect a shrink (size < offset) and rebuild.
+        try:
+            with open(path, "rb") as fh:
+                size = fh.seek(0, 2)
+                if offset >= size:
+                    return [], size
+                fh.seek(offset)
+                data = fh.read()
+        except FileNotFoundError:
+            return [], 0
+        return data.decode("utf-8").splitlines(), size
 
     @staticmethod
     def _unlink(path: pathlib.Path) -> None:

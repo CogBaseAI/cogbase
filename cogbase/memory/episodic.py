@@ -383,6 +383,25 @@ class EpisodicMemory:
         lines = await self._log.load_lines(self._log_type, session_id)
         return self._parse_dedup(lines)
 
+    async def replay_since(
+        self, *, session_id: str, offset: int
+    ) -> tuple[list[MemoryEvent], int]:
+        """Return events appended at/after byte *offset*, plus the log's new size.
+
+        The incremental counterpart of :meth:`replay`: a consumer that has already
+        folded the log up to *offset* re-reads only the tail past it, so a long,
+        tool-heavy session no longer re-parses its whole log every turn (short-term
+        memory's projection cache — see ``cogbase.memory.short_term``).  *offset*
+        must be a record boundary (a prior size); ``replay_since(offset=0)`` is
+        equivalent to :meth:`replay` plus the size.  A returned size below *offset*
+        means the log shrank under the caller (deleted/recreated), who should then
+        rebuild from ``0``.  Dedups the returned slice by ``ulid`` as :meth:`replay`
+        does; cross-slice idempotency (a retry whose twin was already folded) is the
+        consumer's watermark concern, since the duplicate's twin is not in view.
+        """
+        lines, size = await self._log.read_since(self._log_type, session_id, offset)
+        return self._parse_dedup(lines), size
+
     async def tail(self, *, session_id: str, limit: int) -> list[MemoryEvent]:
         """Return the last *limit* events (short-term rehydrate)."""
         lines = await self._log.load_lines(self._log_type, session_id, tail=limit)
