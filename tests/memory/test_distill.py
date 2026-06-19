@@ -13,10 +13,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cogbase.memory.distill import Distiller
+from cogbase.memory.distill import _MAX_CITED_PAYLOAD_BYTES, Distiller
 from cogbase.memory.episodic import EpisodicMemory
 from cogbase.memory.long_term import LongTermMemory
-from cogbase.memory.models import MemoryStatus
+from cogbase.memory.models import EventType, MemoryEvent, MemoryStatus
 from cogbase.stores.log.local_fs import LocalFSLogStore
 from cogbase.stores.scope import AppScope
 from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -409,3 +409,77 @@ async def test_distill_drops_unresolvable_link_id(episodic):
     distiller = Distiller(episodic, lt, llm)
     ids = await distiller.distill_session(session_id=sid)
     assert (await lt._load_records(ids))[0].linked_memory_ids == []
+
+
+# ---------------------------------------------------------------------------
+# Cited-payload truncation: a final_answer can cite large tool results; copied
+# wholesale they bloat the evidence_snapshot JSON column, so _truncate_payload
+# caps a single cited payload's serialized size.
+# ---------------------------------------------------------------------------
+
+
+def _event(payload: dict, *, seq: int = 5, etype=EventType.TOOL_RESULT) -> MemoryEvent:
+    return MemoryEvent(
+        session_id="sess-x", seq=seq, ulid="u", event_type=etype,
+        app_id="app1", payload=payload,
+    )
+
+
+def test_truncate_payload_passes_small_through():
+    payload = {"text": "small result", "n": 3}
+    event = _event(payload)
+    out = Distiller._truncate_payload(event)
+    # A within-budget payload is returned verbatim (the event's own payload),
+    # with no truncation markers added.
+    assert out is event.payload
+    assert out == {"text": "small result", "n": 3}
+
+
+def test_truncate_payload_clips_oversized_text():
+    big = "x" * (_MAX_CITED_PAYLOAD_BYTES + 5000)
+    out = Distiller._truncate_payload(_event({"text": big}))
+
+    assert out["_truncated"] is True
+    assert out["_original_bytes"] > _MAX_CITED_PAYLOAD_BYTES
+    # The stand-in keeps a head of the original text within the byte cap.
+    assert out["text"] == big[:_MAX_CITED_PAYLOAD_BYTES]
+    assert len(out["text"].encode("utf-8")) <= _MAX_CITED_PAYLOAD_BYTES
+
+
+def test_truncate_payload_serializes_when_no_text_field():
+    # No "text" key: fall back to serializing the whole payload for the head.
+    out = Distiller._truncate_payload(_event({"rows": ["y" * (_MAX_CITED_PAYLOAD_BYTES + 100)]}))
+    assert out["_truncated"] is True
+    assert "rows" in out["text"]  # serialized payload preserved as the head
+
+
+def test_truncate_payload_logs_provenance(caplog):
+    import logging
+
+    big = "z" * (_MAX_CITED_PAYLOAD_BYTES + 1000)
+    with caplog.at_level(logging.WARNING):
+        Distiller._truncate_payload(_event({"text": big}, seq=7))
+    msg = caplog.text
+    assert "app=app1" in msg and "session=sess-x" in msg and "seq=7" in msg
+
+
+def test_snapshot_truncates_cited_payload():
+    # A final_answer citing a large tool_result has that cited payload truncated
+    # in the snapshot, while the deciding turn's own text is untouched.
+    big = "q" * (_MAX_CITED_PAYLOAD_BYTES + 2000)
+    tool = _event({"text": big}, seq=1, etype=EventType.TOOL_RESULT)
+    answer = MemoryEvent(
+        session_id="sess-x", seq=2, ulid="u2", event_type=EventType.FINAL_ANSWER,
+        app_id="app1",
+        payload={"text": "the answer", "cited_ids": [{"seq": 1}]},
+    )
+    seq_to_event = {1: tool, 2: answer}
+
+    snap = Distiller._snapshot([2], seq_to_event)
+
+    assert snap["turns"][0]["text"] == "the answer"
+    assert len(snap["cited"]) == 1
+    cited = snap["cited"][0]
+    assert cited["seq"] == 1
+    assert cited["payload"]["_truncated"] is True
+    assert cited["payload"]["text"] == big[:_MAX_CITED_PAYLOAD_BYTES]

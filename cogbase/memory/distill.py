@@ -43,6 +43,12 @@ from cogbase.memory.projection import latest_distillation, project_thread
 
 logger = logging.getLogger(__name__)
 
+# Cap on a single cited event's serialized payload copied into a snapshot.
+# A final_answer can cite large tool results (e.g. a structured query dump);
+# copying them wholesale bloats the evidence_snapshot JSON column.  Oversized
+# payloads are truncated to a self-contained summary instead.
+_MAX_CITED_PAYLOAD_BYTES = 8192
+
 # Per-kind confidence floor: a candidate the LLM scores below its kind's floor
 # is abandoned before reconcile — too weak a belief to be worth embedding,
 # recalling, and persisting.  A candidate whose score is missing or non-numeric
@@ -565,13 +571,47 @@ class Distiller:
                             {
                                 "seq": ref_seq,
                                 "type": cited_event.event_type.value,
-                                "payload": cited_event.payload,
+                                "payload": Distiller._truncate_payload(cited_event),
                             }
                         )
         snapshot: dict = {"turns": turns}
         if cited:
             snapshot["cited"] = cited
         return snapshot
+
+    @staticmethod
+    def _truncate_payload(event: MemoryEvent) -> dict:
+        """Cap a cited payload's serialized size before it lands in a snapshot.
+
+        A final_answer can cite large tool results; copied wholesale they bloat
+        the evidence_snapshot JSON column.  When a payload exceeds
+        ``_MAX_CITED_PAYLOAD_BYTES`` it is replaced with a truncated stand-in
+        that preserves a head of the original text and records what was dropped.
+        """
+        payload = event.payload
+        size = len(json.dumps(payload, default=str).encode("utf-8"))
+        if size <= _MAX_CITED_PAYLOAD_BYTES:
+            return payload
+        logger.warning(
+            "[distill] cited payload too large, truncating: app=%s session=%s "
+            "seq=%s size=%d limit=%d",
+            event.app_id,
+            event.session_id,
+            event.seq,
+            size,
+            _MAX_CITED_PAYLOAD_BYTES,
+        )
+        text = payload.get("text")
+        if not isinstance(text, str):
+            text = json.dumps(payload, default=str)
+        head = text.encode("utf-8")[:_MAX_CITED_PAYLOAD_BYTES].decode(
+            "utf-8", "ignore"
+        )
+        return {
+            "_truncated": True,
+            "_original_bytes": size,
+            "text": head,
+        }
 
     async def _recall_existing(self, transcript: str) -> list[LongTermRecord]:
         """Vector-recall the active memories most related to this session.

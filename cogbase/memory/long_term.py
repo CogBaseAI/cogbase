@@ -286,14 +286,14 @@ class LongTermMemory:
         """
         if not query.strip() or limit <= 0:
             return []
-        # Over-fetch: the status filter is applied in Python, so fetch a wider
-        # band than ``limit`` to refill what the filter drops.
-        hits = await self._search_content(query, top_k=max(limit * 4, limit))
+        # The vector index is active-only (see ``_save_record``), so every hit is
+        # already active and ``limit`` results suffice — there is no status filter
+        # to refill, so no over-fetch.
+        hits = await self._search_content(query, top_k=limit)
         ordered_ids: list[str] = []
         for chunk in hits:
-            if chunk.metadata.get("status") == MemoryStatus.ACTIVE.value:
-                if chunk.doc_id not in ordered_ids:
-                    ordered_ids.append(chunk.doc_id)
+            if chunk.doc_id not in ordered_ids:
+                ordered_ids.append(chunk.doc_id)
             if len(ordered_ids) >= limit:
                 break
         if not ordered_ids:
@@ -373,11 +373,12 @@ class LongTermMemory:
             return []
         wanted_entities = set(normalize_entities(entities or []))
         if query and query.strip():
+            # Over-fetch: the kind/entity filters are applied in Python, so fetch
+            # a wider band than ``limit`` to refill what they drop.  No status
+            # filter — the index is active-only (see ``_save_record``).
             hits = await self._search_content(query, top_k=max(limit * 4, limit))
             ordered_ids: list[str] = []
             for chunk in hits:
-                if chunk.metadata.get("status") != MemoryStatus.ACTIVE.value:
-                    continue
                 if kind and chunk.metadata.get("kind") != kind.value:
                     continue
                 if wanted_entities and not (
@@ -718,6 +719,15 @@ class LongTermMemory:
                 self._app_id, target.memory_id,
             )
             return target.memory_id
+        # Asymmetric visibility: the supersede takes effect instantly, the
+        # replacement does not.  The contradicted target flips to ``superseded``
+        # now and drops straight out of recall, but ``promote`` lands the
+        # candidate at ``pending_review`` for any correction
+        # (AUTO_PROMOTE_CONFIDENCE[CORRECTION] = 1.01, unreachable), so it adds
+        # nothing active until a reviewer accepts it.  Net for the common case
+        # of a user correcting a belief: the old belief leaves recall the moment
+        # the correction lands, but the corrected belief stays invisible until
+        # review — recall briefly knows neither.
         target.status = MemoryStatus.SUPERSEDED
         target.updated_at = _utcnow()
         await self._save_record(target)
@@ -914,6 +924,14 @@ class LongTermMemory:
         if record.status is MemoryStatus.PENDING_REVIEW:
             return
         if record.status is MemoryStatus.SUPERSEDED:
+            # Superseded leaves the vector index but the structured row stays.
+            # TODO(retention): nothing GCs the structured store.  Superseded and
+            # pending_review rows accumulate forever — long-term only ever *marks*
+            # superseded (no hard delete) and nothing sets an expires_at, so the
+            # collection grows monotonically.  Unlike episodic, which can drop a
+            # whole session log, there is no retention sweep here.  Planned, not
+            # yet built — a periodic sweep should age out superseded rows (and
+            # stale pending_review) past a retention window.
             await self._vector.delete(self._vector_collection, [record.memory_id])
             return
         await self._vector.upsert(

@@ -256,6 +256,7 @@ class EpisodicMemory:
             )
         )
 
+    # TODO not used yet. need the end-to-end feedback mechanism from client.
     async def record_feedback(
         self,
         *,
