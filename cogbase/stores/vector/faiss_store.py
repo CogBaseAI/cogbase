@@ -243,6 +243,7 @@ class FAISSVectorStore(FAISSMemoryVectorStore):
         )
         self._loaded = False
         self._persisting = False
+        self._dirty = False
 
     async def create_collection(self, schema: VectorCollectionSchema) -> None:
         await self._ensure_loaded()
@@ -336,12 +337,19 @@ class FAISSVectorStore(FAISSMemoryVectorStore):
         return super().ntotal(collection)  # parent already calls self._c()
 
     async def _after_mutation(self) -> None:
+        # Mark the store dirty. If a save is already in flight, the running loop
+        # below will pick up this change on its next iteration — mutations that
+        # land while _save_sync is persisting collection-by-collection are not
+        # dropped, which would otherwise lose data on shutdown.
+        self._dirty = True
         if self._persisting:
             return
         self._persisting = True
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._save_sync, self.path)
+            while self._dirty:
+                self._dirty = False
+                await loop.run_in_executor(None, self._save_sync, self.path)
         finally:
             self._persisting = False
 

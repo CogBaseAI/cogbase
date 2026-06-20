@@ -1,6 +1,8 @@
 """Tests for FAISSVectorStore."""
 
+import asyncio
 import math
+import threading
 from uuid import uuid4
 
 import pytest
@@ -682,6 +684,56 @@ async def test_file_store_persists_delete_collection(tmp_path):
     loaded = FAISSVectorStore(path=path)
     assert (path / "col_b.faiss").exists()
     assert not (path / "col_a.faiss").exists()
+
+
+async def test_mutation_during_save_is_persisted(tmp_path):
+    """A mutation that lands while a save is in flight must not be lost.
+
+    Regression: ``_after_mutation`` returned early when a save was already
+    running (``_persisting``), so the second mutation was never written. Here the
+    first save is blocked *after* it has persisted only chunk 'a'; chunk 'b' is
+    then upserted while that save is in flight. The dirty-flag retry must re-run
+    the save once unblocked so 'b' reaches disk too.
+    """
+    path = tmp_path / "store"
+    store = FAISSVectorStore(path=path)
+    await store.create_collection(make_schema(COLLECTION, dim=2))
+
+    real_save_sync = store._save_sync
+    started = threading.Event()
+    release = threading.Event()
+    first_call = {"done": False}
+
+    def slow_first_save(p):
+        if not first_call["done"]:
+            first_call["done"] = True
+            real_save_sync(p)   # persists only 'a' — 'b' isn't in memory yet
+            started.set()
+            release.wait(timeout=5)
+        else:
+            real_save_sync(p)
+
+    store._save_sync = slow_first_save
+    loop = asyncio.get_running_loop()
+
+    # First upsert: its save blocks inside the executor thread after writing 'a'.
+    task_a = asyncio.create_task(
+        store.upsert(COLLECTION, [make_chunk(chunk_id="a", embedding=[1.0, 0.0])])
+    )
+    await loop.run_in_executor(None, started.wait, 5.0)
+
+    # 'b' lands while the first save is in flight: _after_mutation sees
+    # _persisting=True, flags _dirty, and returns immediately.
+    await store.upsert(COLLECTION, [make_chunk(chunk_id="b", embedding=[0.0, 1.0])])
+
+    release.set()
+    await task_a
+
+    reloaded = FAISSVectorStore()
+    await reloaded.load(path)
+    assert reloaded.ntotal(COLLECTION) == 2
+    results = await reloaded.search(COLLECTION, "q", [1.0, 0.0], top_k=5)
+    assert {r.chunk_id for r in results} == {"a", "b"}
 
 
 async def test_file_store_persists_deleting_last_collection(tmp_path):
