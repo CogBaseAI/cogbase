@@ -5,8 +5,7 @@ thread before reasoning over it: short-term memory rehydrates the working
 context (dropping turns a ``session_compacted`` summary already covers), and the
 distiller reads the *whole* thread to extract durable memories.  This module
 holds the one projection both use, so the rule for what counts as a
-conversational turn lives in a single place (the plan's open question on where
-the shared helper lives — docs/long-term-memory-implementation-plan.md).
+conversational turn lives in a single place.
 
 The projection mirrors the log's single-writer / append-safety guarantees: a
 ``seq`` is kept on first occurrence, so an out-of-order straggler that reuses a

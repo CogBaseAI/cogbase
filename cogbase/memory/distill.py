@@ -7,14 +7,19 @@ extraction *pattern* (schema-validated JSON + retry) but not the
 ``Document`` / ``doc_id`` contract — output feeds :meth:`LongTermMemory.reconcile`,
 not an upsert by primary key.
 
-The flow (docs/long-term-memory-implementation-plan.md, Step 3):
+The flow:
 
 1. :meth:`EpisodicMemory.replay` the whole session log (it is short and bounded).
 2. Project the conversational thread (the shared
    :mod:`cogbase.memory.projection` helper) and resolve provenance.
 3. LLM-extract candidate memories, each carrying the ``source_event_ids`` it was
-   derived from and a snapshot of the deciding turns for self-containment.
-4. :meth:`LongTermMemory.reconcile` each candidate; return the affected ids.
+   derived from and a snapshot of the deciding turns for self-containment.  When
+   existing memories are front-loaded (the single-call default), the same call
+   also decides each candidate's reconcile op against them.
+4. Reconcile each candidate and return the affected ids:
+   :meth:`LongTermMemory.reconcile_decided` applies the op the extractor already
+   chose (one LLM call per session), or :meth:`LongTermMemory.reconcile` decides
+   it per candidate (N+1 calls — auditable, opt-in via ``single_call=False``).
 
 Runs offline / async (on session settle), never on the request path.
 """
@@ -37,6 +42,7 @@ from cogbase.memory.models import (
     MemoryCandidate,
     MemoryEvent,
     MemoryKind,
+    ReconcileOp,
     normalize_entities,
 )
 from cogbase.memory.projection import latest_distillation, project_thread
@@ -97,6 +103,17 @@ _EXTRACTION_SCHEMA: dict = {
                         "type": "array",
                         "items": {"type": "integer"},
                     },
+                    # The single-call reconcile decision: how this memory
+                    # reconciles against the `## Existing memories` block.  Default
+                    # ADD (omitted) promotes it as new; UPDATE/DELETE/NOOP name an
+                    # existing memory via target_id (the same masked-id namespace
+                    # as linked_memory_ids).  See _build_candidate.
+                    "operation": {
+                        "type": "string",
+                        "enum": [op.value for op in ReconcileOp],
+                    },
+                    "target_id": {"type": ["integer", "null"]},
+                    "revised_content": {"type": ["string", "null"]},
                     # Bounds are enforced by clamping in _parse_confidence rather
                     # than the schema: an out-of-range value should be clamped,
                     # not fail validation and drop the whole extraction batch.
@@ -122,6 +139,19 @@ def _strip_code_fence(content: str) -> str:
     if lines and lines[-1].strip().startswith("```"):
         lines = lines[:-1]
     return "\n".join(lines).strip()
+
+
+def _as_index(value: object) -> int | None:
+    """Coerce a masked-id value to an int index, or ``None`` if it isn't one.
+
+    The extractor's ``target_id`` / ``linked_memory_ids`` reference the masked
+    integer ids of the `## Existing memories` block; a non-numeric or missing
+    value resolves to no record (``None``) rather than raising.
+    """
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _coerce_memories(parsed: object) -> list | None:
@@ -163,12 +193,30 @@ _PROMPT_RULES_AND_SCHEMA = (
     "Rules:\n"
     "- If an `## Existing memories` block appears below the transcript, it lists "
     "durable memories already captured from prior sessions, each tagged with an "
-    "id (e.g. [id=0]). Use it for two things only: (a) deduplication — do NOT "
-    "re-extract a claim already stated there; and (b) linking — see below. Still "
-    "extract genuinely new claims, including a new fact about an entity that "
-    "already appears in an existing memory (a known entity does not mean every "
-    "fact about it is captured). Never extract a memory FROM the existing-memories "
-    "block — every extraction must come from the transcript.\n"
+    "id (e.g. [id=0]). Use it to (a) reconcile each memory you extract against "
+    "accumulated belief — set its `operation` (see below); and (b) link related "
+    "memories — set `linked_memory_ids` (see below). Never extract a memory FROM "
+    "the existing-memories block — every extraction must come from the transcript. "
+    "A known entity does not mean every fact about it is captured: still extract a "
+    "genuinely new fact about an entity that already appears in an existing "
+    "memory, as a separate ADD.\n"
+    "- Set `operation` on every memory to how it reconciles against the "
+    "`## Existing memories` block. Choose exactly one:\n"
+    "    - ADD (the default): the claim is genuinely new — no existing memory "
+    "covers it. Use ADD whenever there is no existing-memories block or none "
+    "applies; omit target_id.\n"
+    "    - UPDATE: an existing memory already expresses this claim — reinforce it, "
+    "or refine its wording. Set target_id to that memory's id; set "
+    "revised_content only when the wording should actually change, otherwise omit "
+    "it.\n"
+    "    - DELETE: the claim CONTRADICTS an existing memory and should replace it. "
+    "Set target_id to the contradicted memory's id (it will be superseded and "
+    "this claim promoted in its place).\n"
+    "    - NOOP: an existing memory already states this claim correctly and "
+    "completely — nothing to change. Set target_id to that memory's id.\n"
+    "  Prefer UPDATE over a duplicate ADD when an existing memory expresses the "
+    "same claim; use DELETE only for a real contradiction, not a mere refinement. "
+    "Set target_id only to an id shown in the `## Existing memories` block.\n"
     "- Set linked_memory_ids to the ids of existing memories a new memory is "
     "specifically related to: the same entity or topic, a follow-up or "
     "continuation event, an update to it, or a contradiction of it. Use only ids "
@@ -277,15 +325,17 @@ def _observation_header(observation_date: datetime | None) -> str:
 
 
 def _existing_memories_block(records: list[LongTermRecord]) -> str:
-    """The transcript suffix listing already-captured memories for dedup + linking.
+    """The transcript suffix listing already-captured memories for reconcile + linking.
 
     Front-loading the related existing memories into the extraction prompt lets
-    the extractor (a) skip claims already in the store, instead of generating
-    duplicate candidates that only get caught (after an embed + a reconcile LLM
-    call) in :meth:`LongTermMemory.reconcile`; and (b) emit ``linked_memory_ids``
-    edges from a new memory to the related existing ones, building the memory
-    graph that recall traverses.  Empty when there are no related records, so the
-    prompt's dedup/linking rules simply have nothing to match against.
+    the extractor, in the single call, (a) reconcile each new memory against the
+    store — emit an ``operation`` (ADD / UPDATE / DELETE / NOOP) and a
+    ``target_id`` against these records — so a duplicate becomes an in-place
+    UPDATE instead of being caught (after an embed + a separate reconcile LLM
+    call) downstream; and (b) emit ``linked_memory_ids`` edges from a new memory
+    to the related existing ones, building the memory graph that recall
+    traverses.  Empty when there are no related records, so the prompt's
+    reconcile/linking rules simply have nothing to match against.
 
     Records are tagged with their *position* (``[id=0]``, ``[id=1]``…), not their
     real ``memory_id``: an LLM asked to echo a 36-char UUID eventually invents or
@@ -296,7 +346,7 @@ def _existing_memories_block(records: list[LongTermRecord]) -> str:
         return ""
     lines = "\n".join(f"- [id={i}] {r.content}" for i, r in enumerate(records))
     return (
-        "\n\n## Existing memories (already captured; for deduplication and linking)\n"
+        "\n\n## Existing memories (already captured; for reconciliation and linking)\n"
         + lines
     )
 
@@ -317,9 +367,15 @@ class Distiller:
             scope in the extraction prompt (see :func:`_build_system_prompt`).
             ``None`` uses the generic prompt.
         existing_memory_limit: How many related existing memories to vector-recall
-            and inject into the extraction prompt as a dedup reference (see
-            :func:`_existing_memories_block`).  ``0`` disables the lookup and
-            reproduces the blind-extract behaviour.
+            and inject into the extraction prompt as a reconcile + linking
+            reference (see :func:`_existing_memories_block`).  ``0`` disables the
+            lookup and reproduces the blind-extract behaviour.
+        single_call: When True (default), the extractor decides each candidate's
+            reconcile op in the single extraction call and
+            :meth:`LongTermMemory.reconcile_decided` just applies it — one LLM
+            call per session.  When False, fall back to the auditable per-candidate
+            :meth:`LongTermMemory.reconcile`, which re-recalls and spends one more
+            LLM call per candidate (N+1 calls per session).
     """
 
     def __init__(
@@ -332,6 +388,7 @@ class Distiller:
         min_confidence: dict[MemoryKind, float] | None = None,
         domain_fact_guidance: str | None = None,
         existing_memory_limit: int = 10,
+        single_call: bool = True,
     ) -> None:
         self._episodic = episodic
         self._long_term = long_term
@@ -340,6 +397,7 @@ class Distiller:
         self._min_confidence = min_confidence or DEFAULT_MIN_CONFIDENCE
         self._system_prompt = _build_system_prompt(domain_fact_guidance)
         self._existing_memory_limit = existing_memory_limit
+        self._single_call = single_call
 
     async def distill_session(self, *, session_id: str) -> list[str]:
         """Replay, extract candidates, reconcile each; return affected memory ids.
@@ -398,13 +456,19 @@ class Distiller:
         # call up front and thread the cache through.
         embeddings = await self._long_term.embed_contents(candidates)
 
+        # Single-call path: the extractor already decided each op, so just apply
+        # it (no per-candidate recall/LLM call).  Otherwise fall back to the
+        # auditable per-candidate reconcile.
+        reconcile = (
+            self._long_term.reconcile_decided
+            if self._single_call
+            else self._long_term.reconcile
+        )
         memory_ids: list[str] = []
         for candidate in candidates:
             try:
                 memory_ids.append(
-                    await self._long_term.reconcile(
-                        candidate=candidate, embeddings=embeddings
-                    )
+                    await reconcile(candidate=candidate, embeddings=embeddings)
                 )
             except Exception:
                 logger.warning(
@@ -492,6 +556,9 @@ class Distiller:
         source_seqs = [s for s in item.get("source_seqs", []) if s in seq_to_ref]
         source_event_ids = [seq_to_ref[s] for s in source_seqs]
         snapshot = self._snapshot(source_seqs, seq_to_event)
+        operation, target_memory_id, revised_content = self._resolve_operation(
+            item, link_id_map, content
+        )
         return MemoryCandidate(
             content=content,
             kind=kind,
@@ -502,7 +569,54 @@ class Distiller:
             source_event_ids=source_event_ids,
             evidence_snapshot=snapshot,
             confidence=confidence,
+            operation=operation,
+            target_memory_id=target_memory_id,
+            revised_content=revised_content,
         )
+
+    @staticmethod
+    def _resolve_operation(
+        item: dict, link_id_map: dict[int, str], content: str
+    ) -> tuple[ReconcileOp, str | None, str | None]:
+        """Lift the extractor's single-call reconcile decision off one item.
+
+        Returns ``(operation, target_memory_id, revised_content)`` ready for
+        :meth:`LongTermMemory.reconcile_decided`.  The extractor names its target
+        by the masked id from the `## Existing memories` block, mapped back to a
+        real ``memory_id`` via ``link_id_map`` (the same namespace as
+        ``linked_memory_ids``).  Anything that can't be a clean non-ADD decision
+        degrades to ADD, so a malformed/hallucinated op or an unresolvable target
+        promotes the candidate as new rather than mis-targeting a record:
+
+        - an unparseable or unknown ``operation`` -> ADD;
+        - an UPDATE/DELETE/NOOP whose ``target_id`` doesn't resolve to a shown id
+          -> ADD (it named a record we never offered).
+
+        ``revised_content`` is kept only for an UPDATE that actually rewords the
+        claim (non-empty and different from ``content``); it is irrelevant to the
+        other ops.
+        """
+        try:
+            operation = ReconcileOp(item.get("operation", ReconcileOp.ADD.value))
+        except ValueError:
+            return ReconcileOp.ADD, None, None
+        if operation is ReconcileOp.ADD:
+            return ReconcileOp.ADD, None, None
+
+        target_memory_id = link_id_map.get(_as_index(item.get("target_id")))
+        if target_memory_id is None:
+            logger.info(
+                "[distill] %s names unresolvable target_id=%r; degrading to ADD: %.80s",
+                operation.value, item.get("target_id"), content,
+            )
+            return ReconcileOp.ADD, None, None
+
+        revised_content = None
+        if operation is ReconcileOp.UPDATE:
+            revised = (item.get("revised_content") or "").strip()
+            if revised and revised != content:
+                revised_content = revised
+        return operation, target_memory_id, revised_content
 
     @staticmethod
     def _resolve_links(
@@ -518,9 +632,8 @@ class Distiller:
             return []
         out: list[str] = []
         for value in raw:
-            try:
-                index = int(value)
-            except (TypeError, ValueError):
+            index = _as_index(value)
+            if index is None:
                 continue
             mid = link_id_map.get(index)
             if mid is not None and mid not in out:

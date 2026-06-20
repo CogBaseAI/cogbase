@@ -273,7 +273,7 @@ class LongTermMemory:
     # ------------------------------------------------------------------
 
     async def recall(
-        self, *, query: str, limit: int = 10
+        self, *, query: str, limit: int = 5
     ) -> list[LongTermRecord]:
         """Return active memories relevant to *query*, plus their neighborhood.
 
@@ -591,38 +591,30 @@ class LongTermMemory:
         :meth:`embed_contents`) reused for the candidate's search query and
         promote write, so distilling a session embeds each content once.
 
-        Scaling note — single-call additive extract+reconcile
-        -----------------------------------------------------
-        The current design is two-phase: ``Distiller`` makes one LLM call to
-        extract N candidate facts from a session, then ``distill`` calls
-        :meth:`reconcile` per candidate, and each candidate with related
-        records spends one more LLM call in :meth:`_decide`.  That is **N+1
-        LLM calls per session** (worst case), which is fine at design-partner
-        volume but grows linearly with facts-per-session.
+        Two-phase vs. single-call
+        -------------------------
+        This is the **two-phase** path: ``Distiller`` makes one LLM call to
+        extract N candidate facts, then calls :meth:`reconcile` per candidate,
+        each one with related records spending one more LLM call in
+        :meth:`_decide` — **N+1 LLM calls per session** (worst case), growing
+        linearly with facts-per-session.  Its upside is auditability: each
+        :meth:`_decide` yields one ``ReconcileOp`` + reasoning for one
+        (candidate, target) pair, easy to log and review, and each candidate
+        gets a fresh per-candidate vector+entity recall (:meth:`_related_records`).
 
-        mem0's V3 pipeline collapses this into a *single* additive call:
-        before extraction it vector-recalls the top-K existing memories, then
-        one LLM call sees ``(new turn, existing memories)`` and emits the
-        extracted facts **together with** their ADD / UPDATE / DELETE / NOOP
-        op against those memories — extraction and reconciliation in one shot.
-        Net effect: one call per session instead of N+1, and the model
-        reconciles the whole batch holistically rather than one fact at a time.
+        The **single-call** path (:meth:`reconcile_decided`, the default for the
+        distiller) collapses this to one call: the extractor sees the
+        front-loaded existing memories and emits each fact *together with* its
+        ADD / UPDATE / DELETE / NOOP op, so reconciliation just applies the
+        pre-made decision — no per-candidate recall, no :meth:`_decide` call.
+        It trades the per-candidate audit point and per-candidate recall for
+        O(1) cost; the candidate carries the decision in
+        ``operation`` / ``target_memory_id`` / ``revised_content``.
 
-        Trade-offs if we adopt it:
-          - Cost/latency drop from O(N) to O(1) calls — the reason to do it.
-          - Lose the per-candidate audit point: today each :meth:`_decide`
-            yields one ``ReconcileOp`` + reasoning for one (candidate, target)
-            pair, which is easy to log and review; the batched call mixes all
-            decisions into one response.
-          - Anti-hallucination matters more: when many existing memories are
-            shown at once, mask their UUIDs as small integers in the prompt
-            and resolve back afterwards so the LLM can't invent/typo an id.
-          - The pending-review gate and confidence reinforcement still apply,
-            but must be re-derived from a batched response shape.
-
-        Recommendation: keep the controllable per-candidate path as default;
-        introduce the single-call mode as an opt-in for high-volume apps where
-        per-session LLM cost dominates.  Revisit when that cost actually bites.
+        Both paths share the same apply tail (:meth:`_apply_op`), the same
+        anti-hallucination id masking (real UUIDs are shown as small integers
+        and resolved back), and the same promotion gate + confidence
+        reinforcement — only *who decides the op* differs.
         """
         related = await self._related_records(candidate, embeddings=embeddings)
 
@@ -648,20 +640,112 @@ class LongTermMemory:
             )
             return target.memory_id if target else related[0].memory_id
 
-        if op is ReconcileOp.UPDATE and target is not None:
-            return await self._apply_update(
-                target, candidate, decision.revised_content, embeddings=embeddings
+        return await self._apply_op(
+            candidate=candidate,
+            op=op,
+            target=target,
+            revised_content=decision.revised_content,
+            embeddings=embeddings,
+        )
+
+    async def reconcile_decided(
+        self,
+        *,
+        candidate: MemoryCandidate,
+        embeddings: dict[str, list[float]] | None = None,
+    ) -> str:
+        """Apply a candidate whose ``ReconcileOp`` the extractor already decided.
+
+        The single-call counterpart to :meth:`reconcile`: when distillation
+        fuses extraction and reconciliation into one LLM call (the additive
+        pipeline), each candidate arrives already carrying its ``operation`` and
+        the resolved ``target_memory_id`` it refers to — so there is nothing to
+        recall and nothing to :meth:`_decide`.  This loads the named target and
+        applies the op, collapsing the session's N+1 LLM calls (1 extract + up to
+        N per-candidate decide) down to the single extract call.
+
+        Robustness mirrors :meth:`_decide`'s: an UPDATE/DELETE/NOOP whose target
+        is missing or no longer active degrades to ADD rather than touching the
+        wrong record or silently dropping the candidate.  ``embeddings`` is the
+        same optional ``content -> vector`` cache reused for the promote write.
+        """
+        op = candidate.operation
+        target: LongTermRecord | None = None
+        if op is not ReconcileOp.ADD and candidate.target_memory_id is not None:
+            target = await self._load_active_target(candidate.target_memory_id)
+            if target is None:
+                logger.info(
+                    "[long_term] app=%s reconcile_decided %s named missing/inactive "
+                    "target memory_id=%s; degrading to ADD",
+                    self._app_id, op.value, candidate.target_memory_id,
+                )
+                op = ReconcileOp.ADD
+        logger.info(
+            "[long_term] app=%s reconcile_decided: kind=%s -> %s (target=%s)",
+            self._app_id, candidate.kind.value, op.value,
+            target.memory_id if target else None,
+        )
+
+        if op is ReconcileOp.NOOP:
+            # Already correctly known: leave the target untouched.  A NOOP that
+            # lost its target was degraded to ADD above, so target is present here.
+            return target.memory_id if target is not None else (
+                await self.promote(candidate=candidate, embeddings=embeddings)
             )
 
-        if op is ReconcileOp.DELETE and target is not None:
-            return await self._apply_delete(target, candidate, embeddings=embeddings)
-
-        # ADD, or UPDATE/DELETE that named no resolvable target.
-        return await self.promote(candidate=candidate, embeddings=embeddings)
+        return await self._apply_op(
+            candidate=candidate,
+            op=op,
+            target=target,
+            revised_content=candidate.revised_content,
+            embeddings=embeddings,
+        )
 
     # ------------------------------------------------------------------
     # Reconcile internals
     # ------------------------------------------------------------------
+
+    async def _apply_op(
+        self,
+        *,
+        candidate: MemoryCandidate,
+        op: ReconcileOp,
+        target: LongTermRecord | None,
+        revised_content: str | None,
+        embeddings: dict[str, list[float]] | None = None,
+    ) -> str:
+        """Apply a resolved non-NOOP op against *target*; return the affected id.
+
+        The shared apply tail of both reconcile paths (:meth:`reconcile` and
+        :meth:`reconcile_decided`): UPDATE reinforces, DELETE supersedes, and
+        anything else — ADD, or an UPDATE/DELETE that named no resolvable
+        target — promotes the candidate as new.  NOOP is handled by the callers
+        (it writes nothing), so it never reaches here.
+        """
+        if op is ReconcileOp.UPDATE and target is not None:
+            return await self._apply_update(
+                target, candidate, revised_content, embeddings=embeddings
+            )
+        if op is ReconcileOp.DELETE and target is not None:
+            return await self._apply_delete(target, candidate, embeddings=embeddings)
+        # ADD, or UPDATE/DELETE that named no resolvable target.
+        return await self.promote(candidate=candidate, embeddings=embeddings)
+
+    async def _load_active_target(self, memory_id: str) -> LongTermRecord | None:
+        """Load *memory_id* iff it exists and is still active, else ``None``.
+
+        The single-call path's analog of :meth:`_resolve_target`: the extractor
+        named an existing memory by its masked id and the distiller resolved it
+        to a real ``memory_id``, but the record may have been superseded since
+        the recall that surfaced it.  Reconciling against a non-active target
+        would corrupt belief, so an UPDATE/DELETE/NOOP against one degrades to
+        ADD (see :meth:`reconcile_decided`).
+        """
+        records = await self._load_records([memory_id])
+        record = records[0] if records else None
+        if record is None or record.status is not MemoryStatus.ACTIVE:
+            return None
+        return record
 
     async def _apply_update(
         self,

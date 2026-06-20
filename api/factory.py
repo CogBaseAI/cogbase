@@ -307,6 +307,7 @@ async def build_app(
             llm,
             domain_fact_guidance=config.memory.domain_fact_guidance,
             existing_memory_limit=config.memory.existing_memory_limit,
+            single_call=config.memory.single_call_reconcile,
         )
         if episodic is not None and long_term is not None
         else None

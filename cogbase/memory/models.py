@@ -425,7 +425,7 @@ class LongTermRecord(BaseModel):
 
 
 class MemoryCandidate(BaseModel):
-    """A distiller's proposed memory, before reconciliation decides its fate.
+    """A distiller's proposed memory on its way into reconciliation.
 
     Carries everything reconciliation needs to ADD / UPDATE / DELETE / NOOP it
     against accumulated belief, including the provenance to snapshot on
@@ -434,6 +434,14 @@ class MemoryCandidate(BaseModel):
     its score clears the kind's auto-promote threshold (see
     :data:`cogbase.memory.long_term.AUTO_PROMOTE_CONFIDENCE`), otherwise it waits
     for review.
+
+    The reconcile decision may be made for the candidate or by it.  In the
+    per-candidate path (:meth:`LongTermMemory.reconcile`) the fields below are
+    left at their ADD defaults and a dedicated LLM call decides the operation.
+    In the single-call additive path (:meth:`LongTermMemory.reconcile_decided`)
+    the extractor decides the operation *while* extracting — fusing the two LLM
+    calls into one — and fills ``operation`` / ``target_memory_id`` /
+    ``revised_content`` here, so reconciliation just applies them.
     """
 
     content: str
@@ -448,6 +456,14 @@ class MemoryCandidate(BaseModel):
     evidence_snapshot: dict = Field(default_factory=dict)
     # 0..1 — how strongly the source supports the claim; weighed in reconciliation.
     confidence: float
+    # The extractor's pre-decided reconcile op against accumulated belief, set only
+    # on the single-call additive path; ADD (the default) carries no target and is
+    # promoted as new.  ``target_memory_id`` is the already-resolved real id of the
+    # existing record an UPDATE/DELETE/NOOP refers to; ``revised_content`` is the
+    # refined wording an UPDATE optionally supplies.
+    operation: ReconcileOp = ReconcileOp.ADD
+    target_memory_id: str | None = None
+    revised_content: str | None = None
 
 
 # ---------------------------------------------------------------------------

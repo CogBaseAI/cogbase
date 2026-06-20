@@ -22,6 +22,7 @@ from cogbase.memory.models import (
     MemoryCandidate,
     MemoryKind,
     MemoryStatus,
+    ReconcileOp,
     ReviewDecision,
     ReviewOutcome,
 )
@@ -325,6 +326,134 @@ async def test_reconcile_noop_leaves_record_unchanged():
     after = (await svc._load_records([mid]))[0]
     assert after.confidence == before.confidence
     assert after.content == before.content
+
+
+# ---------------------------------------------------------------------------
+# reconcile_decided — the single-call path applies a pre-decided op, no LLM
+# ---------------------------------------------------------------------------
+
+def _decided(content, *, op, target=None, revised=None, kind=MemoryKind.FACT, **kw):
+    """A candidate the extractor already decided the reconcile op for."""
+    candidate = _candidate(content, kind=kind, **kw)
+    candidate.operation = op
+    candidate.target_memory_id = target
+    candidate.revised_content = revised
+    return candidate
+
+
+@pytest.mark.asyncio
+async def test_reconcile_decided_add_promotes_without_llm():
+    # ADD is the default op; the single-call path never touches the LLM.
+    svc = await _make_service(llm=_llm_returning({"operation": "NOOP"}))
+    mid = await svc.reconcile_decided(
+        candidate=_decided("user prefers dark mode", op=ReconcileOp.ADD,
+                           kind=MemoryKind.PREFERENCE),
+    )
+    svc._llm.complete.assert_not_called()
+    assert (await svc._load_records([mid]))[0].content == "user prefers dark mode"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_decided_update_reinforces_target():
+    svc = await _make_service(llm=_llm_returning({"operation": "NOOP"}))
+    mid = await svc.promote(
+        candidate=_candidate("user prefers concise answers", kind=MemoryKind.PREFERENCE, seqs=[1]),
+    )
+    before = (await svc._load_records([mid]))[0].confidence
+
+    out = await svc.reconcile_decided(
+        candidate=_decided("user likes concise answers", op=ReconcileOp.UPDATE,
+                           target=mid, kind=MemoryKind.PREFERENCE, seqs=[5]),
+    )
+    svc._llm.complete.assert_not_called()
+    assert out == mid
+    rec = (await svc._load_records([mid]))[0]
+    assert rec.confidence > before
+    assert {r.seq for r in rec.source_event_ids} == {1, 5}
+
+
+@pytest.mark.asyncio
+async def test_reconcile_decided_update_revises_content():
+    svc = await _make_service()
+    mid = await svc.promote(
+        candidate=_candidate("user prefers concise answers", kind=MemoryKind.PREFERENCE),
+    )
+    await svc.reconcile_decided(
+        candidate=_decided(
+            "user prefers concise answers", op=ReconcileOp.UPDATE, target=mid,
+            revised="user strongly prefers concise answers with citations",
+            kind=MemoryKind.PREFERENCE,
+        ),
+    )
+    assert (await svc._load_records([mid]))[0].content == (
+        "user strongly prefers concise answers with citations"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconcile_decided_delete_supersedes_when_candidate_outranks():
+    svc = await _make_service()
+    old = await svc.promote(
+        candidate=_candidate("user is based in Berlin", kind=MemoryKind.FACT),
+        status=MemoryStatus.ACTIVE,
+    )
+    new = await svc.reconcile_decided(
+        candidate=_decided("user is based in Munich", op=ReconcileOp.DELETE,
+                           target=old, kind=MemoryKind.CORRECTION),
+    )
+    assert new != old
+    assert (await svc._load_records([old]))[0].status is MemoryStatus.SUPERSEDED
+    assert "Munich" in (await svc._load_records([new]))[0].content
+
+
+@pytest.mark.asyncio
+async def test_reconcile_decided_noop_leaves_target_unchanged():
+    svc = await _make_service()
+    mid = await svc.promote(
+        candidate=_candidate("user prefers concise answers", kind=MemoryKind.PREFERENCE),
+    )
+    before = (await svc._load_records([mid]))[0]
+    out = await svc.reconcile_decided(
+        candidate=_decided("user prefers concise answers", op=ReconcileOp.NOOP,
+                           target=mid, kind=MemoryKind.PREFERENCE),
+    )
+    assert out == mid
+    after = (await svc._load_records([mid]))[0]
+    assert after.confidence == before.confidence
+    assert after.content == before.content
+    # NOOP writes nothing new.
+    assert len(await svc._structured.query(svc._structured_collection)) == 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_decided_degrades_to_add_on_missing_target():
+    # An UPDATE whose target was superseded since recall must not touch the wrong
+    # record — it degrades to ADD and promotes the candidate as new.
+    svc = await _make_service()
+    out = await svc.reconcile_decided(
+        candidate=_decided("user works at Acme", op=ReconcileOp.UPDATE,
+                           target="does-not-exist", kind=MemoryKind.FACT, confidence=0.9),
+    )
+    rec = (await svc._load_records([out]))[0]
+    assert rec.content == "user works at Acme"
+    assert rec.status is MemoryStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_reconcile_decided_degrades_to_add_on_inactive_target():
+    # A target that exists but is no longer active (superseded) is not a valid
+    # reconcile target; the op degrades to ADD.
+    svc = await _make_service()
+    old = await svc.promote(
+        candidate=_candidate("user is based in Berlin", kind=MemoryKind.FACT),
+        status=MemoryStatus.SUPERSEDED,
+    )
+    out = await svc.reconcile_decided(
+        candidate=_decided("user is based in Munich", op=ReconcileOp.DELETE,
+                           target=old, kind=MemoryKind.CORRECTION),
+    )
+    assert out != old
+    assert "Munich" in (await svc._load_records([out]))[0].content
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,17 @@ Install the extra dependency before use:
 
 Not thread-safe. ``FAISSMemoryVectorStore`` stores data only in memory.
 ``FAISSVectorStore`` is file-backed and persists each mutation to disk.
+
+Currently used only in tests. Before relying on ``FAISSVectorStore`` under
+concurrent writes, note that ``_save_sync`` runs in an executor thread while
+mutations (``upsert``/``delete``) run on the event loop, so a mutation can read
+or modify the per-collection dicts (``chunks``/``id_map``/``id_rev``) while the
+save thread is iterating them. That can raise "dictionary changed size during
+iteration" or write a torn ``meta.json``. The dirty-flag retry in
+``_after_mutation`` guarantees no mutation is left unpersisted, but it does not
+serialise mutations against an in-flight save. Guard it by snapshotting the
+payload on the event loop before handing it to the thread, or by serialising
+mutations and saves under an ``asyncio.Lock``.
 """
 
 from __future__ import annotations

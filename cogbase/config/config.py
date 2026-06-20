@@ -545,8 +545,20 @@ class MemoryConfig(ConfigPromptMixin, BaseModel):
         default=10,
         description=(
             "How many related existing memories the distiller vector-recalls and "
-            "injects into the extraction prompt as a deduplication + linking "
+            "injects into the extraction prompt as a reconcile + linking "
             "reference. 0 disables the lookup (blind extraction)."
+        ),
+        json_schema_extra={"prompt_skip": True},
+    )
+    single_call_reconcile: bool = Field(
+        default=True,
+        description=(
+            "When true, the distiller's single extraction call also decides each "
+            "memory's reconcile op (ADD/UPDATE/DELETE/NOOP) against the front-loaded "
+            "existing memories — one LLM call per session. When false, fall back to "
+            "the auditable per-candidate reconcile (one extra LLM call per "
+            "candidate). Requires existing_memory_limit > 0 to have memories to "
+            "reconcile against."
         ),
         json_schema_extra={"prompt_skip": True},
     )

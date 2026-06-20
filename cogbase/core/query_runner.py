@@ -314,7 +314,7 @@ _MEMORY_LOOKUP_DEF: ToolDefinition = {
             },
             "limit": {
                 "type": "integer",
-                "description": "Max memories to return (default: 10, max: 20).",
+                "description": "Max memories to return (default: 5, max: 20).",
             },
         },
         "additionalProperties": False,
@@ -712,6 +712,8 @@ class QueryRunner:
         memory_active = self._short_term is not None and session_id is not None
         episodic_on = self._episodic is not None and session_id is not None
         long_term_on = self._long_term is not None
+
+        logger.info("[runner] start, session=%s question=%s", session_id, user_input)
 
         # Slot 0 is reserved for the system prompt; updated each iteration.
         messages: list[ChatMessage] = [{"role": "system", "content": ""}]
@@ -1208,7 +1210,7 @@ class QueryRunner:
         lines = "\n".join(_format_memory_line(m) for m in memories)
         logger.info("[runner] long-term recall injected %d memories", len(memories))
         return (
-            "Relevant long-term memory about the user/project (recalled):\n"
+            "Relevant long-term memory about the user, topic, or entity (recalled):\n"
             + _MEMORY_EVIDENCE_POLICY + "\n" + lines,
             memories,
         )

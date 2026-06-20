@@ -213,9 +213,10 @@ async def test_distill_drops_candidate_with_bad_kind(episodic):
 
 @pytest.mark.asyncio
 async def test_distill_injects_existing_memories_for_dedup(episodic):
-    # Front-loaded existing memories appear in the extraction prompt as a dedup
-    # reference so the extractor can skip already-captured claims, instead of the
-    # duplicate only being caught later in reconcile.
+    # Front-loaded existing memories appear in the extraction prompt as a
+    # reconcile reference so the extractor can fold an already-captured claim into
+    # an in-place UPDATE op, instead of the duplicate only being caught later in a
+    # separate per-candidate reconcile call.
     lt = await _long_term()
     # Seed an active memory the recall will surface.
     from cogbase.memory.models import MemoryCandidate, MemoryKind
@@ -483,3 +484,112 @@ def test_snapshot_truncates_cited_payload():
     assert cited["seq"] == 1
     assert cited["payload"]["_truncated"] is True
     assert cited["payload"]["text"] == big[:_MAX_CITED_PAYLOAD_BYTES]
+
+
+# ---------------------------------------------------------------------------
+# Single-call additive path: the extraction call also decides each candidate's
+# reconcile op against the front-loaded existing memories, so reconcile applies
+# the decision without a second LLM call per candidate.
+# ---------------------------------------------------------------------------
+
+
+async def _seed_existing(lt, content, *, kind, confidence=0.9, entities=()):
+    from cogbase.memory.models import MemoryCandidate
+
+    return await lt.promote(
+        candidate=MemoryCandidate(
+            content=content, kind=kind, confidence=confidence, entities=list(entities)
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_distill_single_call_update_reinforces_existing(episodic):
+    # The extractor names an UPDATE against the [id=0] existing memory; the
+    # distiller applies it in place — no new record, confidence reinforced.
+    from cogbase.memory.models import MemoryKind
+
+    lt = await _long_term()
+    target_id = await _seed_existing(
+        lt, "user prefers concise answers", kind=MemoryKind.PREFERENCE
+    )
+    before = (await lt._load_records([target_id]))[0].confidence
+
+    sid = "sess-sc-update"
+    await _seed_turn(episodic, sid, "I like concise answers", "Noted.")
+    llm = _extracting_llm([
+        {"content": "user likes concise answers", "kind": "preference",
+         "source_seqs": [0], "confidence": 0.8, "operation": "UPDATE", "target_id": 0},
+    ])
+    distiller = Distiller(episodic, lt, llm)
+    ids = await distiller.distill_session(session_id=sid)
+
+    assert ids == [target_id]
+    rec = (await lt._load_records([target_id]))[0]
+    assert rec.confidence > before
+    # No second record was created — the duplicate folded into the existing one.
+    assert len(await lt._structured.query(lt._structured_collection)) == 1
+    # The single extraction call is the only LLM call (no per-candidate decide).
+    assert llm.complete.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_distill_single_call_delete_supersedes_existing(episodic):
+    from cogbase.memory.models import MemoryKind
+
+    lt = await _long_term()
+    old = await _seed_existing(lt, "user is based in Berlin", kind=MemoryKind.FACT)
+
+    sid = "sess-sc-delete"
+    await _seed_turn(episodic, sid, "Actually I moved to Munich", "Got it.")
+    llm = _extracting_llm([
+        {"content": "user is based in Munich", "kind": "correction",
+         "source_seqs": [0], "confidence": 0.9, "operation": "DELETE", "target_id": 0},
+    ])
+    distiller = Distiller(episodic, lt, llm)
+    ids = await distiller.distill_session(session_id=sid)
+
+    assert (await lt._load_records([old]))[0].status is MemoryStatus.SUPERSEDED
+    assert "Munich" in (await lt._load_records(ids))[0].content
+
+
+@pytest.mark.asyncio
+async def test_distill_single_call_degrades_to_add_on_unresolvable_target(episodic):
+    # An UPDATE naming an id the extractor never saw (empty store) degrades to ADD.
+    sid = "sess-sc-badtarget"
+    await _seed_turn(episodic, sid, "I work at Acme", "Got it.")
+    lt = await _long_term()  # nothing seeded -> no existing-memories ids
+    llm = _extracting_llm([
+        {"content": "user works at Acme", "kind": "fact", "source_seqs": [0],
+         "confidence": 0.9, "operation": "UPDATE", "target_id": 0},
+    ])
+    distiller = Distiller(episodic, lt, llm)
+    ids = await distiller.distill_session(session_id=sid)
+
+    rec = (await lt._load_records(ids))[0]
+    assert rec.content == "user works at Acme"
+    assert rec.status is MemoryStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_distill_single_call_false_falls_back_to_per_candidate(episodic):
+    # With single_call=False the extractor's pre-decided op is ignored: the
+    # per-candidate reconcile re-decides via its own LLM call (which, with the
+    # extraction-shaped fake response, defaults to ADD), so the near-duplicate
+    # lands as a separate record instead of folding into the existing one.
+    from cogbase.memory.models import MemoryKind
+
+    lt = await _long_term()
+    await _seed_existing(lt, "user is based in Berlin", kind=MemoryKind.FACT)
+
+    sid = "sess-sc-off"
+    await _seed_turn(episodic, sid, "I am based in Berlin", "Noted.")
+    llm = _extracting_llm([
+        {"content": "user is based in Berlin", "kind": "fact", "source_seqs": [0],
+         "confidence": 0.9, "operation": "UPDATE", "target_id": 0},
+    ])
+    distiller = Distiller(episodic, lt, llm, single_call=False)
+    await distiller.distill_session(session_id=sid)
+
+    # Two records: the op was not applied as an in-place UPDATE.
+    assert len(await lt._structured.query(lt._structured_collection)) == 2
