@@ -26,6 +26,10 @@ Usage:
         --base_url http://localhost:8000 \
         --include_adversarial
 
+Questions within a conversation are queried concurrently (--max_workers, default
+4), checkpointed every 20 answers, and the full conversation is saved on return.
+An interrupt (Ctrl-C) is graceful: in-flight queries finish and save before exit.
+
 Resumable: re-running with the same --out_file skips already-answered questions.
 When --judge_model is added on a resume run, previously answered questions that
 lack a judge verdict are judged automatically.
@@ -37,9 +41,11 @@ import io
 import json
 import logging
 import re
+import signal
 import time
 import zipfile
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -56,6 +62,8 @@ OUTPUT_TOKENS_KEY = "cogbase_output_tokens"
 QUERY_TIME_KEY = "cogbase_query_time"
 CHUNKS_KEY = "cogbase_chunks"
 DOCUMENT_SLICES_KEY = "cogbase_document_slices"
+MEMORIES_KEY = "cogbase_memories"
+MEMORY_BUILT_KEY = "cogbase_memory_built"
 APP_CONFIG_PATH = Path(__file__).parent / "locomo_app.yaml"
 
 # ---------------------------------------------------------------------------
@@ -73,17 +81,17 @@ _JUDGE_PROMPT_TEMPLATE = """Label the generated answer as CORRECT or WRONG.
 
 1. **PARTIAL CREDIT**: If the generated answer includes AT LEAST ONE correct item from the gold answer's list, mark CORRECT. Getting 1 out of 2, 2 out of 4, etc. is always acceptable. Only mark WRONG if NONE of the gold answer items appear.
 
-2. **PARAPHRASES COUNT**: Same concept in different words is CORRECT. Emotions in the same positive/negative family count as paraphrases: "proud" = "fulfilled" = "accomplished"; "huge success" = "relieved" (all express positive achievement). Judge semantic meaning, not exact wording.
+2. **PARAPHRASES COUNT**: Same concept in different words is CORRECT. "Chocolate raspberry tart" = "chocolate cake with raspberries". "Shelter meal service" = "volunteering at a homeless shelter". Emotions and sentiments in the same positive/negative family count as paraphrases: "proud" = "fulfilled" = "accomplished"; "huge success" = "relieved" = "thrilled" (all express positive achievement). Judge semantic meaning, not exact wording.
 
-3. **EXTRA DETAIL IS FINE**: A longer answer that includes the gold answer's key facts plus additional information is CORRECT. Never penalize for being more detailed or specific.
+3. **EXTRA DETAIL IS FINE**: A longer answer that includes the gold answer's key facts plus additional information is CORRECT. Never penalize for being more detailed or specific. If the generated answer adds extra descriptive details beyond the gold answer while still referencing the same core entity or concept, mark CORRECT.
 
-4. **DATE TOLERANCE**: Dates within 14 days of each other are CORRECT. Durations within 50% are CORRECT (e.g., "5 months" matches "six months"). Relative dates match specific dates in the same window.
+4. **DATE TOLERANCE**: Dates within 14 days of each other are CORRECT. Durations within 50% are CORRECT (e.g., "5 months" matches "six months"; "19 days" matches "two weeks"). Relative dates ("few days before November") match specific dates in the same window. A specific date (e.g., "February 2020") that is consistent with a vague reference (e.g., "a few years ago" relative to 2023) is CORRECT. Converting "last year" to the actual year (e.g., "2022" when conversations are in 2023) is CORRECT.
 
-5. **SEMANTIC OVERLAP**: Judge whether the generated answer addresses the same topic and captures the core idea of the gold answer. Different wording or level of detail should not result in WRONG if the underlying concept matches.
+5. **SEMANTIC OVERLAP**: Judge whether the generated answer addresses the same topic and captures the core idea of the gold answer. Different wording, phrasing, or level of detail should not result in WRONG if the underlying concept matches. For EMOTIONS and FEELINGS questions, answers expressing sentiments in the same valence (positive/negative) about the same event are CORRECT — do not require the exact same emotion word.
 
-6. **SAME REFERENT**: If the generated answer mentions the same named entity as the gold answer, mark CORRECT even if it includes additional details.
+6. **SAME REFERENT**: If the generated answer mentions or references the same named entity, character, person, or concept as the gold answer, mark CORRECT — even if the generated answer provides a different physical description or includes additional details. The key question is: does the generated answer identify the same core entity? If yes, it is CORRECT.
 
-7. **FOCUS ON KNOWLEDGE, NOT WORDING**: Only mark WRONG when the generated answer demonstrates a genuinely different or incorrect understanding.
+7. **FOCUS ON KNOWLEDGE, NOT WORDING**: The goal is to assess whether the system recalled the right fact. Minor differences in specificity, phrasing, or scope should not result in WRONG. Only mark WRONG when the generated answer demonstrates a genuinely different or incorrect understanding.
 
 ## ONLY mark WRONG if:
 - The generated answer contains ZERO correct items from the gold answer
@@ -165,66 +173,116 @@ class _JudgeClient:
 # System prompt injected per-query (overrides the app-level query_prompt).
 # This prompt mirrors the ANSWER_GENERATION_PROMPT in mem0 locomo test,
 # https://github.com/mem0ai/memory-benchmarks/blob/main/benchmarks/locomo/prompts.py
+# It is source-agnostic — "retrieved items" covers both vector_search passages and,
+# in hybrid (--build_memory) runs, distilled memory facts. The __MEMORY_SECTION__
+# token is replaced by _MEMORY_SECTION when memory is active, else stripped, so
+# RAG-only runs are never told to use a memory tool that isn't registered.
 SYSTEM_PROMPT = """\
 You are answering questions about a long-term personal conversation between two people.
-Use your retrieval tools to fetch relevant chunks, then follow these reasoning steps IN ORDER.
-
-## Step 1: SCAN ALL RETRIEVED CHUNKS
-Read EVERY retrieved chunk from first to last. For each one that contains information
-relevant to the question, note it. Do NOT stop after finding the first relevant chunk —
-important details are often scattered across multiple chunks, including ones retrieved
-later. Give equal weight to ALL chunks regardless of retrieval rank.
+Use your retrieval tools to gather evidence, then follow these reasoning steps IN ORDER.
+Your retrieved items are conversation passages, each under a "Session N (YYYY-MM-DD
+HH:MM:SS):" header with turn IDs.
+__MEMORY_SECTION__
+## Step 1: SCAN ALL RETRIEVED ITEMS
+Read EVERY retrieved item from first to last. For each one that contains information
+relevant to the question, note it. Do NOT stop after finding the first relevant item —
+important details are often scattered across multiple items, including ones retrieved
+later. Give equal weight to ALL items regardless of retrieval rank or position.
 
 ## Step 2: ENTITY VERIFICATION
-Confirm each relevant chunk is about the correct person or entity. If the question asks
-"What does Person A like?" and a chunk says "Person B likes X", do NOT use that chunk to
+Confirm each relevant item is about the correct person or entity. If the question asks
+"What does Person A like?" and an item says "Person B likes X", do NOT use that item to
 answer about Person A. In two-person conversations, both speakers' actions are relevant —
-always verify that attribution is correct before using a chunk.
+always verify that attribution is correct before using an item.
 
 ## Step 3: COMBINE AND CROSS-REFERENCE
-- COMBINE facts from multiple chunks about the same topic. If one chunk says "won first
-  place" and another says "performed a piece titled X", those describe the same event.
-- For listing or counting questions, extract EVERY distinct item from ALL chunks. Think
+- COMBINE facts from multiple items about the same topic. If one says "won first place"
+  and another says "performed a piece titled X", those describe the same event.
+- DECOMPOSE complex statements: "an immersive X with Y, who enjoys Z" contains several
+  distinct facts, each of which could be the answer.
+- For listing or counting questions, extract EVERY distinct item from ALL evidence. Think
   about what categories of answers are possible, then re-scan for each category.
 - For counting questions ("how many times", "how many X"), enumerate each distinct
   instance explicitly with its date or context BEFORE giving a final count. Do not
   estimate — list them out, then count the list.
-- Connect related facts across chunks: if one says "nearby lake" and another says
-  "Lake Tahoe is great for kayaking", the nearby lake IS Lake Tahoe.
+- Connect related facts across items: if one says "nearby lake" and another says
+  "Lake Tahoe is great for kayaking", the nearby lake IS Lake Tahoe. If one says "bought
+  it in Paris", infer the country is France.
 
 ## Step 4: SELECT THE BEST ANSWER
-- Do NOT assume the highest-ranked chunk is correct. Compare each candidate's relevance
-  to the SPECIFIC question asked.
+- Do NOT assume the highest-ranked item is correct. Compare each candidate's relevance
+  to the SPECIFIC question asked, not its retrieval score.
 - ALWAYS choose the MOST SPECIFIC detail available. A proper name, title, or number beats
   a generic description.
+- Repetition is not evidence: when several items repeat the same generic fact, that does
+  NOT make it more correct than a single item with a more specific answer.
 - Report what someone actually DID, not what was offered or available to them. "Has not
   tried X yet" means X was NOT done. "Joined X" or "has done X" means it WAS done.
+- Photos depict what was IN the photo, not facts about someone's daily life. Prefer
+  direct statements over image descriptions when making inferences.
 - Re-read the question carefully before answering. If it asks "what aspect/type/kind",
   answer with the specific aspect, not the setting.
 
 ## Step 5: TEMPORAL GROUNDING
 These conversations took place in 2022–2024. Each chunk includes a session header with
-an explicit date, e.g. "Session N (YYYY-MM-DD HH:MM:SS):".
-- Use dates explicitly stated in chunk text. Do not invent or estimate dates.
+an explicit date, e.g. "Session N (YYYY-MM-DD HH:MM:SS):"; any memory facts carry an
+"as of YYYY-MM-DD" tag.
+- Use dates explicitly stated in the evidence. Do not invent or estimate dates, and never
+  output 2025 or 2026.
+- When a question asks what someone "shared" or "mentioned" on a date, that date is when
+  they TALKED about it — look for the event shortly BEFORE that date.
 - For "how long" questions, find the start and end dates explicitly, then compute the
   duration. Do not guess.
-- When you find MULTIPLE instances of similar events at different dates, enumerate them
-  all with their dates BEFORE picking the one the question refers to. Never default to
-  the first-mentioned instance — the date context determines the answer.
+- TEMPORAL DISAMBIGUATION: when you find MULTIPLE instances of similar events at different
+  dates, enumerate them all with their dates BEFORE picking. Past tense + "the" → the
+  instance closest to (and before) the reference date. Future tense ("plans to", "going
+  to") → the earliest planned date. Never default to the first-mentioned or highest-ranked
+  instance — the date context determines the answer.
 
 ## Step 6: INCLUSION CHECK
 For lists and counts: include all items found unless you have STRONG evidence they are
 wrong. The most common mistake is finding relevant items but dropping them due to overly
 strict filtering. After enumerating, re-verify each item — check for duplicates (same
-event described differently) and ensure you haven't missed items from later chunks.
+event described differently) and ensure you haven't missed items retrieved later. The
+question assumes something happened; find WHAT happened, don't say nothing did.
 
 ## Step 7: COMMIT AND ANSWER
 Give a direct, specific answer using exact words from the conversation whenever possible.
-NEVER return an empty answer when relevant chunks exist — if ANY chunk contains relevant
-information, give the best answer from available evidence.
-If the information is genuinely not present in any retrieved chunk, say:
+If the question asks for a list, include ALL items found. NEVER return an empty answer
+when relevant evidence exists.
+- NEVER generate specific names, titles, places, or dates that do not appear in any
+  retrieved item. If the specific detail asked for is absent, answer with what the
+  evidence DOES contain rather than guessing.
+- For open-domain / opinion questions ("Would X do Y?", "Is X considered Z?"):
+  * Follow the DIRECT causal reasoning in the evidence; do not construct elaborate
+    counter-arguments.
+  * "Would X still do Y without Z?" — if X does Y BECAUSE of Z, then without Z, answer
+    "likely no."
+  * "Would X do Y again soon?" — if the most recent attempt involved a bad experience
+    (accident, scare, trauma), answer "likely no"; a recent negative outweighs an older
+    positive pattern.
+  * Trait questions ("Is X considered Z?"): weigh all evidence including indirect or
+    symbolic references; with some but not strong evidence, answer a qualified degree
+    ("somewhat") rather than a flat "no".
+- Make reasonable deductions: a store with many working people employs many people; a game
+  exclusive to one platform implies owning that platform; you may name a clearly described
+  work (a "romantic drama about memory and relationships" → "Eternal Sunshine of the
+  Spotless Mind").
+If the information is genuinely not present in any retrieved item, say:
 "Not mentioned in the conversation."
-Do not invent facts not present in the retrieved context.
+Do not invent facts not present in the retrieved evidence.
+"""
+
+# Injected into SYSTEM_PROMPT (replacing __MEMORY_SECTION__) only on hybrid
+# --build_memory runs, where the runner also exposes distilled memory facts and
+# the memory_lookup tool alongside vector_search.
+_MEMORY_SECTION = """\
+Long-term memory is active: some retrieved items are distilled memory facts from earlier
+sessions, shown as "[fact, as of YYYY-MM-DD] ..." (sometimes with an "(entities: ...)"
+tag). Treat these as first-class evidence alongside the conversation passages — a memory
+and a passage that agree corroborate each other. When the passages are thin, call the
+memory_lookup tool to pull more memories about a specific person, topic, or entity. Apply
+the same temporal reasoning (Step 5) to a memory's "as of" date.
 """
 
 # Simple prompt like below works, but achieves lower scores.
@@ -256,6 +314,10 @@ def _build_bundle(app_name: str) -> bytes:
 
 
 def _session_nums(conv: dict) -> list[int]:
+    """Session numbers ordered chronologically by parsed session date, falling
+    back to the numeric suffix when a date is missing or unparseable. Ordering
+    matters for memory build, where each distill reconciles against the ones
+    before it."""
     nums = []
     for k in conv:
         if k.startswith("session_") and not k.endswith("_date_time"):
@@ -263,7 +325,41 @@ def _session_nums(conv: dict) -> list[int]:
                 nums.append(int(k.split("_")[-1]))
             except ValueError:
                 pass
-    return sorted(nums)
+
+    _min = datetime.min.replace(tzinfo=timezone.utc)
+
+    def _key(n: int) -> tuple:
+        parsed = _parse_locomo_date(conv.get(f"session_{n}_date_time", ""))
+        return (0, parsed, n) if parsed else (1, _min, n)
+
+    return sorted(nums, key=_key)
+
+
+def _image_tag(turn: dict) -> str:
+    """Format an image-sharing tag from a turn's query and blip_caption fields.
+
+    Mirrors mem0's richer tagging: the `query` field (what the image was sought
+    for) adds context the blip caption alone lacks, which helps recall on
+    image-sharing turns.
+    """
+    blip = turn.get("blip_caption", "")
+    query = turn.get("query", "")
+    if query and blip:
+        return f"[Sharing image - query: {query}. The image shows: {blip}]"
+    if query:
+        return f"[Sharing image - query for: {query}]"
+    if blip:
+        return f"[Sharing image that shows: {blip}]"
+    return ""
+
+
+def _turn_text(turn: dict) -> str:
+    """A turn's text with any image tag appended."""
+    text = turn.get("text", "")
+    tag = _image_tag(turn)
+    if tag:
+        text = f"{text} {tag}" if text else tag
+    return text
 
 
 def _format_session(conv: dict, n: int) -> str:
@@ -274,12 +370,35 @@ def _format_session(conv: dict, n: int) -> str:
     for turn in turns:
         dia_id = turn.get("dia_id", "")
         speaker = turn.get("speaker", "")
-        text = turn.get("text", "")
-        line = f"[{dia_id}] {speaker}: {text}"
-        if turn.get("blip_caption"):
-            line += f" [shares image: {turn['blip_caption']}]"
-        lines.append(line)
+        lines.append(f"[{dia_id}] {speaker}: {_turn_text(turn)}")
     return "\n".join(lines)
+
+
+def _parse_locomo_date(date_str: str) -> datetime | None:
+    """Parse a LoCoMo session date like '1:56 pm on 8 May, 2023' (UTC)."""
+    for fmt in ("%I:%M %p on %d %B, %Y", "%I:%M %p on %d %b, %Y"):
+        try:
+            return datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _session_messages(conv: dict, n: int, speaker_a: str, speaker_b: str) -> list[dict]:
+    """One session's turns as role-tagged messages for the add-memory endpoint.
+
+    Mirrors mem0's mapping: speaker A -> user, speaker B -> assistant, with the
+    speaker name kept inline so the distiller can attribute each fact correctly.
+    """
+    messages: list[dict] = []
+    for turn in conv.get(f"session_{n}", []):
+        speaker = turn.get("speaker", "")
+        text = _turn_text(turn)
+        if not text:
+            continue
+        role = "user" if speaker == speaker_a else "assistant"
+        messages.append({"role": role, "content": f"{speaker}: {text}"})
+    return messages
 
 
 _DIA_ID_RE = re.compile(r"\[D(\d+):\d+\]")
@@ -296,6 +415,42 @@ def _extract_session_ids(chunks: list) -> list[str]:
         for m in _SESSION_HEADER_RE.finditer(text):
             ids.add(f"S{m.group(1)}")
     return sorted(ids)
+
+
+# Exact substring of SYSTEM_PROMPT's Step 5 anchor, swapped out per-conversation.
+_TEMPORAL_ANCHOR = (
+    "These conversations took place in 2022–2024. Each chunk includes a session header with"
+)
+
+
+def _reference_date(conv: dict) -> str | None:
+    """Latest session's human-readable date string (e.g. '1:56 pm on 8 May, 2023').
+
+    Used to anchor temporal reasoning to the conversation's own timeframe.
+    """
+    nums = _session_nums(conv)
+    if not nums:
+        return None
+    return conv.get(f"session_{nums[-1]}_date_time") or None
+
+
+def _build_system_prompt(reference_date: str | None, build_memory: bool = False) -> str:
+    """SYSTEM_PROMPT specialized for one query: the memory-aware block is included
+    only in hybrid runs, and the temporal-grounding anchor is tied to this
+    conversation's own timeframe so relative-time reasoning is computed against the
+    conversation dates rather than today's (mirrors mem0's reference_date injection)."""
+    prompt = SYSTEM_PROMPT.replace(
+        "__MEMORY_SECTION__\n",
+        (_MEMORY_SECTION + "\n") if build_memory else "",
+    )
+    if reference_date:
+        anchored = (
+            f"These conversations took place in 2022–2024, around {reference_date}. "
+            "Compute any relative time against that timeframe, never against today's "
+            "date — never output 2025 or 2026. Each chunk includes a session header with"
+        )
+        prompt = prompt.replace(_TEMPORAL_ANCHOR, anchored)
+    return prompt
 
 
 # ---------------------------------------------------------------------------
@@ -378,12 +533,61 @@ async def wait_for_ingestion(
         await asyncio.sleep(poll_interval)
 
 
+async def add_memory(
+    client: httpx.AsyncClient,
+    app_name: str,
+    messages: list[dict],
+    session_id: str,
+    observation_date: str | None,
+) -> list[dict]:
+    """Distill one session's messages into long-term memory; return the records."""
+    payload: dict = {"messages": messages, "session_id": session_id}
+    if observation_date:
+        payload["observation_date"] = observation_date
+    resp = await client.post(
+        f"/applications/{app_name}/memory",
+        json=payload,
+        timeout=300,
+    )
+    resp.raise_for_status()
+    return resp.json().get("memories", [])
+
+
+async def build_conversation_memory(
+    client: httpx.AsyncClient, app_name: str, sample_id: str, conv: dict
+) -> int:
+    """Replay each session into long-term memory, in chronological order.
+
+    One add-memory call per LoCoMo session so memories accrue across sessions and
+    each distill reconciles against the ones built before it. Returns the total
+    number of memory records created/reinforced.
+    """
+    speaker_a = conv.get("speaker_a", "")
+    speaker_b = conv.get("speaker_b", "")
+    total = 0
+    for n in _session_nums(conv):
+        messages = _session_messages(conv, n, speaker_a, speaker_b)
+        if not messages:
+            continue
+        date_str = conv.get(f"session_{n}_date_time", "")
+        parsed = _parse_locomo_date(date_str)
+        obs = parsed.isoformat() if parsed else None
+        records = await add_memory(
+            client, app_name, messages, session_id=f"{sample_id}-s{n}", observation_date=obs
+        )
+        total += len(records)
+        log.info("  memory: session %d → %d record(s) (total %d)", n, len(records), total)
+    return total
+
+
 async def query_cogbase(
-    client: httpx.AsyncClient, app_name: str, question: str
-) -> tuple[str, list[str], list[dict], list[dict], int, int]:
+    client: httpx.AsyncClient, app_name: str, question: str, system_prompt: str | None = None
+) -> tuple[str, list[str], list[dict], list[dict], int, int, list[dict]]:
+    if system_prompt is None:
+        system_prompt = _build_system_prompt(None)
     resp = await client.post(
         f"/applications/{app_name}/query",
-        json={"text": question, "system_prompt": SYSTEM_PROMPT},
+        json={"text": question, "system_prompt": system_prompt},
         timeout=120,
     )
     resp.raise_for_status()
@@ -394,7 +598,8 @@ async def query_cogbase(
     context_ids = _extract_session_ids(chunks)
     input_tokens = data.get("input_tokens", 0)
     output_tokens = data.get("output_tokens", 0)
-    return answer, context_ids, chunks, document_slices, input_tokens, output_tokens
+    memories = data.get("memories", [])
+    return answer, context_ids, chunks, document_slices, input_tokens, output_tokens, memories
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +608,31 @@ async def query_cogbase(
 
 def _save(out_file: Path, all_results: dict) -> None:
     out_file.write_text(json.dumps(list(all_results.values()), indent=2, ensure_ascii=False))
+
+
+class _GracefulShutdown:
+    """SIGINT handler that flips a flag instead of raising, so in-flight work can
+    finish and checkpoint before the run exits. A second Ctrl-C aborts hard."""
+
+    def __init__(self) -> None:
+        self.requested = False
+        self._orig = None
+
+    def __enter__(self) -> "_GracefulShutdown":
+        self._orig = signal.signal(signal.SIGINT, self._handle)
+        return self
+
+    def _handle(self, signum, frame) -> None:
+        if self.requested:
+            log.warning("Second interrupt — aborting now.")
+            signal.signal(signal.SIGINT, self._orig or signal.SIG_DFL)
+            raise KeyboardInterrupt
+        log.warning("Shutdown requested — finishing in-flight queries, then checkpointing.")
+        self.requested = True
+
+    def __exit__(self, *exc) -> None:
+        if self._orig is not None:
+            signal.signal(signal.SIGINT, self._orig)
 
 
 async def process_conversation(
@@ -414,6 +644,9 @@ async def process_conversation(
     judge: "_JudgeClient | None" = None,
     judge_categories: set[int] | None = None,
     include_adversarial: bool = False,
+    build_memory: bool = False,
+    max_workers: int = 4,
+    shutdown: "_GracefulShutdown | None" = None,
 ) -> dict:
     sample_id = sample["sample_id"]
     app_name = _app_name(sample_id)
@@ -424,89 +657,143 @@ async def process_conversation(
     if task_ids:
         await wait_for_ingestion(client, app_name)
 
+    # Hybrid mode: distill the conversation into long-term memory so recall +
+    # memory_lookup have something to draw on alongside vector_search. Skipped on
+    # resume once built (distillation is the expensive part). The RAG-only run
+    # leaves this off, which is the #1 baseline to diff against.
+    memory_built = bool(all_results.get(sample_id, {}).get(MEMORY_BUILT_KEY))
+    if build_memory and not memory_built:
+        log.info("Building long-term memory for '%s' …", sample_id)
+        total = await build_conversation_memory(client, app_name, sample_id, sample["conversation"])
+        log.info("Memory build complete for '%s': %d record(s).", sample_id, total)
+        memory_built = True
+        # Persist the marker immediately — distillation is the expensive part, so
+        # don't risk redoing it if the query phase crashes before a checkpoint.
+        prior = all_results.get(sample_id, {})
+        all_results[sample_id] = {**prior, "sample_id": sample_id, "qa": prior.get("qa", []), MEMORY_BUILT_KEY: True}
+        _save(out_file, all_results)
+    elif build_memory:
+        log.info("Memory already built for '%s', skipping.", sample_id)
+
     qas = sample["qa"]
     if not include_adversarial:
         qas = [qa for qa in qas if qa.get("category") != 5]
     if sample_n is not None:
         qas = qas[:sample_n]
 
-    # Index already-answered items from a previous run
+    # Per-conversation system prompt anchored to the latest session date, so
+    # temporal reasoning is computed against this conversation's own timeframe.
+    reference_date = _reference_date(sample["conversation"])
+    system_prompt = _build_system_prompt(reference_date, build_memory)
+
+    # Index already-answered items from a previous run, keyed by (question, category).
     prev_by_key: dict[tuple, dict] = {}
     if sample_id in all_results:
         for qa in all_results[sample_id].get("qa", []):
             if qa.get(PREDICTION_KEY):
                 prev_by_key[(qa["question"], qa.get("category"))] = qa
 
-    result_qas: list[dict] = []
+    ordered_keys = [(qa["question"], qa.get("category")) for qa in qas]
+    answered: dict[tuple, dict] = dict(prev_by_key)
+    answered_lock = asyncio.Lock()
+
     todo = [qa for qa in qas if (qa["question"], qa.get("category")) not in prev_by_key]
     skipped = len(qas) - len(todo)
     if skipped:
         log.info("Resuming '%s': skipping %d already-answered question(s).", sample_id, skipped)
 
-    # Prepend previously answered items in original order
-    for qa in qas:
-        key = (qa["question"], qa.get("category"))
-        if key in prev_by_key:
-            result_qas.append(prev_by_key[key])
+    def _assemble() -> list[dict]:
+        """Results in original question order, deduped by (question, category)."""
+        seen: set = set()
+        out: list[dict] = []
+        for key in ordered_keys:
+            if key in answered and key not in seen:
+                out.append(answered[key])
+                seen.add(key)
+        return out
 
-    new_results: list[dict] = []
-    for i, qa in enumerate(todo, 1):
-        log.info("  [%d/%d] %s", i, len(todo), qa["question"][:80])
+    def _checkpoint() -> None:
+        all_results[sample_id] = {"sample_id": sample_id, "qa": _assemble(), MEMORY_BUILT_KEY: memory_built}
+        _save(out_file, all_results)
+
+    sem = asyncio.Semaphore(max_workers)
+    counter = {"done": 0}
+
+    async def _handle(qa: dict) -> None:
+        if shutdown is not None and shutdown.requested:
+            return
         question = qa["question"]
         if qa.get("category") == 2:
             question += " Use the date shown in the conversation to answer."
 
-        t0 = time.perf_counter()
-        try:
-            answer, context_ids, chunks, document_slices, input_tokens, output_tokens = await query_cogbase(client, app_name, question)
-        except Exception as exc:
-            log.warning("  Query failed: %s", exc)
-            answer, context_ids, chunks, document_slices, input_tokens, output_tokens = "", [], [], [], 0, 0
-        query_time = time.perf_counter() - t0
+        async with sem:
+            if shutdown is not None and shutdown.requested:
+                return
+            t0 = time.perf_counter()
+            try:
+                answer, context_ids, chunks, document_slices, input_tokens, output_tokens, memories = await query_cogbase(
+                    client, app_name, question, system_prompt
+                )
+            except Exception as exc:
+                log.warning("  Query failed: %s", exc)
+                answer, context_ids, chunks, document_slices, input_tokens, output_tokens, memories = "", [], [], [], 0, 0, []
+            query_time = time.perf_counter() - t0
 
-        result_qa = qa.copy()
-        result_qa[PREDICTION_KEY] = answer
-        result_qa[PREDICTION_KEY + "_context"] = context_ids
-        result_qa[CHUNKS_KEY] = chunks
-        result_qa[DOCUMENT_SLICES_KEY] = document_slices
-        result_qa[INPUT_TOKENS_KEY] = input_tokens
-        result_qa[OUTPUT_TOKENS_KEY] = output_tokens
-        result_qa[QUERY_TIME_KEY] = round(query_time, 3)
+            result_qa = qa.copy()
+            result_qa[PREDICTION_KEY] = answer
+            result_qa[PREDICTION_KEY + "_context"] = context_ids
+            result_qa[CHUNKS_KEY] = chunks
+            result_qa[DOCUMENT_SLICES_KEY] = document_slices
+            result_qa[INPUT_TOKENS_KEY] = input_tokens
+            result_qa[OUTPUT_TOKENS_KEY] = output_tokens
+            result_qa[MEMORIES_KEY] = memories
+            result_qa[QUERY_TIME_KEY] = round(query_time, 3)
 
-        if judge and (judge_categories is None or qa.get("category") in judge_categories):
-            gt = _preprocess_answer(qa.get("category", 0), str(qa.get("answer", "")))
-            score, label, reasoning = await judge.judge(qa["question"], gt, answer)
-            result_qa[JUDGE_SCORE_KEY] = score
-            result_qa[JUDGE_LABEL_KEY] = label
-            result_qa[JUDGE_REASONING_KEY] = reasoning
+            if judge and (judge_categories is None or qa.get("category") in judge_categories):
+                gt = _preprocess_answer(qa.get("category", 0), str(qa.get("answer", "")))
+                score, label, reasoning = await judge.judge(qa["question"], gt, answer)
+                result_qa[JUDGE_SCORE_KEY] = score
+                result_qa[JUDGE_LABEL_KEY] = label
+                result_qa[JUDGE_REASONING_KEY] = reasoning
 
-        new_results.append(result_qa)
+        # Record under the lock; checkpoint every 20 so a crash loses at most the
+        # last <20 answers (the full conversation is saved by the caller on return).
+        async with answered_lock:
+            answered[(qa["question"], qa.get("category"))] = result_qa
+            counter["done"] += 1
+            done = counter["done"]
+            if done % 20 == 0:
+                _checkpoint()
+                log.info("Checkpoint: %d/%d questions saved.", done, len(todo))
+        log.info("  [%d/%d] %s", done, len(todo), qa["question"][:80])
 
-        if i % 20 == 0:
-            all_results[sample_id] = {"sample_id": sample_id, "qa": result_qas + new_results}
-            _save(out_file, all_results)
-            log.info("Checkpoint: %d/%d questions saved.", i, len(todo))
+    if todo:
+        await asyncio.gather(*(_handle(qa) for qa in todo))
 
     # On resume with a judge model, backfill verdicts for previously answered items.
-    if judge and result_qas:
+    if judge and prev_by_key:
         pending = [
-            qa for qa in result_qas
+            qa for qa in prev_by_key.values()
             if PREDICTION_KEY in qa
             and JUDGE_LABEL_KEY not in qa
             and (judge_categories is None or qa.get("category") in judge_categories)
         ]
         if pending:
             log.info("Backfilling judge verdicts for %d previously answered question(s).", len(pending))
-            for qa in pending:
-                gt = _preprocess_answer(qa.get("category", 0), str(qa.get("answer", "")))
-                score, label, reasoning = await judge.judge(
-                    qa["question"], gt, qa[PREDICTION_KEY]
-                )
-                qa[JUDGE_SCORE_KEY] = score
-                qa[JUDGE_LABEL_KEY] = label
-                qa[JUDGE_REASONING_KEY] = reasoning
 
-    result = {"sample_id": sample_id, "qa": result_qas + new_results}
+            async def _backfill(qa: dict) -> None:
+                async with sem:
+                    gt = _preprocess_answer(qa.get("category", 0), str(qa.get("answer", "")))
+                    score, label, reasoning = await judge.judge(qa["question"], gt, qa[PREDICTION_KEY])
+                async with answered_lock:
+                    qa[JUDGE_SCORE_KEY] = score
+                    qa[JUDGE_LABEL_KEY] = label
+                    qa[JUDGE_REASONING_KEY] = reasoning
+
+            await asyncio.gather(*(_backfill(qa) for qa in pending))
+            _checkpoint()
+
+    result = {"sample_id": sample_id, "qa": _assemble(), MEMORY_BUILT_KEY: memory_built}
     return result
 
 
@@ -623,6 +910,103 @@ def _print_chunks_summary(all_results: dict) -> None:
     print()
 
 
+def _print_memory_summary(all_results: dict) -> None:
+    """How often recall/memory_lookup contributed — the hybrid attribution metric."""
+    cat_counts: dict[int, list[int]] = defaultdict(list)
+    for d in all_results.values():
+        for qa in d.get("qa", []):
+            if MEMORIES_KEY not in qa:
+                continue
+            cat_counts[qa.get("category", 0)].append(len(qa[MEMORIES_KEY]))
+
+    all_counts = [n for v in cat_counts.values() for n in v]
+    if not all_counts:
+        return
+
+    print(f"\nMemory usage  ({len(all_counts)} questions)")
+    print(f"{'Category':<22} {'N':>6}  {'Avg memories':>12}  {'% w/ memory':>11}")
+    print("─" * 56)
+    for cat in [4, 1, 2, 3, 5]:
+        counts = cat_counts.get(cat, [])
+        if not counts:
+            continue
+        with_mem = sum(1 for n in counts if n > 0)
+        print(
+            f"  {_CAT_NAMES.get(cat, str(cat)):<20} {len(counts):>6}"
+            f"  {sum(counts)/len(counts):>12.2f}  {with_mem/len(counts)*100:>10.1f}%"
+        )
+    print("─" * 56)
+    all_with_mem = sum(1 for n in all_counts if n > 0)
+    print(
+        f"  {'Overall':<20} {len(all_counts):>6}"
+        f"  {sum(all_counts)/len(all_counts):>12.2f}  {all_with_mem/len(all_counts)*100:>10.1f}%"
+    )
+    print()
+
+
+def _print_per_conversation_summary(all_results: dict) -> None:
+    """Per-conversation judge accuracy, broken down by category.
+
+    One row per sample_id; one column per category (plus an Overall column),
+    each cell showing accuracy% and the correct/total counts behind it.
+    """
+    # correct/total per (sample_id, category) and the totals per sample_id.
+    per_conv: dict[str, dict[int, list[int]]] = {}
+    for sample_id, d in all_results.items():
+        cats: dict[int, list[int]] = defaultdict(lambda: [0, 0])  # [correct, total]
+        for qa in d.get("qa", []):
+            if JUDGE_LABEL_KEY not in qa:
+                continue
+            cat = qa.get("category", 0)
+            cats[cat][1] += 1
+            if qa.get(JUDGE_SCORE_KEY, 0.0) >= 0.5:
+                cats[cat][0] += 1
+        if cats:
+            per_conv[sample_id] = cats
+
+    if not per_conv:
+        return
+
+    cat_order = [c for c in (4, 1, 2, 3, 5) if any(c in cats for cats in per_conv.values())]
+
+    def _cell(correct: int, total: int) -> str:
+        return f"{correct/total*100:>5.1f}% {correct:>3}/{total:<3}" if total else f"{'—':>14}"
+
+    col_w = 14
+    header = f"{'Conversation':<26}" + "".join(f"  {_CAT_NAMES.get(c, str(c)):<{col_w}}" for c in cat_order)
+    header += f"  {'Overall':<{col_w}}"
+    print(f"\nPer-conversation results by category  ({len(per_conv)} conversation(s))")
+    print(header)
+    print("─" * len(header))
+
+    grand: dict[int, list[int]] = defaultdict(lambda: [0, 0])
+    for sample_id in sorted(per_conv):
+        cats = per_conv[sample_id]
+        row = f"  {sample_id:<24}"
+        conv_correct = conv_total = 0
+        for c in cat_order:
+            correct, total = cats.get(c, [0, 0])
+            grand[c][0] += correct
+            grand[c][1] += total
+            conv_correct += correct
+            conv_total += total
+            row += f"  {_cell(correct, total):<{col_w}}"
+        row += f"  {_cell(conv_correct, conv_total):<{col_w}}"
+        print(row)
+
+    print("─" * len(header))
+    g_correct = g_total = 0
+    overall_row = f"  {'Overall':<24}"
+    for c in cat_order:
+        correct, total = grand[c]
+        g_correct += correct
+        g_total += total
+        overall_row += f"  {_cell(correct, total):<{col_w}}"
+    overall_row += f"  {_cell(g_correct, g_total):<{col_w}}"
+    print(overall_row)
+    print()
+
+
 def _print_judge_summary(all_results: dict) -> None:
     cat_total: dict[int, int] = defaultdict(int)
     cat_correct: dict[int, int] = defaultdict(int)
@@ -672,7 +1056,10 @@ async def main(args: argparse.Namespace) -> None:
         _print_token_summary(all_results)
         #_print_query_time_summary(all_results)
         _print_chunks_summary(all_results)
+        _print_memory_summary(all_results)
         _print_judge_summary(all_results)
+        if args.per_conversation:
+            _print_per_conversation_summary(all_results)
         return
 
     samples: list[dict] = json.loads(data_file.read_text())
@@ -691,20 +1078,27 @@ async def main(args: argparse.Namespace) -> None:
         samples = samples[: args.conversations]
 
     async with httpx.AsyncClient(base_url=args.base_url) as client:
-        for sample in samples:
-            result = await process_conversation(
-                client=client,
-                sample=sample,
-                out_file=out_file,
-                all_results=all_results,
-                sample_n=args.sample,
-                judge=judge,
-                judge_categories=judge_categories,
-                include_adversarial=args.include_adversarial,
-            )
-            all_results[result["sample_id"]] = result
-            _save(out_file, all_results)
-            log.info("Saved predictions for '%s' → %s", result["sample_id"], out_file)
+        with _GracefulShutdown() as shutdown:
+            for sample in samples:
+                if shutdown.requested:
+                    log.info("Shutdown requested — stopping before '%s'.", sample.get("sample_id"))
+                    break
+                result = await process_conversation(
+                    client=client,
+                    sample=sample,
+                    out_file=out_file,
+                    all_results=all_results,
+                    sample_n=args.sample,
+                    judge=judge,
+                    judge_categories=judge_categories,
+                    include_adversarial=args.include_adversarial,
+                    build_memory=args.build_memory,
+                    max_workers=args.max_workers,
+                    shutdown=shutdown,
+                )
+                all_results[result["sample_id"]] = result
+                _save(out_file, all_results)
+                log.info("Saved predictions for '%s' → %s", result["sample_id"], out_file)
 
     answered = sum(
         sum(1 for qa in d.get("qa", []) if PREDICTION_KEY in qa)
@@ -715,8 +1109,11 @@ async def main(args: argparse.Namespace) -> None:
     _print_token_summary(all_results)
     #_print_query_time_summary(all_results)
     _print_chunks_summary(all_results)
+    _print_memory_summary(all_results)
     if judge:
         _print_judge_summary(all_results)
+    if args.per_conversation:
+        _print_per_conversation_summary(all_results)
 
 
 if __name__ == "__main__":
@@ -742,6 +1139,11 @@ if __name__ == "__main__":
         help="Process only the first N questions per conversation (for quick testing)",
     )
     parser.add_argument(
+        "--max_workers", type=int, default=4,
+        help="Number of questions queried concurrently per conversation (default: 4). "
+             "Bounds in-flight queries + judge calls.",
+    )
+    parser.add_argument(
         "--judge_model", default=None,
         help="LLM model for binary CORRECT/WRONG judgment (e.g. gpt-4o-mini). "
              "If omitted, no judging is performed.",
@@ -755,6 +1157,11 @@ if __name__ == "__main__":
         help="Load --out_file and print the LLM judge summary without running any queries.",
     )
     parser.add_argument(
+        "--per_conversation", action="store_true",
+        help="Print a per-conversation judge accuracy breakdown (one row per "
+             "sample_id) in addition to the aggregate summary.",
+    )
+    parser.add_argument(
         "--include_adversarial", action="store_true",
         help="Include category 5 adversarial questions in queries (skipped by default "
              "because the LLM judge does not score them).",
@@ -763,6 +1170,13 @@ if __name__ == "__main__":
         "--categories", default="1,2,3,4",
         help="Comma-separated question categories to judge (default: 1,2,3,4; "
              "category 5 adversarial is excluded by default)",
+    )
+    parser.add_argument(
+        "--build_memory", action="store_true",
+        help="Hybrid mode: distill each conversation into long-term memory (per "
+             "session) before querying, so recall + memory_lookup run alongside "
+             "vector_search. Off = RAG-only baseline. Skipped per-conversation on "
+             "resume once built.",
     )
     args = parser.parse_args()
     asyncio.run(main(args))

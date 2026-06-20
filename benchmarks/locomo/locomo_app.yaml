@@ -61,6 +61,20 @@ query_prompt: |
   "Not mentioned in the conversation."
   Do not invent facts not present in the retrieved context.
 
+# Long-term memory tuning. Only used in hybrid mode (run_cogbase.py
+# --build_memory), where each conversation session is distilled into memory and
+# recall + memory_lookup run alongside vector_search. The guidance reframes the
+# distiller for a two-person dialogue (its default prompt assumes a user↔assistant
+# exchange and extracts facts "about the user").
+memory:
+  domain_fact_guidance: >
+    This transcript is a dialogue between two named speakers, not a user↔assistant
+    exchange. Extract durable facts about BOTH speakers — preferences, relationships,
+    events, plans, and recurring activities. Attribute every fact to the speaker it
+    concerns by name (the speaker's name prefixes each turn). Preserve explicit dates
+    and durations verbatim; they are needed to answer temporal questions and must not
+    be summarized into vague relative terms.
+
 vector_collections:
   - name: locomo_chunks
     description: >
