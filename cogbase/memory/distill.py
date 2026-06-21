@@ -77,6 +77,10 @@ DEFAULT_MIN_CONFIDENCE: dict[MemoryKind, float] = {
 # Floor applied to a kind missing from the table (defensive).
 _FALLBACK_MIN_CONFIDENCE = 0.5
 
+# Cap on deterministic auto-links added per candidate, so even a candidate that
+# shares discriminative entities with many existing memories stays sparsely linked.
+_MAX_AUTO_LINKS = 3
+
 _EXTRACTION_SCHEMA: dict = {
     "type": "object",
     "properties": {
@@ -387,6 +391,13 @@ class Distiller:
             call per session.  When False, fall back to the auditable per-candidate
             :meth:`LongTermMemory.reconcile`, which re-recalls and spends one more
             LLM call per candidate (N+1 calls per session).
+        auto_link_max_entity_ratio: Deterministic link augmentation (see
+            :meth:`_auto_link`).  A candidate is auto-linked to a recalled existing
+            memory when they share an entity present in no more than this fraction
+            of active records — discriminative enough to be a real signal.  Common
+            entities (recurring speakers) exceed the ratio and are skipped, so the
+            graph never collapses into a same-subject clique.  ``0`` disables it and
+            leaves edges to the LLM alone.
     """
 
     def __init__(
@@ -400,6 +411,7 @@ class Distiller:
         domain_fact_guidance: str | None = None,
         existing_memory_limit: int = 10,
         single_call: bool = True,
+        auto_link_max_entity_ratio: float = 0.1,
     ) -> None:
         self._episodic = episodic
         self._long_term = long_term
@@ -409,6 +421,7 @@ class Distiller:
         self._system_prompt = _build_system_prompt(domain_fact_guidance)
         self._existing_memory_limit = existing_memory_limit
         self._single_call = single_call
+        self._auto_link_max_entity_ratio = auto_link_max_entity_ratio
 
     async def distill_session(self, *, session_id: str) -> list[str]:
         """Replay, extract candidates, reconcile each; return affected memory ids.
@@ -469,6 +482,11 @@ class Distiller:
             )
             if candidate is not None:
                 candidates.append(candidate)
+
+        # Deterministic edge augmentation: link candidates to recalled existing
+        # memories that share a discriminative entity, on top of whatever edges the
+        # LLM emitted.  No-op when disabled or when there is nothing to link to.
+        await self._auto_link(candidates, existing)
 
         # Reconcile is order-dependent (each candidate sees what prior ones
         # wrote), so it stays a sequential loop — but every candidate's content
@@ -770,6 +788,82 @@ class Distiller:
             "_original_bytes": size,
             "text": head,
         }
+
+    async def _auto_link(
+        self,
+        candidates: list[MemoryCandidate],
+        existing: list[LongTermRecord],
+    ) -> None:
+        """Add deterministic edges from candidates to related existing memories.
+
+        Mutates each candidate's ``linked_memory_ids`` in place, augmenting the
+        LLM-emitted edges.  A candidate is linked to an existing record when they
+        share at least one *discriminative* entity — one present in no more than
+        ``auto_link_max_entity_ratio`` of all active records.  Ubiquitous entities
+        (a recurring speaker who tags most records) exceed the ratio and are
+        ignored, so this never wires every same-subject record into a clique; rare,
+        specific entities ("homeless shelter", "career fair") are what create
+        edges.  Each candidate gains at most ``_MAX_AUTO_LINKS`` new edges.
+
+        Best-effort: a frequency-scan failure leaves the LLM's edges untouched
+        rather than sinking the distillation.
+        """
+        if self._auto_link_max_entity_ratio <= 0 or not candidates or not existing:
+            return
+        try:
+            counts, total = await self._long_term.active_entity_frequencies()
+        except Exception:
+            logger.warning(
+                "[distill] entity-frequency scan failed; skipping auto-link",
+                exc_info=True,
+            )
+            return
+        if total <= 0:
+            return
+        cap = self._auto_link_max_entity_ratio * total
+
+        # Pre-normalize each existing record's discriminative entities once.
+        existing_disc: list[tuple[str, set[str]]] = []
+        for record in existing:
+            disc = {
+                e
+                for e in normalize_entities(record.entities)
+                if counts.get(e, 0) <= cap
+            }
+            if disc:
+                existing_disc.append((record.memory_id, disc))
+        if not existing_disc:
+            return
+
+        added = 0
+        for candidate in candidates:
+            cand_disc = {
+                e
+                for e in normalize_entities(candidate.entities)
+                if counts.get(e, 0) <= cap
+            }
+            if not cand_disc:
+                continue
+            existing_links = set(candidate.linked_memory_ids)
+            new_links: list[str] = []
+            for memory_id, disc in existing_disc:
+                if len(new_links) >= _MAX_AUTO_LINKS:
+                    break
+                if memory_id in existing_links:
+                    continue
+                if cand_disc & disc:
+                    new_links.append(memory_id)
+            if new_links:
+                candidate.linked_memory_ids = list(
+                    dict.fromkeys(candidate.linked_memory_ids + new_links)
+                )
+                added += len(new_links)
+        if added:
+            logger.info(
+                "[distill] auto-linked %d edge(s) across %d candidate(s) "
+                "(entity ratio<=%.2f of %d active record(s))",
+                added, len(candidates), self._auto_link_max_entity_ratio, total,
+            )
 
     async def _recall_existing(self, transcript: str) -> list[LongTermRecord]:
         """Vector-recall the active memories most related to this session.

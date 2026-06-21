@@ -357,6 +357,79 @@ async def test_distill_links_new_memory_to_existing(episodic):
 
 
 @pytest.mark.asyncio
+async def test_distill_auto_links_on_discriminative_entity_only(episodic):
+    # A candidate auto-links to an existing memory that shares a *rare* entity,
+    # even when the LLM emits no link — but NOT to memories that share only a
+    # ubiquitous entity (a recurring speaker), which would otherwise wire every
+    # same-subject record into a clique.
+    from cogbase.memory.models import MemoryCandidate, MemoryKind
+
+    lt = await _long_term()
+
+    async def _seed(content: str, entities: list[str]) -> str:
+        return await lt.promote(
+            candidate=MemoryCandidate(
+                content=content, kind=MemoryKind.FACT, confidence=0.9,
+                entities=entities, observed_at=_OBSERVED_AT,
+            )
+        )
+
+    # "alice" tags every record (common); "kayaking" tags only one (rare).
+    common_ids = [
+        await _seed("Alice enjoys morning coffee", ["alice"]),
+        await _seed("Alice reads mystery novels", ["alice"]),
+        await _seed("Alice works as a teacher", ["alice"]),
+    ]
+    rare_id = await _seed("Alice went kayaking on Lake Tahoe", ["alice", "kayaking"])
+
+    sid = "sess-autolink"
+    await _seed_turn(
+        episodic, sid,
+        "Alice planned another kayaking trip on Lake Tahoe with coffee", "Fun!",
+    )
+    # Extractor emits no linked_memory_ids — the edges below come from auto-link.
+    llm = _extracting_llm([
+        {"content": "Alice planned another kayaking trip on Lake Tahoe",
+         "kind": "fact", "source_seqs": [0], "confidence": 0.9,
+         "entities": ["alice", "kayaking"]},
+    ])
+    # ratio 0.5 of 4 active records = cap 2: "alice" (4) is common, "kayaking" (1)
+    # discriminative.
+    distiller = Distiller(episodic, lt, llm, auto_link_max_entity_ratio=0.5)
+    ids = await distiller.distill_session(session_id=sid)
+
+    new = (await lt._load_records(ids))[0]
+    assert new.linked_memory_ids == [rare_id]
+    assert not (set(new.linked_memory_ids) & set(common_ids))
+
+
+@pytest.mark.asyncio
+async def test_distill_no_auto_link_when_disabled(episodic):
+    # ratio 0 leaves edges entirely to the LLM: a shared rare entity creates no
+    # auto-link.
+    from cogbase.memory.models import MemoryCandidate, MemoryKind
+
+    lt = await _long_term()
+    await lt.promote(
+        candidate=MemoryCandidate(
+            content="Alice went kayaking on Lake Tahoe", kind=MemoryKind.FACT,
+            confidence=0.9, entities=["alice", "kayaking"], observed_at=_OBSERVED_AT,
+        )
+    )
+    sid = "sess-noautolink"
+    await _seed_turn(episodic, sid, "Alice planned another kayaking trip", "Fun!")
+    llm = _extracting_llm([
+        {"content": "Alice planned another kayaking trip", "kind": "fact",
+         "source_seqs": [0], "confidence": 0.9, "entities": ["alice", "kayaking"]},
+    ])
+    distiller = Distiller(episodic, lt, llm, auto_link_max_entity_ratio=0.0)
+    ids = await distiller.distill_session(session_id=sid)
+
+    new = (await lt._load_records(ids))[0]
+    assert new.linked_memory_ids == []
+
+
+@pytest.mark.asyncio
 async def test_distill_is_idempotent_across_reruns(episodic):
     # Sessions are resumable / re-closable, so distillation can run more than once
     # over the same log.  A session_distilled watermark records how far it has

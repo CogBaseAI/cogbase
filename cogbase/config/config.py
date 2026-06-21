@@ -550,6 +550,19 @@ class MemoryConfig(ConfigPromptMixin, BaseModel):
         ),
         json_schema_extra={"prompt_skip": True},
     )
+    auto_link_max_entity_ratio: float = Field(
+        default=0.1,
+        description=(
+            "Deterministic link augmentation: after extraction, a new memory is "
+            "auto-linked to an existing recalled memory when they share an entity "
+            "that is discriminative — present in no more than this fraction of all "
+            "active records. Ubiquitous entities (e.g. the speakers in a two-person "
+            "dialogue, who appear in most records) exceed the ratio and are ignored, "
+            "so the graph stays sparse instead of collapsing into a same-subject "
+            "clique. 0 disables auto-linking and leaves edges to the LLM alone."
+        ),
+        json_schema_extra={"prompt_skip": True},
+    )
     single_call_reconcile: bool = Field(
         default=True,
         description=(

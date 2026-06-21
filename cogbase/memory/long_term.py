@@ -348,6 +348,27 @@ class LongTermMemory:
                 neighbors.setdefault(rec.memory_id, rec)
         return list(neighbors.values())[:budget]
 
+    async def active_entity_frequencies(self) -> tuple[dict[str, int], int]:
+        """Document frequency of each normalized entity over active records.
+
+        Returns ``(counts, total)`` where ``counts`` maps an entity to the number
+        of active records mentioning it and ``total`` is the active record count.
+        The distiller uses this to tell a *discriminative* entity (rare, worth a
+        link) from a *ubiquitous* one (e.g. a recurring speaker, present in most
+        records and worthless as a link signal).  Only the ``entities`` column is
+        projected, so this stays a cheap scan even on a large store.
+        """
+        rows = await self._structured.query(
+            self._structured_collection,
+            [Col("status") == MemoryStatus.ACTIVE.value],
+            fields=["entities"],
+        )
+        counts: dict[str, int] = {}
+        for row in rows:
+            for entity in set(normalize_entities(row.get("entities") or [])):
+                counts[entity] = counts.get(entity, 0) + 1
+        return counts, len(rows)
+
     # ------------------------------------------------------------------
     # Lookup (the pull path: the memory_lookup tool)
     # ------------------------------------------------------------------
