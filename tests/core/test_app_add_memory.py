@@ -92,6 +92,56 @@ async def test_add_memory_activates_subthreshold_fact_and_returns_records(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_add_memory_dates_record_by_observation_date(tmp_path):
+    # The promoted long-term record is dated by the conversation's observation
+    # date — pinned onto the replayed turns and carried through distillation to
+    # LongTermRecord.observed_at — not by wall-clock distill time.  This is the
+    # end-to-end path a replayed past dialogue takes, so a back-dated conversation
+    # yields a correctly back-dated memory.
+    episodic = EpisodicMemory(LocalFSLogStore(tmp_path))
+    lt = await _long_term()
+    # The fact cites seq 1 — the user turn (seq 0 is session_started) — whose
+    # timestamp add_memory pins to ``obs``.
+    llm = _extracting_llm([
+        {"content": "Caroline works at Acme Corp", "kind": "fact",
+         "source_seqs": [1], "confidence": 0.7},
+    ])
+    app = _app(episodic, lt, Distiller(episodic, lt, llm))
+
+    obs = datetime(2023, 5, 8, 13, 56, tzinfo=timezone.utc)
+    _, records = await app.add_memory(
+        messages=[
+            {"role": "user", "content": "Caroline: I just started at Acme Corp"},
+            {"role": "assistant", "content": "Melanie: congrats!"},
+        ],
+        observation_date=obs,
+    )
+    assert [r.observed_at for r in records] == [obs]
+
+
+@pytest.mark.asyncio
+async def test_add_memory_dates_record_even_without_observation_date(tmp_path):
+    # A live conversation passes no observation_date: the turns carry wall-clock
+    # timestamps, so the record is still dated (observed_at is never None — the
+    # invariant the required field enforces).
+    episodic = EpisodicMemory(LocalFSLogStore(tmp_path))
+    lt = await _long_term()
+    llm = _extracting_llm([
+        {"content": "Caroline works at Acme Corp", "kind": "fact",
+         "source_seqs": [1], "confidence": 0.7},
+    ])
+    app = _app(episodic, lt, Distiller(episodic, lt, llm))
+
+    _, records = await app.add_memory(
+        messages=[
+            {"role": "user", "content": "Caroline: I just started at Acme Corp"},
+            {"role": "assistant", "content": "Melanie: congrats!"},
+        ],
+    )
+    assert records and all(r.observed_at is not None for r in records)
+
+
+@pytest.mark.asyncio
 async def test_add_memory_pins_observation_date_on_session_started(tmp_path):
     episodic = EpisodicMemory(LocalFSLogStore(tmp_path))
     lt = await _long_term()

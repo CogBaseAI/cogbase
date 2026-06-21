@@ -7,6 +7,7 @@ marked memory-derived (kept distinct from document-backed evidence).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,6 +21,8 @@ from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSMemoryVectorStore
 
 from tests.memory.test_long_term import HashingEmbedding
+
+_OBSERVED_AT = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
 def _capturing_llm(answer: str) -> tuple[MagicMock, list]:
@@ -59,7 +62,7 @@ async def test_recall_injects_memory_block():
     await lt.promote(
         candidate=MemoryCandidate(
             content="user prefers dark mode", kind=MemoryKind.PREFERENCE,
-            confidence=0.7,
+            confidence=0.7, observed_at=_OBSERVED_AT,
         ),
     )
     llm, captured = _capturing_llm("ok")
@@ -98,7 +101,7 @@ async def test_recall_query_includes_previous_exchange_for_follow_ups():
     await lt.promote(
         candidate=MemoryCandidate(
             content="user prefers dark mode", kind=MemoryKind.PREFERENCE,
-            confidence=0.7,
+            confidence=0.7, observed_at=_OBSERVED_AT,
         ),
     )
     llm, captured = _capturing_llm("ok")
@@ -166,7 +169,7 @@ async def test_memory_lookup_tool_returns_matching_memories():
     await lt.promote(
         candidate=MemoryCandidate(
             content="user works at Acme Corp", kind=MemoryKind.PREFERENCE,
-            entities=["acme corp"], confidence=0.7,
+            entities=["acme corp"], confidence=0.7, observed_at=_OBSERVED_AT,
         ),
     )
     llm, _ = _capturing_llm("ok")

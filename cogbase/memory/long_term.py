@@ -561,6 +561,7 @@ class LongTermMemory:
             linked_memory_ids=list(dict.fromkeys(candidate.linked_memory_ids)),
             source_event_ids=list(candidate.source_event_ids),
             evidence_snapshot=dict(candidate.evidence_snapshot),
+            observed_at=candidate.observed_at,
         )
         await self._save_record(record, embeddings=embeddings)
         logger.info(
@@ -770,6 +771,11 @@ class LongTermMemory:
         )
         if candidate.evidence_snapshot:
             target.evidence_snapshot = {**target.evidence_snapshot, **candidate.evidence_snapshot}
+        # Advance the observation anchor to the most recent dialogue that asserted
+        # the claim, so recall dates a reinforced memory by its freshest observation
+        # rather than its first (see LongTermRecord.observed_at).
+        if candidate.observed_at > target.observed_at:
+            target.observed_at = candidate.observed_at
         target.updated_at = _utcnow()
         content_changed = bool(revised) and revised != target.content
         if content_changed:

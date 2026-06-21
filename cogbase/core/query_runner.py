@@ -395,8 +395,17 @@ _MEMORY_EVIDENCE_POLICY = (
 
 
 def _format_memory_line(m: LongTermRecord) -> str:
-    """One recalled memory as a dated, attributed line for an injected block."""
-    line = f"- [{m.kind.value}, as of {m.updated_at.date().isoformat()}] {m.content}"
+    """One recalled memory as a dated, attributed line for an injected block.
+
+    The "as of" anchor is the memory's ``observed_at`` (when its source turn was
+    asserted — see LongTermRecord.observed_at), which is always set on a promoted
+    record.  Using the observation date keeps a fact dated by when it was observed,
+    not when distillation happened to run — the two coincide for an immediately-
+    distilled live session and diverge for a delayed/batched distill or a replayed
+    past dialogue.
+    """
+    as_of = m.observed_at.date().isoformat()
+    line = f"- [{m.kind.value}, as of {as_of}] {m.content}"
     if m.entities:
         line += f" (entities: {', '.join(m.entities)})"
     return line

@@ -361,6 +361,20 @@ class LongTermRecord(BaseModel):
     evidence_snapshot: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
+    # When the claim was observed, as opposed to ``created_at``/``updated_at``
+    # which are the wall-clock distill time.  Dated per-memory from the latest of
+    # *its own* source turns' timestamps (``Distiller._observed_at``), not one
+    # session-level anchor — so a fact asserted late in a long or resumed session
+    # is dated by that turn, not by session start.  Each source turn's timestamp
+    # is its real event time for a live session, or the ``add_memory``
+    # observation_date stamped onto the replayed turn for a past dialogue.  So a
+    # fact is dated by *when it was observed*, not when distillation happened to
+    # run; the two coincide only when distill is immediate.  This is the date
+    # recall presents as the memory's "as of" anchor.  Reinforced to the latest
+    # observation on UPDATE.  Required: a promoted memory always derives from
+    # timestamped turns, so a missing observation date signals a bug rather than a
+    # legitimate state (see ``Distiller`` and the ``MemoryCandidate`` invariant).
+    observed_at: datetime
     expires_at: datetime | None = None
 
     def is_expired(self, now: datetime | None = None) -> bool:
@@ -399,6 +413,7 @@ class LongTermRecord(BaseModel):
                 "evidence_snapshot": FieldSchema(type=FieldType.JSON),
                 "created_at": s(index=True),
                 "updated_at": s(index=True),
+                "observed_at": s(index=True),
                 "expires_at": s(index=True),
             },
         )
@@ -454,6 +469,13 @@ class MemoryCandidate(BaseModel):
     linked_memory_ids: list[str] = Field(default_factory=list)
     source_event_ids: list[EventRef] = Field(default_factory=list)
     evidence_snapshot: dict = Field(default_factory=dict)
+    # When the claim was observed: the latest of *this candidate's own* source
+    # turns' timestamps, falling back to the session observation date when it cites
+    # no resolvable source turn (``Distiller._observed_at``).  Carried onto the
+    # promoted record's ``observed_at`` (see LongTermRecord.observed_at).  Required:
+    # a candidate always derives from timestamped turns, so distillation can always
+    # supply this; a missing value signals a bug.
+    observed_at: datetime
     # 0..1 — how strongly the source supports the claim; weighed in reconciliation.
     confidence: float
     # The extractor's pre-decided reconcile op against accumulated belief, set only

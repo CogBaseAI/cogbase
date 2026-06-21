@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,8 @@ from cogbase.stores.vector.faiss_store import FAISSVectorStore
 from tests.live_setup import make_llm, make_embedding
 
 logger = logging.getLogger(__name__)
+
+_OBSERVED_AT = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 _llm = make_llm()
 _embedder = make_embedding()
@@ -281,6 +284,7 @@ class TestLongTermLive:
                 kind=MemoryKind.PREFERENCE,
                 entities=["maya archaeology"],
                 confidence=0.7,
+                observed_at=_OBSERVED_AT,
             )
         )
 
@@ -329,6 +333,7 @@ class TestLongTermLive:
                 kind=MemoryKind.PREFERENCE,
                 entities=["maya"],
                 confidence=0.7,
+                observed_at=_OBSERVED_AT,
             )
         )
         # A paraphrase of the same claim — the real LLM should UPDATE/NOOP, not
@@ -340,6 +345,7 @@ class TestLongTermLive:
                 kind=MemoryKind.PREFERENCE,
                 entities=["maya"],
                 confidence=0.7,
+                observed_at=_OBSERVED_AT,
             )
         )
         assert affected, "reconcile returned no affected id"
@@ -453,6 +459,7 @@ class TestMemoryDocumentConflictLive:
                 kind=MemoryKind.CORRECTION,
                 entities=["machu picchu", "maya inscriptions"],
                 confidence=0.7,
+                observed_at=_OBSERVED_AT,
             ),
             status=MemoryStatus.ACTIVE,
         )

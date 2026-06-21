@@ -9,6 +9,7 @@ in-memory stores, so candidates → records end-to-end.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -23,6 +24,8 @@ from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.vector.faiss_store import FAISSMemoryVectorStore
 
 from tests.memory.test_long_term import HashingEmbedding
+
+_OBSERVED_AT = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
 @pytest.fixture
@@ -194,6 +197,57 @@ async def test_distill_anchors_transcript_to_session_observation_date(episodic):
 
 
 @pytest.mark.asyncio
+async def test_distill_resumed_session_anchors_on_new_turns_not_session_start(episodic):
+    # A session resumed days later: the earlier turn is already distilled (the
+    # watermark advanced), so this pass sees only the new turn.  Both the prompt
+    # anchor and the promoted memory's observed_at must use the *new* turn's date,
+    # not the original session start.
+    sid = "sess-resumed"
+    day1 = datetime(2023, 1, 1, tzinfo=timezone.utc)
+    day2 = datetime(2023, 6, 15, tzinfo=timezone.utc)
+    await episodic.record_user_message(
+        session_id=sid, content="I met the investor yesterday", observation_date=day1
+    )
+    await episodic.record_final_answer(
+        session_id=sid, answer="Noted.", observation_date=day1
+    )
+    await episodic.flush(sid)
+
+    lt = await _long_term()
+    first_llm = _extracting_llm([
+        {"content": "user met the investor", "kind": "fact",
+         "source_seqs": [0], "confidence": 0.8},
+    ])
+    await Distiller(episodic, lt, first_llm).distill_session(session_id=sid)
+
+    # Resume the same session the next day with a new turn.
+    await episodic.record_user_message(
+        session_id=sid, content="I closed the round today", observation_date=day2
+    )
+    await episodic.record_final_answer(
+        session_id=sid, answer="Congrats.", observation_date=day2
+    )
+    await episodic.flush(sid)
+
+    # seq 2 is the session_distilled watermark from the first pass, so the
+    # resumed user turn is seq 3.
+    second_llm = _extracting_llm([
+        {"content": "user closed the funding round", "kind": "fact",
+         "source_seqs": [3], "confidence": 0.8},
+    ])
+    ids = await Distiller(episodic, lt, second_llm).distill_session(session_id=sid)
+
+    # Prompt anchor is the resumed turn's date (day2), not the session start (day1).
+    user_msg = second_llm.complete.call_args.args[0][1]["content"]
+    assert f"{day2:%Y-%m-%d}" in user_msg
+    assert f"{day1:%Y-%m-%d}" not in user_msg
+
+    # The memory promoted from the resumed turn is dated by that turn.
+    rec = (await lt._load_records(ids))[0]
+    assert rec.observed_at == day2
+
+
+@pytest.mark.asyncio
 async def test_distill_drops_candidate_with_bad_kind(episodic):
     sid = "sess-2"
     await _seed_turn(episodic, sid, "hello", "hi")
@@ -226,6 +280,7 @@ async def test_distill_injects_existing_memories_for_dedup(episodic):
             content="user prefers concise answers",
             kind=MemoryKind.PREFERENCE,
             confidence=0.9,
+            observed_at=_OBSERVED_AT,
         )
     )
 
@@ -251,6 +306,7 @@ async def test_distill_no_existing_memory_block_when_disabled(episodic):
             content="user prefers concise answers",
             kind=MemoryKind.PREFERENCE,
             confidence=0.9,
+            observed_at=_OBSERVED_AT,
         )
     )
     sid = "sess-disabled"
@@ -277,6 +333,7 @@ async def test_distill_links_new_memory_to_existing(episodic):
             kind=MemoryKind.FACT,
             confidence=0.9,
             entities=["max"],
+            observed_at=_OBSERVED_AT,
         )
     )
 
@@ -498,7 +555,8 @@ async def _seed_existing(lt, content, *, kind, confidence=0.9, entities=()):
 
     return await lt.promote(
         candidate=MemoryCandidate(
-            content=content, kind=kind, confidence=confidence, entities=list(entities)
+            content=content, kind=kind, confidence=confidence,
+            entities=list(entities), observed_at=_OBSERVED_AT,
         )
     )
 

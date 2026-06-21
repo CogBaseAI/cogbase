@@ -447,9 +447,13 @@ class CogBaseApp:
             if not content:
                 continue
             if msg.get("role") == "assistant":
-                await self._episodic.record_final_answer(session_id=sid, answer=content)
+                await self._episodic.record_final_answer(
+                    session_id=sid, answer=content, observation_date=observation_date
+                )
             else:
-                await self._episodic.record_user_message(session_id=sid, content=content)
+                await self._episodic.record_user_message(
+                    session_id=sid, content=content, observation_date=observation_date
+                )
         await self._episodic.flush(sid)
 
         memory_ids = await self._distiller.distill_session(session_id=sid)

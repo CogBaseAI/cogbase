@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -96,7 +97,15 @@ async def _make_service(llm=None, *, app_id="app1") -> LongTermMemory:
     return svc
 
 
-def _candidate(content, *, kind=MemoryKind.FACT, seqs=(), entities=(), confidence=None):
+# A fixed observation date for hand-built test candidates; distillation always
+# supplies one (see LongTermRecord.observed_at), so fixtures must too.
+_TEST_OBSERVED_AT = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+
+def _candidate(
+    content, *, kind=MemoryKind.FACT, seqs=(), entities=(), confidence=None,
+    observed_at=_TEST_OBSERVED_AT,
+):
     return MemoryCandidate(
         content=content,
         kind=kind,
@@ -104,7 +113,22 @@ def _candidate(content, *, kind=MemoryKind.FACT, seqs=(), entities=(), confidenc
         source_event_ids=[EventRef(session_id="s1", seq=s, ulid=f"u{s}") for s in seqs],
         evidence_snapshot={"turns": list(seqs)},
         confidence=confidence if confidence is not None else _TEST_CONFIDENCE[kind],
+        observed_at=observed_at,
     )
+
+
+def test_observed_at_is_required_on_candidate_and_record():
+    # observed_at is mandatory on both models: a promoted memory always derives
+    # from timestamped turns, so a missing observation date is a bug we surface at
+    # construction rather than silently defaulting (see LongTermRecord.observed_at).
+    import pydantic
+
+    from cogbase.memory.models import LongTermRecord
+
+    with pytest.raises(pydantic.ValidationError):
+        MemoryCandidate(content="x", kind=MemoryKind.FACT, confidence=0.6)
+    with pytest.raises(pydantic.ValidationError):
+        LongTermRecord(content="x", kind=MemoryKind.FACT, confidence=0.6)
 
 
 # ---------------------------------------------------------------------------
@@ -748,6 +772,7 @@ async def _promote_active(svc, content, *, links=()):
             kind=MemoryKind.FACT,
             confidence=0.9,
             linked_memory_ids=list(links),
+            observed_at=_TEST_OBSERVED_AT,
         ),
         status=MemoryStatus.ACTIVE,
     )

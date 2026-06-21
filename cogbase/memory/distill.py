@@ -42,6 +42,7 @@ from cogbase.memory.models import (
     MemoryCandidate,
     MemoryEvent,
     MemoryKind,
+    MemoryMessage,
     ReconcileOp,
     normalize_entities,
 )
@@ -292,21 +293,31 @@ def _build_system_prompt(domain_fact_guidance: str | None = None) -> str:
 _SYSTEM_PROMPT = _build_system_prompt()
 
 
-def _session_observation_date(events: list[MemoryEvent]) -> datetime | None:
-    """When the conversation took place — the anchor for relative time refs.
+def _thread_observation_date(
+    thread: list[MemoryMessage], seq_to_event: dict[int, MemoryEvent]
+) -> datetime | None:
+    """When the turns being distilled took place — the anchor for relative refs.
 
     Distillation runs offline, often long after the session settled, so "today"
-    at distill time is the wrong anchor for a turn that said "yesterday".  We
-    pin every relative reference to *when the conversation happened*: the
-    ``session_started`` event if present, else the earliest event's timestamp.
-    Returns ``None`` only for an empty log (no anchor to offer).
+    at distill time is the wrong anchor for a turn that said "yesterday".  We pin
+    relative references to *when the conversation happened*.
+
+    Crucially this anchors on the turns *in this pass* — the post-watermark
+    ``thread`` — not the original session start.  A session resumed days later has
+    its earlier turns already distilled (the watermark advanced), so this pass
+    sees only the new turns; anchoring on the original ``session_started`` would
+    resolve the resumed turns' "yesterday" against the wrong day.  ``thread`` is
+    seq-ordered, so the first turn's timestamp is when this batch began.
+
+    Returns ``None`` only when no thread turn maps to a timestamped event (no
+    anchor to offer); a single observation date still suits the whole batch, so we
+    do not thread per-turn timestamps into the transcript.
     """
-    started = next(
-        (e for e in events if e.event_type is EventType.SESSION_STARTED), None
-    )
-    if started is not None:
-        return started.created_at
-    return min((e.created_at for e in events), default=None)
+    for m in thread:
+        event = seq_to_event.get(m.seq)
+        if event is not None and event.created_at is not None:
+            return event.created_at
+    return None
 
 
 def _observation_header(observation_date: datetime | None) -> str:
@@ -428,7 +439,18 @@ class Distiller:
         transcript = "\n".join(
             f"[{m.seq} {m.role.value}] {m.content}" for m in thread
         )
-        observation_date = _session_observation_date(events)
+        seq_to_ref = {e.seq: e.ref for e in events}
+        seq_to_event = {e.seq: e for e in events}
+        observation_date = _thread_observation_date(thread, seq_to_event)
+        if observation_date is None:
+            # Invariant: ``thread`` is non-empty here (we returned above otherwise)
+            # and every turn is projected from a timestamped log event, so an anchor
+            # must exist.  ``None`` means a turn reached the thread without a backing
+            # event — a bug we surface rather than promote an undated memory.
+            raise RuntimeError(
+                f"no observation anchor for session={session_id} despite "
+                f"{len(thread)} turn(s); a thread turn lacks a timestamped event"
+            )
         existing = await self._recall_existing(transcript)
         parsed = await self._extract(
             transcript, observation_date=observation_date, existing=existing
@@ -436,8 +458,6 @@ class Distiller:
         if not parsed:
             return []
 
-        seq_to_ref = {e.seq: e.ref for e in events}
-        seq_to_event = {e.seq: e for e in events}
         # Position -> real memory_id, mirroring the masked ids in the existing-
         # memories block, to resolve the extractor's linked_memory_ids.
         link_id_map = {i: r.memory_id for i, r in enumerate(existing)}
@@ -445,7 +465,7 @@ class Distiller:
         candidates: list[MemoryCandidate] = []
         for item in parsed.get("memories", []):
             candidate = self._build_candidate(
-                item, seq_to_ref, seq_to_event, link_id_map
+                item, seq_to_ref, seq_to_event, link_id_map, observation_date
             )
             if candidate is not None:
                 candidates.append(candidate)
@@ -533,6 +553,7 @@ class Distiller:
         seq_to_ref: dict[int, EventRef],
         seq_to_event: dict[int, MemoryEvent],
         link_id_map: dict[int, str],
+        observation_date: datetime,
     ) -> MemoryCandidate | None:
         try:
             kind = MemoryKind(item["kind"])
@@ -556,6 +577,7 @@ class Distiller:
         source_seqs = [s for s in item.get("source_seqs", []) if s in seq_to_ref]
         source_event_ids = [seq_to_ref[s] for s in source_seqs]
         snapshot = self._snapshot(source_seqs, seq_to_event)
+        observed_at = self._observed_at(source_seqs, seq_to_event, observation_date)
         operation, target_memory_id, revised_content = self._resolve_operation(
             item, link_id_map, content
         )
@@ -568,6 +590,7 @@ class Distiller:
             ),
             source_event_ids=source_event_ids,
             evidence_snapshot=snapshot,
+            observed_at=observed_at,
             confidence=confidence,
             operation=operation,
             target_memory_id=target_memory_id,
@@ -691,6 +714,28 @@ class Distiller:
         if cited:
             snapshot["cited"] = cited
         return snapshot
+
+    @staticmethod
+    def _observed_at(
+        source_seqs: list[int],
+        seq_to_event: dict[int, MemoryEvent],
+        fallback: datetime,
+    ) -> datetime:
+        """When the claim was observed: the latest of its source turns' timestamps.
+
+        Dating a memory by *its own* source turns rather than one session-level
+        anchor keeps it correct when a session is long or resumed days later — a
+        fact asserted late in the transcript is dated by that turn, not by session
+        start (see LongTermRecord.observed_at).  The latest source turn is the most
+        recent assertion of the claim.  Falls back to ``fallback`` (the session
+        observation date, itself always present — see ``distill_session``) when the
+        candidate cites no resolvable source turn, so the result is never None."""
+        stamps = [
+            e.created_at
+            for s in source_seqs
+            if (e := seq_to_event.get(s)) is not None and e.created_at is not None
+        ]
+        return max(stamps) if stamps else fallback
 
     @staticmethod
     def _truncate_payload(event: MemoryEvent) -> dict:

@@ -145,8 +145,9 @@ class EpisodicMemory:
         # When the conversation happened in the past (e.g. replaying an external
         # dialogue into memory), pin the event's timestamp to that date so the
         # distiller anchors relative time references correctly — distillation runs
-        # offline, so wall-clock "now" would be the wrong anchor.  Distiller reads
-        # this via ``_session_observation_date`` (the session_started event).
+        # offline, so wall-clock "now" would be the wrong anchor.  The distiller
+        # anchors on the timestamps of the turns it distills (see
+        # ``_thread_observation_date``), which the replayed messages also carry.
         event = MemoryEvent(
             session_id=session_id,
             event_type=EventType.SESSION_STARTED,
@@ -163,16 +164,22 @@ class EpisodicMemory:
         session_id: str,
         content: str,
         attachments: list[dict] | None = None,
+        observation_date: datetime | None = None,
     ) -> EventRef:
-        return await self.record(
-            MemoryEvent(
-                session_id=session_id,
-                event_type=EventType.USER_MESSAGE,
-                payload=UserMessagePayload(
-                    text=content, attachments=attachments or []
-                ).model_dump(),
-            )
+        # ``observation_date`` pins the turn's timestamp when replaying a past
+        # dialogue (see ``record_session_started``); the distiller dates each
+        # promoted memory from its source turns, so a turn replayed for a past
+        # conversation must carry that conversation's date, not wall-clock now.
+        event = MemoryEvent(
+            session_id=session_id,
+            event_type=EventType.USER_MESSAGE,
+            payload=UserMessagePayload(
+                text=content, attachments=attachments or []
+            ).model_dump(),
         )
+        if observation_date is not None:
+            event.created_at = observation_date
+        return await self.record(event)
 
     async def record_tool_call(
         self,
@@ -253,16 +260,20 @@ class EpisodicMemory:
         session_id: str,
         answer: str,
         cited_ids: list[EventRef] | None = None,
+        observation_date: datetime | None = None,
     ) -> EventRef:
-        return await self.record(
-            MemoryEvent(
-                session_id=session_id,
-                event_type=EventType.FINAL_ANSWER,
-                payload=FinalAnswerPayload(
-                    text=answer, cited_ids=cited_ids or []
-                ).model_dump(),
-            )
+        # See ``record_user_message`` re: ``observation_date`` — a replayed past
+        # turn carries its conversation's date so its memories are dated correctly.
+        event = MemoryEvent(
+            session_id=session_id,
+            event_type=EventType.FINAL_ANSWER,
+            payload=FinalAnswerPayload(
+                text=answer, cited_ids=cited_ids or []
+            ).model_dump(),
         )
+        if observation_date is not None:
+            event.created_at = observation_date
+        return await self.record(event)
 
     # TODO not used yet. need the end-to-end feedback mechanism from client.
     async def record_feedback(
