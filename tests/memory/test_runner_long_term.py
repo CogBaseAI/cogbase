@@ -7,8 +7,9 @@ marked memory-derived (kept distinct from document-backed evidence).
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -187,6 +188,86 @@ async def test_memory_lookup_tool_returns_matching_memories():
     output, memories = await runner._run_memory_lookup({"query": "unrelated topic"})
     assert output is not None
     assert all(isinstance(m, LongTermRecord) for m in memories)
+
+
+# ---------------------------------------------------------------------------
+# Chronological rendering of recalled memories
+#
+# Both injection paths (recall block + memory_lookup tool) render the dated
+# lines oldest -> newest so they read as a timeline, while the returned records
+# keep the store's native order (relevance / recency) for the caller.
+# ---------------------------------------------------------------------------
+
+def _record(content: str, observed_at: datetime) -> LongTermRecord:
+    return LongTermRecord(
+        content=content, kind=MemoryKind.PREFERENCE,
+        confidence=0.7, observed_at=observed_at,
+    )
+
+
+def _runner_with_long_term_stub() -> tuple[QueryRunner, MagicMock]:
+    stub = MagicMock()
+    runner = QueryRunner(
+        app_id="app1", llm=_capturing_llm("ok")[0],
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(long_term=stub),
+    )
+    return runner, stub
+
+
+def _rendered_dates(block: str) -> list[str]:
+    return re.findall(r"as of (\d{4}-\d{2}-\d{2})", block)
+
+
+@pytest.mark.asyncio
+async def test_recall_block_renders_oldest_to_newest_but_returns_recall_order():
+    runner, stub = _runner_with_long_term_stub()
+    # Records handed back in a non-chronological (relevance) order.
+    recall_order = [
+        _record("newest", datetime(2024, 3, 1, tzinfo=timezone.utc)),
+        _record("oldest", datetime(2024, 1, 1, tzinfo=timezone.utc)),
+        _record("middle", datetime(2024, 2, 1, tzinfo=timezone.utc)),
+    ]
+    stub.recall = AsyncMock(return_value=recall_order)
+
+    block, returned = await runner._recall_memory_block("q")
+
+    # Rendered lines are chronological.
+    assert _rendered_dates(block) == ["2024-01-01", "2024-02-01", "2024-03-01"]
+    assert block.index("oldest") < block.index("middle") < block.index("newest")
+    # Returned records preserve recall's (relevance) order for the caller.
+    assert returned is recall_order
+
+
+@pytest.mark.asyncio
+async def test_recall_block_renders_stable_within_same_date():
+    runner, stub = _runner_with_long_term_stub()
+    same = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    stub.recall = AsyncMock(return_value=[
+        _record("first by relevance", same),
+        _record("second by relevance", same),
+    ])
+
+    block, _ = await runner._recall_memory_block("q")
+
+    # Equal observed_at -> stable sort keeps the incoming relevance order.
+    assert block.index("first by relevance") < block.index("second by relevance")
+
+
+@pytest.mark.asyncio
+async def test_memory_lookup_renders_oldest_to_newest_but_returns_lookup_order():
+    runner, stub = _runner_with_long_term_stub()
+    lookup_order = [
+        _record("newest", datetime(2024, 3, 1, tzinfo=timezone.utc)),
+        _record("oldest", datetime(2024, 1, 1, tzinfo=timezone.utc)),
+    ]
+    stub.lookup = AsyncMock(return_value=lookup_order)
+
+    output, returned = await runner._run_memory_lookup({"query": "q"})
+
+    assert _rendered_dates(output) == ["2024-01-01", "2024-03-01"]
+    assert output.index("oldest") < output.index("newest")
+    assert returned is lookup_order
 
 
 @pytest.mark.asyncio

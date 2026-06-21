@@ -1142,7 +1142,12 @@ class QueryRunner:
         logger.info("[runner] memory_lookup.result memories=%d", len(memories))
         if not memories:
             return "(no matching memories)", []
-        lines = "\n".join(_format_memory_line(m) for m in memories)
+        # Render oldest -> newest so the dated lines read as a timeline (see
+        # _recall_memory_block).  Stable sort keeps lookup's own order — vector
+        # relevance, or recency when no query — as the tiebreaker within a date.
+        # Only the rendering is reordered; the returned records keep lookup's order.
+        ordered = sorted(memories, key=lambda m: m.observed_at)
+        lines = "\n".join(_format_memory_line(m) for m in ordered)
         return (
             "Memories (recalled from long-term memory):\n"
             + _MEMORY_EVIDENCE_POLICY + "\n" + lines,
@@ -1216,7 +1221,15 @@ class QueryRunner:
             return None, []
         if not memories:
             return None, []
-        lines = "\n".join(_format_memory_line(m) for m in memories)
+        # Render oldest -> newest so the dated lines read as a timeline: the model
+        # can follow how a belief evolved (a correction sits after what it corrects)
+        # and the most-current fact lands last, which lines up with the recency the
+        # precedence policy tells it to prefer.  Stable sort on the relevance-ordered
+        # list keeps vector relevance as the tiebreaker within a single date.  Only
+        # the rendering is reordered; the returned records keep recall's relevance
+        # order, which is the contract callers (e.g. QueryResult.recalled) expect.
+        ordered = sorted(memories, key=lambda m: m.observed_at)
+        lines = "\n".join(_format_memory_line(m) for m in ordered)
         logger.info("[runner] long-term recall injected %d memories", len(memories))
         return (
             "Relevant long-term memory about the user, topic, or entity (recalled):\n"
