@@ -32,7 +32,8 @@ An interrupt (Ctrl-C) is graceful: in-flight queries finish and save before exit
 
 Resumable: re-running with the same --out_file skips already-answered questions.
 When --judge_model is added on a resume run, previously answered questions that
-lack a judge verdict are judged automatically.
+lack a judge verdict are judged automatically. Pass --force to re-query the
+already-answered questions instead of skipping them.
 """
 
 import argparse
@@ -643,8 +644,10 @@ async def process_conversation(
     sample_n: int | None,
     judge: "_JudgeClient | None" = None,
     judge_categories: set[int] | None = None,
+    query_categories: set[int] | None = None,
     include_adversarial: bool = False,
     build_memory: bool = False,
+    force: bool = False,
     max_workers: int = 4,
     shutdown: "_GracefulShutdown | None" = None,
 ) -> dict:
@@ -676,7 +679,11 @@ async def process_conversation(
         log.info("Memory already built for '%s', skipping.", sample_id)
 
     qas = sample["qa"]
-    if not include_adversarial:
+    if query_categories is not None:
+        # Explicit category filter overrides the default adversarial exclusion:
+        # querying only the requested categories (e.g. just category 2 temporal).
+        qas = [qa for qa in qas if qa.get("category") in query_categories]
+    elif not include_adversarial:
         qas = [qa for qa in qas if qa.get("category") != 5]
     if sample_n is not None:
         qas = qas[:sample_n]
@@ -697,10 +704,18 @@ async def process_conversation(
     answered: dict[tuple, dict] = dict(prev_by_key)
     answered_lock = asyncio.Lock()
 
-    todo = [qa for qa in qas if (qa["question"], qa.get("category")) not in prev_by_key]
-    skipped = len(qas) - len(todo)
-    if skipped:
-        log.info("Resuming '%s': skipping %d already-answered question(s).", sample_id, skipped)
+    if force:
+        # Force rerun: re-query every selected question, even those already
+        # answered in a prior run. Prior answers stay seeded in `answered` so any
+        # not in the current query set survive, but matching keys get overwritten.
+        todo = list(qas)
+        if prev_by_key:
+            log.info("Force rerun '%s': re-querying %d already-answered question(s).", sample_id, len(prev_by_key))
+    else:
+        todo = [qa for qa in qas if (qa["question"], qa.get("category")) not in prev_by_key]
+        skipped = len(qas) - len(todo)
+        if skipped:
+            log.info("Resuming '%s': skipping %d already-answered question(s).", sample_id, skipped)
 
     def _assemble() -> list[dict]:
         """Results in original question order, deduped by (question, category)."""
@@ -771,7 +786,8 @@ async def process_conversation(
         await asyncio.gather(*(_handle(qa) for qa in todo))
 
     # On resume with a judge model, backfill verdicts for previously answered items.
-    if judge and prev_by_key:
+    # Skipped under --force, where every prior item was just re-answered (and judged).
+    if judge and prev_by_key and not force:
         pending = [
             qa for qa in prev_by_key.values()
             if PREDICTION_KEY in qa
@@ -1074,6 +1090,25 @@ async def main(args: argparse.Namespace) -> None:
             args.judge_model, args.judge_provider, args.categories,
         )
 
+    query_categories: set[int] | None = None
+    if args.query_categories:
+        query_categories = {int(c) for c in args.query_categories.split(",")}
+        log.info("Querying only category(ies): %s", sorted(query_categories))
+
+    if args.conversation_ids:
+        wanted = {c.strip() for c in args.conversation_ids.split(",") if c.strip()}
+        # Match either the full sample_id ('conv-41') or its bare number ('41').
+        def _matches(sample_id: str) -> bool:
+            num = sample_id.split("-")[-1]
+            return sample_id in wanted or num in wanted
+        selected = [s for s in samples if _matches(s.get("sample_id", ""))]
+        missing = wanted - {s.get("sample_id", "") for s in selected} - {
+            s.get("sample_id", "").split("-")[-1] for s in selected
+        }
+        if missing:
+            log.warning("No conversation matched: %s", sorted(missing))
+        samples = selected
+        log.info("Selected %d conversation(s): %s", len(samples), [s.get("sample_id") for s in samples])
     if args.conversations is not None:
         samples = samples[: args.conversations]
 
@@ -1091,8 +1126,10 @@ async def main(args: argparse.Namespace) -> None:
                     sample_n=args.sample,
                     judge=judge,
                     judge_categories=judge_categories,
+                    query_categories=query_categories,
                     include_adversarial=args.include_adversarial,
                     build_memory=args.build_memory,
+                    force=args.force,
                     max_workers=args.max_workers,
                     shutdown=shutdown,
                 )
@@ -1135,6 +1172,11 @@ if __name__ == "__main__":
         help="Process only the first N conversations (default: all 10)",
     )
     parser.add_argument(
+        "--conversation_ids", default=None,
+        help="Comma-separated conversation selector(s) — full sample_id ('conv-41') "
+             "or bare number ('41'). Applied before --conversations. Default: all.",
+    )
+    parser.add_argument(
         "--sample", type=int, default=None,
         help="Process only the first N questions per conversation (for quick testing)",
     )
@@ -1170,6 +1212,18 @@ if __name__ == "__main__":
         "--categories", default="1,2,3,4",
         help="Comma-separated question categories to judge (default: 1,2,3,4; "
              "category 5 adversarial is excluded by default)",
+    )
+    parser.add_argument(
+        "--query_categories", default=None,
+        help="Comma-separated question categories to query (e.g. '2' for temporal "
+             "only). If omitted, all categories are queried (adversarial subject to "
+             "--include_adversarial). Overrides the default adversarial exclusion.",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Force rerun: re-query already-answered questions instead of skipping "
+             "them on resume. Previously answered items not in the current query set "
+             "are preserved; matching ones are overwritten with the fresh result.",
     )
     parser.add_argument(
         "--build_memory", action="store_true",
