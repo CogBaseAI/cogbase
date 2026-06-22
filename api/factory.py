@@ -337,6 +337,7 @@ async def build_app(
         ),
         memory=MemoryTiers(short_term=short_term, episodic=episodic, long_term=long_term),
         skills=skills or None,
+        enable_memory_lookup=config.memory.enable_memory_lookup,
     )
 
     # --- Workflows ---

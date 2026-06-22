@@ -534,6 +534,10 @@ class QueryRunner:
         passthrough_token_threshold: Estimated token count of ``structured_lookup`` results
                                      above which records are returned directly without LLM
                                      synthesis. None means disabled. Defaults None.
+        enable_memory_lookup:        Whether to expose the ``memory_lookup`` tool when a
+                                     long-term memory tier is present. Defaults False; set
+                                     True to opt into on-demand memory recall. Memory
+                                     injected into context applies regardless.
     """
 
     def __init__(
@@ -548,6 +552,7 @@ class QueryRunner:
         max_calls: int = 10,
         passthrough_token_threshold: int | None = None,
         context_token_budget: int | None = None,
+        enable_memory_lookup: bool = False,
     ) -> None:
         self._app_id = app_id
         self._llm = llm
@@ -583,7 +588,7 @@ class QueryRunner:
             self._tool_defs.append(_VECTOR_SEARCH_DEF)
         if resources.document_store is not None and app_id is not None:
             self._tool_defs.append(_READ_DOCUMENT_DEF)
-        if mem.long_term is not None:
+        if mem.long_term is not None and enable_memory_lookup:
             self._tool_defs.append(_MEMORY_LOOKUP_DEF)
 
     # ------------------------------------------------------------------

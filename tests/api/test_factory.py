@@ -1112,3 +1112,23 @@ class TestBuildAppMemoryConfig:
         assert app._long_term._recall_neighbors == 5
         assert app._distiller._existing_memory_limit == 10
         assert "Domain reconciliation guidance" not in app._long_term._reconcile_prompt
+        # memory_lookup is opt-in: omitting the section leaves it disabled even
+        # though a long-term tier is wired.
+        assert "memory_lookup" not in [t["name"] for t in app._runner._tool_defs]
+
+    @patch("api.factory._build_llm")
+    async def test_enable_memory_lookup_threaded_into_runner(self, mock_build_llm, tmp_path):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(
+            _FULL_CONFIG_YAML + "memory:\n  enable_memory_lookup: true\n"
+        )
+        with patch("api.factory._build_embedder") as mock_emb:
+            mock_emb.return_value = MagicMock()
+            app = await build_app(
+                cfg,
+                system=_memory_system(tmp_path),
+                app_id=cfg.name, app_status="initializing",
+                task_store=_mock_task_store(),
+            )
+
+        assert "memory_lookup" in [t["name"] for t in app._runner._tool_defs]

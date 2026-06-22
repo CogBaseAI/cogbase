@@ -594,6 +594,16 @@ class MemoryConfig(ConfigPromptMixin, BaseModel):
         ),
         json_schema_extra={"prompt_skip": True},
     )
+    enable_memory_lookup: bool = Field(
+        default=False,
+        description=(
+            "Whether the query runner exposes the `memory_lookup` tool for on-demand "
+            "long-term memory recall. When false (the default), the tool is withheld "
+            "even if a long-term tier is configured; memory injected into context "
+            "still applies. Set true to opt into on-demand recall."
+        ),
+        json_schema_extra={"prompt_skip": True},
+    )
 
 
 class AppConfig(ConfigPromptMixin, BaseModel):

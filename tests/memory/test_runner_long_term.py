@@ -158,10 +158,41 @@ async def test_memory_lookup_tool_registered_only_when_long_term_wired():
         app_id="app1", llm=llm,
         resources=RetrievalResources(document_store=MagicMock()),
         memory=MemoryTiers(long_term=lt),
+        enable_memory_lookup=True,
     )
-    without_lt = QueryRunner(app_id="app1", llm=llm, resources=RetrievalResources(document_store=MagicMock()))
+    without_lt = QueryRunner(
+        app_id="app1", llm=llm,
+        resources=RetrievalResources(document_store=MagicMock()),
+        enable_memory_lookup=True,
+    )
     assert "memory_lookup" in [t["name"] for t in with_lt._tool_defs]
     assert "memory_lookup" not in [t["name"] for t in without_lt._tool_defs]
+
+
+@pytest.mark.asyncio
+async def test_memory_lookup_tool_disabled_by_default():
+    """The pull tool is opt-in: a wired long-term tier alone does not expose it."""
+    lt = await _long_term()
+    llm, _ = _capturing_llm("ok")
+    runner = QueryRunner(
+        app_id="app1", llm=llm,
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(long_term=lt),
+    )
+    assert "memory_lookup" not in [t["name"] for t in runner._tool_defs]
+
+
+@pytest.mark.asyncio
+async def test_memory_lookup_tool_withheld_when_disabled():
+    lt = await _long_term()
+    llm, _ = _capturing_llm("ok")
+    runner = QueryRunner(
+        app_id="app1", llm=llm,
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(long_term=lt),
+        enable_memory_lookup=False,
+    )
+    assert "memory_lookup" not in [t["name"] for t in runner._tool_defs]
 
 
 @pytest.mark.asyncio
