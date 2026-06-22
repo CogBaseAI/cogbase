@@ -133,17 +133,25 @@ Examples:
 Every long-term memory record should carry provenance:
 
 - `memory_id`
-- `scope`
+- `app_id` (the partition boundary; finer `scope` is designed but not yet a field)
 - `kind`
 - `content`
+- `entities` (drives entity-overlap recall and graph auto-linking)
 - `confidence`
 - `status`
+- `linked_memory_ids` (edges to related memories — the memory graph)
 - `source_event_ids`
+- `evidence_snapshot` (copied cited text — keeps the record valid after log deletion)
+- `observed_at` (when the claim was observed; anchors recall dating)
 - `created_at`
 - `updated_at`
 - optional `expires_at`
 
 Promotion from episodic to long-term memory should be confidence-aware. Some memories can be promoted automatically, but memories that affect app behavior or store user, project, or organization facts should carry source event IDs and a review status. Promotion also *snapshots* the cited evidence into the long-term record rather than only referencing it, so the record stays valid after its source session log is expired or deleted (see [episodic-memory.md](episodic-memory.md#retention-deletion-and-redaction)).
+
+The build, reconciliation, memory graph (`linked_memory_ids` + `auto_link`), the
+two read paths (`recall` push and `lookup` pull), and the confidence/promotion
+gates are detailed in [long-term-memory.md](long-term-memory.md).
 
 ## Scoping
 

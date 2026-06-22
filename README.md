@@ -122,15 +122,15 @@ CogBase is organized into six layers with clean boundaries between them.
 ╔═══════════════════════════════════════════════════════════╗
 ║  MEMORY LAYER                              (persistent)   ║
 ║                                                           ║
-║  Short-term  →  Redis / in-memory                         ║
-║               (session-scoped context window)             ║
+║  Short-term  →  in-memory projection over the log         ║
+║               (session context; rehydrates on miss)       ║
 ║                                                           ║
-║  Episodic    →  Structured Store                          ║
-║               (conversation + agent action history)       ║
+║  Episodic    →  Log Store (append-only NDJSON)            ║
+║               (per-session event log; source of truth)    ║
 ║                                                           ║
 ║  Long-term   →  Structured Store + Vector Store           ║
-║               (cross-session facts, conclusions,          ║
-║                confirmed resolutions, user preferences)   ║
+║               (distilled cross-session facts, prefs,      ║
+║                corrections, hints; linked memory graph)   ║
 ╚═══════════════════════════════════════════════════════════╝
           ↕  reads episodic history
 ╔═══════════════════════════════════════════════════════════╗
@@ -273,6 +273,9 @@ About 90% of the codebase — the ingestion pipeline, workflow engine, query run
 - [x] Query-time and app-level `system_prompt` — override the default system prompt per request via `QueryRequest.system_prompt`, or set a default in `config.yaml`
 - [x] `top_k` configurable in `QueryRequest` for per-request result tuning
 - [x] Sentence-boundary chunking — Langchain chunker splits at sentence boundaries (`.`, `。`) instead of mid-word or mid-sentence; Chinese text supported
+- [x] Short-term memory — in-memory projection over the episodic log tail; rehydrates on cache miss, compacts under model-context pressure (`session_compacted`)
+- [x] Episodic memory — durable append-only per-session event log (`LogStoreBase`, NDJSON), the single source of truth for short-term and distillation
+- [x] Long-term memory — offline distillation on session close: extract + reconcile (ADD/UPDATE/DELETE/NOOP) durable facts/preferences/corrections/hints against accumulated belief, linked into a memory graph, recalled into the query runner (with the `memory_lookup` pull tool); LoCoMo: 93.9% vs 92.8% baseline
 
 **Improvements**
 
@@ -286,9 +289,7 @@ These are known gaps in the first-pass implementations.
 - [ ] Broader integration test coverage — especially for query runner loops, workflows, and API end-to-end paths
 
 **Planned**
-- [ ] Short-term memory (Redis + in-memory)
-- [ ] Episodic memory (conversation + agent history)
-- [ ] Long-term memory (cross-session knowledge store)
+- [ ] Long-term memory: retention sweep for superseded / stale `pending_review` records; finer `scope` (user/project/org) within the app partition
 - [ ] Adaptive evolution engine (gap detector: retrieval score analysis, null-answer mining, tool-chain clustering)
 - [ ] Suggestion surface API (GET /suggestions, accept/reject with targeted re-ingest)
 - [ ] Document source connectors (Google Drive, etc)
@@ -316,7 +317,6 @@ CogBase is in early development. The highest-impact contributions right now are 
 - **Contribute a skill** — any stateless capability that implements the skill interface
 
 **Build planned features**
-- **Memory layer** — short-term (Redis), episodic (history), and long-term (cross-session facts) tiers
 - **Adaptive evolution** — gap detector, suggestion queue, and targeted re-ingest
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-CogBase is in active early development. The knowledge pipeline, workflow engine, query runner, skills registry, REST API, store adapters, app generator, document registry, and background task tracking are implemented. The short-term and episodic memory tiers are implemented in `cogbase/memory/`: episodic memory is a durable append-only per-session event log (`episodic.py` over `cogbase/stores/log/`), and short-term memory (`short_term.py`) is a projection over that log — it rehydrates the conversational thread from the log, compacts by appending a `session_compacted` summary event, and assembles near pass-through context. The long-term tier and the adaptive evolution engine are planned but not yet implemented.
+CogBase is in active early development. The knowledge pipeline, workflow engine, query runner, skills registry, REST API, store adapters, app generator, document registry, and background task tracking are implemented. All three memory tiers are implemented in `cogbase/memory/`: episodic memory is a durable append-only per-session event log (`episodic.py` over `cogbase/stores/log/`); short-term memory (`short_term.py`) is a projection over that log — it rehydrates the conversational thread from the log, compacts by appending a `session_compacted` summary event, and assembles near pass-through context; and long-term memory (`long_term.py` + the offline `distill.py`) is the curated cross-session tier — distillation runs on session close, extracting and reconciling durable facts/preferences/corrections/hints into a structured + vector store linked as a memory graph, recalled into the query runner (see `docs/long-term-memory.md`). The adaptive evolution engine is planned but not yet implemented.
 
 ## Architecture
 
@@ -40,10 +40,10 @@ CogBase is a framework for building AI applications that need to understand, cro
 - Passthrough rule: large structured result sets are returned directly without LLM synthesis
 - `Runner` handles both retrieval-only and skill-routing modes
 
-**Memory Layer** (persistent, planned)
-- Short-term: Redis-backed session context
-- Episodic: conversation + agent action history in structured store
-- Long-term: cross-session confirmed facts, resolved contradictions, preferences
+**Memory Layer** (persistent, implemented; see `docs/memory.md`, `docs/episodic-memory.md`, `docs/long-term-memory.md`)
+- Short-term: in-memory projection over the episodic log tail; rehydrates on cache miss, compacts under model-context pressure (`short_term.py`)
+- Episodic: durable append-only per-session event log, the single source of truth (`episodic.py` over `cogbase/stores/log/`)
+- Long-term: curated cross-session facts, preferences, corrections, and retrieval hints, distilled offline on session close and reconciled (ADD/UPDATE/DELETE/NOOP) against accumulated belief; linked into a memory graph and recalled into the query runner (`long_term.py`, `distill.py`)
 
 **Adaptive Evolution** (background, planned)
 - Gap detector mines episodic logs for signals the current config doesn't cover: low vector scores, repeated null answers, recurring tool chains
