@@ -20,7 +20,7 @@ Competitive with purpose-built systems on public benchmarks.
 
 | Benchmark | Task | CogBase | Comparison |
 |---|---|---|---|
-| [LoCoMo](https://github.com/snap-research/locomo) | Conversational memory | **92.8%** | Mem0 91.6% (Apr 2026) |
+| [LoCoMo](https://github.com/snap-research/locomo) | Conversational memory | **93.9%** memory mode / 92.8% baseline (June 2026) | Mem0 91.6% (Apr 2026) |
 | [GraphRAG-Bench](https://graphrag-bench.github.io/) (Medical) | Document QA | **74.46** with extraction pipeline | above top leaderboard entry (73.30) |
 | [GraphRAG-Bench](https://graphrag-bench.github.io/) (Medical) | Document QA | 72.94 simple chunking | 2nd on leaderboard (leader 73.30) |
 | [GraphRAG-Bench](https://graphrag-bench.github.io/) (Novel) | Document QA | 58.62 simple chunking | 3rd on leaderboard (leaders 63.72 / 58.94) |

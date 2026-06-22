@@ -14,10 +14,11 @@ LoCoMo contains 10 long-running conversations between two people (19–32 sessio
 | 4 – Single-hop | Direct lookup in one session |
 | 5 – Adversarial | Answer is NOT in the conversation; model should say "not mentioned" |
 
-Using gpt-4o-mini as the answering model, CogBase scores **92.8%** overall on the LLM-judge
-metric (categories 1–4), compared to Mem0's **91.6%** as of April 2026. CogBase leads on
-single-hop, multi-hop, and open-domain; Mem0 leads on temporal reasoning (92.8% vs 87.5%).
-See [Token usage](#token-usage-and-model-trade-off) for the accuracy/cost trade-off across
+Using gpt-4o-mini as the answering model, CogBase scores **93.9%** overall on the LLM-judge
+metric (categories 1–4) in [memory mode](#memory-mode-results), and **92.8%** baseline,
+compared to Mem0's **91.6%** as of April 2026. Both modes lead Mem0 on single-hop,
+multi-hop, and open-domain; Mem0 leads on temporal reasoning. See
+[Token usage](#token-usage-and-model-trade-off) for the accuracy/cost trade-off across
 answering models.
 
 ## How it works
@@ -28,6 +29,61 @@ For each conversation:
 3. Waits for chunk-embed-upsert ingestion to complete
 4. Queries each QA pair via `POST /applications/{name}/query`
 5. Tracks which sessions appear in retrieved chunks for recall scoring
+
+### Baseline
+
+By default the long-term memory tier is not exercised. The query runner answers from
+the ingested conversation using `vector_search` to retrieve passages and `read_document`
+to pull a full session into context when a chunk isn't enough.
+
+### Memory mode (`--build_memory`)
+
+Adds a memory-build phase before querying: each session is distilled into
+long-term memory via `POST /applications/{name}/memory` (one call per session, in
+chronological order, so memories accrue and reconcile across sessions). At query
+time recall then run **alongside** `vector_search` + `read_document` — the
+configuration CogBase actually ships. Speaker A maps to `user`, speaker B to
+`assistant` (mirroring mem0), with the speaker name kept inline; the distiller is
+reframed for two-person dialogue via `memory.domain_fact_guidance` in
+`locomo_app.yaml`.
+
+The `add` endpoint is self-contained (mem0's `add` shape): it appends the
+messages, distills, and **activates everything distilled** so it is immediately
+recallable — no separate session-close or review step. Memory build is skipped
+per-conversation on resume (it is the expensive part).
+
+```
+python benchmarks/locomo/run_cogbase.py \
+    --data_file locomo/data/locomo10.json \
+    --out_file benchmarks/locomo/results/locomo10_cogbase_with_memory.json \
+    --judge_model gpt-4o-mini --build_memory --conversations 1 --sample 5
+```
+
+The run summary adds a **Memory usage** table (avg memories per question and the
+% of questions where recall contributed) so memory's contribution is attributable.
+Diff hybrid against the baseline (same model, prompt, judge) to isolate memory's
+effect on accuracy and tokens.
+
+#### Memory mode results
+
+Full run with `--build_memory` (gpt-4o-mini answering and judge):
+
+```
+LLM Judge results  (1529 questions judged)
+Category                    N   Correct   Accuracy
+────────────────────────────────────────────────────
+  Single-hop              830       798      96.1%
+  Multi-hop               282       266      94.3%
+  Temporal                321       286      89.1%
+  Open-domain              96        86      89.6%
+────────────────────────────────────────────────────
+  Overall                1529      1436      93.9%
+```
+
+Memory mode lifts overall accuracy to **93.9%** from the baseline's 92.8%
+([Score](#score)), driven by gains on single-hop (94.3% → 96.1%) and temporal
+(87.5% → 89.1%); multi-hop (95.0% → 94.3%) and open-domain (90.6% → 89.6%) dip
+slightly.
 
 ## Score
 
@@ -60,17 +116,19 @@ Category 5 (adversarial) is excluded from judge scoring by default.
 
 | System | Single-hop | Multi-hop | Temporal | Open-domain | Overall |
 |---|---|---|---|---|---|
-| **CogBase** | **94.3%** | **95.0%** | 87.5% | **90.6%** | **92.8%** |
+| **CogBase** (Memory mode, June 2026) | **96.1%** | 94.3% | 89.1% | 89.6% | **93.9%** |
+| **CogBase** (Baseline, May 2026) | 94.3% | **95.0%** | 87.5% | **90.6%** | 92.8% |
 | **Mem0** (Apr 2026) | 92.3% | 93.3% | **92.8%** | 76.0% | 91.6% |
 
 Source: [mem0 memory evaluation docs](https://docs.mem0.ai/core-concepts/memory-evaluation).
 Mem0 reports a mean of 6,956 tokens per query. See [Token usage](#token-usage-and-model-trade-off)
 for CogBase's per-query token cost.
 
-CogBase leads on single-hop, multi-hop, and open-domain recall. Mem0 leads on temporal
-reasoning — likely due to its ADD-only memory model preserving chronological ordering.
-Scores are comparable only when Mem0 is run **without** `--with-evidence` (see [Judge
-prompt comparison](#judge-prompt-comparison-with-mem0) below).
+Both CogBase modes lead on single-hop, multi-hop, and open-domain recall. Mem0 leads on
+temporal reasoning — likely due to its ADD-only memory model preserving chronological
+ordering — though memory mode narrows that gap (87.5% → 89.1%). Scores are comparable only
+when Mem0 is run **without** `--with-evidence` (see [Judge prompt
+comparison](#judge-prompt-comparison-with-mem0) below).
 
 ## Token usage and model trade-off
 
@@ -274,3 +332,16 @@ Each judged QA entry gains three extra fields: `cogbase_judge_label` (CORRECT/WR
 The run is **resumable**: re-running with the same `--out_file` skips already-answered
 questions. Adding `--judge_model` on a resume run backfills verdicts for previously answered
 questions that lack them. Predictions are checkpointed every 20 questions.
+
+## Experiments
+
+### On-demand memory lookup (`MemoryConfig.enable_memory_lookup`)
+
+Enabling `enable_memory_lookup` exposes the `memory_lookup` tool so the query runner can
+issue on-demand long-term recall during the agent loop, on top of the memory already
+injected into context. In our LoCoMo runs this did **not** improve accuracy — some conversations
+may get *lower* scores with the tool enabled. Probably the extra recalled memories added noise
+that pulled the answer away from the gold label rather than reinforcing it. The tool therefore
+remains disabled by default (`enable_memory_lookup: false`). We plan to re-run this experiment
+with newer answering models (e.g. `gpt-5.4-mini`) to see whether `memory_lookup` tool improves
+scores with stronger models.

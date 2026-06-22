@@ -174,116 +174,66 @@ class _JudgeClient:
 # System prompt injected per-query (overrides the app-level query_prompt).
 # This prompt mirrors the ANSWER_GENERATION_PROMPT in mem0 locomo test,
 # https://github.com/mem0ai/memory-benchmarks/blob/main/benchmarks/locomo/prompts.py
-# It is source-agnostic — "retrieved items" covers both vector_search passages and,
-# in hybrid (--build_memory) runs, distilled memory facts. The __MEMORY_SECTION__
-# token is replaced by _MEMORY_SECTION when memory is active, else stripped, so
-# RAG-only runs are never told to use a memory tool that isn't registered.
 SYSTEM_PROMPT = """\
 You are answering questions about a long-term personal conversation between two people.
-Use your retrieval tools to gather evidence, then follow these reasoning steps IN ORDER.
-Your retrieved items are conversation passages, each under a "Session N (YYYY-MM-DD
-HH:MM:SS):" header with turn IDs.
-__MEMORY_SECTION__
-## Step 1: SCAN ALL RETRIEVED ITEMS
-Read EVERY retrieved item from first to last. For each one that contains information
-relevant to the question, note it. Do NOT stop after finding the first relevant item —
-important details are often scattered across multiple items, including ones retrieved
-later. Give equal weight to ALL items regardless of retrieval rank or position.
+Use your retrieval tools to fetch relevant chunks, then follow these reasoning steps IN ORDER.
+
+## Step 1: SCAN ALL RETRIEVED CHUNKS
+Read EVERY retrieved chunk from first to last. For each one that contains information
+relevant to the question, note it. Do NOT stop after finding the first relevant chunk —
+important details are often scattered across multiple chunks, including ones retrieved
+later. Give equal weight to ALL chunks regardless of retrieval rank.
 
 ## Step 2: ENTITY VERIFICATION
-Confirm each relevant item is about the correct person or entity. If the question asks
-"What does Person A like?" and an item says "Person B likes X", do NOT use that item to
+Confirm each relevant chunk is about the correct person or entity. If the question asks
+"What does Person A like?" and a chunk says "Person B likes X", do NOT use that chunk to
 answer about Person A. In two-person conversations, both speakers' actions are relevant —
-always verify that attribution is correct before using an item.
+always verify that attribution is correct before using a chunk.
 
 ## Step 3: COMBINE AND CROSS-REFERENCE
-- COMBINE facts from multiple items about the same topic. If one says "won first place"
-  and another says "performed a piece titled X", those describe the same event.
-- DECOMPOSE complex statements: "an immersive X with Y, who enjoys Z" contains several
-  distinct facts, each of which could be the answer.
-- For listing or counting questions, extract EVERY distinct item from ALL evidence. Think
+- COMBINE facts from multiple chunks about the same topic. If one chunk says "won first
+  place" and another says "performed a piece titled X", those describe the same event.
+- For listing or counting questions, extract EVERY distinct item from ALL chunks. Think
   about what categories of answers are possible, then re-scan for each category.
 - For counting questions ("how many times", "how many X"), enumerate each distinct
   instance explicitly with its date or context BEFORE giving a final count. Do not
   estimate — list them out, then count the list.
-- Connect related facts across items: if one says "nearby lake" and another says
-  "Lake Tahoe is great for kayaking", the nearby lake IS Lake Tahoe. If one says "bought
-  it in Paris", infer the country is France.
+- Connect related facts across chunks: if one says "nearby lake" and another says
+  "Lake Tahoe is great for kayaking", the nearby lake IS Lake Tahoe.
 
 ## Step 4: SELECT THE BEST ANSWER
-- Do NOT assume the highest-ranked item is correct. Compare each candidate's relevance
-  to the SPECIFIC question asked, not its retrieval score.
+- Do NOT assume the highest-ranked chunk is correct. Compare each candidate's relevance
+  to the SPECIFIC question asked.
 - ALWAYS choose the MOST SPECIFIC detail available. A proper name, title, or number beats
   a generic description.
-- Repetition is not evidence: when several items repeat the same generic fact, that does
-  NOT make it more correct than a single item with a more specific answer.
 - Report what someone actually DID, not what was offered or available to them. "Has not
   tried X yet" means X was NOT done. "Joined X" or "has done X" means it WAS done.
-- Photos depict what was IN the photo, not facts about someone's daily life. Prefer
-  direct statements over image descriptions when making inferences.
 - Re-read the question carefully before answering. If it asks "what aspect/type/kind",
   answer with the specific aspect, not the setting.
 
 ## Step 5: TEMPORAL GROUNDING
 These conversations took place in 2022–2024. Each chunk includes a session header with
-an explicit date, e.g. "Session N (YYYY-MM-DD HH:MM:SS):"; any memory facts carry an
-"as of YYYY-MM-DD" tag.
-- Use dates explicitly stated in the evidence. Do not invent or estimate dates, and never
-  output 2025 or 2026.
-- When a question asks what someone "shared" or "mentioned" on a date, that date is when
-  they TALKED about it — look for the event shortly BEFORE that date.
+an explicit date, e.g. "Session N (YYYY-MM-DD HH:MM:SS):".
+- Use dates explicitly stated in chunk text. Do not invent or estimate dates.
 - For "how long" questions, find the start and end dates explicitly, then compute the
   duration. Do not guess.
-- TEMPORAL DISAMBIGUATION: when you find MULTIPLE instances of similar events at different
-  dates, enumerate them all with their dates BEFORE picking. Past tense + "the" → the
-  instance closest to (and before) the reference date. Future tense ("plans to", "going
-  to") → the earliest planned date. Never default to the first-mentioned or highest-ranked
-  instance — the date context determines the answer.
+- When you find MULTIPLE instances of similar events at different dates, enumerate them
+  all with their dates BEFORE picking the one the question refers to. Never default to
+  the first-mentioned instance — the date context determines the answer.
 
 ## Step 6: INCLUSION CHECK
 For lists and counts: include all items found unless you have STRONG evidence they are
 wrong. The most common mistake is finding relevant items but dropping them due to overly
 strict filtering. After enumerating, re-verify each item — check for duplicates (same
-event described differently) and ensure you haven't missed items retrieved later. The
-question assumes something happened; find WHAT happened, don't say nothing did.
+event described differently) and ensure you haven't missed items from later chunks.
 
 ## Step 7: COMMIT AND ANSWER
 Give a direct, specific answer using exact words from the conversation whenever possible.
-If the question asks for a list, include ALL items found. NEVER return an empty answer
-when relevant evidence exists.
-- NEVER generate specific names, titles, places, or dates that do not appear in any
-  retrieved item. If the specific detail asked for is absent, answer with what the
-  evidence DOES contain rather than guessing.
-- For open-domain / opinion questions ("Would X do Y?", "Is X considered Z?"):
-  * Follow the DIRECT causal reasoning in the evidence; do not construct elaborate
-    counter-arguments.
-  * "Would X still do Y without Z?" — if X does Y BECAUSE of Z, then without Z, answer
-    "likely no."
-  * "Would X do Y again soon?" — if the most recent attempt involved a bad experience
-    (accident, scare, trauma), answer "likely no"; a recent negative outweighs an older
-    positive pattern.
-  * Trait questions ("Is X considered Z?"): weigh all evidence including indirect or
-    symbolic references; with some but not strong evidence, answer a qualified degree
-    ("somewhat") rather than a flat "no".
-- Make reasonable deductions: a store with many working people employs many people; a game
-  exclusive to one platform implies owning that platform; you may name a clearly described
-  work (a "romantic drama about memory and relationships" → "Eternal Sunshine of the
-  Spotless Mind").
-If the information is genuinely not present in any retrieved item, say:
+NEVER return an empty answer when relevant chunks exist — if ANY chunk contains relevant
+information, give the best answer from available evidence.
+If the information is genuinely not present in any retrieved chunk, say:
 "Not mentioned in the conversation."
-Do not invent facts not present in the retrieved evidence.
-"""
-
-# Injected into SYSTEM_PROMPT (replacing __MEMORY_SECTION__) only on hybrid
-# --build_memory runs, where the runner also exposes distilled memory facts and
-# the memory_lookup tool alongside vector_search.
-_MEMORY_SECTION = """\
-Long-term memory is active: some retrieved items are distilled memory facts from earlier
-sessions, shown as "[fact, as of YYYY-MM-DD] ..." (sometimes with an "(entities: ...)"
-tag). Treat these as first-class evidence alongside the conversation passages — a memory
-and a passage that agree corroborate each other. When the passages are thin, call the
-memory_lookup tool to pull more memories about a specific person, topic, or entity. Apply
-the same temporal reasoning (Step 5) to a memory's "as of" date.
+Do not invent facts not present in the retrieved context.
 """
 
 # Simple prompt like below works, but achieves lower scores.
@@ -435,23 +385,15 @@ def _reference_date(conv: dict) -> str | None:
     return conv.get(f"session_{nums[-1]}_date_time") or None
 
 
-def _build_system_prompt(reference_date: str | None, build_memory: bool = False) -> str:
-    """SYSTEM_PROMPT specialized for one query: the memory-aware block is included
-    only in hybrid runs, and the temporal-grounding anchor is tied to this
-    conversation's own timeframe so relative-time reasoning is computed against the
-    conversation dates rather than today's (mirrors mem0's reference_date injection)."""
-    prompt = SYSTEM_PROMPT.replace(
-        "__MEMORY_SECTION__\n",
-        (_MEMORY_SECTION + "\n") if build_memory else "",
-    )
+def _build_system_prompt(reference_date: str | None) -> str:
     if reference_date:
         anchored = (
             f"These conversations took place in 2022–2024, around {reference_date}. "
             "Compute any relative time against that timeframe, never against today's "
             "date — never output 2025 or 2026. Each chunk includes a session header with"
         )
-        prompt = prompt.replace(_TEMPORAL_ANCHOR, anchored)
-    return prompt
+        return SYSTEM_PROMPT.replace(_TEMPORAL_ANCHOR, anchored)
+    return SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------
@@ -691,7 +633,7 @@ async def process_conversation(
     # Per-conversation system prompt anchored to the latest session date, so
     # temporal reasoning is computed against this conversation's own timeframe.
     reference_date = _reference_date(sample["conversation"])
-    system_prompt = _build_system_prompt(reference_date, build_memory)
+    system_prompt = _build_system_prompt(reference_date)
 
     # Index already-answered items from a previous run, keyed by (question, category).
     prev_by_key: dict[tuple, dict] = {}
