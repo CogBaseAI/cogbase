@@ -11,7 +11,11 @@ Usage:
         --base_url http://localhost:8000 \
         --dataset_dir ./GraphRAG-Benchmark/Datasets \
         --output_dir ./benchmarks/results \
-        [--sample 20]
+        [--sample 20] [--build_memory]
+
+With --build_memory, each corpus's QA pairs (question + answer) are distilled into
+long-term memory before querying, so recall + memory_lookup run alongside
+vector_search. Off = RAG-only baseline.
 
 Output: benchmarks/results/{config_stem}/{subset}/{corpus_name}/predictions_{corpus_name}.json
 
@@ -165,11 +169,12 @@ async def wait_for_ingestion(client: httpx.AsyncClient, app_name: str, poll_inte
         await asyncio.sleep(poll_interval)
 
 
-async def query(client: httpx.AsyncClient, app_name: str, question: str, question_type: str, system_prompt: str) -> tuple[str, list[str]]:
+async def query(client: httpx.AsyncClient, app_name: str, question: str, question_type: str, system_prompt: str) -> tuple[str, list[str], list[dict]]:
     """Run a question through the CogBase query endpoint.
 
-    Returns (answer, context) where context combines chunk texts, document
-    slice texts, and JSON-serialized structured records.
+    Returns (answer, context, memories) where context combines chunk texts,
+    document slice texts, and JSON-serialized structured records, and memories
+    are the long-term records recall injected (empty unless memory was built).
     """
     resp = await client.post(
         f"/applications/{app_name}/query",
@@ -184,7 +189,60 @@ async def query(client: httpx.AsyncClient, app_name: str, question: str, questio
         + [s["text"] for s in data.get("document_slices", [])]
         + [json.dumps(r, ensure_ascii=False) for r in data.get("structured_records", [])]
     )
-    return answer, context
+    return answer, context, data.get("memories", [])
+
+
+# ---------------------------------------------------------------------------
+# Long-term memory build (parallels locomo run_cogbase.py --build_memory)
+# ---------------------------------------------------------------------------
+
+def _memory_messages(question: str, answer: str) -> list[dict]:
+    """One QA pair as a user (question) + assistant (answer) message pair."""
+    return [
+        {"role": "user", "content": question},
+        {"role": "assistant", "content": answer},
+    ]
+
+
+async def add_memory(
+    client: httpx.AsyncClient, app_name: str, messages: list[dict], session_id: str
+) -> list[dict]:
+    """Distill one QA pair into long-term memory; return the records created."""
+    resp = await client.post(
+        f"/applications/{app_name}/memory",
+        json={"messages": messages, "session_id": session_id},
+        timeout=300,
+    )
+    resp.raise_for_status()
+    return resp.json().get("memories", [])
+
+
+async def build_corpus_memory(
+    client: httpx.AsyncClient,
+    app_name: str,
+    corpus_name: str,
+    questions: list[dict],
+    batch_size: int = 20,
+) -> int:
+    """Replay QA pairs into long-term memory in batches. Returns total records created.
+
+    Each add-memory call carries `batch_size` QA pairs (one user question +
+    assistant answer message pair each), so distillation sees a chunk of verified
+    answers at once instead of one call per question.
+    """
+    total = 0
+    for start in range(0, len(questions), batch_size):
+        batch = questions[start : start + batch_size]
+        messages: list[dict] = []
+        for q in batch:
+            messages.extend(_memory_messages(q["question"], q.get("answer", "")))
+        records = await add_memory(
+            client, app_name, messages, session_id=f"{corpus_name}-{start // batch_size}"
+        )
+        total += len(records)
+        done = min(start + batch_size, len(questions))
+        log.info("  memory: %d/%d QA pair(s) → %d record(s)", done, len(questions), total)
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +298,8 @@ async def process_corpus(
     output_dir: Path,
     sample: int | None,
     question_type: str | None = None,
+    build_memory: bool = False,
+    max_workers: int = 4,
 ) -> None:
     app_name = _app_name(config_path, corpus_name)
     log.info("=== %s → app '%s' ===", corpus_name, app_name)
@@ -263,6 +323,21 @@ async def process_corpus(
     if task_ids:
         await wait_for_ingestion(client, app_name)
 
+    # Build long-term memory from ALL QA pairs (question + answer) before querying, so
+    # recall + memory_lookup run alongside vector_search ("teaching to the test"). This
+    # is independent of --sample / --question_type, which only restrict the query set:
+    # memory always covers the full corpus, so the marker's record count fully describes
+    # what was built and resume can simply skip the (expensive) rebuild.
+    if build_memory:
+        marker = out_dir / ".memory_built"
+        if marker.exists():
+            log.info("Memory already built for '%s', skipping.", corpus_name)
+        else:
+            log.info("Building long-term memory for '%s' from %d QA pair(s) …", corpus_name, len(questions))
+            total = await build_corpus_memory(client, app_name, corpus_name, questions)
+            log.info("Memory build complete for '%s': %d record(s).", corpus_name, total)
+            marker.write_text(str(total))
+
     if question_type:
         questions = [q for q in questions if q.get("question_type") == question_type]
         log.info("Filtered to question_type='%s': %d question(s)", question_type, len(questions))
@@ -281,30 +356,45 @@ async def process_corpus(
     if not questions:
         return
 
-    results = []
-    for i, q in enumerate(questions, 1):
-        log.info("  [%d/%d] %s", i, len(questions), q["question"][:80])
-        try:
-            answer, context = await query(client, app_name, q["question"], q["question_type"], system_prompt)
-        except Exception as exc:
-            log.warning("  Query failed: %s", exc)
-            answer, context = "", []
+    # Query questions concurrently (bounded by max_workers). Results are keyed by
+    # id and assembled in original order on save, so checkpoints stay deterministic
+    # regardless of completion order.
+    by_id: dict[str, dict] = {}
+    by_id_lock = asyncio.Lock()
+    sem = asyncio.Semaphore(max_workers)
+    counter = {"done": 0}
 
-        results.append({
-            "id": q["id"],
-            "question": q["question"],
-            "source": corpus_name,
-            "context": context,
-            "evidence": q.get("evidence", ""),
-            "question_type": q["question_type"],
-            "generated_answer": answer,
-            "ground_truth": q.get("answer", ""),
-        })
+    def _assemble() -> list[dict]:
+        return [by_id[q["id"]] for q in questions if q["id"] in by_id]
 
-        if i % 50 == 0:
-            _save(results)
+    async def _handle(q: dict) -> None:
+        async with sem:
+            try:
+                answer, context, memories = await query(client, app_name, q["question"], q["question_type"], system_prompt)
+            except Exception as exc:
+                log.warning("  Query failed: %s", exc)
+                answer, context, memories = "", [], []
 
-    _save(results)
+        async with by_id_lock:
+            by_id[q["id"]] = {
+                "id": q["id"],
+                "question": q["question"],
+                "source": corpus_name,
+                "context": context,
+                "memories": memories,
+                "evidence": q.get("evidence", ""),
+                "question_type": q["question_type"],
+                "generated_answer": answer,
+                "ground_truth": q.get("answer", ""),
+            }
+            counter["done"] += 1
+            done = counter["done"]
+            if done % 50 == 0:
+                _save(_assemble())
+        log.info("  [%d/%d] %s", done, len(questions), q["question"][:80])
+
+    await asyncio.gather(*(_handle(q) for q in questions))
+    _save(_assemble())
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +446,8 @@ async def main(args: argparse.Namespace) -> None:
                 output_dir=output_dir,
                 sample=args.sample,
                 question_type=args.question_type,
+                build_memory=args.build_memory,
+                max_workers=args.max_workers,
             )
 
 
@@ -374,8 +466,15 @@ if __name__ == "__main__":
                         help="Process only the first N corpora (e.g. --corpora 3)")
     parser.add_argument("--sample", type=int, default=None,
                         help="Process only the first N questions per corpus (for quick testing)")
+    parser.add_argument("--max_workers", type=int, default=4,
+                        help="Number of questions queried concurrently per corpus (default: 4)")
     parser.add_argument("--question_type", default=None,
                         help="Filter to a single question_type (e.g. 'Fact Retrieval'); tests all types if omitted")
+    parser.add_argument("--build_memory", action="store_true",
+                        help="Hybrid mode: distill each corpus's QA pairs (question + answer) "
+                             "into long-term memory before querying, so recall + memory_lookup "
+                             "run alongside vector_search. Off = RAG-only baseline. Skipped per "
+                             "corpus on resume once built (see the .memory_built marker).")
     args = parser.parse_args()
 
     asyncio.run(main(args))
