@@ -150,6 +150,7 @@ class MemoryRecordResponse(BaseModel):
     status: str
     source_event_ids: list[dict] = []
     evidence_snapshot: dict = {}
+    observed_at: datetime
     created_at: datetime
     updated_at: datetime
     expires_at: datetime | None = None
@@ -157,6 +158,13 @@ class MemoryRecordResponse(BaseModel):
 
 class PendingMemoriesResponse(BaseModel):
     memories: list[MemoryRecordResponse]
+
+
+class MemoryListResponse(BaseModel):
+    """A page of stored long-term memories for the inspection surface."""
+
+    memories: list[MemoryRecordResponse]
+    total: int = Field(description="Number of records on this page.")
 
 
 class MemoryReviewItem(BaseModel):

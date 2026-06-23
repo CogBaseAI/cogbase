@@ -840,6 +840,14 @@ tr:hover td { background: var(--bg3); }
   padding: 7px 10px; border-radius: 7px; font-size: 13px; font-family: inherit;
 }
 .select:focus { outline: none; border-color: var(--accent); }
+
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.seg button {
+  background: var(--bg3); color: var(--muted); border: none; cursor: pointer;
+  padding: 6px 14px; font-size: 13px; font-family: inherit;
+}
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.active { background: var(--accent); color: #fff; }
 .settings-field input.readonly { color: var(--muted); cursor: default; }
 .settings-actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
 .settings-msg { font-size: 12px; }

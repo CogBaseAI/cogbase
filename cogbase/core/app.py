@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         LongTermMemory,
         LongTermRecord,
         MemoryKind,
+        MemoryStatus,
         ReviewDecision,
         ReviewResult,
         ShortTermMemory,
@@ -389,6 +390,26 @@ class CogBaseApp:
         if self._long_term is None:
             raise RuntimeError("long-term memory is not configured")
         return await self._long_term.list_pending(kind=kind, limit=limit, offset=offset)
+
+    async def memories(
+        self,
+        *,
+        status: "MemoryStatus | None" = None,
+        kind: "MemoryKind | None" = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> "list[LongTermRecord]":
+        """Browse stored long-term records (most-recently-observed first).
+
+        The inspection counterpart to :meth:`pending_memories`: ``status``/``kind``
+        are optional filters; omit ``status`` to span every lifecycle state.
+        Raises if long-term memory is not configured.
+        """
+        if self._long_term is None:
+            raise RuntimeError("long-term memory is not configured")
+        return await self._long_term.list_records(
+            status=status, kind=kind, limit=limit, offset=offset
+        )
 
     async def review_memories(
         self, *, decisions: "list[ReviewDecision]"

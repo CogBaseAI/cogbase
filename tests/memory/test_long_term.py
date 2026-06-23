@@ -665,6 +665,49 @@ async def test_list_pending_filters_by_kind():
 
 
 @pytest.mark.asyncio
+async def test_list_records_filters_by_status():
+    svc = await _make_service()
+    # A fact is gated (pending_review); a preference auto-actives.
+    fact = await svc.promote(candidate=_candidate("user works at Acme", kind=MemoryKind.FACT))
+    pref = await svc.promote(
+        candidate=_candidate("prefers concise answers", kind=MemoryKind.PREFERENCE),
+    )
+    active = await svc.list_records(status=MemoryStatus.ACTIVE)
+    assert [r.memory_id for r in active] == [pref]
+    pending = await svc.list_records(status=MemoryStatus.PENDING_REVIEW)
+    assert [r.memory_id for r in pending] == [fact]
+    # No status filter spans every lifecycle state.
+    everything = await svc.list_records()
+    assert {r.memory_id for r in everything} == {fact, pref}
+
+
+@pytest.mark.asyncio
+async def test_list_records_orders_by_observed_at_desc():
+    svc = await _make_service()
+    older = await svc.promote(candidate=_candidate(
+        "older preference", kind=MemoryKind.PREFERENCE,
+        observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    ))
+    newer = await svc.promote(candidate=_candidate(
+        "newer preference", kind=MemoryKind.PREFERENCE,
+        observed_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    ))
+    records = await svc.list_records(status=MemoryStatus.ACTIVE)
+    assert [r.memory_id for r in records] == [newer, older]
+
+
+@pytest.mark.asyncio
+async def test_list_records_filters_by_kind():
+    svc = await _make_service()
+    fact = await svc.promote(candidate=_candidate("user works at Acme", kind=MemoryKind.FACT))
+    await svc.promote(
+        candidate=_candidate("user corrected the spelling", kind=MemoryKind.CORRECTION),
+    )
+    records = await svc.list_records(kind=MemoryKind.FACT)
+    assert [r.memory_id for r in records] == [fact]
+
+
+@pytest.mark.asyncio
 async def test_review_accept_makes_record_recallable():
     svc = await _make_service()
     mid = await svc.promote(candidate=_candidate("user works at Acme"))

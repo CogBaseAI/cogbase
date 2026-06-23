@@ -42,7 +42,12 @@ const RUNS = [
   { task_id: 't3', task_type: 'distill', task_name: 'distill', doc_id: 'sess-err', status: 'failed', created_at: '2026-06-02T09:00:00Z', started_at: '2026-06-02T09:00:01Z', completed_at: '2026-06-02T09:00:02Z', error: 'llm timeout' },
 ]
 
-function mockPending(list = PENDING, runs = []) {
+const RECORDS = [
+  { memory_id: 'r1', kind: 'fact', content: 'User works at Acme.', entities: ['acme'], confidence: 0.9, status: 'active', observed_at: '2026-05-10T00:00:00Z', created_at: '2026-05-10T00:00:00Z', updated_at: '2026-05-10T00:00:00Z' },
+  { memory_id: 'r2', kind: 'preference', content: 'Prefers concise answers.', entities: [], confidence: 0.7, status: 'active', observed_at: '2026-05-12T00:00:00Z', created_at: '2026-05-12T00:00:00Z', updated_at: '2026-05-12T00:00:00Z' },
+]
+
+function mockPending(list = PENDING, runs = [], records = RECORDS) {
   return vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
     if (String(url).includes('/memory/pending')) {
       return Promise.resolve({ ok: true, json: async () => ({ memories: list }) })
@@ -52,6 +57,9 @@ function mockPending(list = PENDING, runs = []) {
       const id = body.decisions[0].memory_id
       const outcome = body.decisions[0].decision === 'accept' ? 'accepted' : 'rejected'
       return Promise.resolve({ ok: true, json: async () => ({ results: [{ memory_id: id, outcome }] }) })
+    }
+    if (String(url).includes('/memory?')) {
+      return Promise.resolve({ ok: true, json: async () => ({ memories: records, total: records.length }) })
     }
     if (String(url).includes('/tasks')) {
       return Promise.resolve({ ok: true, json: async () => ({ tasks: runs }) })
@@ -190,5 +198,49 @@ describe('distillation runs', () => {
 
     await user.click(screen.getByText(/Distillation runs/))
     await waitFor(() => expect(screen.getByText(/No distillation runs yet/)).toBeInTheDocument())
+  })
+})
+
+describe('records mode', () => {
+  it('switches to Records and lists active records by default', async () => {
+    const spy = mockPending()
+    const user = userEvent.setup()
+    renderMemoryTab()
+    await waitFor(() => screen.getByText(/EU data residency/))   // review mode first
+
+    await user.click(screen.getByText('Records'))
+    await waitFor(() => expect(screen.getByText('User works at Acme.')).toBeInTheDocument())
+    expect(screen.getByText('Prefers concise answers.')).toBeInTheDocument()
+    // Defaults to status=active.
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('status=active'))
+  })
+
+  it('reloads records when the status filter changes', async () => {
+    const spy = mockPending()
+    const user = userEvent.setup()
+    renderMemoryTab()
+    await user.click(screen.getByText('Records'))
+    await waitFor(() => screen.getByText('User works at Acme.'))
+
+    spy.mockClear()
+    await user.selectOptions(screen.getAllByRole('combobox')[0], 'all')
+    await waitFor(() => expect(spy).toHaveBeenCalledWith(expect.stringContaining('status=all')))
+  })
+
+  it('shows an empty state when there are no records', async () => {
+    mockPending(PENDING, [], [])
+    const user = userEvent.setup()
+    renderMemoryTab()
+    await user.click(screen.getByText('Records'))
+    await waitFor(() => expect(screen.getByText(/No memories yet/)).toBeInTheDocument())
+  })
+
+  it('does not show Accept/Reject controls in records mode', async () => {
+    mockPending()
+    const user = userEvent.setup()
+    renderMemoryTab()
+    await user.click(screen.getByText('Records'))
+    await waitFor(() => screen.getByText('User works at Acme.'))
+    expect(screen.queryByRole('button', { name: /Accept/ })).not.toBeInTheDocument()
   })
 })

@@ -472,6 +472,41 @@ class LongTermMemory:
         )
         return page
 
+    async def list_records(
+        self,
+        *,
+        status: MemoryStatus | None = None,
+        kind: MemoryKind | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[LongTermRecord]:
+        """Browse stored records, most-recently-observed first.
+
+        The general read for an inspection surface (cf. :meth:`list_pending`,
+        the FIFO review queue, and :meth:`recall`, which is active-only and
+        query-driven).  ``status``/``kind`` are optional filters — omit ``status``
+        to span every lifecycle state.  Ordered by ``observed_at`` descending so
+        the newest knowledge surfaces first; the full record (provenance
+        included) is returned for auditing.
+        """
+        if limit <= 0:
+            return []
+        filters = []
+        if status:
+            filters.append(Col("status") == status.value)
+        if kind:
+            filters.append(Col("kind") == kind.value)
+        rows = await self._structured.query(self._structured_collection, filters or None)
+        records = [LongTermRecord.model_validate(row) for row in rows]
+        records.sort(key=lambda r: r.observed_at, reverse=True)
+        page = records[offset : offset + limit]
+        logger.info(
+            "[long_term] app=%s list_records: status=%s kind=%s -> %d of %d record(s)",
+            self._app_id, status.value if status else None,
+            kind.value if kind else None, len(page), len(records),
+        )
+        return page
+
     async def review_many(
         self, *, decisions: list[ReviewDecision]
     ) -> list[ReviewResult]:

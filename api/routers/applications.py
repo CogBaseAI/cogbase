@@ -38,6 +38,7 @@ from api.models import (
     DocWorkflowResponse,
     FilterRequest,
     IngestDocumentsAcceptedResponse,
+    MemoryListResponse,
     MemoryRecordResponse,
     MemoryReviewRequest,
     MemoryReviewResponse,
@@ -829,6 +830,38 @@ def _to_query_memory(record) -> QueryMemoryResponse:
     )
 
 
+@router.get("/{app_name}/memory", response_model=MemoryListResponse)
+async def list_memories(
+    app_name: str,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+    status: str | None = "active",
+    kind: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> MemoryListResponse:
+    """Browse stored long-term memories (most-recently-observed first).
+
+    The inspection surface behind the Memory tab's records view. Defaults to
+    ``active`` records (what the query path actually recalls); pass ``status=all``
+    to span every lifecycle state, or a specific status / ``kind`` to filter.
+    """
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    # `status` is a query param here, shadowing the fastapi `status` module — use
+    # literal HTTP codes below rather than `status.HTTP_*`.
+    parsed_status = _parse_memory_status(status)
+    parsed_kind = _parse_memory_kind(kind)
+    try:
+        records = await app.memories(
+            status=parsed_status, kind=parsed_kind, limit=limit, offset=offset
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    items = [_to_memory_response(r) for r in records]
+    return MemoryListResponse(memories=items, total=len(items))
+
+
 @router.get("/{app_name}/memory/pending", response_model=PendingMemoriesResponse)
 async def list_pending_memories(
     app_name: str,
@@ -902,6 +935,24 @@ def _parse_memory_kind(kind: str | None):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"invalid memory kind: {kind!r}",
+        )
+
+
+def _parse_memory_status(status_value: str | None):
+    """Resolve an optional ``status`` query param to a ``MemoryStatus`` or 422.
+
+    ``None`` or ``"all"`` mean no status filter (span every lifecycle state).
+    """
+    if status_value is None or status_value == "all":
+        return None
+    from cogbase.memory import MemoryStatus
+
+    try:
+        return MemoryStatus(status_value)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"invalid memory status: {status_value!r}",
         )
 
 
