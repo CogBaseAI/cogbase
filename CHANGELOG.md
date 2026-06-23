@@ -1,5 +1,72 @@
 # Changelog
 
+## v0.4.0 — 2026-06-23
+
+### Memory Layer
+
+- All three memory tiers are now implemented (see `docs/memory.md`, `docs/episodic-memory.md`, `docs/long-term-memory.md`)
+- **Episodic memory**: durable append-only per-session event log as the single source of truth (`MemoryEvent` model + `EpisodicMemory` writer over the log store); logs user messages, tool calls, tool results, and final answers from the query runner
+- Single-writer guarantee enforced via compare-and-append fencing on the log byte offset
+- **Short-term memory**: refactored into a projection over the episodic log; per-session projection cache backed by byte-offset incremental reads avoids re-parsing the whole log every turn; per-session locks replace the global lock, with the LLM summary moved outside the lock
+- Message compaction: separate prompts for memory compaction vs. long tool-output compaction; compaction sizes are fractions of a configurable LLM context window; `estimate_tokens` supports multiple languages
+- **Long-term memory**: curated cross-session facts, preferences, corrections, and retrieval hints, distilled offline on session close and reconciled (ADD/UPDATE/DELETE/NOOP) against accumulated belief; linked into a memory graph and recalled into the query runner
+- Session lifecycle: `start`/`close` session APIs; session close triggers a memory distillation task; the query runner recalls long-term memory at the start of a query
+- `AddMemoryRequest` API appends a batch of messages to a session's episodic log, distills durable facts, and activates everything distilled
+- `list-memories` API and client APIs to list/review FACT and CORRECTION memories
+
+### Memory Distillation
+
+- Single additive LLM call per session by default instead of N+1; additive consolidation prompt for long-term reconcile
+- `session_distilled` watermark so re-runs only process new turns
+- Temporal grounding: relative time references (e.g. "yesterday") anchor to the session's date; memories dated by when they were observed, not updated, anchored on the first turn past the distill watermark
+- Existing memories are front-loaded into the extraction prompt for dedup; reconcile maps real memory UUIDs to integer ids to avoid LLM hallucinations
+- Extract-time memory linking: `linked_memory_ids` edges with recall neighborhood traversal; auto-link candidates that share entities, gated by a document-frequency threshold to skip common entities (e.g. person names)
+- Confidence handling: low-confidence candidates ignored, high-confidence candidates auto-promoted
+- Entity tagging plus a configurable `memory_lookup` tool (disabled by default)
+- Per-app memory config knobs (`domain_fact_guidance`, etc.); document evidence is preferred when memory and document conflict
+- Batch-embed all candidate contents in `distill_session` instead of one embed call per candidate
+- Recall/lookup long-term memories sorted by `observed_at`
+
+### Query Runner
+
+- Long-term memory recalled at query start; long-term memory references included in the query response
+- First recall carries the conversation messages so short follow-up questions retain context
+
+### Store Adapters
+
+- New append-only log store, independent from the document store, wired into system config and resources at startup; included in the Docker image
+- Vector store: record-level batch deletion added; the existing `delete()` renamed to `delete_doc()` (deletes all chunks of a doc); memory vector collection keeps only active records
+- `Op.OVERLAPS` structured-store filter pushes memory entity filtering down to the store instead of fetching all records and filtering in memory
+- FAISS store: a dirty flag ensures mutations during an in-flight save aren't dropped
+- `get_dimensions` API added to `EmbeddingBase`
+
+### Skills
+
+- Skills are now system-wide, UUID-keyed, uploadable, and persisted to the document store; can be assigned to an app
+- UI to manage skills and assign them to apps
+- Dangling skills disallowed: deleting a skill checks app references
+- Read-only built-in skills (under the system config dir) distinguished from user-managed document-store skills
+
+### Demo UI
+
+- New Memory tab: initial memory view, a memory distillation task panel, and a Records view
+- Query answers rendered as markdown
+- UI and example client updated to call session start/end (history messages held in the server session)
+
+### Benchmarks
+
+- LoCoMo with the memory layer: 93.9 vs. 92.8 baseline
+- GraphRAG: self-distilled memory improves score from 58.62 to 60.18; gold memory further improves to 66.56; supports forcing a subset of corpora, parallel query execution, and building memory from ground-truth answers
+
+### Refactor
+
+- App identity: apps assigned a UUID; `app_id` is the real identity used for all storage and scoping (prefixed with `app` to avoid collection names starting with a number)
+- Skill/app APIs use skill name in path params and request bodies; `skill_id` is internal only
+- Resources grouped into `RetrievalResources` and `MemoryTiers`
+- Expanded logging across memory, pipeline, and workflow, including `app_id`
+
+---
+
 ## v0.3.0 — 2026-06-02
 
 ### Query Runner
