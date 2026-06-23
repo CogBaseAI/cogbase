@@ -14,6 +14,10 @@ document_store:
   type: local
   path: /data/documents
 
+log_store:
+  type: local
+  path: /data/logs
+
 # LLM and embedding are not pre-configured — set them via the UI Settings tab,
 # or add the blocks below (with a valid api_key):
 # llm:
