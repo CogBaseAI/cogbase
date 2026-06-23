@@ -6,6 +6,7 @@ import DemosTab from './components/tabs/DemosTab'
 import IngestTab from './components/tabs/IngestTab'
 import DataTab from './components/tabs/DataTab'
 import QueryTab from './components/tabs/QueryTab'
+import MemoryTab from './components/tabs/MemoryTab'
 import SkillsTab from './components/tabs/SkillsTab'
 import SettingsTab from './components/tabs/SettingsTab'
 import DocModal from './components/modals/DocModal'
@@ -27,7 +28,7 @@ function Layout() {
     setActiveTab(name)
   }
 
-  const tabs = ['build', 'apps', 'demos', 'ingest', 'data', 'query', 'skills', 'settings']
+  const tabs = ['build', 'apps', 'demos', 'ingest', 'data', 'query', 'memory', 'skills', 'settings']
 
   return (
     <>
@@ -87,6 +88,9 @@ function Layout() {
         </div>
         <div className={`panel ${activeTab === 'query' ? 'active' : ''}`}>
           <QueryTab active={activeTab === 'query'} />
+        </div>
+        <div className={`panel ${activeTab === 'memory' ? 'active' : ''}`}>
+          <MemoryTab active={activeTab === 'memory'} />
         </div>
         <div className={`panel ${activeTab === 'skills' ? 'active' : ''}`}>
           <SkillsTab active={activeTab === 'skills'} />

@@ -835,6 +835,11 @@ tr:hover td { background: var(--bg3); }
   padding: 7px 10px; border-radius: 7px; font-size: 13px; font-family: inherit;
 }
 .settings-field input:focus, .settings-field select:focus { outline: none; border-color: var(--accent); }
+.select {
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+  padding: 7px 10px; border-radius: 7px; font-size: 13px; font-family: inherit;
+}
+.select:focus { outline: none; border-color: var(--accent); }
 .settings-field input.readonly { color: var(--muted); cursor: default; }
 .settings-actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
 .settings-msg { font-size: 12px; }
