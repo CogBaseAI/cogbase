@@ -11,11 +11,17 @@ Usage:
         --base_url http://localhost:8000 \
         --dataset_dir ./GraphRAG-Benchmark/Datasets \
         --output_dir ./benchmarks/results \
-        [--sample 20] [--build_memory]
+        [--sample 20] [--build_memory] [--memory_from_results PATH]
 
-With --build_memory, each corpus's QA pairs (question + answer) are distilled into
-long-term memory before querying, so recall + memory_lookup run alongside
-vector_search. Off = RAG-only baseline.
+With --build_memory, each corpus's QA pairs (question + ground-truth answer) are
+distilled into long-term memory before querying, so recall + memory_lookup run
+alongside vector_search. Off = RAG-only baseline.
+
+With --memory_from_results PATH, memory is instead built from a previous run's
+predictions file (e.g. results/<exp>/novel_all.json), distilling each record's
+generated_answer rather than the gold answer. This mirrors the system distilling
+memory from its own closed session, letting us test whether that self-distilled
+memory improves the next run's answers. Implies --build_memory.
 
 Output: benchmarks/results/{config_stem}/{subset}/{corpus_name}/predictions_{corpus_name}.json
 
@@ -221,27 +227,29 @@ async def build_corpus_memory(
     client: httpx.AsyncClient,
     app_name: str,
     corpus_name: str,
-    questions: list[dict],
+    pairs: list[dict],
     batch_size: int = 20,
 ) -> int:
     """Replay QA pairs into long-term memory in batches. Returns total records created.
 
     Each add-memory call carries `batch_size` QA pairs (one user question +
     assistant answer message pair each), so distillation sees a chunk of verified
-    answers at once instead of one call per question.
+    answers at once instead of one call per question. `pairs` are normalized dicts
+    with "question" and "answer" keys (the answer is the ground-truth answer or a
+    previous run's generated answer, depending on the memory source).
     """
     total = 0
-    for start in range(0, len(questions), batch_size):
-        batch = questions[start : start + batch_size]
+    for start in range(0, len(pairs), batch_size):
+        batch = pairs[start : start + batch_size]
         messages: list[dict] = []
-        for q in batch:
-            messages.extend(_memory_messages(q["question"], q.get("answer", "")))
+        for p in batch:
+            messages.extend(_memory_messages(p["question"], p.get("answer", "")))
         records = await add_memory(
             client, app_name, messages, session_id=f"{corpus_name}-{start // batch_size}"
         )
         total += len(records)
-        done = min(start + batch_size, len(questions))
-        log.info("  memory: %d/%d QA pair(s) → %d record(s)", done, len(questions), total)
+        done = min(start + batch_size, len(pairs))
+        log.info("  memory: %d/%d QA pair(s) → %d record(s)", done, len(pairs), total)
     return total
 
 
@@ -299,6 +307,7 @@ async def process_corpus(
     sample: int | None,
     question_type: str | None = None,
     build_memory: bool = False,
+    memory_results: list[dict] | None = None,
     max_workers: int = 4,
 ) -> None:
     app_name = _app_name(config_path, corpus_name)
@@ -328,13 +337,36 @@ async def process_corpus(
     # is independent of --sample / --question_type, which only restrict the query set:
     # memory always covers the full corpus, so the marker's record count fully describes
     # what was built and resume can simply skip the (expensive) rebuild.
+    #
+    # Two memory sources:
+    #   - ground truth (default): answer = the dataset's gold answer — an upper bound.
+    #   - previous-run results (--memory_from_results): answer = a prior run's
+    #     generated_answer. This mirrors how the system distills memory from a real
+    #     closed session (its own answers, not gold), letting us test whether that
+    #     self-distilled memory lifts the next run's answers.
     if build_memory:
+        if memory_results is not None:
+            pairs = [
+                {"question": r["question"], "answer": r.get("generated_answer", "")}
+                for r in memory_results
+            ]
+            pairs = [p for p in pairs if p["answer"].strip()]
+            source_label = "previous-run results"
+        else:
+            pairs = [
+                {"question": q["question"], "answer": q.get("answer", "")} for q in questions
+            ]
+            source_label = "ground-truth answers"
+
         marker = out_dir / ".memory_built"
         if marker.exists():
             log.info("Memory already built for '%s', skipping.", corpus_name)
         else:
-            log.info("Building long-term memory for '%s' from %d QA pair(s) …", corpus_name, len(questions))
-            total = await build_corpus_memory(client, app_name, corpus_name, questions)
+            log.info(
+                "Building long-term memory for '%s' from %d QA pair(s) (%s) …",
+                corpus_name, len(pairs), source_label,
+            )
+            total = await build_corpus_memory(client, app_name, corpus_name, pairs)
             log.info("Memory build complete for '%s': %d record(s).", corpus_name, total)
             marker.write_text(str(total))
 
@@ -428,6 +460,21 @@ async def main(args: argparse.Namespace) -> None:
 
     grouped = _group_by_source(questions_raw)
 
+    # Optional: build memory from a previous run's predictions instead of ground truth.
+    # The predictions file (e.g. .../novel_all.json) carries the same `source` corpus
+    # key, so we group it the same way and hand each corpus its own slice.
+    memory_results_by_corpus: dict[str, list[dict]] = {}
+    if args.memory_from_results:
+        results_path = Path(args.memory_from_results)
+        if not results_path.exists():
+            raise FileNotFoundError(f"--memory_from_results file not found: {results_path}")
+        with results_path.open() as f:
+            memory_results_by_corpus = _group_by_source(json.load(f))
+        log.info(
+            "Will build memory from previous-run results %s (%d corpus group(s)).",
+            results_path, len(memory_results_by_corpus),
+        )
+
     async with httpx.AsyncClient(base_url=args.base_url) as client:
         for item in corpora:
             corpus_name: str = item["corpus_name"]
@@ -446,7 +493,12 @@ async def main(args: argparse.Namespace) -> None:
                 output_dir=output_dir,
                 sample=args.sample,
                 question_type=args.question_type,
-                build_memory=args.build_memory,
+                build_memory=args.build_memory or args.memory_from_results is not None,
+                memory_results=(
+                    memory_results_by_corpus.get(corpus_name)
+                    if args.memory_from_results
+                    else None
+                ),
                 max_workers=args.max_workers,
             )
 
@@ -471,10 +523,18 @@ if __name__ == "__main__":
     parser.add_argument("--question_type", default=None,
                         help="Filter to a single question_type (e.g. 'Fact Retrieval'); tests all types if omitted")
     parser.add_argument("--build_memory", action="store_true",
-                        help="Hybrid mode: distill each corpus's QA pairs (question + answer) "
-                             "into long-term memory before querying, so recall + memory_lookup "
+                        help="Hybrid mode: distill each corpus's QA pairs (question + ground-truth "
+                             "answer) into long-term memory before querying, so recall + memory_lookup "
                              "run alongside vector_search. Off = RAG-only baseline. Skipped per "
                              "corpus on resume once built (see the .memory_built marker).")
+    parser.add_argument("--memory_from_results", default=None,
+                        help="Build memory from a previous run's predictions JSON "
+                             "(e.g. results/<exp>/novel_all.json) instead of ground truth: the "
+                             "answer distilled is each record's generated_answer. Simulates the "
+                             "system distilling memory from its own closed session, to test whether "
+                             "that self-distilled memory improves the next run. Implies --build_memory; "
+                             "use a distinct config stem so the app/output stays isolated from the "
+                             "run that produced the predictions.")
     args = parser.parse_args()
 
     asyncio.run(main(args))

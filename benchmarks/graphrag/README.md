@@ -213,9 +213,78 @@ Average Answer Correctness: 0.6159
 
 **Finding:** Disabling `read_document` has negligible impact on average correctness (0.6246 → 0.6159), suggesting vector search alone is sufficient for this corpus. Contextual summarization and complex reasoning improve slightly without it, while fact retrieval drops. We did observe the LLM calling `read_document` during the test, and will run more experiments to understand its impact.
 
+### Impact of the memory layer (Novel)
+
+Tested whether **long-term memory** lifts answer correctness, under two memory sources:
+
+- **Gold memory** (upper bound) — distill each corpus's **ground-truth answers** into long-term memory before querying. This is the ceiling: it shows how much memory can help when what it stores is correct.
+- **Self-distilled memory** (realistic) — distill each corpus's **own generated answers** from a prior `bench_app_simple` run (gpt-4o-mini ingest + query) into memory, then re-run. This mirrors the system distilling memory from its own closed sessions and reusing it on the next run — no gold answers involved.
+
+In both, queries run with memory `recall` alongside `vector_search`.
+
+```
+# Gold memory (upper bound) — distill ground-truth answers:
+python benchmarks/graphrag/run_cogbase.py \
+    --config benchmarks/graphrag/bench_app_simple.yaml \
+    --subset novel \
+    --dataset_dir /your-path/GraphRAG-Benchmark/Datasets \
+    --output_dir benchmarks/graphrag/results \
+    --build_memory
+
+# Self-distilled memory — distill a prior run's own generated answers:
+python benchmarks/graphrag/run_cogbase.py \
+    --config benchmarks/graphrag/bench_app_simple.yaml \
+    --subset novel \
+    --dataset_dir /your-path/GraphRAG-Benchmark/Datasets \
+    --output_dir benchmarks/graphrag/results \
+    --build_memory \
+    --memory_from_results benchmarks/graphrag/results/bench_app_simple_novels/novel_all.json
+```
+
+| Variant                              | Scope        | Avg. correctness |
+|--------------------------------------|--------------|------------------|
+| Gold memory (upper bound)            | 5 corpora    | **66.56**        |
+| Self-distilled memory (realistic)    | full Novel   | **60.18**        |
+| Baseline (RAG-only)                  | full Novel   | 58.62            |
+
+> The gold and self-distilled runs cover different corpus sets (5 corpora vs. the full Novel subset), so their absolute scores aren't directly comparable; gold marks the ceiling, self-distilled the realistic lift over its own full-Novel baseline.
+
+<details>
+<summary>Detailed scores</summary>
+
+**Gold memory** (66.56, 5 corpora):
+```
+python benchmarks/graphrag/print_scores.py benchmarks/graphrag/results/bench_app_simple_memory_gold/novel_scores.json
+Results:
+  Fact Retrieval:  {"rouge_score": 0.4805, "answer_correctness": 0.719}
+  Complex Reasoning:  {"rouge_score": 0.2208, "answer_correctness": 0.5591}
+  Contextual Summarize:  {"answer_correctness": 0.7408, "coverage_score": 0.6205}
+  Creative Generation:  {"answer_correctness": 0.6437, "coverage_score": 0.5773, "faithfulness": 0.0}
+
+Average Answer Correctness: 0.6656
+```
+
+**Self-distilled memory** (60.18, full Novel):
+```
+python benchmarks/graphrag/print_scores.py benchmarks/graphrag/results/bench_app_simple/novel_scores.json
+Results:
+  Fact Retrieval:  {"rouge_score": 0.344, "answer_correctness": 0.5766}
+  Complex Reasoning:  {"rouge_score": 0.2032, "answer_correctness": 0.5363}
+  Contextual Summarize:  {"answer_correctness": 0.7195, "coverage_score": 0.567}
+  Creative Generation:  {"answer_correctness": 0.5748, "coverage_score": 0.3718, "faithfulness": 0.1234}
+
+Average Answer Correctness: 0.6018
+```
+
+**Baseline** (58.62, full Novel) — see [Novel](#novel) above.
+
+</details>
+
+**Finding:** Even self-distilled memory — built from the system's *own* (imperfect) prior answers — lifts average correctness by **+1.56 points** (58.62 → 60.18) on the full Novel subset, with Fact Retrieval (+3.10), Complex Reasoning (+2.35), and Contextual Summarize (+1.34) all improving and Creative Generation flat (−0.56). Gold memory (distilling ground-truth answers) reaches **66.56** on the 5-corpus set, marking the ceiling memory can reach when what it stores is correct. The gain comes from memory surfacing previously-derived facts that vector search alone re-retrieves less reliably.
+
 ## Future Work
 
 - **Test full corpora in one app** — each corpus is currently tested in its own isolated app, which the real world won't be. Testing all corpora together in a single application would better reflect cross-document reasoning and reveal how CogBase handles retrieval across a larger, mixed collection.
 - **Investigate the `bench_app_extraction` gap** — extraction-based scoring (0.5990) lags `bench_app_simple` (0.6179); worth understanding whether this is a prompt-quality issue, schema design, or a fundamental tradeoff of structured extraction vs. chunk-level retrieval.
-- **Memory and Adaptive Engine** — once the memory layer and adaptive evolution engine are implemented, re-run benchmarks to measure the impact on answer correctness, latency, and token usage.
+- **Memory and Adaptive Engine** — the memory layer is now implemented and an initial Novel run shows a +1.56-point lift (see [Impact of the memory layer](#impact-of-the-memory-layer-novel)); extend this to the Medical subset and, once the adaptive evolution engine lands, measure its impact on answer correctness, latency, and token usage.
 - **Stronger model** — current scores use gpt-4o-mini or gpt-5.4-mini; running with a stronger model such as gpt-5.4 would establish an upper bound and is expected to push the leaderboard score higher.
