@@ -9,6 +9,9 @@ const KIND_FILTERS = [
   { value: 'correction', label: 'Corrections' },
 ]
 
+// Map a distillation task status to the shared status-badge class.
+const STATUS_BADGE = { done: 'b-active', failed: 'b-error', running: 'b-init', pending: 'b-init' }
+
 export default function MemoryTab({ active }) {
   const { apiUrl, currentApp } = useApp()
   const [memories, setMemories] = useState(null)  // null=loading, []|[...]=loaded
@@ -16,6 +19,8 @@ export default function MemoryTab({ active }) {
   const [kind, setKind] = useState('')
   const [busyId, setBusyId] = useState(null)       // memory_id with an in-flight verdict
   const [msg, setMsg] = useState({ text: '', cls: '' })
+  const [runs, setRuns] = useState(null)           // distillation tasks; null=loading
+  const [showRuns, setShowRuns] = useState(false)
 
   async function loadPending() {
     if (!currentApp) { setMemories([]); setError(null); return }
@@ -29,7 +34,22 @@ export default function MemoryTab({ active }) {
     } catch (e) { setError(e.message) }
   }
 
+  // Load the distillation task runs that feed this review queue (newest first).
+  async function loadRuns() {
+    if (!currentApp) { setRuns([]); return }
+    try {
+      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/tasks?task_type=distill`)
+      if (!resp.ok) { setRuns([]); return }
+      const { tasks = [] } = await resp.json()
+      tasks.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+      setRuns(tasks)
+    } catch { setRuns([]) }
+  }
+
+  function refresh() { loadPending(); loadRuns() }
+
   useEffect(() => { if (active) loadPending() }, [active, currentApp, kind])
+  useEffect(() => { if (active) loadRuns() }, [active, currentApp])
 
   // Send a single accept/reject verdict, then drop the row on success.
   async function review(memory, decision) {
@@ -61,7 +81,7 @@ export default function MemoryTab({ active }) {
     <div className="page">
       <div className="page-hd">
         <h2>Memory</h2>
-        <button className="btn btn-ghost" onClick={loadPending}>⟳ Refresh</button>
+        <button className="btn btn-ghost" onClick={refresh}>⟳ Refresh</button>
       </div>
 
       <p className="sub" style={{ marginBottom: 14 }}>
@@ -71,6 +91,8 @@ export default function MemoryTab({ active }) {
           ? <> Reviewing for <strong>{currentApp}</strong>.</>
           : <> Select an app in the Apps tab to review its pending memories.</>}
       </p>
+
+      {currentApp && <DistillRuns runs={runs} expanded={showRuns} onToggle={() => setShowRuns(v => !v)} />}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
         <select
@@ -100,6 +122,65 @@ export default function MemoryTab({ active }) {
       )}
     </div>
   )
+}
+
+// Collapsible summary of recent distillation runs — the producer of the
+// pending-review queue below. Explains an empty queue (running vs. nothing found).
+function DistillRuns({ runs, expanded, onToggle }) {
+  const active = (runs || []).filter(r => r.status === 'pending' || r.status === 'running').length
+  const failed = (runs || []).filter(r => r.status === 'failed').length
+  const count = runs ? runs.length : null
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <button className="btn btn-ghost btn-sm" onClick={onToggle} style={{ width: '100%', justifyContent: 'flex-start', display: 'flex', gap: 8 }}>
+        <span>{expanded ? '▲' : '▼'}</span>
+        <span>Distillation runs{count != null ? ` (${count})` : ''}</span>
+        {active > 0 && <span className="badge b-init">{active} in progress</span>}
+        {failed > 0 && <span className="badge b-error">{failed} failed</span>}
+      </button>
+
+      {expanded && (
+        <div style={{ marginTop: 10 }}>
+          {!runs && <div className="empty"><p><span className="spinning">⟳</span> Loading…</p></div>}
+          {runs && runs.length === 0 && (
+            <div className="sub" style={{ padding: '8px 2px' }}>No distillation runs yet. Closing a session enqueues one.</div>
+          )}
+          {runs && runs.length > 0 && (
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: 100 }}>Status</th>
+                  <th>Session</th>
+                  <th style={{ width: 170 }}>Started</th>
+                  <th style={{ width: 170 }}>Finished</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map(r => (
+                  <tr key={r.task_id}>
+                    <td><span className={`badge ${STATUS_BADGE[r.status] || 'b-init'}`}>{r.status}</span></td>
+                    <td style={{ fontFamily: 'monospace', fontSize: 11 }} title={r.error || undefined}>
+                      {r.doc_id || '—'}
+                      {r.error && <div style={{ color: 'var(--red)', fontSize: 10 }}>{r.error}</div>}
+                    </td>
+                    <td style={{ color: 'var(--muted)', fontSize: 11 }}>{fmtTime(r.started_at)}</td>
+                    <td style={{ color: 'var(--muted)', fontSize: 11 }}>{fmtTime(r.completed_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Render an ISO-8601 timestamp as a compact local string, or an em dash.
+function fmtTime(iso) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return isNaN(d) ? iso : d.toLocaleString()
 }
 
 function MemoryCard({ memory, busy, onReview }) {

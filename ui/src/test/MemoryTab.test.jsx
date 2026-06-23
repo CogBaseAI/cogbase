@@ -36,7 +36,13 @@ const PENDING = [
   },
 ]
 
-function mockPending(list = PENDING) {
+const RUNS = [
+  { task_id: 't1', task_type: 'distill', task_name: 'distill', doc_id: 'sess-abc', status: 'done', created_at: '2026-06-02T10:00:00Z', started_at: '2026-06-02T10:00:01Z', completed_at: '2026-06-02T10:00:05Z', error: null },
+  { task_id: 't2', task_type: 'distill', task_name: 'distill', doc_id: 'sess-xyz', status: 'running', created_at: '2026-06-02T11:00:00Z', started_at: '2026-06-02T11:00:01Z', completed_at: null, error: null },
+  { task_id: 't3', task_type: 'distill', task_name: 'distill', doc_id: 'sess-err', status: 'failed', created_at: '2026-06-02T09:00:00Z', started_at: '2026-06-02T09:00:01Z', completed_at: '2026-06-02T09:00:02Z', error: 'llm timeout' },
+]
+
+function mockPending(list = PENDING, runs = []) {
   return vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
     if (String(url).includes('/memory/pending')) {
       return Promise.resolve({ ok: true, json: async () => ({ memories: list }) })
@@ -46,6 +52,9 @@ function mockPending(list = PENDING) {
       const id = body.decisions[0].memory_id
       const outcome = body.decisions[0].decision === 'accept' ? 'accepted' : 'rejected'
       return Promise.resolve({ ok: true, json: async () => ({ results: [{ memory_id: id, outcome }] }) })
+    }
+    if (String(url).includes('/tasks')) {
+      return Promise.resolve({ ok: true, json: async () => ({ tasks: runs }) })
     }
     return Promise.resolve({ ok: true, json: async () => ({}) })
   })
@@ -138,4 +147,48 @@ it('toggles the evidence panel when provenance exists', async () => {
   const toggle = screen.getByText(/Evidence/)
   await user.click(toggle)
   await waitFor(() => expect(screen.getByText(/evidence_snapshot/)).toBeInTheDocument())
+})
+
+describe('distillation runs', () => {
+  it('queries distill tasks on load', async () => {
+    const spy = mockPending(PENDING, RUNS)
+    renderMemoryTab()
+    await waitFor(() =>
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining('/tasks?task_type=distill'))
+    )
+  })
+
+  it('summarizes in-progress and failed counts in the collapsed header', async () => {
+    mockPending(PENDING, RUNS)
+    renderMemoryTab()
+    // RUNS has one running and one failed; rows are hidden until expanded.
+    await waitFor(() => expect(screen.getByText('1 in progress')).toBeInTheDocument())
+    expect(screen.getByText('1 failed')).toBeInTheDocument()
+    expect(screen.getByText(/Distillation runs \(3\)/)).toBeInTheDocument()
+    expect(screen.queryByText('sess-abc')).not.toBeInTheDocument()
+  })
+
+  it('expands to show run rows with session ids and statuses', async () => {
+    const user = userEvent.setup()
+    mockPending(PENDING, RUNS)
+    renderMemoryTab()
+    await waitFor(() => screen.getByText(/Distillation runs/))
+
+    await user.click(screen.getByText(/Distillation runs/))
+    await waitFor(() => expect(screen.getByText('sess-abc')).toBeInTheDocument())
+    expect(screen.getByText('sess-xyz')).toBeInTheDocument()
+    expect(screen.getByText('done')).toBeInTheDocument()
+    expect(screen.getByText('running')).toBeInTheDocument()
+    expect(screen.getByText('llm timeout')).toBeInTheDocument()
+  })
+
+  it('shows an empty hint when there are no runs', async () => {
+    const user = userEvent.setup()
+    mockPending(PENDING, [])
+    renderMemoryTab()
+    await waitFor(() => screen.getByText(/Distillation runs/))
+
+    await user.click(screen.getByText(/Distillation runs/))
+    await waitFor(() => expect(screen.getByText(/No distillation runs yet/)).toBeInTheDocument())
+  })
 })
