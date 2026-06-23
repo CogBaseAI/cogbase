@@ -24,8 +24,11 @@ Competitive with purpose-built systems on public benchmarks.
 | [GraphRAG-Bench](https://graphrag-bench.github.io/) (Medical) | Document QA | **74.46** with extraction pipeline | above top leaderboard entry (73.30) |
 | [GraphRAG-Bench](https://graphrag-bench.github.io/) (Medical) | Document QA | 72.94 simple chunking | 2nd on leaderboard (leader 73.30) |
 | [GraphRAG-Bench](https://graphrag-bench.github.io/) (Novel) | Document QA | 58.62 simple chunking | 3rd on leaderboard (leaders 63.72 / 58.94) |
+| [GraphRAG-Bench](https://graphrag-bench.github.io/) (Novel) | Document QA | **60.18** self-distilled (full Novel) · **66.56** gold-memory ceiling (5 corpora) | +1.56 over 58.62 simple chunking |
 
 On **[GraphRAG-Bench](https://graphrag-bench.github.io/) Medical**, CogBase's **structured-extraction pipeline scores 74.46 — above the top leaderboard entry (73.30)** — the same extraction + workflow layer that sets CogBase apart from plain chunk-and-retrieve RAG, with the app config generated from a natural-language description — no hand-authored schema, and no purpose-built, hand-maintained knowledge graph. Even simple chunking alone places CogBase 2nd–3rd across subsets.
+
+On **Novel**, adding the long-term memory layer lifts answer correctness above simple chunking. **Self-distilled memory — built from the system's own prior answers, no ground truth — scores 60.18 on the full Novel subset (+1.56 over the 58.62 baseline).** Distilling ground-truth answers instead marks the ceiling at **66.56** on a 5-corpus set, showing how much memory can add when what it stores is correct. Gold memory simulates the case where an admin fixes or improves the answers to some questions, and those corrections are distilled back into memory for future queries.
 
 Details: [benchmarks/graphrag/README.md](benchmarks/graphrag/README.md) · [benchmarks/locomo/README.md](benchmarks/locomo/README.md).
 

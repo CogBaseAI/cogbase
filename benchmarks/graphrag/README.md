@@ -217,7 +217,7 @@ Average Answer Correctness: 0.6159
 
 Tested whether **long-term memory** lifts answer correctness, under two memory sources:
 
-- **Gold memory** (upper bound) — distill each corpus's **ground-truth answers** into long-term memory before querying. This is the ceiling: it shows how much memory can help when what it stores is correct.
+- **Gold memory** (upper bound) — distill each corpus's **ground-truth answers** into long-term memory before querying. This simulates the case where an admin fixes or improves the answers to some questions, and those corrections are distilled back into memory for future queries. This is the ceiling: it shows how much memory can help when what it stores is correct.
 - **Self-distilled memory** (realistic) — distill each corpus's **own generated answers** from a prior `bench_app_simple` run (gpt-4o-mini ingest + query) into memory, then re-run. This mirrors the system distilling memory from its own closed sessions and reusing it on the next run — no gold answers involved.
 
 In both, queries run with memory `recall` alongside `vector_search`.
@@ -245,7 +245,7 @@ python benchmarks/graphrag/run_cogbase.py \
 |--------------------------------------|--------------|------------------|
 | Gold memory (upper bound)            | 5 corpora    | **66.56**        |
 | Self-distilled memory (realistic)    | full Novel   | **60.18**        |
-| Baseline (RAG-only)                  | full Novel   | 58.62            |
+| Baseline (simple chunking)           | full Novel   | 58.62            |
 
 > The gold and self-distilled runs cover different corpus sets (5 corpora vs. the full Novel subset), so their absolute scores aren't directly comparable; gold marks the ceiling, self-distilled the realistic lift over its own full-Novel baseline.
 

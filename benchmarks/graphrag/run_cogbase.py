@@ -309,6 +309,7 @@ async def process_corpus(
     build_memory: bool = False,
     memory_results: list[dict] | None = None,
     max_workers: int = 4,
+    force: bool = False,
 ) -> None:
     app_name = _app_name(config_path, corpus_name)
     log.info("=== %s → app '%s' ===", corpus_name, app_name)
@@ -316,6 +317,12 @@ async def process_corpus(
     out_dir = output_dir / corpus_name
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"predictions_{corpus_name}.json"
+
+    # --force: drop existing predictions so every question is re-queried. The
+    # .memory_built marker is left untouched, so long-term memory is not rebuilt.
+    if force and out_file.exists():
+        out_file.unlink()
+        log.info("--force: removed existing predictions for '%s'; re-testing all questions.", corpus_name)
 
     existing: list[dict] = []
     done_ids: set = set()
@@ -500,6 +507,7 @@ async def main(args: argparse.Namespace) -> None:
                     else None
                 ),
                 max_workers=args.max_workers,
+                force=args.force,
             )
 
 
@@ -520,6 +528,10 @@ if __name__ == "__main__":
                         help="Process only the first N questions per corpus (for quick testing)")
     parser.add_argument("--max_workers", type=int, default=4,
                         help="Number of questions queried concurrently per corpus (default: 4)")
+    parser.add_argument("--force", action="store_true",
+                        help="Remove existing prediction results for each corpus and re-test all "
+                             "questions. The .memory_built marker is preserved, so long-term memory "
+                             "is not rebuilt.")
     parser.add_argument("--question_type", default=None,
                         help="Filter to a single question_type (e.g. 'Fact Retrieval'); tests all types if omitted")
     parser.add_argument("--build_memory", action="store_true",
