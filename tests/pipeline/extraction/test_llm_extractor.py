@@ -24,6 +24,7 @@ def _make_llm(content: str) -> MagicMock:
     """Build a mock LLMBase returning *content* for complete() and streaming it."""
     llm = MagicMock(spec=LLMBase)
     llm.complete = AsyncMock(return_value={"content": content})
+    llm.context_window = MagicMock(return_value=128_000)
 
     async def _stream(*args, **kwargs):
         yield content
@@ -329,6 +330,7 @@ def _make_llm_with_responses(*contents: str) -> MagicMock:
     """Build a mock LLMBase that returns each content string in sequence."""
     llm = MagicMock(spec=LLMBase)
     llm.complete = AsyncMock(side_effect=[{"content": c} for c in contents])
+    llm.context_window = MagicMock(return_value=128_000)
 
     async def _stream(*args, **kwargs):
         yield contents[-1]
@@ -717,3 +719,153 @@ async def test_extract_calls_llm_with_mini_model() -> None:
 
     llm.complete.assert_called_once()
     assert llm.complete.call_args.kwargs.get("model") == "mini"
+
+
+# ---------------------------------------------------------------------------
+# Windowing — long documents split into multiple LLM calls and merge
+# ---------------------------------------------------------------------------
+
+
+def _force_windows(monkeypatch, n: int) -> None:
+    """Patch the splitter so any document is split into exactly *n* windows."""
+    monkeypatch.setattr(
+        "cogbase.pipeline.extraction.llm.split_by_tokens",
+        lambda text, budget: [text] * n,
+    )
+
+
+@pytest.mark.asyncio
+async def test_window_budget_sizes_from_mini_context_window(monkeypatch) -> None:
+    """The per-window budget is derived from the mini model's context window."""
+    captured: list[int] = []
+
+    def _spy_split(text, budget):
+        captured.append(budget)
+        return [text]
+
+    monkeypatch.setattr("cogbase.pipeline.extraction.llm.split_by_tokens", _spy_split)
+    llm = _make_llm(_full_payload())
+    llm.context_window = MagicMock(return_value=8_000)
+    extractor = _make_extractor(llm)
+
+    await extractor.extract(Document(doc_id="doc-w0", text="contract text"))
+
+    llm.context_window.assert_called_with("mini")
+    # 0.5 * 8000 minus the system-prompt tokens — well above the 1000 floor.
+    assert 1_000 <= captured[0] <= 4_000
+
+
+@pytest.mark.asyncio
+async def test_short_document_makes_one_llm_call() -> None:
+    """A document that fits one window triggers exactly one extraction call."""
+    llm = _make_llm(_full_payload())
+    extractor = _make_extractor(llm)
+
+    await extractor.extract(Document(doc_id="doc-w1", text="contract text"))
+
+    assert llm.complete.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_many_mode_concatenates_records_across_windows(monkeypatch) -> None:
+    """List mode maps over windows and concatenates the per-window record lists."""
+    _force_windows(monkeypatch, 2)
+    llm = _make_llm_with_responses(
+        _list_payload({"clause_type": "a", "text": "first"}, {"clause_type": "b", "text": "second"}),
+        _list_payload({"clause_type": "c", "text": "third"}),
+    )
+    extractor = _make_list_extractor(llm)
+    result = await extractor.extract(Document(doc_id="doc-w2", text="long contract"))
+
+    assert llm.complete.call_count == 2
+    assert [r["clause_type"] for r in result] == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_many_mode_reindexes_ids_across_merged_windows(monkeypatch) -> None:
+    """Item ids index across the merged list, not restarting per window."""
+    _force_windows(monkeypatch, 2)
+    llm = _make_llm_with_responses(
+        _list_payload({"clause_type": "a", "text": "first"}, {"clause_type": "b", "text": "second"}),
+        _list_payload({"clause_type": "c", "text": "third"}),
+    )
+    extractor = _make_list_extractor(llm)
+    result = await extractor.extract(Document(doc_id="doc-w3", text="long contract"))
+
+    assert [r["item_id"] for r in result] == [
+        "doc-w3__0000",
+        "doc-w3__0001",
+        "doc-w3__0002",
+    ]
+    assert all(r["doc_id"] == "doc-w3" for r in result)
+
+
+@pytest.mark.asyncio
+async def test_many_mode_window_parse_failure_fails_extraction(monkeypatch) -> None:
+    """A single bad window fails the whole attempt."""
+    _force_windows(monkeypatch, 2)
+    llm = _make_llm_with_responses(
+        _list_payload({"clause_type": "a", "text": "first"}),
+        "not json",
+    )
+    extraction_schema = _Clause.model_json_schema()
+    extractor = LLMExtractor(
+        llm,
+        extraction_schema=extraction_schema,
+        config=ExtractorConfig(
+            extraction_schema=_DEFAULT_EXTRACTION_SCHEMA,
+            prompt="Extract.",
+            record_mode="many",
+            response_field="clauses",
+            id_field="item_id",
+            id_template="{doc_id}__{index:04d}",
+        ),
+        record_schema=_build_list_record_schema(extraction_schema, "item_id"),
+        max_retries=0,
+    )
+    result = await extractor.extract(Document(doc_id="doc-w4", text="long contract"))
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_one_mode_reconciles_scalar_fields_across_windows(monkeypatch) -> None:
+    """Single mode reduces windows: each field takes the first non-null value."""
+    _force_windows(monkeypatch, 2)
+    llm = _make_llm_with_responses(
+        _full_payload(contract_type="NDA", governing_law=None),
+        _full_payload(contract_type=None, governing_law="Laws of New York."),
+    )
+    extractor = _make_extractor(llm)
+    r = (await extractor.extract(Document(doc_id="doc-w5", text="long contract")))[0]
+
+    assert llm.complete.call_count == 2
+    assert r["contract_type"] == "NDA"            # from window 1
+    assert r["governing_law"] == "Laws of New York."  # from window 2
+    assert r["doc_id"] == "doc-w5"
+
+
+@pytest.mark.asyncio
+async def test_one_mode_concatenates_list_fields_across_windows(monkeypatch) -> None:
+    """List-valued fields on a single record are concatenated across windows."""
+    _force_windows(monkeypatch, 2)
+    llm = _make_llm_with_responses(
+        _full_payload(parties=[{"name": "Acme Corp", "role": "discloser", "jurisdiction": None}]),
+        _full_payload(parties=[{"name": "Supplier Ltd", "role": "recipient", "jurisdiction": None}]),
+    )
+    extractor = _make_extractor(llm)
+    r = (await extractor.extract(Document(doc_id="doc-w6", text="long contract")))[0]
+
+    assert [p["name"] for p in r["parties"]] == ["Acme Corp", "Supplier Ltd"]
+
+
+@pytest.mark.asyncio
+async def test_one_mode_single_window_passes_through_unchanged(monkeypatch) -> None:
+    """A single window in single mode reconciles to itself with no extra call."""
+    _force_windows(monkeypatch, 1)
+    llm = _make_llm(_full_payload(contract_type="MSA"))
+    extractor = _make_extractor(llm)
+    r = (await extractor.extract(Document(doc_id="doc-w7", text="contract text")))[0]
+
+    assert llm.complete.call_count == 1
+    assert r["contract_type"] == "MSA"

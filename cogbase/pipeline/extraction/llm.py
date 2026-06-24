@@ -12,9 +12,21 @@ import jsonschema
 from cogbase.config.config import ExtractorConfig, RecordMode
 from cogbase.core.models import Document
 from cogbase.llms import LLMBase
+from cogbase.llms.compaction import estimate_tokens, split_by_tokens
 from cogbase.pipeline.extraction.base import ExtractorBase
 
 logger = logging.getLogger(__name__)
+
+# Fraction of the llm model's context window reserved for one window of input
+# document text. The remainder leaves room for the system prompt (schema hint +
+# instructions) and the model's output, which for verbatim extraction can
+# approach the size of the input. Documents larger than this are split into
+# multiple windows, extracted independently, then merged.
+_INPUT_WINDOW_RATIO = 0.5
+
+# Floor for the per-window token budget, so a pathologically large system prompt
+# can never drive the budget to zero (which would split every document to death).
+_MIN_WINDOW_TOKENS = 1_000
 
 _DEFAULT_SYSTEM_PROMPT_PREFIX = (
     "Extract structured information from the document provided by the user.\n\n"
@@ -135,12 +147,45 @@ class LLMExtractor(ExtractorBase):
                 )
         return injected_fields
 
+    def _window_tokens(self) -> int:
+        """Per-window input budget (tokens) for a single extraction call.
+
+        Sized as a fraction of the mini model's context window minus the system
+        prompt, so the document text, the schema-hint prompt, and the model's
+        output all fit in one call. Floored at ``_MIN_WINDOW_TOKENS``.
+        """
+        window = self._llm.context_window("mini")
+        budget = int(window * _INPUT_WINDOW_RATIO) - estimate_tokens(self._system_prompt)
+        return max(_MIN_WINDOW_TOKENS, budget)
+
     async def _extract_once(self, doc: Document) -> list[dict] | None:
+        """Extract from *doc*, splitting into token-bounded windows when needed.
+
+        ``doc.text`` is split so no single LLM call exceeds the mini model's
+        context window. Each window is extracted independently, then the results
+        are merged: list mode (``record_mode=many``) concatenates the per-window
+        record lists as a map step; single mode (``record_mode=one``) reconciles
+        the per-window records into one as a reduce step. Injected identity fields
+        (``doc_id``, item id) are applied once, after the merge, so item ids index
+        across the whole merged list rather than restarting per window. A short
+        document yields a single window and behaves exactly like one call.
+        """
+        windows = split_by_tokens(doc.text, self._window_tokens())
+        if self._record_mode == RecordMode.MANY:
+            return await self._extract_many(doc, windows)
+        return await self._extract_one(doc, windows)
+
+    async def _complete_window(self, doc: Document, window_text: str) -> dict | None:
+        """Run one LLM extraction call for *window_text*.
+
+        Returns the raw ``CompletionResult`` on success, or ``None`` when the
+        model returned no content (which propagates as a retry).
+        """
         t0 = time.monotonic()
         result = await self._llm.complete(
             [
                 {"role": "system", "content": self._system_prompt},
-                {"role": "user", "content": doc.text},
+                {"role": "user", "content": window_text},
             ],
             model="mini",
         )
@@ -164,10 +209,61 @@ class LLMExtractor(ExtractorBase):
             time.monotonic() - t0,
             content[:50],
         )
+        return result
 
-        if self._record_mode == RecordMode.MANY:
-            return self._parse_list(doc, content, result)
-        return self._parse_single(doc, content, result)
+    async def _extract_many(self, doc: Document, windows: list[str]) -> list[dict] | None:
+        """Map step: extract per window, concatenate, then inject ids globally."""
+        merged: list[dict] = []
+        for window_text in windows:
+            result = await self._complete_window(doc, window_text)
+            if result is None:
+                return None
+            items = self._parse_list_items(doc, result["content"], result)
+            if items is None:
+                return None
+            merged.extend(items)
+
+        records = []
+        for index, item in enumerate(merged):
+            injected = {k: fn(doc, item, index) for k, fn in self._injected_fields.items()}
+            records.append({**item, **injected})
+        return records
+
+    async def _extract_one(self, doc: Document, windows: list[str]) -> list[dict] | None:
+        """Reduce step: extract per window, reconcile into one record, inject ids."""
+        extractions: list[dict] = []
+        for window_text in windows:
+            result = await self._complete_window(doc, window_text)
+            if result is None:
+                return None
+            extraction = self._parse_single_item(doc, result["content"], result)
+            if extraction is None:
+                return None
+            extractions.append(extraction)
+
+        extraction = self._reconcile_one(extractions)
+        injected = {k: fn(doc, extraction, 0) for k, fn in self._injected_fields.items()}
+        return [{**extraction, **injected}]
+
+    def _reconcile_one(self, extractions: list[dict]) -> dict:
+        """Fold per-window single-record extractions into one record.
+
+        A single window (the common case) passes through unchanged. Across
+        windows, each field takes the first non-null value found; list-valued
+        fields are concatenated, since a field's matches may be spread across
+        windows. Conflicting scalar values resolve to the earliest window.
+        """
+        if len(extractions) == 1:
+            return extractions[0]
+        merged: dict = {}
+        for extraction in extractions:
+            for key, value in extraction.items():
+                current = merged.get(key)
+                if current is None or current == []:
+                    merged[key] = value
+                elif isinstance(current, list) and isinstance(value, list):
+                    merged[key] = current + value
+        return merged
 
     def _try_unwrap_single_item_list(self, content: str) -> dict | None:
         """Return the first element if the LLM returned a one-item list instead of an object."""
@@ -192,11 +288,12 @@ class LLMExtractor(ExtractorBase):
         except (jsonschema.ValidationError, Exception):
             return None
 
-    def _parse_single(self, doc: Document, content: str, raw_result: dict) -> list[dict] | None:
+    def _parse_single_item(self, doc: Document, content: str, raw_result: dict) -> dict | None:
+        """Parse one window's response into a single extraction dict (no injection)."""
         try:
             parsed = json.loads(content)
             jsonschema.validate(instance=parsed, schema=self._extraction_schema)
-            extraction = parsed
+            return parsed
         except (json.JSONDecodeError, jsonschema.ValidationError):
             extraction = self._try_unwrap_single_item_list(content)
             if extraction is None:
@@ -212,10 +309,10 @@ class LLMExtractor(ExtractorBase):
                 "llm_extractor.unwrapped_single_item_list app_id=%s doc_id=%s",
                 self._app_id, doc.doc_id,
             )
-        injected = {k: fn(doc, extraction, 0) for k, fn in self._injected_fields.items()}
-        return [{**extraction, **injected}]
+            return extraction
 
-    def _parse_list(self, doc: Document, content: str, raw_result: dict) -> list[dict] | None:
+    def _parse_list_items(self, doc: Document, content: str, raw_result: dict) -> list[dict] | None:
+        """Parse one window's response into its list of extraction items (no injection)."""
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError:
@@ -245,8 +342,4 @@ class LLMExtractor(ExtractorBase):
                 raw_result,
             )
             return None
-        records = []
-        for index, item in enumerate(items):
-            injected = {k: fn(doc, item, index) for k, fn in self._injected_fields.items()}
-            records.append({**item, **injected})
-        return records
+        return items
