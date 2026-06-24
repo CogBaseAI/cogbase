@@ -3,10 +3,6 @@
 Wraps any ``langchain_text_splitters.TextSplitter`` so it can be used
 wherever a ``ChunkerBase`` is expected.
 
-Install the extra dependency before use::
-
-    pip install "cogbase[langchain]"
-
 Example::
 
     from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -17,9 +13,10 @@ Example::
     )
 """
 
-from langchain_text_splitters import TextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter, TextSplitter
 
 from cogbase.core.models import Document
+from cogbase.llms.compaction import estimate_tokens
 from cogbase.pipeline.chunking.base import ChunkerBase
 
 _SENTENCE_SEPARATORS = ["\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", "; ", ", ", " ", ""]
@@ -30,18 +27,34 @@ def build_recursive_chunker(chunk_size: int, overlap: int) -> "LangChainChunker"
 
     Separators are ordered so splits prefer sentence boundaries over mid-sentence cuts.
     """
-    try:
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
-    except ImportError as exc:
-        raise ImportError(
-            "langchain-text-splitters required: pip install langchain-text-splitters"
-        ) from exc
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=overlap,
         separators=_SENTENCE_SEPARATORS,
     )
     return LangChainChunker(splitter)
+
+
+def split_text_by_tokens(text: str, max_tokens: int, overlap_tokens: int) -> list[str]:
+    """Split *text* into overlapping, token-bounded windows on the best boundary.
+
+    Backed by ``RecursiveCharacterTextSplitter`` with token-based sizing
+    (:func:`estimate_tokens`) and the shared sentence-preferring separator
+    hierarchy, so cuts prefer paragraph > line > sentence > word > character
+    boundaries and consecutive windows overlap by up to ~*overlap_tokens*. A
+    document within budget yields ``[text]``.
+
+    Window text is not a verbatim slice of *text* — the splitter strips
+    surrounding whitespace and re-joins on separators — but content within a unit
+    is preserved, which is all the extractor needs.
+    """
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=max_tokens,
+        chunk_overlap=overlap_tokens,
+        separators=_SENTENCE_SEPARATORS,
+        length_function=estimate_tokens,
+    )
+    return splitter.split_text(text)
 
 
 class LangChainChunker(ChunkerBase):

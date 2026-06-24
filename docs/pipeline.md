@@ -100,6 +100,6 @@ Call this at the API boundary to turn raw uploads into `Document.text` before pa
 
 **Custom chunker** — subclass `ChunkerBase` and implement `chunk(doc) -> list[Chunk]`. Use the provided `_make_chunk(doc, index, text, char_offset, char_length)` helper to construct each `Chunk` — it generates the `chunk_id` (`"{doc_id}_{index}"`) and leaves `metadata={}` for the pipeline to populate from `doc.metadata`.
 
-**LangChain splitter** — wrap any `TextSplitter` with `LangChainChunker` (requires `pip install "cogbase[langchain]"`). `LangChainChunker` configures the splitter with sentence-boundary separators (`.`, `?`, `!`, `。`) so splits occur between sentences rather than mid-word or mid-sentence. Chinese text is supported via the `。` separator.
+**LangChain splitter** — wrap any `TextSplitter` with `LangChainChunker`. `LangChainChunker` configures the splitter with sentence-boundary separators (`.`, `?`, `!`, `。`) so splits occur between sentences rather than mid-word or mid-sentence. Chinese text is supported via the `。` separator.
 
 **Custom extractor** — subclass `ExtractorBase` and implement `_extract_once(doc) -> list[BaseModel] | None`. Return `None` to trigger a retry, an empty list for no results, or a list of Pydantic records on success.

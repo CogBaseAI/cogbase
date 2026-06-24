@@ -12,7 +12,8 @@ import jsonschema
 from cogbase.config.config import ExtractorConfig, RecordMode
 from cogbase.core.models import Document
 from cogbase.llms import LLMBase
-from cogbase.llms.compaction import estimate_tokens, split_by_tokens
+from cogbase.llms.compaction import estimate_tokens
+from cogbase.pipeline.chunking.langchain import split_text_by_tokens
 from cogbase.pipeline.extraction.base import ExtractorBase
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,46 @@ _INPUT_WINDOW_RATIO = 0.5
 # Floor for the per-window token budget, so a pathologically large system prompt
 # can never drive the budget to zero (which would split every document to death).
 _MIN_WINDOW_TOKENS = 1_000
+
+# Fraction of the per-window budget that consecutive windows overlap. Window
+# boundaries land between clauses where the document's structure allows, but a
+# clause with no structural break can still straddle a cut; the overlap re-presents
+# the tail of one window at the head of the next, so such a clause appears intact
+# in at least one window (duplicates are removed when the windows are merged).
+_WINDOW_OVERLAP_RATIO = 0.1
+
+
+def _normalize(value: Any) -> Any:
+    """Canonicalise a JSON value for content comparison.
+
+    Whitespace inside strings is collapsed (the model may re-emit the same clause
+    from an overlapping window with incidental whitespace differences); containers
+    recurse. No case folding, so genuinely distinct items are not merged.
+    """
+    if isinstance(value, str):
+        return " ".join(value.split())
+    if isinstance(value, list):
+        return [_normalize(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _normalize(v) for k, v in value.items()}
+    return value
+
+
+def _content_key(item: Any) -> str:
+    """Stable, comparable key for a record's content (ignoring whitespace noise)."""
+    return json.dumps(_normalize(item), sort_keys=True, ensure_ascii=False)
+
+
+def _concat_unique(current: list, incoming: list) -> list:
+    """Append *incoming* elements to *current*, skipping ones already present."""
+    seen = {_content_key(v) for v in current}
+    result = list(current)
+    for v in incoming:
+        key = _content_key(v)
+        if key not in seen:
+            seen.add(key)
+            result.append(v)
+    return result
 
 _DEFAULT_SYSTEM_PROMPT_PREFIX = (
     "Extract structured information from the document provided by the user.\n\n"
@@ -150,7 +191,7 @@ class LLMExtractor(ExtractorBase):
     def _window_tokens(self) -> int:
         """Per-window input budget (tokens) for a single extraction call.
 
-        Sized as a fraction of the mini model's context window minus the system
+        Sized as a fraction of the model's context window minus the system
         prompt, so the document text, the schema-hint prompt, and the model's
         output all fit in one call. Floored at ``_MIN_WINDOW_TOKENS``.
         """
@@ -161,16 +202,19 @@ class LLMExtractor(ExtractorBase):
     async def _extract_once(self, doc: Document) -> list[dict] | None:
         """Extract from *doc*, splitting into token-bounded windows when needed.
 
-        ``doc.text`` is split so no single LLM call exceeds the mini model's
-        context window. Each window is extracted independently, then the results
-        are merged: list mode (``record_mode=many``) concatenates the per-window
-        record lists as a map step; single mode (``record_mode=one``) reconciles
-        the per-window records into one as a reduce step. Injected identity fields
-        (``doc_id``, item id) are applied once, after the merge, so item ids index
-        across the whole merged list rather than restarting per window. A short
-        document yields a single window and behaves exactly like one call.
+        ``doc.text`` is split into overlapping windows so no single LLM call
+        exceeds the model's context window. Each window is extracted
+        independently, then the results are merged: list mode (``record_mode=many``)
+        concatenates the per-window record lists as a map step, dropping the
+        duplicates the overlap introduces; single mode (``record_mode=one``)
+        reconciles the per-window records into one as a reduce step. Injected
+        identity fields (``doc_id``, item id) are applied once, after the merge, so
+        item ids index across the whole merged list rather than restarting per
+        window. A short document yields a single window and behaves exactly like
+        one call.
         """
-        windows = split_by_tokens(doc.text, self._window_tokens())
+        budget = self._window_tokens()
+        windows = split_text_by_tokens(doc.text, budget, int(budget * _WINDOW_OVERLAP_RATIO))
         if self._record_mode == RecordMode.MANY:
             return await self._extract_many(doc, windows)
         return await self._extract_one(doc, windows)
@@ -212,8 +256,8 @@ class LLMExtractor(ExtractorBase):
         return result
 
     async def _extract_many(self, doc: Document, windows: list[str]) -> list[dict] | None:
-        """Map step: extract per window, concatenate, then inject ids globally."""
-        merged: list[dict] = []
+        """Map step: extract per window, merge + dedup, then inject ids globally."""
+        per_window: list[list[dict]] = []
         for window_text in windows:
             result = await self._complete_window(doc, window_text)
             if result is None:
@@ -221,13 +265,36 @@ class LLMExtractor(ExtractorBase):
             items = self._parse_list_items(doc, result["content"], result)
             if items is None:
                 return None
-            merged.extend(items)
+            per_window.append(items)
 
+        merged = self._dedup_across_windows(per_window)
         records = []
         for index, item in enumerate(merged):
             injected = {k: fn(doc, item, index) for k, fn in self._injected_fields.items()}
             records.append({**item, **injected})
         return records
+
+    def _dedup_across_windows(self, per_window: list[list[dict]]) -> list[dict]:
+        """Flatten per-window records, dropping overlap-induced duplicates.
+
+        A record is dropped only when an identical record (by normalized content)
+        appeared in the *immediately preceding* window — the only window it shares
+        an overlap region with. Duplicates within a single window are kept (the
+        model returned them deliberately), as are identical records that recur in
+        non-adjacent windows (genuinely repeated content rather than overlap).
+        """
+        merged: list[dict] = []
+        prev_keys: set[str] = set()
+        for items in per_window:
+            cur_keys: set[str] = set()
+            for item in items:
+                key = _content_key(item)
+                if key in prev_keys:
+                    continue
+                merged.append(item)
+                cur_keys.add(key)
+            prev_keys = cur_keys
+        return merged
 
     async def _extract_one(self, doc: Document, windows: list[str]) -> list[dict] | None:
         """Reduce step: extract per window, reconcile into one record, inject ids."""
@@ -250,8 +317,9 @@ class LLMExtractor(ExtractorBase):
 
         A single window (the common case) passes through unchanged. Across
         windows, each field takes the first non-null value found; list-valued
-        fields are concatenated, since a field's matches may be spread across
-        windows. Conflicting scalar values resolve to the earliest window.
+        fields are concatenated, with elements the overlap duplicated removed, so
+        a field's matches spread across windows are gathered without repeats.
+        Conflicting scalar values resolve to the earliest window.
         """
         if len(extractions) == 1:
             return extractions[0]
@@ -262,7 +330,7 @@ class LLMExtractor(ExtractorBase):
                 if current is None or current == []:
                     merged[key] = value
                 elif isinstance(current, list) and isinstance(value, list):
-                    merged[key] = current + value
+                    merged[key] = _concat_unique(current, value)
         return merged
 
     def _try_unwrap_single_item_list(self, content: str) -> dict | None:

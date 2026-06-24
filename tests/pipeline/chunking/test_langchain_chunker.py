@@ -1,9 +1,5 @@
 """Tests for LangChainChunker and build_recursive_chunker."""
 
-import sys
-from unittest.mock import MagicMock, patch
-
-import pytest
 from langchain_text_splitters import CharacterTextSplitter, RecursiveCharacterTextSplitter
 
 from cogbase.core.models import Document
@@ -18,11 +14,6 @@ class TestBuildRecursiveChunker:
 
     def test_contract(self):
         assert_chunker_contract(build_recursive_chunker(200, 20), "hello world " * 50, "doc-1")
-
-    def test_import_error(self):
-        with patch.dict(sys.modules, {"langchain_text_splitters": None}):
-            with pytest.raises(ImportError, match="langchain-text-splitters"):
-                build_recursive_chunker(200, 20)
 
     def test_splits_at_separator_not_mid_word(self):
         # chunk_size=40 forces a split on 47-char text. The ". " separator is preferred

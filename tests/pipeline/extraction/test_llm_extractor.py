@@ -10,7 +10,9 @@ from pydantic import BaseModel
 
 from cogbase.config.config import ExtractorConfig
 from cogbase.llms import LLMBase
+from cogbase.llms.compaction import estimate_tokens
 from cogbase.core.models import Document
+from cogbase.pipeline.chunking.langchain import split_text_by_tokens
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from examples.contract_analyst_demo.schema import (
     ContractExtraction,
@@ -729,8 +731,8 @@ async def test_extract_calls_llm_with_mini_model() -> None:
 def _force_windows(monkeypatch, n: int) -> None:
     """Patch the splitter so any document is split into exactly *n* windows."""
     monkeypatch.setattr(
-        "cogbase.pipeline.extraction.llm.split_by_tokens",
-        lambda text, budget: [text] * n,
+        "cogbase.pipeline.extraction.llm.split_text_by_tokens",
+        lambda text, budget, overlap: [text] * n,
     )
 
 
@@ -739,11 +741,11 @@ async def test_window_budget_sizes_from_mini_context_window(monkeypatch) -> None
     """The per-window budget is derived from the mini model's context window."""
     captured: list[int] = []
 
-    def _spy_split(text, budget):
+    def _spy_split(text, budget, overlap):
         captured.append(budget)
         return [text]
 
-    monkeypatch.setattr("cogbase.pipeline.extraction.llm.split_by_tokens", _spy_split)
+    monkeypatch.setattr("cogbase.pipeline.extraction.llm.split_text_by_tokens", _spy_split)
     llm = _make_llm(_full_payload())
     llm.context_window = MagicMock(return_value=8_000)
     extractor = _make_extractor(llm)
@@ -869,3 +871,120 @@ async def test_one_mode_single_window_passes_through_unchanged(monkeypatch) -> N
 
     assert llm.complete.call_count == 1
     assert r["contract_type"] == "MSA"
+
+
+# ---------------------------------------------------------------------------
+# Overlap-induced duplicate handling in the merge step
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_many_mode_dedups_overlap_duplicate_across_adjacent_windows(monkeypatch) -> None:
+    """A clause re-extracted from the overlap of two adjacent windows is dropped once."""
+    _force_windows(monkeypatch, 2)
+    llm = _make_llm_with_responses(
+        _list_payload({"clause_type": "a", "text": "first"}, {"clause_type": "b", "text": "second"}),
+        _list_payload({"clause_type": "b", "text": "second"}, {"clause_type": "c", "text": "third"}),
+    )
+    extractor = _make_list_extractor(llm)
+    result = await extractor.extract(Document(doc_id="doc-d1", text="long contract"))
+
+    assert [r["clause_type"] for r in result] == ["a", "b", "c"]
+    assert [r["item_id"] for r in result] == ["doc-d1__0000", "doc-d1__0001", "doc-d1__0002"]
+
+
+@pytest.mark.asyncio
+async def test_many_mode_dedup_ignores_whitespace_differences(monkeypatch) -> None:
+    """Overlap duplicates that differ only in whitespace are still de-duplicated."""
+    _force_windows(monkeypatch, 2)
+    llm = _make_llm_with_responses(
+        _list_payload({"clause_type": "x", "text": "Clause one."}),
+        _list_payload({"clause_type": "x", "text": "Clause   one."}),
+    )
+    extractor = _make_list_extractor(llm)
+    result = await extractor.extract(Document(doc_id="doc-d2", text="long contract"))
+
+    assert len(result) == 1
+
+
+@pytest.mark.asyncio
+async def test_many_mode_keeps_intra_window_duplicates(monkeypatch) -> None:
+    """Two identical records the model returns within one window are both kept."""
+    _force_windows(monkeypatch, 1)
+    llm = _make_llm(
+        _list_payload({"clause_type": "a", "text": "same"}, {"clause_type": "a", "text": "same"})
+    )
+    extractor = _make_list_extractor(llm)
+    result = await extractor.extract(Document(doc_id="doc-d3", text="contract"))
+
+    assert len(result) == 2
+
+
+@pytest.mark.asyncio
+async def test_many_mode_keeps_duplicate_in_non_adjacent_windows(monkeypatch) -> None:
+    """An identical record recurring in non-adjacent windows is genuine, not overlap."""
+    _force_windows(monkeypatch, 3)
+    llm = _make_llm_with_responses(
+        _list_payload({"clause_type": "a", "text": "repeat"}),
+        _list_payload({"clause_type": "b", "text": "middle"}),
+        _list_payload({"clause_type": "a", "text": "repeat"}),
+    )
+    extractor = _make_list_extractor(llm)
+    result = await extractor.extract(Document(doc_id="doc-d4", text="long contract"))
+
+    assert [r["clause_type"] for r in result] == ["a", "b", "a"]
+
+
+@pytest.mark.asyncio
+async def test_one_mode_dedups_list_field_across_overlap(monkeypatch) -> None:
+    """A list field's overlap-duplicated element is gathered once when reconciled."""
+    _force_windows(monkeypatch, 2)
+    a = {"name": "Acme Corp", "role": "discloser", "jurisdiction": None}
+    b = {"name": "Supplier Ltd", "role": "recipient", "jurisdiction": None}
+    c = {"name": "Holdco", "role": "guarantor", "jurisdiction": None}
+    llm = _make_llm_with_responses(
+        _full_payload(parties=[a, b]),
+        _full_payload(parties=[b, c]),
+    )
+    extractor = _make_extractor(llm)
+    r = (await extractor.extract(Document(doc_id="doc-d5", text="long contract")))[0]
+
+    assert [p["name"] for p in r["parties"]] == ["Acme Corp", "Supplier Ltd", "Holdco"]
+
+
+# ---------------------------------------------------------------------------
+# split_text_by_tokens — token-bounded, overlapping recursive splitter
+# ---------------------------------------------------------------------------
+
+
+def test_split_text_by_tokens_short_text_is_single_window() -> None:
+    assert split_text_by_tokens("a short clause", 1_000, 100) == ["a short clause"]
+
+
+def test_split_text_by_tokens_windows_are_token_bounded_and_cover_paragraphs() -> None:
+    paras = [f"Paragraph {i}: " + " ".join(f"word{i}x{j}" for j in range(20)) for i in range(6)]
+    text = "\n\n".join(paras)
+    budget = estimate_tokens(paras[0]) * 2 + 4  # room for ~2 paragraphs per window
+    overlap = budget // 5
+
+    windows = split_text_by_tokens(text, budget, overlap)
+
+    assert len(windows) >= 2
+    # Sized in tokens, not characters: no window exceeds the token budget.
+    assert all(estimate_tokens(w) <= budget for w in windows)
+    # Every paragraph appears intact in some window (cuts land between paragraphs).
+    assert all(any(p in w for w in windows) for p in paras)
+
+
+def test_split_text_by_tokens_overlaps_consecutive_windows() -> None:
+    paras = [f"Clause {i}: unique alpha{i} beta{i} gamma{i} delta{i} epsilon{i}." for i in range(8)]
+    text = "\n\n".join(paras)
+    budget = estimate_tokens(paras[0]) * 2 + 2
+    overlap = estimate_tokens(paras[0])  # ~one paragraph of overlap
+
+    windows = split_text_by_tokens(text, budget, overlap)
+
+    assert len(windows) >= 2
+    # With paragraph-sized overlap, at least one paragraph is shared by two windows.
+    shared = [p for p in paras if sum(p in w for w in windows) >= 2]
+    assert shared
