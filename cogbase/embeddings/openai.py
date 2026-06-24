@@ -11,12 +11,23 @@ from cogbase.embeddings.base import EmbeddingBase
 logger = logging.getLogger(__name__)
 
 
+#: Default maximum number of texts sent per embedding API request.  The OpenAI
+#: Embeddings endpoint caps the input array (currently 2048 entries) and the
+#: total tokens per request, so a document that chunks into thousands of
+#: passages must be split across several requests.  Kept in sync with
+#: ``EmbeddingConfig.batch_size`` so the config-driven path and a directly
+#: constructed embedder behave identically.
+DEFAULT_BATCH_SIZE = 500
+
+
 class OpenAIEmbedding(EmbeddingBase):
     """Embedder backed by the OpenAI Embeddings API.
 
-    Sends all texts in a single batched API call and returns the vectors. The
-    client must be an async OpenAI-compatible client (``openai.AsyncOpenAI`` or
-    any compatible drop-in).
+    Texts are embedded in sub-batches of at most ``batch_size`` per API request
+    and the results concatenated, so arbitrarily long inputs (e.g. a document
+    that chunks into thousands of passages) stay within the endpoint's
+    per-request array/token limits.  The client must be an async
+    OpenAI-compatible client (``openai.AsyncOpenAI`` or any compatible drop-in).
 
     Install the extra dependency before use::
 
@@ -30,6 +41,8 @@ class OpenAIEmbedding(EmbeddingBase):
                     the embedding to this length (supported by
                     ``text-embedding-3-*`` models).  ``None`` returns the
                     model's native dimensionality.
+        batch_size: Maximum number of texts per API request.  Defaults to
+                    :data:`DEFAULT_BATCH_SIZE`.
 
     Example::
 
@@ -47,10 +60,14 @@ class OpenAIEmbedding(EmbeddingBase):
         model: str = "text-embedding-3-small",
         *,
         dimensions: int | None = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> None:
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
         self._client = client
         self._model = model
         self._dimensions = dimensions
+        self._batch_size = batch_size
 
     @property
     def dimensions(self) -> int | None:
@@ -62,16 +79,25 @@ class OpenAIEmbedding(EmbeddingBase):
         if not texts:
             return []
 
-        kwargs: dict[str, Any] = {
-            "input": texts,
-            "model": self._model,
-        }
-        if self._dimensions is not None:
-            kwargs["dimensions"] = self._dimensions
+        embeddings: list[list[float]] = []
+        for start in range(0, len(texts), self._batch_size):
+            batch = texts[start : start + self._batch_size]
 
-        logger.debug("openai_embedder.request model=%s texts=%d", self._model, len(texts))
-        response = await self._client.embeddings.create(**kwargs)
-        logger.debug("openai_embedder.response usage=%s", response.usage)
+            kwargs: dict[str, Any] = {
+                "input": batch,
+                "model": self._model,
+            }
+            if self._dimensions is not None:
+                kwargs["dimensions"] = self._dimensions
 
-        # The API returns embeddings in the same order as the input.
-        return [item.embedding for item in response.data]
+            logger.debug(
+                "openai_embedder.request model=%s texts=%d offset=%d total=%d",
+                self._model, len(batch), start, len(texts),
+            )
+            response = await self._client.embeddings.create(**kwargs)
+            logger.debug("openai_embedder.response usage=%s", response.usage)
+
+            # The API returns embeddings in the same order as the input.
+            embeddings.extend(item.embedding for item in response.data)
+
+        return embeddings

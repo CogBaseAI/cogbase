@@ -84,3 +84,13 @@ class EmbeddingConfig(ConfigPromptMixin, BaseModel):
         default=1536,
         description="Optional output vector dimension override.",
     )
+    batch_size: int = Field(
+        default=500,
+        ge=1,
+        description=(
+            "Maximum number of texts sent per embedding API request. A long "
+            "document can chunk into thousands of passages, which would exceed "
+            "the endpoint's per-request array/token limit; the embedder splits "
+            "inputs into sub-batches of this size and concatenates the results."
+        ),
+    )
