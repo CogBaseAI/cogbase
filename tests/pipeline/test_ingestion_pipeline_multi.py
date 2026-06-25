@@ -41,8 +41,15 @@ def _mock_task_store():
 # ---------------------------------------------------------------------------
 
 class StubEmbedding(EmbeddingBase):
-    def __init__(self, dim: int = 4) -> None:
+    def __init__(self, dim: int = 4, context_window: int | None = None) -> None:
         self._dim = dim
+        self._context_window = context_window
+
+    @property
+    def context_window(self) -> int:
+        if self._context_window is not None:
+            return self._context_window
+        return super().context_window
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         return [[0.1] * self._dim for _ in texts]
@@ -332,6 +339,76 @@ class TestDocumentEmbedUpsert:
         assert count == 0
         assert not extraction_failed
         assert vector_store.ntotal("summaries") == 0
+
+    @pytest.mark.asyncio
+    async def test_no_llm_oversized_doc_raises(self, make_vector_store):
+        vector_store = make_vector_store()
+        await vector_store.create_collection(self._SUMMARIES_SCHEMA)
+        vc = VectorCollection(
+            schema=self._SUMMARIES_SCHEMA,
+            store=vector_store,
+            embedder=StubEmbedding(dim=4, context_window=10),
+        )
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[PipelineStep(tool="document-embed-upsert", collection="summaries")],
+            vector_collections=[vc],
+        )
+        # ~50 tokens of text against a 10-token embedding window, no llm to reduce it.
+        doc = Document(doc_id="d-001", text="word " * 50)
+        with pytest.raises(ValueError, match="embedding context window"):
+            await pipeline._ingest(doc)
+        assert vector_store.ntotal("summaries") == 0
+
+    @pytest.mark.asyncio
+    async def test_no_llm_oversized_doc_captured_as_failure(self, make_vector_store):
+        vector_store = make_vector_store()
+        await vector_store.create_collection(self._SUMMARIES_SCHEMA)
+        vc = VectorCollection(
+            schema=self._SUMMARIES_SCHEMA,
+            store=vector_store,
+            embedder=StubEmbedding(dim=4, context_window=10),
+        )
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[PipelineStep(tool="document-embed-upsert", collection="summaries")],
+            vector_collections=[vc],
+        )
+        [result] = await pipeline.ingest_documents([Document(doc_id="d-001", text="word " * 50)])
+        assert not result.success
+        assert isinstance(result.error, ValueError)
+
+    @pytest.mark.asyncio
+    async def test_large_doc_summarized_map_reduce(self, make_vector_store):
+        vector_store = make_vector_store()
+        await vector_store.create_collection(self._SUMMARIES_SCHEMA)
+
+        async def fake_complete(messages, model=None):
+            system = messages[0]["content"]
+            if "combining several partial summaries" in system:
+                return {"content": "FINAL", "tool_calls": None}
+            return {"content": "partial", "tool_calls": None}
+
+        llm = MagicMock(spec=LLMBase)
+        llm.context_window = MagicMock(return_value=2000)
+        llm.complete = AsyncMock(side_effect=fake_complete)
+        vc = VectorCollection(
+            schema=self._SUMMARIES_SCHEMA,
+            store=vector_store,
+            embedder=StubEmbedding(dim=4),
+        )
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[PipelineStep(tool="document-embed-upsert", collection="summaries", llm=llm)],
+            vector_collections=[vc],
+        )
+        # ~2500 tokens against a ~1190-token window budget → multiple map windows + a reduce.
+        await pipeline._ingest(Document(doc_id="d-001", text="word " * 2000))
+
+        # More than one llm call: at least two map windows plus the reduce.
+        assert llm.complete.await_count >= 3
+        chunks = await vector_store.search("summaries", "", [0.1] * 4, top_k=1)
+        assert chunks[0].text == "FINAL"
 
 
 # ---------------------------------------------------------------------------
