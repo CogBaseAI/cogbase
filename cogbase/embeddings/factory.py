@@ -24,8 +24,17 @@ def build_embedding(cfg: EmbeddingConfig) -> EmbeddingBase:
             model=cfg.model,
             dimensions=cfg.dimensions,
             batch_size=cfg.batch_size,
+            context_window=cfg.context_window,
         )
     if cfg.provider == "sentence-transformers":
         from cogbase.embeddings.huggingface import SentenceTransformersEmbedding
-        return SentenceTransformersEmbedding(model_name=cfg.model)
+        # Only override the model's own max_seq_length when the window was set
+        # explicitly; otherwise let the local model report its true limit.
+        explicit_window = (
+            cfg.context_window if "context_window" in cfg.model_fields_set else None
+        )
+        return SentenceTransformersEmbedding(
+            model_name=cfg.model,
+            context_window=explicit_window,
+        )
     raise ValueError(f"Unknown embedding provider: {cfg.provider!r}")

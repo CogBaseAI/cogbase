@@ -5,6 +5,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Conservative fallback context window (tokens) for a single input text. Most
+# hosted embedding models cap one input around 8k tokens (e.g. OpenAI's
+# ``text-embedding-3-*`` at 8191); a text beyond the window is silently
+# truncated or rejected by the provider, so callers size passage chunks against
+# this value. Concrete backends override with the configured window.
+DEFAULT_CONTEXT_WINDOW = 8192
+
 
 class EmbeddingBase(abc.ABC):
     """Embed a list of texts into dense vectors.
@@ -25,6 +32,17 @@ class EmbeddingBase(abc.ABC):
     Implementations must return one embedding per input text, preserving
     order.
     """
+
+    @property
+    def context_window(self) -> int:
+        """Maximum number of tokens accepted in a single input text.
+
+        Inputs longer than this are truncated or rejected by the backend, so
+        callers (e.g. the chunk-embed-upsert step) size passages against it.
+        The base returns a conservative :data:`DEFAULT_CONTEXT_WINDOW`;
+        concrete embedders override with the configured window.
+        """
+        return DEFAULT_CONTEXT_WINDOW
 
     @property
     def dimensions(self) -> int | None:

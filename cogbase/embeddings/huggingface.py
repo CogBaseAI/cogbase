@@ -4,7 +4,7 @@ import asyncio
 import functools
 import logging
 
-from cogbase.embeddings.base import EmbeddingBase
+from cogbase.embeddings.base import DEFAULT_CONTEXT_WINDOW, EmbeddingBase
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +23,21 @@ class SentenceTransformersEmbedding(EmbeddingBase):
         model_name: Any model name accepted by ``SentenceTransformer``.
                     Defaults to ``"all-MiniLM-L6-v2"`` (384-dim, fast, good
                     general-purpose quality).
+        context_window: Maximum tokens accepted in a single input text. When
+                    ``None`` (the default), the model's own ``max_seq_length``
+                    is used, falling back to
+                    :data:`~cogbase.embeddings.base.DEFAULT_CONTEXT_WINDOW`
+                    when the model does not report one.
     """
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2") -> None:
+    def __init__(
+        self,
+        model_name: str = "all-MiniLM-L6-v2",
+        *,
+        context_window: int | None = None,
+    ) -> None:
+        if context_window is not None and context_window < 1:
+            raise ValueError(f"context_window must be >= 1, got {context_window}")
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:  # pragma: no cover
@@ -37,6 +49,16 @@ class SentenceTransformersEmbedding(EmbeddingBase):
 
         self._model = SentenceTransformer(model_name)
         self._dimensions = self._model.get_sentence_embedding_dimension()
+        self._context_window = (
+            context_window
+            or getattr(self._model, "max_seq_length", None)
+            or DEFAULT_CONTEXT_WINDOW
+        )
+
+    @property
+    def context_window(self) -> int:
+        """Maximum tokens per input text — the override or the model's own."""
+        return self._context_window
 
     @property
     def dimensions(self) -> int | None:

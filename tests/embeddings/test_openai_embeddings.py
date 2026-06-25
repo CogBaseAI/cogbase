@@ -121,3 +121,15 @@ class TestOpenAIEmbeddingBatching:
     def test_rejects_invalid_batch_size(self):
         with pytest.raises(ValueError):
             OpenAIEmbedding(_FakeEmbeddingsClient(), batch_size=0)
+
+    def test_context_window_defaults_to_8k(self):
+        embedder = OpenAIEmbedding(_FakeEmbeddingsClient())
+        assert embedder.context_window == 8192
+
+    def test_context_window_override(self):
+        embedder = OpenAIEmbedding(_FakeEmbeddingsClient(), context_window=2048)
+        assert embedder.context_window == 2048
+
+    def test_rejects_invalid_context_window(self):
+        with pytest.raises(ValueError):
+            OpenAIEmbedding(_FakeEmbeddingsClient(), context_window=0)

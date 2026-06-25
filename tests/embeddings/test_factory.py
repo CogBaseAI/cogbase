@@ -56,6 +56,18 @@ def test_build_embedding_openai_no_dimensions_by_default():
     assert embedder._dimensions == 1536
 
 
+def test_build_embedding_openai_context_window_default():
+    with patch("openai.AsyncOpenAI", return_value=MagicMock()):
+        embedder = build_embedding(_openai_cfg(api_key="sk-test"))
+    assert embedder.context_window == 8192
+
+
+def test_build_embedding_openai_passes_context_window():
+    with patch("openai.AsyncOpenAI", return_value=MagicMock()):
+        embedder = build_embedding(_openai_cfg(api_key="sk-test", context_window=4096))
+    assert embedder.context_window == 4096
+
+
 
 # --- openai-compatible provider ---
 
@@ -92,6 +104,36 @@ def test_build_embedding_sentence_transformers(monkeypatch):
     cfg = EmbeddingConfig(provider="sentence-transformers", model="all-MiniLM-L6-v2", api_key="EMPTY")
     embedder = build_embedding(cfg)
     assert isinstance(embedder, SentenceTransformersEmbedding)
+
+
+def test_build_embedding_sentence_transformers_uses_model_window_by_default(monkeypatch):
+    mock_st_module = MagicMock()
+    mock_model_instance = MagicMock()
+    mock_model_instance.get_sentence_embedding_dimension.return_value = 384
+    mock_model_instance.max_seq_length = 256
+    mock_st_module.SentenceTransformer.return_value = mock_model_instance
+    monkeypatch.setitem(sys.modules, "sentence_transformers", mock_st_module)
+
+    cfg = EmbeddingConfig(provider="sentence-transformers", model="all-MiniLM-L6-v2", api_key="EMPTY")
+    embedder = build_embedding(cfg)
+    # context_window not set in config -> model's own max_seq_length wins.
+    assert embedder.context_window == 256
+
+
+def test_build_embedding_sentence_transformers_explicit_window_overrides_model(monkeypatch):
+    mock_st_module = MagicMock()
+    mock_model_instance = MagicMock()
+    mock_model_instance.get_sentence_embedding_dimension.return_value = 384
+    mock_model_instance.max_seq_length = 256
+    mock_st_module.SentenceTransformer.return_value = mock_model_instance
+    monkeypatch.setitem(sys.modules, "sentence_transformers", mock_st_module)
+
+    cfg = EmbeddingConfig(
+        provider="sentence-transformers", model="all-MiniLM-L6-v2",
+        api_key="EMPTY", context_window=512,
+    )
+    embedder = build_embedding(cfg)
+    assert embedder.context_window == 512
 
 
 # --- shared ---

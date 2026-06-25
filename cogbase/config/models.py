@@ -94,3 +94,13 @@ class EmbeddingConfig(ConfigPromptMixin, BaseModel):
             "inputs into sub-batches of this size and concatenates the results."
         ),
     )
+    context_window: int = Field(
+        default=8192,
+        ge=1,
+        description=(
+            "Maximum tokens accepted in a single input text. Inputs beyond "
+            "this are truncated or rejected by the backend, so passage chunks "
+            "are sized against it. Defaults to 8192, matching the ~8k cap of "
+            "most hosted models (e.g. OpenAI's text-embedding-3-*)."
+        ),
+    )

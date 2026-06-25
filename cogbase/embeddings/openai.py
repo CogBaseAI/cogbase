@@ -6,7 +6,7 @@ The provider that provides OpenAI compatible API can use this implementation.
 import logging
 from typing import Any
 
-from cogbase.embeddings.base import EmbeddingBase
+from cogbase.embeddings.base import DEFAULT_CONTEXT_WINDOW, EmbeddingBase
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,9 @@ class OpenAIEmbedding(EmbeddingBase):
                     model's native dimensionality.
         batch_size: Maximum number of texts per API request.  Defaults to
                     :data:`DEFAULT_BATCH_SIZE`.
+        context_window: Maximum tokens accepted in a single input text.
+                    Defaults to :data:`~cogbase.embeddings.base.DEFAULT_CONTEXT_WINDOW`
+                    (8192), matching ``text-embedding-3-*``'s 8191-token cap.
 
     Example::
 
@@ -61,13 +64,22 @@ class OpenAIEmbedding(EmbeddingBase):
         *,
         dimensions: int | None = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        context_window: int = DEFAULT_CONTEXT_WINDOW,
     ) -> None:
         if batch_size < 1:
             raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+        if context_window < 1:
+            raise ValueError(f"context_window must be >= 1, got {context_window}")
         self._client = client
         self._model = model
         self._dimensions = dimensions
         self._batch_size = batch_size
+        self._context_window = context_window
+
+    @property
+    def context_window(self) -> int:
+        """The configured maximum tokens per input text."""
+        return self._context_window
 
     @property
     def dimensions(self) -> int | None:
