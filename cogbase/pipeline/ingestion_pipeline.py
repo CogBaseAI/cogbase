@@ -23,39 +23,13 @@ from typing import Sequence
 
 from cogbase.core.models import Chunk, Document
 from cogbase.embeddings import EmbeddingBase
-from cogbase.llms.base import ChatMessage, LLMBase
-from cogbase.llms.compaction import estimate_tokens
-from cogbase.pipeline.chunking.langchain import split_text_by_tokens
+from cogbase.llms.base import LLMBase
+from cogbase.llms.compaction import estimate_tokens, summarise_chunk_tokens, summarize_transcript
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.chunking.base import ChunkerBase
 from cogbase.stores import CollectionSchema, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 
 logger = logging.getLogger(__name__)
-
-# Fraction of the llm model's context window available for one window of input
-# document text during summarization. The remainder leaves room for the system
-# (doc) prompt and the model's summary output (short relative to the input).
-# Documents larger than one window are summarized map-reduce: each window is
-# summarized independently, then the window summaries are summarized into one.
-_SUMMARY_INPUT_WINDOW_RATIO = 0.6
-
-# Floor for the per-window token budget, so a large doc_prompt can never drive
-# the budget to zero (which would split every document to death).
-_MIN_SUMMARY_WINDOW_TOKENS = 1_000
-
-# Fraction of the per-window budget that consecutive windows overlap, so a span
-# straddling a window cut still appears intact in at least one window.
-_SUMMARY_WINDOW_OVERLAP_RATIO = 0.1
-
-# Reduce-step prompt for collapsing per-window summaries into one document
-# summary. Used in place of the step's ``doc_prompt`` because the input here is
-# already a set of partial summaries, not the raw document.
-_REDUCE_PROMPT = (
-    "You are combining several partial summaries, each covering a consecutive "
-    "section of one document, into a single coherent summary of the whole "
-    "document. Preserve the key facts from every section and introduce no "
-    "information absent from the partial summaries."
-)
 
 
 @dataclass
@@ -395,82 +369,28 @@ class IngestionPipeline:
         return await self._summarize(doc, step)
 
     async def _summarize(self, doc: Document, step: PipelineStep) -> str | None:
-        """Summarize ``doc.text`` through ``step.doc_prompt``, map-reduce when large.
+        """Summarize ``doc.text`` through ``step.doc_prompt``; ``None`` on failure.
 
-        A document that fits one window is summarized in a single call. A larger
-        document is split into overlapping, token-bounded windows; each is
-        summarized independently (map), then the window summaries are collapsed
-        into one document summary (reduce, see :meth:`_reduce_summaries`).
+        Delegates to :func:`cogbase.llms.compaction.summarize_transcript`, the
+        shared map-reduce summariser: a document that fits the summariser's
+        context window is summarized in one call, while a larger one is split,
+        summarized per chunk, and recursively merged into a single bounded
+        summary. Runs on the cheaper ``"mini"`` model. Transient LLM failures are
+        a step-local concern — they are logged and degraded to ``None`` (the step
+        skips the upsert) rather than aborting the document's other steps.
         """
-        budget = self._summary_window_tokens(step, step.doc_prompt)
-        windows = split_text_by_tokens(
-            doc.text, budget, int(budget * _SUMMARY_WINDOW_OVERLAP_RATIO)
-        )
-        if len(windows) <= 1:
-            return await self._summarize_text(doc, step, windows[0], step.doc_prompt)
-
-        summaries: list[str] = []
-        for window_text in windows:
-            summary = await self._summarize_text(doc, step, window_text, step.doc_prompt)
-            if summary:
-                summaries.append(summary)
-        if not summaries:
-            return None
-        return await self._reduce_summaries(doc, step, summaries)
-
-    async def _reduce_summaries(
-        self, doc: Document, step: PipelineStep, summaries: list[str]
-    ) -> str | None:
-        """Collapse per-window summaries into one, recursing while they overflow.
-
-        The window summaries are concatenated and summarized in a single reduce
-        call when they fit the model's context window. When even the
-        concatenation overflows (a pathologically large document), it is itself
-        windowed, each batch reduced, and the batch summaries reduced again —
-        each level produces shorter text, so the recursion converges.
-        """
-        budget = self._summary_window_tokens(step, _REDUCE_PROMPT)
-        combined = "\n\n".join(summaries)
-        if estimate_tokens(combined) <= budget:
-            return await self._summarize_text(doc, step, combined, _REDUCE_PROMPT)
-
-        windows = split_text_by_tokens(
-            combined, budget, int(budget * _SUMMARY_WINDOW_OVERLAP_RATIO)
-        )
-        batch_summaries: list[str] = []
-        for window_text in windows:
-            summary = await self._summarize_text(doc, step, window_text, _REDUCE_PROMPT)
-            if summary:
-                batch_summaries.append(summary)
-        if not batch_summaries:
-            return None
-        return await self._reduce_summaries(doc, step, batch_summaries)
-
-    def _summary_window_tokens(self, step: PipelineStep, prompt: str) -> int:
-        """Per-window input budget (tokens) for one summarization call.
-
-        A fraction of the model's context window minus the system prompt, so the
-        document text, the prompt, and the (short) summary output all fit in one
-        call. Floored at ``_MIN_SUMMARY_WINDOW_TOKENS``.
-        """
-        window = step.llm.context_window("mini")
-        budget = int(window * _SUMMARY_INPUT_WINDOW_RATIO) - estimate_tokens(prompt)
-        return max(_MIN_SUMMARY_WINDOW_TOKENS, budget)
-
-    async def _summarize_text(
-        self, doc: Document, step: PipelineStep, text: str, prompt: str
-    ) -> str | None:
-        """Run one summarization call over *text* with *prompt*; ``None`` on failure."""
-        messages: list[ChatMessage] = [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": text},
-        ]
         try:
-            result = await step.llm.complete(messages, model="mini")
-            return result.get("content") or None
+            summary = await summarize_transcript(
+                step.llm,
+                doc.text,
+                chunk_tokens=summarise_chunk_tokens(step.llm, "mini"),
+                compress_prompt=step.doc_prompt,
+                model="mini",
+            )
+            return summary or None
         except Exception:
             logger.exception(
-                "ingestion_pipeline.summarize_text.failed app_id=%s name=%s doc_id=%s collection=%s",
+                "ingestion_pipeline.summarize.failed app_id=%s name=%s doc_id=%s collection=%s",
                 self.app_id, self.name, doc.doc_id, step.collection,
             )
             return None

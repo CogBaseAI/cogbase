@@ -1,6 +1,6 @@
-"""Transcript compaction primitives shared across tiers.
+"""Map-reduce text summarisation primitives shared across tiers.
 
-Two places compact conversation transcripts into bounded summaries:
+Several places collapse arbitrarily long text into a single bounded summary:
 
   - ``QueryRunner.compact_messages`` (``cogbase/core/query_runner.py``) collapses
     the transient in-loop working message list when it outgrows the context
@@ -8,13 +8,16 @@ Two places compact conversation transcripts into bounded summaries:
   - ``ShortTermMemory._commit_compaction`` (``cogbase/memory/short_term.py``)
     folds overflow turns into the running summary, persisted as a
     ``session_compacted`` event in the episodic log.
+  - ``IngestionPipeline`` (``cogbase/pipeline/ingestion_pipeline.py``) summarises a
+    full document into the single text embedded by a ``document-embed-upsert``
+    step, map-reducing documents that overflow the summariser's context window.
 
 Summarisation is inherently an LLM operation: ``summarize_transcript`` requires a
 live ``LLMBase``. Policy for the no-LLM case and for transient LLM failures lives
 at the call site, which has the context to degrade sensibly (e.g. dropping
 overflow turns rather than fabricating a non-summary).
 
-Both share the same underlying need — summarise an arbitrarily long transcript
+They share the same underlying need — summarise an arbitrarily long text
 within a token budget — so the reusable parts live here:
 
   - token estimation (``estimate_tokens`` / ``estimate_messages_tokens``)
@@ -243,6 +246,7 @@ async def summarize_transcript(
     chunk_tokens: int = DEFAULT_CHUNK_TOKENS,
     prior_summary: str | None = None,
     compress_prompt: str = WORKING_CONTEXT_PROMPT,
+    model: str | None = None,
 ) -> str:
     """Summarise *transcript* within *chunk_tokens*, returning a single summary.
 
@@ -255,6 +259,11 @@ async def summarize_transcript(
     :data:`WORKING_CONTEXT_PROMPT` / :data:`CONVERSATION_SUMMARY_PROMPT`); it is
     applied at every level, including the *prior_summary* fold, so the running
     summary is re-compressed with the same emphasis.
+
+    *model* is the ``complete`` model selector for every summarisation call (e.g.
+    ``"mini"`` to run on the cheaper model); ``None`` uses the default model. Size
+    *chunk_tokens* against the same model's window (see
+    :func:`summarise_chunk_tokens`).
 
     LLM errors propagate; the caller owns any degradation policy.
     """
@@ -269,11 +278,11 @@ async def summarize_transcript(
         chunk_tokens,
     )
 
-    new_summary = await _map_reduce(llm, transcript, chunk_tokens, compress_prompt, stats)
+    new_summary = await _map_reduce(llm, transcript, chunk_tokens, compress_prompt, stats, model=model)
     if prior_summary:
         combined = f"Existing summary:\n{prior_summary}\n\nNew turns:\n{new_summary}"
         new_summary = await _map_reduce(
-            llm, combined, chunk_tokens, compress_prompt, stats
+            llm, combined, chunk_tokens, compress_prompt, stats, model=model
         )
 
     elapsed = time.perf_counter() - started
@@ -310,10 +319,12 @@ async def _map_reduce(
     compress_prompt: str,
     stats: _CompactionStats,
     depth: int = 0,
+    *,
+    model: str | None = None,
 ) -> str:
     stats.max_depth = max(stats.max_depth, depth)
     if estimate_tokens(transcript) <= chunk_tokens:
-        return await _summarize_chunk(llm, transcript, compress_prompt, stats)
+        return await _summarize_chunk(llm, transcript, compress_prompt, stats, model=model)
 
     chunks = split_by_tokens(transcript, chunk_tokens)
     logger.info(
@@ -323,7 +334,7 @@ async def _map_reduce(
         estimate_tokens(transcript),
     )
     partials = await asyncio.gather(
-        *(_summarize_chunk(llm, c, compress_prompt, stats) for c in chunks)
+        *(_summarize_chunk(llm, c, compress_prompt, stats, model=model) for c in chunks)
     )
     merged = "\n".join(p for p in partials if p)
 
@@ -351,13 +362,18 @@ async def _map_reduce(
             chunk_tokens,
         )
         return await _map_reduce(
-            llm, merged, chunk_tokens, compress_prompt, stats, depth + 1
+            llm, merged, chunk_tokens, compress_prompt, stats, depth + 1, model=model
         )
     return merged
 
 
 async def _summarize_chunk(
-    llm: LLMBase, transcript: str, compress_prompt: str, stats: _CompactionStats
+    llm: LLMBase,
+    transcript: str,
+    compress_prompt: str,
+    stats: _CompactionStats,
+    *,
+    model: str | None = None,
 ) -> str:
     started = time.perf_counter()
     # Instructions go in the system role (not concatenated into the user turn):
@@ -368,7 +384,8 @@ async def _summarize_chunk(
         [
             {"role": "system", "content": compress_prompt},
             {"role": "user", "content": transcript},
-        ]
+        ],
+        model=model,
     )
     elapsed = time.perf_counter() - started
     stats.llm_calls += 1

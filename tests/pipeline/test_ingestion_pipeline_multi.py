@@ -90,6 +90,7 @@ class StubExtractor(ExtractorBase):
 
 def _make_llm(summary: str = "A short summary.") -> MagicMock:
     llm = MagicMock(spec=LLMBase)
+    llm.context_window = MagicMock(return_value=128_000)
     llm.complete = AsyncMock(return_value={"content": summary, "tool_calls": None})
     return llm
 
@@ -384,13 +385,12 @@ class TestDocumentEmbedUpsert:
         await vector_store.create_collection(self._SUMMARIES_SCHEMA)
 
         async def fake_complete(messages, model=None):
-            system = messages[0]["content"]
-            if "combining several partial summaries" in system:
-                return {"content": "FINAL", "tool_calls": None}
-            return {"content": "partial", "tool_calls": None}
+            # Every summarisation call runs on the cheaper mini model.
+            assert model == "mini"
+            return {"content": "partial summary", "tool_calls": None}
 
         llm = MagicMock(spec=LLMBase)
-        llm.context_window = MagicMock(return_value=2000)
+        llm.context_window = MagicMock(return_value=2000)  # chunk budget = 1000 tokens
         llm.complete = AsyncMock(side_effect=fake_complete)
         vc = VectorCollection(
             schema=self._SUMMARIES_SCHEMA,
@@ -402,13 +402,13 @@ class TestDocumentEmbedUpsert:
             steps=[PipelineStep(tool="document-embed-upsert", collection="summaries", llm=llm)],
             vector_collections=[vc],
         )
-        # ~2500 tokens against a ~1190-token window budget → multiple map windows + a reduce.
+        # ~2500 tokens against a 1000-token chunk budget → the document is split
+        # and summarised map-reduce (more than one llm call) via summarize_transcript.
         await pipeline._ingest(Document(doc_id="d-001", text="word " * 2000))
 
-        # More than one llm call: at least two map windows plus the reduce.
-        assert llm.complete.await_count >= 3
+        assert llm.complete.await_count >= 2
         chunks = await vector_store.search("summaries", "", [0.1] * 4, top_k=1)
-        assert chunks[0].text == "FINAL"
+        assert "partial summary" in chunks[0].text
 
 
 # ---------------------------------------------------------------------------
