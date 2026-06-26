@@ -12,7 +12,7 @@ Several places collapse arbitrarily long text into a single bounded summary:
     full document into the single text embedded by a ``document-embed-upsert``
     step, map-reducing documents that overflow the summariser's context window.
 
-Summarisation is inherently an LLM operation: ``summarize_transcript`` requires a
+Summarisation is inherently an LLM operation: ``summarize_text`` requires a
 live ``LLMBase``. Policy for the no-LLM case and for transient LLM failures lives
 at the call site, which has the context to degrade sensibly (e.g. dropping
 overflow turns rather than fabricating a non-summary).
@@ -21,8 +21,8 @@ They share the same underlying need — summarise an arbitrarily long text
 within a token budget — so the reusable parts live here:
 
   - token estimation (``estimate_tokens`` / ``estimate_messages_tokens``)
-  - transcript chunking (``split_by_tokens``) and rendering (``render_message``)
-  - the map-reduce summariser (``summarize_transcript``)
+  - text chunking (``split_by_tokens``) and rendering (``render_message``)
+  - the map-reduce summariser (``summarize_text``)
 
 The stateful orchestration (budget walks, lock-held state mutation, building the
 final message list) stays at each call site; only the summarisation core is shared.
@@ -239,19 +239,19 @@ def _hard_split_line(line: str, max_tokens: int) -> list[str]:
     return pieces
 
 
-async def summarize_transcript(
+async def summarize_text(
     llm: LLMBase,
-    transcript: str,
+    text: str,
     *,
     chunk_tokens: int = DEFAULT_CHUNK_TOKENS,
     prior_summary: str | None = None,
     compress_prompt: str = WORKING_CONTEXT_PROMPT,
     model: str | None = None,
 ) -> str:
-    """Summarise *transcript* within *chunk_tokens*, returning a single summary.
+    """Summarise *text* within *chunk_tokens*, returning a single summary.
 
-    Long transcripts are split into budget-sized chunks, summarised in parallel,
-    and merged — recursively, so an arbitrarily long transcript collapses to one
+    Long texts are split into budget-sized chunks, summarised in parallel,
+    and merged — recursively, so an arbitrarily long text collapses to one
     bounded summary. When *prior_summary* is given, the new summary is folded into
     it (incremental running summary).
 
@@ -267,18 +267,18 @@ async def summarize_transcript(
 
     LLM errors propagate; the caller owns any degradation policy.
     """
-    in_tokens = estimate_tokens(transcript)
+    in_tokens = estimate_tokens(text)
     prior_tokens = estimate_tokens(prior_summary) if prior_summary else 0
-    stats = _CompactionStats()
+    stats = _SummarizationStats()
     started = time.perf_counter()
     logger.info(
-        "[compaction] start: transcript=%d tok, prior_summary=%d tok, chunk_budget=%d tok",
+        "[summarization] start: text=%d tok, prior_summary=%d tok, chunk_budget=%d tok",
         in_tokens,
         prior_tokens,
         chunk_tokens,
     )
 
-    new_summary = await _map_reduce(llm, transcript, chunk_tokens, compress_prompt, stats, model=model)
+    new_summary = await _map_reduce(llm, text, chunk_tokens, compress_prompt, stats, model=model)
     if prior_summary:
         combined = f"Existing summary:\n{prior_summary}\n\nNew turns:\n{new_summary}"
         new_summary = await _map_reduce(
@@ -287,7 +287,7 @@ async def summarize_transcript(
 
     elapsed = time.perf_counter() - started
     logger.info(
-        "[compaction] done in %.2fs: %d LLM call(s), max_depth=%d, folded_prior=%s, "
+        "[summarization] done in %.2fs: %d LLM call(s), max_depth=%d, folded_prior=%s, "
         "%d -> %d tok (%.0f%% reduction), llm_time=%.2fs",
         elapsed,
         stats.llm_calls,
@@ -301,8 +301,8 @@ async def summarize_transcript(
     return new_summary
 
 
-class _CompactionStats:
-    """Mutable accounting threaded through one ``summarize_transcript`` call."""
+class _SummarizationStats:
+    """Mutable accounting threaded through one ``summarize_text`` call."""
 
     __slots__ = ("llm_calls", "llm_seconds", "max_depth")
 
@@ -314,24 +314,24 @@ class _CompactionStats:
 
 async def _map_reduce(
     llm: LLMBase,
-    transcript: str,
+    text: str,
     chunk_tokens: int,
     compress_prompt: str,
-    stats: _CompactionStats,
+    stats: _SummarizationStats,
     depth: int = 0,
     *,
     model: str | None = None,
 ) -> str:
     stats.max_depth = max(stats.max_depth, depth)
-    if estimate_tokens(transcript) <= chunk_tokens:
-        return await _summarize_chunk(llm, transcript, compress_prompt, stats, model=model)
+    if estimate_tokens(text) <= chunk_tokens:
+        return await _summarize_chunk(llm, text, compress_prompt, stats, model=model)
 
-    chunks = split_by_tokens(transcript, chunk_tokens)
+    chunks = split_by_tokens(text, chunk_tokens)
     logger.info(
-        "[compaction] depth=%d: mapping %d chunk(s) (%d tok total)",
+        "[summarization] depth=%d: mapping %d chunk(s) (%d tok total)",
         depth,
         len(chunks),
-        estimate_tokens(transcript),
+        estimate_tokens(text),
     )
     partials = await asyncio.gather(
         *(_summarize_chunk(llm, c, compress_prompt, stats, model=model) for c in chunks)
@@ -346,9 +346,9 @@ async def _map_reduce(
     # under the budget. Strictly-decreasing token counts bound the recursion.
     merged_tokens = estimate_tokens(merged)
     if merged_tokens > chunk_tokens:
-        if merged_tokens >= estimate_tokens(transcript):
+        if merged_tokens >= estimate_tokens(text):
             logger.warning(
-                "[compaction] depth=%d: reduction stalled at %d tok (budget=%d); "
+                "[summarization] depth=%d: reduction stalled at %d tok (budget=%d); "
                 "returning best-effort summary without further recursion",
                 depth,
                 merged_tokens,
@@ -356,7 +356,7 @@ async def _map_reduce(
             )
             return merged
         logger.info(
-            "[compaction] depth=%d: merged partials still %d tok > %d budget; recursing",
+            "[summarization] depth=%d: merged partials still %d tok > %d budget; recursing",
             depth,
             merged_tokens,
             chunk_tokens,
@@ -369,9 +369,9 @@ async def _map_reduce(
 
 async def _summarize_chunk(
     llm: LLMBase,
-    transcript: str,
+    text: str,
     compress_prompt: str,
-    stats: _CompactionStats,
+    stats: _SummarizationStats,
     *,
     model: str | None = None,
 ) -> str:
@@ -383,7 +383,7 @@ async def _summarize_chunk(
     result = await llm.complete(
         [
             {"role": "system", "content": compress_prompt},
-            {"role": "user", "content": transcript},
+            {"role": "user", "content": text},
         ],
         model=model,
     )
@@ -392,9 +392,9 @@ async def _summarize_chunk(
     stats.llm_seconds += elapsed
     content = result.get("content") or ""
     logger.info(
-        "[compaction] chunk summarised in %.2fs: %d -> %d tok",
+        "[summarization] chunk summarised in %.2fs: %d -> %d tok",
         elapsed,
-        estimate_tokens(transcript),
+        estimate_tokens(text),
         estimate_tokens(content),
     )
     return content

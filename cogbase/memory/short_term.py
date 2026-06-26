@@ -52,12 +52,12 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from cogbase.llms.compaction import (
+from cogbase.llms.summarization import (
     CONVERSATION_SUMMARY_PROMPT,
     context_budget_tokens,
     estimate_tokens,
     summarise_chunk_tokens,
-    summarize_transcript,
+    summarize_text,
 )
 from cogbase.llms.base import ChatMessage, LLMBase
 from cogbase.memory.episodic import EpisodicMemory
@@ -330,7 +330,7 @@ class ShortTermMemory:
         summarized = 0
         if plan is not None:
             try:
-                new_summary = await summarize_transcript(
+                new_summary = await summarize_text(
                     self._llm,
                     plan.transcript,
                     chunk_tokens=summarise_chunk_tokens(self._llm),

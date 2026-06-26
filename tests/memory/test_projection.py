@@ -9,7 +9,7 @@ directly rather than recording through ``EpisodicMemory``.
 
 from __future__ import annotations
 
-from cogbase.llms.compaction import estimate_tokens
+from cogbase.llms.summarization import estimate_tokens
 from cogbase.memory.models import EventType, MemoryEvent, MemoryRole
 from cogbase.memory.projection import (
     latest_compaction,

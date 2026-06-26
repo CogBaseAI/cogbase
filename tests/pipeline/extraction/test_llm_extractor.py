@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from cogbase.config.config import ExtractorConfig
 from cogbase.llms import LLMBase
-from cogbase.llms.compaction import estimate_tokens
+from cogbase.llms.summarization import estimate_tokens
 from cogbase.core.models import Document
 from cogbase.pipeline.chunking.langchain import split_text_by_tokens
 from cogbase.pipeline.extraction.llm import LLMExtractor

@@ -16,7 +16,7 @@ Example::
 from langchain_text_splitters import RecursiveCharacterTextSplitter, TextSplitter
 
 from cogbase.core.models import Document
-from cogbase.llms.compaction import estimate_tokens
+from cogbase.llms.summarization import estimate_tokens
 from cogbase.pipeline.chunking.base import ChunkerBase
 
 _SENTENCE_SEPARATORS = ["\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", "; ", ", ", " ", ""]

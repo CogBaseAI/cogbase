@@ -1,4 +1,4 @@
-"""Unit tests for cogbase.llms.compaction."""
+"""Unit tests for cogbase.llms.summarization."""
 
 from __future__ import annotations
 
@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cogbase.llms.compaction import (
+from cogbase.llms.summarization import (
     DEFAULT_CHUNK_TOKENS,
     estimate_messages_tokens,
     estimate_tokens,
     render_message,
     split_by_tokens,
-    summarize_transcript,
+    summarize_text,
 )
 
 
@@ -163,13 +163,13 @@ def test_split_oversized_line_flushes_pending_buffer_first():
 
 
 # ---------------------------------------------------------------------------
-# summarize_transcript — single call / fold
+# summarize_text — single call / fold
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_short_transcript_single_call():
     llm = _llm("S")
-    out = await summarize_transcript(llm, "short transcript")
+    out = await summarize_text(llm, "short transcript")
     assert out == "S"
     assert llm.complete.call_count == 1
 
@@ -177,7 +177,7 @@ async def test_short_transcript_single_call():
 @pytest.mark.asyncio
 async def test_prior_summary_triggers_fold_call():
     llm = _llm("S")
-    out = await summarize_transcript(llm, "short", prior_summary="PRIOR")
+    out = await summarize_text(llm, "short", prior_summary="PRIOR")
     assert out == "S"
     # One call to summarise the transcript, one to fold into the prior summary.
     assert llm.complete.call_count == 2
@@ -192,11 +192,11 @@ async def test_prior_summary_triggers_fold_call():
 @pytest.mark.asyncio
 async def test_empty_llm_content_returns_empty_string():
     llm = _llm("")
-    assert await summarize_transcript(llm, "short") == ""
+    assert await summarize_text(llm, "short") == ""
 
 
 # ---------------------------------------------------------------------------
-# summarize_transcript — map-reduce over long input
+# summarize_text — map-reduce over long input
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -209,7 +209,7 @@ async def test_long_transcript_maps_over_chunks():
     assert n_chunks > 1  # sanity: the input really does split
 
     llm = _llm("s")
-    out = await summarize_transcript(llm, transcript, chunk_tokens=chunk_tokens)
+    out = await summarize_text(llm, transcript, chunk_tokens=chunk_tokens)
     assert llm.complete.call_count == n_chunks
     assert estimate_tokens(out) <= chunk_tokens
 
@@ -224,14 +224,14 @@ async def test_recurses_until_merged_fits_budget():
     assert first_pass_chunks > 10
 
     llm = _llm("x")
-    out = await summarize_transcript(llm, transcript, chunk_tokens=chunk_tokens)
+    out = await summarize_text(llm, transcript, chunk_tokens=chunk_tokens)
 
     assert estimate_tokens(out) <= chunk_tokens  # terminated within budget
     assert llm.complete.call_count > first_pass_chunks  # recursion happened
 
 
 # ---------------------------------------------------------------------------
-# summarize_transcript — error handling
+# summarize_text — error handling
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -240,4 +240,4 @@ async def test_llm_error_propagates():
     llm = MagicMock()
     llm.complete = AsyncMock(side_effect=RuntimeError("boom"))
     with pytest.raises(RuntimeError, match="boom"):
-        await summarize_transcript(llm, "the transcript")
+        await summarize_text(llm, "the transcript")

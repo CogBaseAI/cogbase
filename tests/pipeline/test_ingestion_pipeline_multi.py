@@ -403,7 +403,7 @@ class TestDocumentEmbedUpsert:
             vector_collections=[vc],
         )
         # ~2500 tokens against a 1000-token chunk budget → the document is split
-        # and summarised map-reduce (more than one llm call) via summarize_transcript.
+        # and summarised map-reduce (more than one llm call) via summarize_text.
         await pipeline._ingest(Document(doc_id="d-001", text="word " * 2000))
 
         assert llm.complete.await_count >= 2

@@ -24,7 +24,7 @@ from typing import Sequence
 from cogbase.core.models import Chunk, Document
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import LLMBase
-from cogbase.llms.compaction import estimate_tokens, summarise_chunk_tokens, summarize_transcript
+from cogbase.llms.summarization import estimate_tokens, summarise_chunk_tokens, summarize_text
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.chunking.base import ChunkerBase
 from cogbase.stores import CollectionSchema, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
@@ -371,7 +371,7 @@ class IngestionPipeline:
     async def _summarize(self, doc: Document, step: PipelineStep) -> str | None:
         """Summarize ``doc.text`` through ``step.doc_prompt``; ``None`` on failure.
 
-        Delegates to :func:`cogbase.llms.compaction.summarize_transcript`, the
+        Delegates to :func:`cogbase.llms.summarization.summarize_text`, the
         shared map-reduce summariser: a document that fits the summariser's
         context window is summarized in one call, while a larger one is split,
         summarized per chunk, and recursively merged into a single bounded
@@ -380,7 +380,7 @@ class IngestionPipeline:
         skips the upsert) rather than aborting the document's other steps.
         """
         try:
-            summary = await summarize_transcript(
+            summary = await summarize_text(
                 step.llm,
                 doc.text,
                 chunk_tokens=summarise_chunk_tokens(step.llm, "mini"),

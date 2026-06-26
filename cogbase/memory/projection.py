@@ -15,7 +15,7 @@ docs/episodic-memory.md#single-writer-and-append-safety).
 
 from __future__ import annotations
 
-from cogbase.llms.compaction import estimate_tokens
+from cogbase.llms.summarization import estimate_tokens
 from cogbase.memory.models import (
     EventType,
     MemoryEvent,

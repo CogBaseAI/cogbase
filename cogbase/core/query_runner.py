@@ -61,13 +61,13 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from cogbase.llms.compaction import (
+from cogbase.llms.summarization import (
     WORKING_CONTEXT_PROMPT,
     estimate_messages_tokens,
     estimate_tokens,
     render_message,
     summarise_chunk_tokens,
-    summarize_transcript,
+    summarize_text,
 )
 from cogbase.core.models import Chunk
 from cogbase.embeddings import EmbeddingBase
@@ -1351,12 +1351,12 @@ class QueryRunner:
     ) -> list[ChatMessage]:
         """Summarise *messages* into a minimal list to recover from context overflow.
 
-        Delegates to ``cogbase.llms.compaction.summarize_transcript``, which preserves
+        Delegates to ``cogbase.llms.summarization.summarize_text``, which preserves
         the full transcript (no per-message truncation): long transcripts are
         split into budget-sized chunks, summarised, and merged recursively.
         """
         transcript = "\n".join(render_message(m) for m in messages)
-        summary = await summarize_transcript(
+        summary = await summarize_text(
             self._llm,
             transcript,
             chunk_tokens=summarise_chunk_tokens(self._llm),
