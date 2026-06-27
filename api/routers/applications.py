@@ -1140,11 +1140,17 @@ async def get_doc(
 async def delete_doc(
     app_name: str,
     doc_id: str,
+    app_cache: AppCacheDep,
     system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
 ) -> None:
-    """Remove a document from the registry and cascade-delete its workflow tasks.
+    """Delete a document: purge its ingested data, then drop it from the registry.
 
-    Note: this does not yet remove data from vector or structured stores.
+    Removes the document's vector chunks and structured records from every
+    pipeline, its parsed text from the document store, and its raw uploaded file,
+    then cascade-deletes its workflow tasks and the registry record.  The store
+    purge runs first so a failure there surfaces before the registry entry — the
+    only handle on the document — is gone.
     """
     record = await system_store.get_app(app_name)
     if record is None:
@@ -1152,6 +1158,20 @@ async def delete_doc(
     doc = await system_store.get_doc(record.app_id, doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"Document '{doc_id}' not found")
+
+    # Purge derived data (vector + structured + parsed text) from every pipeline's
+    # stores before touching the registry. Best-effort for the raw original, whose
+    # path we reconstruct from the upload metadata (originals/{doc_id}{suffix}).
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    await app.delete_document(doc_id)
+
+    source_format = (json.loads(doc.metadata) if doc.metadata else {}).get("source_format")
+    suffix = f".{source_format}" if source_format else ""
+    try:
+        await app.document_store.delete(record.app_id, f"originals/{doc_id}{suffix}")
+    except Exception:
+        logger.exception("delete_doc: failed to remove raw original doc_id=%s", doc_id)
+
     await system_store.delete_doc(record.app_id, doc_id)
     logger.info("Document '%s' deleted from app '%s'", doc_id, app_name)
 

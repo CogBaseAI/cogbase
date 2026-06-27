@@ -279,14 +279,15 @@ About 90% of the codebase — the ingestion pipeline, workflow engine, query run
 - [x] Short-term memory — in-memory projection over the episodic log tail; rehydrates on cache miss, compacts under model-context pressure (`session_compacted`)
 - [x] Episodic memory — durable append-only per-session event log (`LogStoreBase`, NDJSON), the single source of truth for short-term and distillation
 - [x] Long-term memory — offline distillation on session close: extract + reconcile (ADD/UPDATE/DELETE/NOOP) durable facts/preferences/corrections/hints against accumulated belief, linked into a memory graph, recalled into the query runner (with the `memory_lookup` pull tool); LoCoMo: 93.9% vs 92.8% baseline
+- [x] Long-document ingestion — all three pipeline steps handle inputs that overflow model limits: `chunk-embed-upsert` batches passages to the embedding API (configurable `batch_size`) and sizes chunks against the embedding `context_window`; `extract-structured` splits oversized documents into overlapping, token-bounded windows, extracts each independently, and merges the results with duplicate removal; `document-embed-upsert` summarizes oversized documents map-reduce (shared `summarize_text` helper, also used by short-term memory compaction)
+- [x] Query runner: auto-compaction — when the working message list outgrows `context_token_budget`, the agent loop compacts it in place via `compact_messages` (map-reduce summarization over the transcript, same `summarize_text` helper), bounding token cost across long multi-tool turns; opt-in (off when no budget is set), and safe to trigger between rounds since every tool call has already been answered
 
 **Improvements**
 
 These are known gaps in the first-pass implementations.
 
-- [ ] Query runner: auto-compaction — `compact_messages` is implemented but not wired into the loop, etc
 - [ ] Skills: skill creator, pull from a registry, add a skill to an app, skill versioning, etc
-- [ ] Ingestion: long document handling (hierarchical chunking, map-reduce summarization), multi-modal inputs (image, audio, video), etc
+- [ ] Ingestion: multi-modal inputs (image, audio, video), hierarchical chunking, etc
 - [ ] Workflow step timeouts and partial-failure recovery — a failing step currently aborts the whole workflow, parallel steps, etc
 - [ ] API layer - authentication (API keys or token-based), etc
 - [ ] Broader integration test coverage — especially for query runner loops, workflows, and API end-to-end paths

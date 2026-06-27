@@ -1734,3 +1734,60 @@ class TestListWorkflowDocs:
         )
         assert resp.status_code == 404
         assert "nonexistent" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# DELETE /applications/{app_name}/docs/{doc_id}
+# ---------------------------------------------------------------------------
+
+
+def _mock_delete_app() -> MagicMock:
+    """Mock CogBaseApp whose delete_document and document_store.delete are awaitable."""
+    inst = MagicMock()
+    inst.delete_document = AsyncMock()
+    store = MagicMock()
+    store.delete = AsyncMock()
+    inst.document_store = store
+    return inst
+
+
+class TestDeleteDoc:
+    @pytest.mark.asyncio
+    async def test_delete_purges_stores_and_removes_record(self, app_overrides):
+        client = app_overrides["client"]
+        system_store: SystemStore = app_overrides["system_store"]
+        mock_app = _mock_delete_app()
+        await _create_app(client, mock_app)
+        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        await system_store.save_doc(DocRecord(
+            app_id=app_id, doc_id="doc-1", status="active",
+            ingested_at="2024-01-01T00:00:00+00:00",
+            metadata='{"source_filename": "doc-1.pdf", "source_format": "pdf"}',
+        ))
+
+        resp = await client.delete("/applications/my-contract-analyzer/docs/doc-1")
+
+        assert resp.status_code == 204
+        # Derived data purged from every pipeline's stores.
+        mock_app.delete_document.assert_awaited_once_with("doc-1")
+        # Raw original removed using the suffix reconstructed from upload metadata.
+        mock_app.document_store.delete.assert_awaited_once_with(app_id, "originals/doc-1.pdf")
+        # Registry entry gone.
+        assert await system_store.get_doc(app_id, "doc-1") is None
+
+    @pytest.mark.asyncio
+    async def test_delete_unknown_doc_returns_404(self, app_overrides):
+        client = app_overrides["client"]
+        mock_app = _mock_delete_app()
+        await _create_app(client, mock_app)
+
+        resp = await client.delete("/applications/my-contract-analyzer/docs/ghost")
+
+        assert resp.status_code == 404
+        mock_app.delete_document.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_delete_unknown_app_returns_404(self, app_overrides):
+        client = app_overrides["client"]
+        resp = await client.delete("/applications/nonexistent/docs/doc-1")
+        assert resp.status_code == 404

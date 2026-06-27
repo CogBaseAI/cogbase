@@ -28,6 +28,7 @@ from cogbase.llms.summarization import estimate_tokens, summarise_chunk_tokens, 
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.chunking.base import ChunkerBase
 from cogbase.stores import CollectionSchema, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
+from cogbase.stores.filters import Col
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,39 @@ class IngestionPipeline:
         )
         return 0, False
 
+    async def purge_document(self, doc_id: str) -> None:
+        """Remove ``doc_id``'s prior data from every collection this pipeline writes.
+
+        Makes re-ingestion idempotent. Vector collections are purged by
+        ``delete_doc`` — this drops chunks a shorter re-extraction would otherwise
+        orphan (chunk ids are positional, so a re-ingest yielding fewer chunks
+        leaves the trailing old ones behind without this). Structured collections
+        are purged by deleting every record carrying this ``doc_id``, so a
+        re-ingest replaces the document's rows instead of appending duplicates
+        (``save`` upserts only on the primary key, which for list-mode extraction
+        is a positional item id that shifts when extraction output changes).
+
+        Deleting a ``doc_id`` absent from a collection is a no-op, so this is safe
+        on first ingest. Each collection is purged once even when several steps
+        target it.
+        """
+        vector_names: set[str] = set()
+        structured_names: set[str] = set()
+        for step in self._steps:
+            if step.tool in ("chunk-embed-upsert", "document-embed-upsert"):
+                vector_names.add(step.collection)
+            elif step.tool == "extract-structured":
+                structured_names.add(step.collection)
+
+        for name in vector_names:
+            vc = self._vector_by_name.get(name)
+            if vc is not None:
+                await vc.store.delete_doc(vc.name, doc_id)
+        for name in structured_names:
+            sc = self._structured_by_name.get(name)
+            if sc is not None:
+                await sc.store.delete_records(sc.schema.name, [Col("doc_id") == doc_id])
+
     async def _ingest(self, doc: Document) -> tuple[int, bool]:
         """Ingest a document by executing each step, sequentially or in parallel.
 
@@ -209,6 +243,12 @@ class IngestionPipeline:
             "ingestion_pipeline.ingest.start app_id=%s name=%s doc_id=%s steps=%d parallel=%s",
             self.app_id, self.name, doc.doc_id, len(self._steps), self.parallel,
         )
+
+        # Purge any prior ingest of this doc_id before (re)writing, so a re-ingest
+        # replaces the document's data rather than duplicating structured rows or
+        # leaving orphaned vector chunks. Must complete before any step runs —
+        # including the parallel path, where steps would otherwise race the delete.
+        await self.purge_document(doc.doc_id)
 
         if self.parallel:
             results = await asyncio.gather(*[self._run_step(doc, step) for step in self._steps])

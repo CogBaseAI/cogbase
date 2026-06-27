@@ -273,6 +273,26 @@ class CogBaseApp:
 
         return results
 
+    async def delete_document(self, doc_id: str) -> None:
+        """Purge a document's ingested data from every pipeline and the doc store.
+
+        Removes the document's vector chunks and structured records from every
+        pipeline's collections, then deletes the parsed text the app persisted at
+        ingest time.  A document is not tagged with the pipeline that ingested it,
+        so every pipeline is purged; a ``doc_id`` absent from a collection is a
+        no-op.  Does not touch the task/document registry — the API layer owns
+        that, along with the raw uploaded file.
+        """
+        logger.info("app.delete_document.start app=%s doc_id=%s", self.name, doc_id)
+        for pipeline in self._pipelines:
+            await pipeline.purge_document(doc_id)
+        try:
+            await self._document_store.delete(self.app_id, doc_id)
+        except Exception:
+            # The derived stores are already purged; a stale parsed-text blob is a
+            # storage leak, not a correctness problem, so don't fail the delete.
+            logger.exception("app.delete_document.doc_store_delete_failed doc_id=%s", doc_id)
+
     async def resolve_workflow_params(
         self,
         wf_runner: "WorkflowRunner",

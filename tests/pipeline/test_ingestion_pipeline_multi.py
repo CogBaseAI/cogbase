@@ -22,6 +22,7 @@ from cogbase.pipeline.ingestion_pipeline import (
     PipelineStep,
 )
 from cogbase.stores import CollectionSchema, FieldSchema, FieldType, VectorCollectionSchema
+from cogbase.stores.filters import Col
 from cogbase.stores.document.memory import InMemoryDocumentStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 from cogbase.stores.structured.base import StructuredStoreBase
@@ -686,3 +687,109 @@ class TestWhenConditionRouting:
         assert rule_store.ntotal("rule_chunks") > 0, "rules doc did not land in rule_chunks"
         assert contract_store.ntotal("contract_chunks") > 0, "contract doc did not land in contract_chunks"
 
+
+# ---------------------------------------------------------------------------
+# Idempotent re-ingest (purge_document)
+# ---------------------------------------------------------------------------
+
+class WordRecord(BaseModel):
+    rec_id: str
+    doc_id: str
+    word: str
+
+
+class WordExtractor(ExtractorBase):
+    """Emits one record per whitespace-delimited word, with positional ids.
+
+    Positional ids (``{doc_id}__{index}``) mean a re-ingest of shorter text would
+    leave the trailing records of the previous run behind unless they are purged
+    first — exactly the orphan/duplicate case purge_document must prevent.
+    """
+
+    _schema = CollectionSchema(
+        name="word_tags",
+        description="One record per word of the source document.",
+        primary_fields=["rec_id"],
+        fields={
+            "rec_id": FieldSchema(type=FieldType.STRING),
+            "doc_id": FieldSchema(type=FieldType.STRING),
+            "word":   FieldSchema(type=FieldType.STRING),
+        },
+    )
+
+    @property
+    def schema(self) -> CollectionSchema:
+        return self._schema
+
+    async def _extract_once(self, doc: Document) -> list[dict] | None:
+        return [
+            WordRecord(rec_id=f"{doc.doc_id}__{i}", doc_id=doc.doc_id, word=w).model_dump()
+            for i, w in enumerate(doc.text.split())
+        ]
+
+
+class TestReingestIdempotent:
+    async def _build(self, make_vector_store, make_structured_store):
+        vector_store = make_vector_store()
+        await vector_store.create_collection(
+            VectorCollectionSchema(name="chunks", dimensions=4, description="chunks")
+        )
+        structured_store = make_structured_store()
+        await structured_store.create_collection(WordExtractor().schema)
+
+        vc = _make_vector_collection(vector_store, "chunks")
+        sc = StructuredCollection(schema=WordExtractor().schema, store=structured_store)
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[
+                PipelineStep(tool="chunk-embed-upsert", collection="chunks", chunker=FixedSizeChunker(chunk_size=10, overlap=0)),
+                PipelineStep(tool="extract-structured", collection="word_tags", extractor=WordExtractor()),
+            ],
+            vector_collections=[vc],
+            structured_collections=[sc],
+        )
+        return pipeline, vector_store, structured_store
+
+    @pytest.mark.asyncio
+    async def test_reingest_does_not_duplicate_structured_records(self, make_vector_store, make_structured_store):
+        pipeline, _, structured_store = await self._build(make_vector_store, make_structured_store)
+        doc = Document(doc_id="d-1", text="alpha beta gamma delta")
+
+        await pipeline._ingest(doc)
+        first = await structured_store.query("word_tags", [Col("doc_id") == "d-1"])
+        assert len(first) == 4
+
+        # Re-ingest identical content: records are replaced, not appended.
+        await pipeline._ingest(doc)
+        again = await structured_store.query("word_tags", [Col("doc_id") == "d-1"])
+        assert len(again) == 4
+
+    @pytest.mark.asyncio
+    async def test_reingest_shorter_doc_drops_orphans(self, make_vector_store, make_structured_store):
+        pipeline, vector_store, structured_store = await self._build(make_vector_store, make_structured_store)
+
+        await pipeline._ingest(Document(doc_id="d-1", text="alpha beta gamma delta epsilon zeta"))
+        assert len(await structured_store.query("word_tags", [Col("doc_id") == "d-1"])) == 6
+        chunks_before = vector_store.ntotal("chunks")
+        assert chunks_before > 1
+
+        # Shorter re-ingest: the previous run's trailing records/chunks must be gone,
+        # not orphaned by their now-unused positional ids.
+        await pipeline._ingest(Document(doc_id="d-1", text="alpha"))
+        records = await structured_store.query("word_tags", [Col("doc_id") == "d-1"])
+        assert [r["word"] for r in records] == ["alpha"]
+        assert vector_store.ntotal("chunks") == 1
+
+    @pytest.mark.asyncio
+    async def test_purge_leaves_other_documents_untouched(self, make_vector_store, make_structured_store):
+        pipeline, vector_store, structured_store = await self._build(make_vector_store, make_structured_store)
+
+        await pipeline._ingest(Document(doc_id="keep", text="one two three"))
+        keep_chunks = vector_store.ntotal("chunks")
+        await pipeline._ingest(Document(doc_id="drop", text="four five"))
+
+        await pipeline.purge_document("drop")
+        assert await structured_store.query("word_tags", [Col("doc_id") == "drop"]) == []
+        kept = await structured_store.query("word_tags", [Col("doc_id") == "keep"])
+        assert len(kept) == 3
+        assert vector_store.ntotal("chunks") == keep_chunks
