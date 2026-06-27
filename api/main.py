@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import pathlib
 import sys
@@ -31,6 +32,7 @@ from api.routers.system import router as system_router
 from api.system_config import SystemConfig
 from api.system_resources import SystemResources
 from api.system_store import SystemStore
+from api.task_runner import recover_orphaned_tasks
 from cogbase.skills.registry import SkillRegistry
 from cogbase.skills.skill import load_skill_dir
 from cogbase.skills.store import SkillBundleStore
@@ -162,6 +164,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.skill_registry = skill_registry
     app.state.skill_bundle_store = skill_bundle_store
     app.state.app_cache = app_cache
+
+    # Requeue background tasks (ingest/distill/workflow) left unfinished by a
+    # previous process: an in-process create_task is lost on crash/deploy/OOM,
+    # stranding its task record in PENDING/RUNNING. Re-execution is idempotent.
+    # Run in the background so startup stays fast.
+    async def _resolve_app(name: str) -> object | None:
+        inst = app_cache.get(name)
+        if inst is not None:
+            return inst
+        rec = await system_store.get_app(name)
+        if rec is None or rec.status != "active":
+            return None
+        built = await build_app(
+            AppConfig.from_yaml(rec.config_yaml), app_id=rec.app_id,
+            system=system_resources, app_status=rec.status, task_store=system_store,
+        )
+        app_cache.add(name, built)
+        return built
+
+    async def _recover() -> None:
+        try:
+            await recover_orphaned_tasks(system_store, _resolve_app, app_cache)
+        except Exception:
+            logger.exception("startup task recovery failed")
+
+    asyncio.create_task(_recover())
 
     yield
 

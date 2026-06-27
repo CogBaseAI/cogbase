@@ -64,9 +64,8 @@ from api.system_store import (
     AppRecord, DocRecord, DocWorkflowRecord, DocWorkflowStatus,
     SystemStore, TaskRecord, TaskStatus, new_app_id,
 )
-from cogbase.core.models import Document
-from cogbase.pipeline.document_parser import parse_to_markdown
 from cogbase.stores.filters import Filter, Op
+from api.task_runner import DEFAULT_TASK_CONCURRENCY, run_distill_task, run_ingest_task
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 
@@ -553,96 +552,19 @@ async def upload_documents(
         ))
         pending_task_ids.append(task_id)
 
-    # 3. Background: for each pending task load bytes from document store, parse, ingest.
+    # 3. Background: for each pending task load bytes from document store, parse,
+    #    ingest. Execution is shared with the startup recovery sweep (see
+    #    api/task_runner.py) so an interrupted upload is requeued on restart.
     if pending_task_ids:
         async def _run_upload_bg() -> None:
-            # TODO make 5 configurable
-            semaphore = asyncio.Semaphore(5)
+            semaphore = asyncio.Semaphore(DEFAULT_TASK_CONCURRENCY)
 
             async def _ingest_one(task_id: str) -> None:
                 async with semaphore:
-                    task = await system_store.get_task(task_id)
-                    if task is None:
-                        return
-
-                    try:
-                        params = json.loads(task.params_json) if task.params_json else {}
-                    except Exception:
-                        params = {}
-
-                    doc_path = params.get("doc_path", "")
-                    doc_metadata = params.get("doc_metadata", {})
-                    doc_id = task.doc_id or ""
-                    filename = doc_metadata.get("source_filename", doc_id)
-
-                    try:
-                        current_app = app_cache.get(app_name) or app
-                        content = await current_app.document_store.load_bytes(app_id, doc_path)
-                    except Exception as exc:
-                        await system_store.update_task(
-                            task_id, status=TaskStatus.FAILED, completed_at=_now(),
-                            error=f"Failed to load document bytes: {exc}",
-                        )
-                        return
-
-                    try:
-                        markdown_text = parse_to_markdown(content, filename)
-                    except Exception as exc:
-                        await system_store.update_task(
-                            task_id, status=TaskStatus.FAILED, completed_at=_now(),
-                            error=f"Failed to parse {filename!r}: {exc}",
-                        )
-                        return
-
-                    doc = Document(doc_id=doc_id, text=markdown_text, metadata=doc_metadata)
-                    await system_store.update_task(task_id, status=TaskStatus.RUNNING, started_at=_now())
-                    try:
-                        current_app = app_cache.get(app_name) or app
-                        results = await current_app.ingest_documents([doc])
-                        result = results[0]
-                        if result.success:
-                            # A successful ingest that lands nothing usually means the
-                            # document had no extractable text (scanned/image-only PDF)
-                            # or no pipeline step matched it. Surface that as a warning
-                            # on the otherwise-'done' task rather than reporting silent
-                            # success.
-                            warning = None
-                            if result.ingested_nothing:
-                                warning = (
-                                    "no text could be extracted — the document may be a "
-                                    "scanned/image-only PDF or otherwise empty; nothing was ingested"
-                                    if not markdown_text.strip()
-                                    else "document parsed but produced no chunks or records; "
-                                    "check that a pipeline matches this document type"
-                                )
-                                logger.warning(
-                                    "upload_bg ingested nothing app=%s doc_id=%s: %s",
-                                    app_name, doc_id, warning,
-                                )
-                            summary = IngestResultSummary(
-                                chunks_written=result.chunks_written,
-                                records_extracted=result.records_extracted,
-                                warning=warning,
-                            )
-                            await system_store.update_task(
-                                task_id, status=TaskStatus.DONE, completed_at=_now(),
-                                result_json=summary.model_dump_json(),
-                            )
-                            await system_store.save_doc(DocRecord(
-                                app_id=app_id,
-                                doc_id=doc.doc_id,
-                                status="active",
-                                ingested_at=_now(),
-                                metadata=json.dumps(doc.metadata) if doc.metadata else None,
-                            ))
-                        else:
-                            await system_store.update_task(
-                                task_id, status=TaskStatus.FAILED, completed_at=_now(),
-                                error=str(result.error) if result.error else "ingest failed",
-                            )
-                    except Exception as exc:
-                        logger.exception("upload_bg failed app=%s doc_id=%s", app_name, doc_id)
-                        await system_store.update_task(task_id, status=TaskStatus.FAILED, completed_at=_now(), error=str(exc))
+                    await run_ingest_task(
+                        task_id, app=app, app_name=app_name, app_cache=app_cache,
+                        app_id=app_id, system_store=system_store,
+                    )
 
             await asyncio.gather(*(_ingest_one(tid) for tid in pending_task_ids))
 
@@ -797,16 +719,9 @@ async def close_session(
 
     task_id = await system_store.create_distill_task(app.app_id, session_id)
 
-    async def _run_distill_bg() -> None:
-        await system_store.start_task(task_id)
-        try:
-            await distiller.distill_session(session_id=session_id)
-            await system_store.complete_distill_task(task_id, success=True)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("distillation failed for session '%s'", session_id)
-            await system_store.complete_distill_task(task_id, success=False, error=str(exc))
-
-    asyncio.create_task(_run_distill_bg())
+    # Shared with the startup recovery sweep so an interrupted distillation is
+    # requeued on restart (see api/task_runner.py).
+    asyncio.create_task(run_distill_task(task_id, app=app, system_store=system_store))
     return SessionCloseResponse(
         session_id=session_id, distillation="enqueued", task_id=task_id
     )

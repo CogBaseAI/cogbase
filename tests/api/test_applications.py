@@ -658,7 +658,7 @@ class TestUploadDocuments:
         mock_app = _mock_upload_app()
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", return_value="parsed text"):
+        with patch("api.task_runner.parse_to_markdown", return_value="parsed text"):
             resp = await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("contract.txt", b"raw text", "text/plain"))],
@@ -677,7 +677,7 @@ class TestUploadDocuments:
         )
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+        with patch("api.task_runner.parse_to_markdown", return_value="text"):
             await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("my contract 2024.pdf", b"bytes", "application/pdf"))],
@@ -695,7 +695,7 @@ class TestUploadDocuments:
         mock_app = _mock_upload_app(results=[])
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", side_effect=RuntimeError("bad pdf")):
+        with patch("api.task_runner.parse_to_markdown", side_effect=RuntimeError("bad pdf")):
             resp = await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("broken.pdf", b"not a pdf", "application/pdf"))],
@@ -713,7 +713,7 @@ class TestUploadDocuments:
         mock_app = _mock_upload_app()
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+        with patch("api.task_runner.parse_to_markdown", return_value="text"):
             await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("contract.txt", b"text", "text/plain"))],
@@ -733,7 +733,7 @@ class TestUploadDocuments:
         mock_app = _mock_upload_app()
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+        with patch("api.task_runner.parse_to_markdown", return_value="text"):
             await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("report.pdf", b"bytes", "application/pdf"))],
@@ -752,7 +752,7 @@ class TestUploadDocuments:
         mock_app = _mock_upload_app()
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+        with patch("api.task_runner.parse_to_markdown", return_value="text"):
             await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("doc.txt", b"text", "text/plain"))],
@@ -801,7 +801,7 @@ class TestUploadDocuments:
         await _create_app(client, mock_app)
 
         raw_bytes = b"original pdf bytes"
-        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+        with patch("api.task_runner.parse_to_markdown", return_value="text"):
             await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("invoice.pdf", raw_bytes, "application/pdf"))],
@@ -818,7 +818,7 @@ class TestUploadDocuments:
         mock_app = _mock_upload_app(document_store=None)
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+        with patch("api.task_runner.parse_to_markdown", return_value="text"):
             resp = await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("doc.txt", b"text", "text/plain"))],
@@ -840,7 +840,7 @@ class TestUploadDocuments:
         mock_app = _mock_upload_app()
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+        with patch("api.task_runner.parse_to_markdown", return_value="text"):
             resp = await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("contract.txt", b"text", "text/plain"))],
@@ -866,7 +866,7 @@ class TestUploadDocuments:
                 raise RuntimeError("cannot parse")
             return "parsed text"
 
-        with patch("api.routers.applications.parse_to_markdown", side_effect=_parse):
+        with patch("api.task_runner.parse_to_markdown", side_effect=_parse):
             resp = await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[
@@ -887,7 +887,7 @@ class TestUploadDocuments:
         mock_app = _mock_upload_app()
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+        with patch("api.task_runner.parse_to_markdown", return_value="text"):
             resp = await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("invoice.pdf", b"bytes", "application/pdf"))],
@@ -912,7 +912,7 @@ class TestUploadDocuments:
         mock_app = _mock_upload_app()
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", return_value="text") as mock_parse:
+        with patch("api.task_runner.parse_to_markdown", return_value="text") as mock_parse:
             await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("invoice.pdf", raw_bytes, "application/pdf"))],
@@ -935,7 +935,7 @@ class TestUploadDocuments:
         mock_app = _mock_upload_app(document_store=store)
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+        with patch("api.task_runner.parse_to_markdown", return_value="text"):
             resp = await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("invoice.pdf", b"bytes", "application/pdf"))],
@@ -966,7 +966,7 @@ class TestUploadDocuments:
         )
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", return_value="parsed text"):
+        with patch("api.task_runner.parse_to_markdown", return_value="parsed text"):
             resp = await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("contract.txt", b"text", "text/plain"))],
@@ -989,7 +989,7 @@ class TestUploadDocuments:
         await _create_app(client, mock_app)
 
         # markitdown extracts no text from an image-only PDF.
-        with patch("api.routers.applications.parse_to_markdown", return_value="   \n  "):
+        with patch("api.task_runner.parse_to_markdown", return_value="   \n  "):
             resp = await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("scan.pdf", b"%PDF-image", "application/pdf"))],
@@ -1011,7 +1011,7 @@ class TestUploadDocuments:
         )
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", return_value="real content here"):
+        with patch("api.task_runner.parse_to_markdown", return_value="real content here"):
             resp = await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("doc.txt", b"text", "text/plain"))],
@@ -1034,7 +1034,7 @@ class TestUploadDocuments:
         )
         await _create_app(client, mock_app)
 
-        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+        with patch("api.task_runner.parse_to_markdown", return_value="text"):
             resp = await client.post(
                 "/applications/my-contract-analyzer/upload_documents",
                 files=[

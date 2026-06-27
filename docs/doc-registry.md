@@ -12,6 +12,12 @@ The doc registry is the canonical document catalog for an application. It answer
 
 Keeping these separate means ingest tasks become audit logs once complete — they can be pruned without affecting the document inventory or workflow history.
 
+## Task durability
+
+Background tasks (ingest, distill, workflow) are run in-process. The task record is the durable handle: it is created `PENDING`, flipped to `RUNNING` while executing, and settled to `DONE`/`FAILED`. If the node crashes, deploys, or OOMs mid-flight, the in-process coroutine is lost but the record survives. On startup, `recover_orphaned_tasks` (`api/task_runner.py`) sweeps every active app, resets `RUNNING` tasks back to `PENDING`, and re-dispatches all `PENDING` tasks through the same executors used by the live request path. Re-execution is safe because ingestion is idempotent (deterministic chunk ids; upsert-by-primary-key in both vector and structured stores).
+
+This recovery is **single-node, at-least-once**. In a multi-node deployment two nodes could recover the same task concurrently; correctness then rests on idempotent re-execution. Exactly-once across nodes requires task leasing (an atomic `PENDING→RUNNING` claim carrying an owner id and lease expiry) and is not yet implemented.
+
 ## DocRecord
 
 A `DocRecord` is written on successful ingest completion. Fields:
