@@ -38,6 +38,7 @@ from api.models import (
     DocWorkflowResponse,
     FilterRequest,
     IngestDocumentsAcceptedResponse,
+    IngestResultSummary,
     MemoryListResponse,
     MemoryRecordResponse,
     MemoryReviewRequest,
@@ -54,6 +55,7 @@ from api.models import (
     CollectionQueryResponse,
     TaskListResponse,
     TaskResponse,
+    TaskSummaryResponse,
     WorkflowDocListResponse,
     WorkflowListResponse,
     WorkflowRunRequest,
@@ -106,9 +108,16 @@ def _doc_workflow_to_response(record: DocRecord, workflow_status: str, app_name:
 
 def _task_to_response(record: TaskRecord, app_name: str) -> TaskResponse:
     """Map a TaskRecord (id-keyed) to a name-facing TaskResponse."""
+    result = None
+    if record.result_json:
+        try:
+            result = IngestResultSummary.model_validate_json(record.result_json)
+        except Exception:
+            logger.warning("task %s has unparseable result_json", record.task_id)
     return TaskResponse(
         app_name=app_name,
-        **record.model_dump(exclude={"app_id"}),
+        result=result,
+        **record.model_dump(exclude={"app_id", "result_json"}),
     )
 
 
@@ -506,6 +515,7 @@ async def upload_documents(
         return re.sub(r"[^\w\-]", "_", stem)
 
     now = _now()
+    batch_id = str(uuid.uuid4())
     all_task_ids: list[str] = []
     pending_task_ids: list[str] = []
 
@@ -536,6 +546,7 @@ async def upload_documents(
             task_type="ingest",
             task_name="ingest",
             doc_id=doc_id,
+            batch_id=batch_id,
             params_json=json.dumps({"doc_path": doc_path, "doc_metadata": doc_metadata}),
             status=TaskStatus.PENDING,
             created_at=now,
@@ -590,7 +601,33 @@ async def upload_documents(
                         results = await current_app.ingest_documents([doc])
                         result = results[0]
                         if result.success:
-                            await system_store.update_task(task_id, status=TaskStatus.DONE, completed_at=_now())
+                            # A successful ingest that lands nothing usually means the
+                            # document had no extractable text (scanned/image-only PDF)
+                            # or no pipeline step matched it. Surface that as a warning
+                            # on the otherwise-'done' task rather than reporting silent
+                            # success.
+                            warning = None
+                            if result.ingested_nothing:
+                                warning = (
+                                    "no text could be extracted — the document may be a "
+                                    "scanned/image-only PDF or otherwise empty; nothing was ingested"
+                                    if not markdown_text.strip()
+                                    else "document parsed but produced no chunks or records; "
+                                    "check that a pipeline matches this document type"
+                                )
+                                logger.warning(
+                                    "upload_bg ingested nothing app=%s doc_id=%s: %s",
+                                    app_name, doc_id, warning,
+                                )
+                            summary = IngestResultSummary(
+                                chunks_written=result.chunks_written,
+                                records_extracted=result.records_extracted,
+                                warning=warning,
+                            )
+                            await system_store.update_task(
+                                task_id, status=TaskStatus.DONE, completed_at=_now(),
+                                result_json=summary.model_dump_json(),
+                            )
                             await system_store.save_doc(DocRecord(
                                 app_id=app_id,
                                 doc_id=doc.doc_id,
@@ -611,7 +648,9 @@ async def upload_documents(
 
         asyncio.create_task(_run_upload_bg())
 
-    return IngestDocumentsAcceptedResponse(task_ids=all_task_ids, total=len(all_task_ids))
+    return IngestDocumentsAcceptedResponse(
+        task_ids=all_task_ids, total=len(all_task_ids), batch_id=batch_id
+    )
 
 
 async def _drain_query(
@@ -1188,21 +1227,75 @@ async def list_tasks(
     task_type: str | None = None,
     task_name: str | None = None,
     doc_id: str | None = None,
+    batch_id: str | None = None,
     status: TaskStatus | None = None,
 ) -> TaskListResponse:
     """List background tasks for an application.
 
     Filter by task_type ('ingest' or 'workflow'), task_name (workflow name),
-    doc_id, or status ('pending', 'running', 'done', 'failed').
+    doc_id, batch_id (an upload batch), or status ('pending', 'running', 'done',
+    'failed').  Finished ingest tasks carry a ``result`` with per-document chunk
+    and record counts and any warning.
     """
     record = await system_store.get_app(app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
     tasks = await system_store.list_tasks(
-        record.app_id, task_type=task_type, task_name=task_name, doc_id=doc_id, status=status
+        record.app_id, task_type=task_type, task_name=task_name,
+        doc_id=doc_id, batch_id=batch_id, status=status,
     )
     items = [_task_to_response(t, app_name) for t in tasks]
     return TaskListResponse(tasks=items, total=len(items))
+
+
+@router.get("/{app_name}/tasks/summary", response_model=TaskSummaryResponse)
+async def task_summary(
+    app_name: str,
+    system_store: SystemStoreDep,
+    batch_id: str | None = None,
+    task_type: str | None = None,
+) -> TaskSummaryResponse:
+    """Roll up task status and ingest counts — answers 'did my upload work?'.
+
+    Counts tasks by status and, across finished ingest tasks, totals the chunks
+    and records written and the number that ingested nothing (``warnings``).
+    Scope to one upload with ``batch_id`` (returned by upload_documents); narrow
+    to ingest or workflow tasks with ``task_type``.
+    """
+    record = await system_store.get_app(app_name)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
+    tasks = await system_store.list_tasks(
+        record.app_id, task_type=task_type, batch_id=batch_id
+    )
+
+    by_status = {s: 0 for s in (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.DONE, TaskStatus.FAILED)}
+    chunks_written = records_extracted = warnings = 0
+    for t in tasks:
+        by_status[t.status] = by_status.get(t.status, 0) + 1
+        if not t.result_json:
+            continue
+        try:
+            summary = IngestResultSummary.model_validate_json(t.result_json)
+        except Exception:
+            continue
+        chunks_written += summary.chunks_written
+        records_extracted += summary.records_extracted
+        if summary.warning:
+            warnings += 1
+
+    return TaskSummaryResponse(
+        app_name=app_name,
+        batch_id=batch_id,
+        total=len(tasks),
+        pending=by_status[TaskStatus.PENDING],
+        running=by_status[TaskStatus.RUNNING],
+        done=by_status[TaskStatus.DONE],
+        failed=by_status[TaskStatus.FAILED],
+        chunks_written=chunks_written,
+        records_extracted=records_extracted,
+        warnings=warnings,
+    )
 
 
 @router.get("/{app_name}/tasks/{task_id}", response_model=TaskResponse)

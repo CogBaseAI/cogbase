@@ -608,13 +608,25 @@ def _mock_upload_app(
         success: bool
         records_extracted: int
         error: Exception | None
+        chunks_written: int = 0
+
+        @property
+        def ingested_nothing(self) -> bool:
+            return self.success and self.chunks_written == 0 and self.records_extracted == 0
 
     if results is None:
-        results = [{"doc_id": "contract", "success": True, "records_extracted": 2, "error": None}]
+        results = [{"doc_id": "contract", "success": True, "records_extracted": 2, "chunks_written": 3, "error": None}]
 
     fake_results = [_FakeIngestResult(**r) for r in results]
+    results_by_id = {r.doc_id: r for r in fake_results}
     inst = MagicMock()
-    inst.ingest_documents = AsyncMock(return_value=fake_results)
+
+    async def _ingest(docs):
+        # The background task ingests one doc at a time and reads results[0], so
+        # return the result matching each input doc (falling back to the first).
+        return [results_by_id.get(d.doc_id, fake_results[0]) for d in docs]
+
+    inst.ingest_documents = AsyncMock(side_effect=_ingest)
     inst.name = "my-contract-analyzer"
 
     if document_store is _EXPLICIT_NONE:
@@ -940,6 +952,109 @@ class TestUploadDocuments:
         assert data["status"] == "failed"
         assert "load" in data["error"].lower() or "not found" in data["error"].lower()
         mock_app.ingest_documents.assert_not_called()
+
+    @staticmethod
+    async def _drain(n: int = 10) -> None:
+        for _ in range(n):
+            await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_done_task_carries_chunk_and_record_counts(self, client):
+        """A finished ingest task exposes per-document counts in `result` (#6)."""
+        mock_app = _mock_upload_app(
+            results=[{"doc_id": "contract", "success": True, "records_extracted": 2, "chunks_written": 5, "error": None}]
+        )
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.parse_to_markdown", return_value="parsed text"):
+            resp = await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("contract.txt", b"text", "text/plain"))],
+            )
+            task_id = resp.json()["task_ids"][0]
+            await self._drain()
+
+        data = (await client.get(f"/applications/my-contract-analyzer/tasks/{task_id}")).json()
+        assert data["status"] == "done"
+        assert data["result"]["chunks_written"] == 5
+        assert data["result"]["records_extracted"] == 2
+        assert data["result"]["warning"] is None
+
+    @pytest.mark.asyncio
+    async def test_empty_scanned_pdf_warns_instead_of_silent_success(self, client):
+        """Parsed-empty doc → done task with a scanned/image-only warning (#4)."""
+        mock_app = _mock_upload_app(
+            results=[{"doc_id": "scan", "success": True, "records_extracted": 0, "chunks_written": 0, "error": None}]
+        )
+        await _create_app(client, mock_app)
+
+        # markitdown extracts no text from an image-only PDF.
+        with patch("api.routers.applications.parse_to_markdown", return_value="   \n  "):
+            resp = await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("scan.pdf", b"%PDF-image", "application/pdf"))],
+            )
+            task_id = resp.json()["task_ids"][0]
+            await self._drain()
+
+        data = (await client.get(f"/applications/my-contract-analyzer/tasks/{task_id}")).json()
+        assert data["status"] == "done"
+        warning = data["result"]["warning"]
+        assert warning is not None
+        assert "scanned" in warning or "no text" in warning
+
+    @pytest.mark.asyncio
+    async def test_no_pipeline_match_warns_when_text_present(self, client):
+        """Doc parsed with text but ingested nothing → 'no pipeline matched' warning (#4)."""
+        mock_app = _mock_upload_app(
+            results=[{"doc_id": "doc", "success": True, "records_extracted": 0, "chunks_written": 0, "error": None}]
+        )
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.parse_to_markdown", return_value="real content here"):
+            resp = await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[("files", ("doc.txt", b"text", "text/plain"))],
+            )
+            task_id = resp.json()["task_ids"][0]
+            await self._drain()
+
+        data = (await client.get(f"/applications/my-contract-analyzer/tasks/{task_id}")).json()
+        assert data["status"] == "done"
+        assert "pipeline" in data["result"]["warning"]
+
+    @pytest.mark.asyncio
+    async def test_batch_summary_rolls_up_counts_and_warnings(self, client):
+        """GET /tasks/summary aggregates a batch's status, counts, and warnings (#6)."""
+        mock_app = _mock_upload_app(
+            results=[
+                {"doc_id": "a", "success": True, "records_extracted": 2, "chunks_written": 4, "error": None},
+                {"doc_id": "b", "success": True, "records_extracted": 0, "chunks_written": 0, "error": None},
+            ]
+        )
+        await _create_app(client, mock_app)
+
+        with patch("api.routers.applications.parse_to_markdown", return_value="text"):
+            resp = await client.post(
+                "/applications/my-contract-analyzer/upload_documents",
+                files=[
+                    ("files", ("a.txt", b"a", "text/plain")),
+                    ("files", ("b.txt", b"b", "text/plain")),
+                ],
+            )
+            batch_id = resp.json()["batch_id"]
+            assert batch_id
+            await self._drain()
+
+        summary = (await client.get(
+            f"/applications/my-contract-analyzer/tasks/summary?batch_id={batch_id}"
+        )).json()
+        assert summary["total"] == 2
+        assert summary["done"] == 2
+        assert summary["failed"] == 0
+        assert summary["chunks_written"] == 4
+        assert summary["records_extracted"] == 2
+        assert summary["warnings"] == 1  # doc "b" ingested nothing
 
 
 # ---------------------------------------------------------------------------

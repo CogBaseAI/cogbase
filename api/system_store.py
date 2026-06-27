@@ -63,12 +63,16 @@ TASKS_SCHEMA = CollectionSchema(
         "task_type":    FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "task_name":    FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "doc_id":       FieldSchema(type=FieldType.STRING, nullable=True, index=True),
+        "batch_id":     FieldSchema(type=FieldType.STRING, nullable=True, index=True),
         "params_json":  FieldSchema(type=FieldType.STRING, nullable=True),
         "status":       FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "created_at":   FieldSchema(type=FieldType.STRING, nullable=False),
         "started_at":   FieldSchema(type=FieldType.STRING, nullable=True),
         "completed_at": FieldSchema(type=FieldType.STRING, nullable=True),
         "error":        FieldSchema(type=FieldType.STRING, nullable=True),
+        # JSON summary of a finished ingest: chunks_written, records_extracted,
+        # and an optional human-readable warning (e.g. nothing was ingested).
+        "result_json":  FieldSchema(type=FieldType.STRING, nullable=True),
     },
 )
 
@@ -117,12 +121,14 @@ class TaskRecord(BaseModel):
     task_type: str      # "ingest" | "workflow" | "distill"
     task_name: str      # "ingest" for ingest; workflow name for workflows; "distill" for distillation
     doc_id: str | None = None
+    batch_id: str | None = None  # groups tasks created by one upload call
     params_json: str | None = None  # JSON-serialized params
     status: TaskStatus
     created_at: str     # ISO-8601 UTC — when the task was enqueued
     started_at: str | None = None   # ISO-8601 UTC — when execution began
     completed_at: str | None = None
     error: str | None = None
+    result_json: str | None = None  # JSON summary of a finished ingest (counts + warning)
 
 
 class DocWorkflowRecord(BaseModel):
@@ -373,6 +379,7 @@ class SystemStore:
         task_type: str | None = None,
         task_name: str | None = None,
         doc_id: str | None = None,
+        batch_id: str | None = None,
         status: TaskStatus | None = None,
     ) -> list[TaskRecord]:
         filters = [Col("app_id") == app_id]
@@ -382,6 +389,8 @@ class SystemStore:
             filters.append(Col("task_name") == task_name)
         if doc_id is not None:
             filters.append(Col("doc_id") == doc_id)
+        if batch_id is not None:
+            filters.append(Col("batch_id") == batch_id)
         if status is not None:
             filters.append(Col("status") == status)
         return await self._store.query_as("tasks", filters=filters, model=TaskRecord)

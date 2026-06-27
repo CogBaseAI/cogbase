@@ -50,6 +50,24 @@ class DocListResponse(BaseModel):
 class IngestDocumentsAcceptedResponse(BaseModel):
     task_ids: list[str]
     total: int
+    batch_id: str = Field(
+        description="Id grouping this upload's tasks; pass to GET /tasks/summary to track the batch."
+    )
+
+
+class IngestResultSummary(BaseModel):
+    """Per-document outcome of a finished ingest task."""
+
+    chunks_written: int = 0
+    records_extracted: int = 0
+    warning: str | None = Field(
+        default=None,
+        description=(
+            "Set when the document ingested successfully but produced nothing — "
+            "e.g. a scanned/image-only PDF with no extractable text, or content no "
+            "pipeline step captured. The task still reports 'done'."
+        ),
+    )
 
 
 class TaskResponse(BaseModel):
@@ -58,17 +76,36 @@ class TaskResponse(BaseModel):
     task_type: str
     task_name: str
     doc_id: str | None
+    batch_id: str | None = None
     params_json: str | None
     status: str
     created_at: str
     started_at: str | None
     completed_at: str | None
     error: str | None
+    result: IngestResultSummary | None = Field(
+        default=None, description="Ingest counts and any warning, once the task has finished."
+    )
 
 
 class TaskListResponse(BaseModel):
     tasks: list[TaskResponse]
     total: int
+
+
+class TaskSummaryResponse(BaseModel):
+    """Rollup of a set of background tasks — answers 'did my upload work?'."""
+
+    app_name: str
+    batch_id: str | None = None
+    total: int
+    pending: int
+    running: int
+    done: int
+    failed: int
+    chunks_written: int = Field(description="Total vector chunks written across finished ingest tasks.")
+    records_extracted: int = Field(description="Total structured records written across finished ingest tasks.")
+    warnings: int = Field(description="Number of finished ingest tasks that ingested nothing.")
 
 
 # ---------------------------------------------------------------------------

@@ -158,15 +158,17 @@ class TestIngestionPipelineIngest:
     @pytest.mark.asyncio
     async def test_ingest_returns_record_count(self):
         app, _, _ = await self._make_app()
-        count, extraction_failed = await app._ingest(Document(doc_id="doc-1", text="hello world contract clause"))
+        count, chunks_written, extraction_failed = await app._ingest(Document(doc_id="doc-1", text="hello world contract clause"))
         assert count == 1
+        assert chunks_written > 0
         assert not extraction_failed
 
     @pytest.mark.asyncio
     async def test_ingest_empty_text_returns_zero(self):
         app, vector_store, _ = await self._make_app()
-        count, extraction_failed = await app._ingest(Document(doc_id="doc-empty", text=""))
+        count, chunks_written, extraction_failed = await app._ingest(Document(doc_id="doc-empty", text=""))
         assert count == 0
+        assert chunks_written == 0
         assert vector_store.ntotal("docs") == 0
 
     @pytest.mark.asyncio
@@ -193,9 +195,10 @@ class TestIngestionPipelineIngest:
             steps=[PipelineStep(tool="chunk-embed-upsert", collection="docs", chunker=FixedSizeChunker(chunk_size=50, overlap=0))],
             vector_collections=[vc],
         )
-        count, extraction_failed = await app._ingest(Document(doc_id="doc-1", text="word " * 30))
+        count, chunks_written, extraction_failed = await app._ingest(Document(doc_id="doc-1", text="word " * 30))
         assert vector_store.ntotal("docs") > 0
         assert count == 0  # no structured collection
+        assert chunks_written == vector_store.ntotal("docs")
         assert not extraction_failed
 
     @pytest.mark.asyncio
