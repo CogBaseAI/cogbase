@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useApp } from '../../context'
+import { useT } from '../../i18n'
 
 export default function SkillsTab({ active }) {
   const { apiUrl, currentApp } = useApp()
+  const { t } = useT()
   const [skills, setSkills] = useState(null)   // null=loading, []|[...]=loaded
   const [error, setError] = useState(null)
   const [assigned, setAssigned] = useState(new Set()) // skill names assigned to currentApp
@@ -39,23 +41,23 @@ export default function SkillsTab({ active }) {
   async function uploadSkill() {
     if (!picked) return
     setUploading(true)
-    setUploadMsg({ text: 'Uploading…', cls: '' })
+    setUploadMsg({ text: t('skills.uploadingMsg'), cls: '' })
     try {
       const form = new FormData()
       form.append('bundle', picked)
       const resp = await fetch(`${apiUrl}/skills`, { method: 'POST', body: form })
       if (!resp.ok) {
         const d = await resp.json().catch(() => ({}))
-        setUploadMsg({ text: (Array.isArray(d.detail) ? d.detail[0]?.msg : d.detail) || `Error ${resp.status}`, cls: 'err' })
+        setUploadMsg({ text: (Array.isArray(d.detail) ? d.detail[0]?.msg : d.detail) || t('skills.errStatus', { status: resp.status }), cls: 'err' })
         return
       }
       const skill = await resp.json()
-      setUploadMsg({ text: `Uploaded "${skill.name}"`, cls: 'ok' })
+      setUploadMsg({ text: t('skills.uploaded', { name: skill.name }), cls: 'ok' })
       setPicked(null)
       if (uploadInputRef.current) uploadInputRef.current.value = ''
       loadSkills()
     } catch (e) {
-      setUploadMsg({ text: 'Network error: ' + e.message, cls: 'err' })
+      setUploadMsg({ text: t('common.networkError', { msg: e.message }), cls: 'err' })
     } finally {
       setUploading(false)
     }
@@ -78,16 +80,16 @@ export default function SkillsTab({ active }) {
       const resp = await fetch(`${apiUrl}/skills/${encodeURIComponent(skillName)}`, { method: 'PUT', body: form })
       if (!resp.ok) {
         const d = await resp.json().catch(() => ({}))
-        alert('Replace failed: ' + ((Array.isArray(d.detail) ? d.detail[0]?.msg : d.detail) || resp.status))
+        alert(t('skills.replaceFailed', { msg: (Array.isArray(d.detail) ? d.detail[0]?.msg : d.detail) || resp.status }))
         return
       }
       loadSkills()
-    } catch (e) { alert('Error: ' + e.message) }
+    } catch (e) { alert(t('common.error', { msg: e.message })) }
     finally { setBusyId(null) }
   }
 
   async function deleteSkill(skill) {
-    if (!confirm(`Delete skill "${skill.name}"? It will be removed from every application that uses it.`)) return
+    if (!confirm(t('skills.confirmDelete', { name: skill.name }))) return
     setBusyId(skill.name)
     try {
       const resp = await fetch(`${apiUrl}/skills/${encodeURIComponent(skill.name)}`, { method: 'DELETE' })
@@ -95,9 +97,9 @@ export default function SkillsTab({ active }) {
         loadSkills()
         loadAssigned()
       } else {
-        alert('Delete failed: ' + resp.statusText)
+        alert(t('skills.deleteFailed', { msg: resp.statusText }))
       }
-    } catch (e) { alert('Error: ' + e.message) }
+    } catch (e) { alert(t('common.error', { msg: e.message })) }
     finally { setBusyId(null) }
   }
 
@@ -118,24 +120,24 @@ export default function SkillsTab({ active }) {
         })
       } else {
         const d = await resp.json().catch(() => ({}))
-        alert((isOn ? 'Unassign' : 'Assign') + ' failed: ' + (d.detail || resp.statusText))
+        alert(isOn ? t('skills.unassignFailed', { msg: d.detail || resp.statusText }) : t('skills.assignFailed', { msg: d.detail || resp.statusText }))
       }
-    } catch (e) { alert('Error: ' + e.message) }
+    } catch (e) { alert(t('common.error', { msg: e.message })) }
     finally { setBusyId(null) }
   }
 
   return (
     <div className="page">
       <div className="page-hd">
-        <h2>Skills</h2>
-        <button className="btn btn-ghost" onClick={() => { loadSkills(); loadAssigned() }}>⟳ Refresh</button>
+        <h2>{t('skills.title')}</h2>
+        <button className="btn btn-ghost" onClick={() => { loadSkills(); loadAssigned() }}>{t('common.refresh')}</button>
       </div>
 
       <p className="sub" style={{ marginBottom: 14 }}>
-        Skills are system-wide capabilities uploaded as ZIP bundles (SKILL.md + scripts).
+        {t('skills.subA')}
         {currentApp
-          ? <> Toggle <strong>Assigned</strong> to add or remove a skill from <strong>{currentApp}</strong>.</>
-          : <> Select an app in the Apps tab to assign skills to it.</>}
+          ? <>{t('skills.subToggle')}<strong>{t('skills.subAssigned')}</strong>{t('skills.subToAdd')}<strong>{currentApp}</strong>.</>
+          : <>{t('skills.subSelect')}</>}
       </p>
 
       {/* Upload new skill */}
@@ -148,8 +150,8 @@ export default function SkillsTab({ active }) {
       >
         <input ref={uploadInputRef} type="file" accept=".zip" style={{ display: 'none' }} onChange={e => { const f = e.target.files[0]; if (f) { setPicked(f); setUploadMsg({ text: '', cls: '' }) } }} />
         <div className="drop-icon">🧩</div>
-        <div className="drop-txt">Drop a skill ZIP here or click to browse</div>
-        <div className="drop-hint">A bundle containing SKILL.md and any scripts/assets</div>
+        <div className="drop-txt">{t('skills.drop')}</div>
+        <div className="drop-hint">{t('skills.dropHint')}</div>
       </div>
 
       {picked && (
@@ -160,7 +162,7 @@ export default function SkillsTab({ active }) {
 
       <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
         <button className="btn btn-green" disabled={!picked || uploading} onClick={uploadSkill}>
-          {uploading ? '⟳ Uploading…' : '▲ Upload Skill'}
+          {uploading ? t('skills.uploading') : t('skills.upload')}
         </button>
         <span className={`settings-msg${uploadMsg.cls ? ' ' + uploadMsg.cls : ''}`}>{uploadMsg.text}</span>
       </div>
@@ -170,17 +172,17 @@ export default function SkillsTab({ active }) {
 
       {/* Skills list */}
       <div style={{ marginTop: 26 }}>
-        {!skills && !error && <div className="empty"><p><span className="spinning">⟳</span> Loading…</p></div>}
-        {error && <div className="empty"><p style={{ color: 'var(--red)' }}>Failed: {error}</p></div>}
-        {skills && skills.length === 0 && <div className="empty"><div className="ei">🧩</div><p>No skills yet. Upload a skill bundle above.</p></div>}
+        {!skills && !error && <div className="empty"><p><span className="spinning">⟳</span> {t('common.loading')}</p></div>}
+        {error && <div className="empty"><p style={{ color: 'var(--red)' }}>{t('common.failed', { msg: error })}</p></div>}
+        {skills && skills.length === 0 && <div className="empty"><div className="ei">🧩</div><p>{t('skills.noSkills')}</p></div>}
         {skills && skills.length > 0 && (
           <table>
             <thead>
               <tr>
-                <th style={{ width: 90 }}>Assigned</th>
-                <th>Name</th>
-                <th>Description</th>
-                <th style={{ width: 160 }}>Actions</th>
+                <th style={{ width: 90 }}>{t('skills.colAssigned')}</th>
+                <th>{t('skills.colName')}</th>
+                <th>{t('skills.colDescription')}</th>
+                <th style={{ width: 160 }}>{t('skills.colActions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -193,10 +195,10 @@ export default function SkillsTab({ active }) {
                       <button
                         className={`btn btn-sm ${on ? 'btn-primary' : 'btn-ghost'}`}
                         disabled={!currentApp || busy}
-                        title={currentApp ? (on ? 'Remove from app' : 'Add to app') : 'Select an app first'}
+                        title={currentApp ? (on ? t('skills.removeFromApp') : t('skills.addToApp')) : t('skills.selectAppFirst')}
                         onClick={() => toggleAssign(s)}
                       >
-                        {on ? '✓ On' : 'Add'}
+                        {on ? t('skills.on') : t('skills.add')}
                       </button>
                     </td>
                     <td style={{ fontWeight: 500 }}>
@@ -206,8 +208,8 @@ export default function SkillsTab({ active }) {
                     <td style={{ color: 'var(--muted)', fontSize: 12 }}>{s.description}</td>
                     <td>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => startReplace(s.name)}>Replace</button>
-                        <button className="btn btn-red btn-sm" disabled={busy} onClick={() => deleteSkill(s)}>Delete</button>
+                        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => startReplace(s.name)}>{t('common.replace')}</button>
+                        <button className="btn btn-red btn-sm" disabled={busy} onClick={() => deleteSkill(s)}>{t('common.delete')}</button>
                       </div>
                     </td>
                   </tr>

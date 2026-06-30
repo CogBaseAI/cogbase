@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react'
 import { useApp } from '../../context'
+import { useT } from '../../i18n'
 import { previewText, metaText, waitForTasks } from '../../utils'
 
 export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, onOpenWfModal, onSwitchTab }) {
   const { apiUrl, currentApp, setCurrentApp, demoCatalog, setDemoCatalog } = useApp()
+  const { t } = useT()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [demoStatus, setDemoStatus] = useState('Select a demo to deploy and ingest.')
+  const [demoStatus, setDemoStatus] = useState(t('demos.status'))
   // steps: { [demoKey]: [{id, text, state}] }
   const [steps, setSteps] = useState({})
   // deploying: Set of demo keys currently being deployed
@@ -50,20 +52,20 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
 
     try {
       // Step 1: check/create app
-      const appStepId = addStep(key, `Checking for app "${demo.name}"…`)
+      const appStepId = addStep(key, t('demos.stepCheckApp', { name: demo.name }))
       const appResp = await fetch(`${apiUrl}/applications/${encodeURIComponent(demo.name)}`)
       if (appResp.ok) {
         const app = await appResp.json()
         if (app.status !== 'active') {
-          updateStep(key, appStepId, `App "${demo.name}" exists but is not active.`, 'error')
-          throw new Error(`Existing app "${demo.name}" is not active.`)
+          updateStep(key, appStepId, t('demos.stepNotActive', { name: demo.name }), 'error')
+          throw new Error(t('demos.stepExistsErr', { name: demo.name }))
         }
-        updateStep(key, appStepId, `App "${demo.name}" already exists.`, 'done')
+        updateStep(key, appStepId, t('demos.stepExists', { name: demo.name }), 'done')
       } else if (appResp.status !== 404) {
-        updateStep(key, appStepId, `Failed to check app: HTTP ${appResp.status}`, 'error')
-        throw new Error(`Failed to check app state: ${appResp.status}`)
+        updateStep(key, appStepId, t('demos.stepCheckFail', { status: appResp.status }), 'error')
+        throw new Error(t('demos.stepCheckFailErr', { status: appResp.status }))
       } else {
-        updateStep(key, appStepId, `Creating app "${demo.name}"…`, 'running')
+        updateStep(key, appStepId, t('demos.stepCreating', { name: demo.name }), 'running')
         const deployResp = await fetch(`${apiUrl}/generate/deploy`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -71,20 +73,20 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
         })
         const deployData = await deployResp.json()
         if (!deployResp.ok) {
-          updateStep(key, appStepId, `Create failed: ${deployData.detail || deployResp.statusText}`, 'error')
+          updateStep(key, appStepId, t('demos.stepCreateFail', { msg: deployData.detail || deployResp.statusText }), 'error')
           throw new Error(deployData.detail || deployResp.statusText)
         }
         if (deployData.status !== 'active') {
-          const msg = `Deploy status: ${deployData.status}${deployData.error ? ' — ' + deployData.error : ''}`
+          const msg = t('demos.stepDeployStatus', { status: `${deployData.status}${deployData.error ? ' — ' + deployData.error : ''}` })
           updateStep(key, appStepId, msg, 'error')
           throw new Error(msg)
         }
-        updateStep(key, appStepId, `App "${demo.name}" created.`, 'done')
+        updateStep(key, appStepId, t('demos.stepCreated', { name: demo.name }), 'done')
       }
 
       // Step 2: upload docs grouped by metadata
       const docs = demo.docs || []
-      const uploadStepId = addStep(key, `Uploading ${docs.length} document(s)…`)
+      const uploadStepId = addStep(key, t('demos.stepUploading', { n: docs.length }))
       const metaGroups = {}
       for (const doc of docs) {
         const mk = JSON.stringify(doc.metadata || {})
@@ -101,29 +103,29 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
         const ingestResp = await fetch(`${apiUrl}/applications/${encodeURIComponent(demo.name)}/upload_documents`, { method: 'POST', body: formData })
         const ingestData = await ingestResp.json()
         if (!ingestResp.ok) {
-          updateStep(key, uploadStepId, `Upload failed: ${ingestData.detail || ingestResp.statusText}`, 'error')
+          updateStep(key, uploadStepId, t('demos.stepUploadFail', { msg: ingestData.detail || ingestResp.statusText }), 'error')
           throw new Error(ingestData.detail || ingestResp.statusText)
         }
         allIngestTaskIds.push(...ingestData.task_ids)
       }
-      updateStep(key, uploadStepId, `${docs.length} document(s) uploaded.`, 'done')
+      updateStep(key, uploadStepId, t('demos.stepUploaded', { n: docs.length }), 'done')
 
       // Step 3: wait for ingest
       const total = allIngestTaskIds.length
-      const ingestStepId = addStep(key, `Ingesting 0 / ${total} document(s)…`)
+      const ingestStepId = addStep(key, t('demos.stepIngesting', { done: 0, total }))
       const ingestTasks = await waitForTasks(apiUrl, demo.name, allIngestTaskIds, {
         timeout: 600000,
-        onProgress: (done, n) => updateStep(key, ingestStepId, `Ingesting ${done} / ${n} document(s)…`, 'running'),
+        onProgress: (done, n) => updateStep(key, ingestStepId, t('demos.stepIngesting', { done, total: n }), 'running'),
       })
       const okCount = ingestTasks.filter(t => t && t.status === 'done').length
       const failCount = total - okCount
-      updateStep(key, ingestStepId, failCount > 0 ? `${okCount} / ${total} ingested (${failCount} failed).` : `${okCount} document(s) ingested.`, failCount === total ? 'error' : 'done')
+      updateStep(key, ingestStepId, failCount > 0 ? t('demos.stepIngestedSome', { ok: okCount, total, fail: failCount }) : t('demos.stepIngested', { ok: okCount }), failCount === total ? 'error' : 'done')
 
-      addStep(key, `"${demo.title}" is ready — switching to Ingest tab.`, 'done')
+      addStep(key, t('demos.stepReady', { title: demo.title }), 'done')
       setCurrentApp(demo.name)
       onSwitchTab('ingest')
     } catch (e) {
-      addStep(key, `Failed: ${e.message}`, 'error')
+      addStep(key, t('demos.stepFailed', { msg: e.message }), 'error')
     } finally {
       setDeploying(prev => { const s = new Set(prev); s.delete(key); return s })
     }
@@ -147,18 +149,18 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
         const doneIds = doneResp.ok ? new Set(((await doneResp.json()).docs || []).map(d => d.doc_id).filter(Boolean)) : new Set()
         if (pendingIds.length) {
           values = pendingIds
-          desc = `${pendingIds.length} ${wf.param_label.toLowerCase()}${pendingIds.length === 1 ? ' has' : 's have'} pending tasks. Select one and run the workflow.`
+          desc = t('demos.wfPending', { count: pendingIds.length, label: wf.param_label.toLowerCase() })
         } else if (doneIds.size > 0) {
           values = (wf.param_values || []).filter(v => !doneIds.has(v))
-          if (values.length === 0) { allDone = true; desc = 'All documents have already been processed.' }
+          if (values.length === 0) { allDone = true; desc = t('demos.wfAllDone') }
         }
       } catch {}
     }
 
     if (!desc) {
       desc = overrideValues
-        ? `${overrideValues.length} ${wf.param_label.toLowerCase()}${overrideValues.length === 1 ? ' has' : 's have'} not been checked yet.`
-        : (wf.description || `Run the ${wf.label} workflow for the selected ${wf.param_label.toLowerCase()}.`)
+        ? t('demos.wfNotChecked', { count: overrideValues.length, label: wf.param_label.toLowerCase() })
+        : (wf.description || t('demos.wfRun', { label: wf.label, paramLabel: wf.param_label.toLowerCase() }))
     }
 
     // Find saveCollection for this workflow
@@ -190,17 +192,17 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
     <div className="page">
       <div className="page-hd">
         <div>
-          <h2>Prebuilt Demos</h2>
-          <p className="sub" style={{ margin: '6px 0 0' }}>Deploy a bundled app, ingest its example documents, then switch to Query.</p>
+          <h2>{t('demos.title')}</h2>
+          <p className="sub" style={{ margin: '6px 0 0' }}>{t('demos.sub')}</p>
         </div>
-        <button className="btn btn-ghost" onClick={loadDemos}>⟳ Refresh</button>
+        <button className="btn btn-ghost" onClick={loadDemos}>{t('common.refresh')}</button>
       </div>
       <div className="demo-status">{demoStatus}</div>
 
-      {loading && <div className="empty"><p><span className="spinning">⟳</span> Loading demo catalog…</p></div>}
-      {error && <div className="empty"><p style={{ color: 'var(--red)' }}>Failed: {error}</p></div>}
+      {loading && <div className="empty"><p><span className="spinning">⟳</span> {t('demos.loadingCatalog')}</p></div>}
+      {error && <div className="empty"><p style={{ color: 'var(--red)' }}>{t('common.failed', { msg: error })}</p></div>}
       {!loading && !error && demoCatalog.length === 0 && (
-        <div className="empty"><p>No demo apps returned by the API.</p></div>
+        <div className="empty"><p>{t('demos.emptyApi')}</p></div>
       )}
       {!loading && demoCatalog.length > 0 && (
         <div className="demo-grid">
@@ -213,15 +215,15 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
               <div className="demo-desc">{demo.description}</div>
               {demo.notes && <div className="demo-desc" style={{ color: 'var(--muted)' }}>{demo.notes}</div>}
               <div className="demo-badges">
-                <span className="demo-badge">App: {demo.name}</span>
-                <span className="demo-badge">{(demo.docs || []).length} docs</span>
+                <span className="demo-badge">{t('demos.appLabel', { name: demo.name })}</span>
+                <span className="demo-badge">{t('demos.docsCount', { n: (demo.docs || []).length })}</span>
               </div>
               <div className="demo-actions" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                   <button className="btn btn-green" disabled={deploying.has(demo.key)} onClick={() => deployDemo(demo.key)}>
-                    {deploying.has(demo.key) ? 'Working…' : 'Deploy & Ingest'}
+                    {deploying.has(demo.key) ? t('demos.working') : t('demos.deployIngest')}
                   </button>
-                  <button className="btn btn-ghost" onClick={() => onOpenConfigModal(demo)}>View full config</button>
+                  <button className="btn btn-ghost" onClick={() => onOpenConfigModal(demo)}>{t('demos.viewConfig')}</button>
                 </div>
                 {(steps[demo.key] || []).length > 0 && (
                   <div className="demo-progress">
@@ -236,7 +238,7 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
               </div>
               {(demo.query_examples || []).length > 0 && (
                 <div className="demo-block">
-                  <h4>Query ideas</h4>
+                  <h4>{t('demos.queryIdeas')}</h4>
                   <div className="demo-badges">
                     {demo.query_examples.map((q, i) => <span key={i} className="demo-badge">{q}</span>)}
                   </div>
@@ -244,7 +246,7 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
               )}
               {(demo.docs || []).length > 0 && (
                 <div className="demo-block">
-                  <h4>Documents</h4>
+                  <h4>{t('demos.documents')}</h4>
                   <div className="demo-docs">
                     {demo.docs.map(doc => (
                       <div className="demo-doc" key={doc.doc_id}>
@@ -254,7 +256,7 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
                         </div>
                         <div className="demo-doc-preview">{previewText(doc.text)}</div>
                         <div className="demo-doc-actions">
-                          <button className="btn btn-ghost btn-sm" onClick={() => onOpenDocModal({ demoKey: demo.key, demoName: demo.name, docId: doc.doc_id, meta: doc.metadata || {}, text: doc.text || '' })}>View full text</button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => onOpenDocModal({ demoKey: demo.key, demoName: demo.name, docId: doc.doc_id, meta: doc.metadata || {}, text: doc.text || '' })}>{t('demos.viewText')}</button>
                         </div>
                       </div>
                     ))}
@@ -262,7 +264,7 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
                 </div>
               )}
               <div className="demo-block">
-                <h4>Config preview</h4>
+                <h4>{t('demos.configPreview')}</h4>
                 <pre className="demo-pre">{previewText(demo.config_yaml || '', 18, 1600)}</pre>
               </div>
             </div>

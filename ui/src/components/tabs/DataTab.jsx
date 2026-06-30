@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react'
 import { useApp } from '../../context'
+import { useT } from '../../i18n'
 
 export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, onWfCompleteHandled }) {
   const { apiUrl, currentApp, demoCatalog } = useApp()
+  const { t } = useT()
   const [collections, setCollections] = useState([])
   const [activeCollection, setActiveCollectionState] = useState('')
   const [records, setRecords] = useState(null)
@@ -50,7 +52,7 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
       )
       if (!resp.ok) throw new Error(resp.status + ': ' + await resp.text())
       const { records: recs = [] } = await resp.json()
-      setRowCount(recs.length + ' row' + (recs.length !== 1 ? 's' : ''))
+      setRowCount(recs.length !== 1 ? t('data.rows', { n: recs.length }) : t('data.row', { n: recs.length }))
 
       const colsSet = new Set()
       const colsList = []
@@ -79,8 +81,8 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
       const pendingIds = [...new Set(tasks.map(t => t.doc_id).filter(Boolean))]
       if (!pendingIds.length) return
       setPendingBar({
-        msg: `⚠ ${pendingIds.length} ${pendingIds.length === 1 ? 'doc has' : 'docs have'} pending workflow tasks — ${pendingIds.join(', ')}`,
-        btnLabel: (wf.label || 'Run Workflow') + ' →',
+        msg: t('data.pendingMsg', { count: pendingIds.length, ids: pendingIds.join(', ') }),
+        btnLabel: (wf.label || t('data.runWorkflow')) + ' →',
         pendingState: { demoKey: demo.key, wfActionIndex: target.workflow_action_index, pendingIds },
       })
     } catch {}
@@ -101,7 +103,7 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
       label: wf.label,
       paramLabel: wf.param_label,
       values: pendingIds,
-      desc: `${pendingIds.length} ${wf.param_label?.toLowerCase() || 'doc'}${pendingIds.length === 1 ? ' has' : 's have'} pending tasks.`,
+      desc: t('data.pendingDesc', { count: pendingIds.length, label: wf.param_label?.toLowerCase() || t('ingest.paramDocument') }),
       allDone: false,
       saveCollection: saveTarget?.save_collection || null,
     })
@@ -124,42 +126,42 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
 
   return (
     <>
-      {!hasApp && <div className="warn-bar show">⚠ No app selected — go to Apps and click Use on an app first.</div>}
+      {!hasApp && <div className="warn-bar show">{t('common.noAppWarn')}</div>}
       <div className="data-layout">
         <div className="data-sidebar">
           <div className="data-sidebar-hd">
-            <h3>Collections</h3>
-            <button className="btn btn-ghost btn-sm" onClick={loadCollections} title="Refresh">⟳</button>
+            <h3>{t('data.collections')}</h3>
+            <button className="btn btn-ghost btn-sm" onClick={loadCollections} title={t('data.refresh')}>⟳</button>
           </div>
           <div className="coll-list">
-            {!hasApp && <div className="empty" style={{ padding: '30px 10px' }}><p>Select an app first.</p></div>}
+            {!hasApp && <div className="empty" style={{ padding: '30px 10px' }}><p>{t('data.selectApp')}</p></div>}
             {collError && <div style={{ color: 'var(--red)', padding: 10, fontSize: 12 }}>{collError}</div>}
             {collections.map(name => (
               <div key={name} className={`coll-item${name === activeCollection ? ' active' : ''}`} onClick={() => selectCollection(name)}>
                 <span className="coll-dot" />
                 {name}
-                {wfSaveColls.has(name) && <span className="coll-wf-badge">workflow</span>}
+                {wfSaveColls.has(name) && <span className="coll-wf-badge">{t('data.workflowBadge')}</span>}
               </div>
             ))}
           </div>
         </div>
         <div className="data-main">
           <div className="data-main-hd">
-            <h3 style={{ color: activeCollection ? '' : 'var(--muted)' }}>{activeCollection || 'No collection selected'}</h3>
+            <h3 style={{ color: activeCollection ? '' : 'var(--muted)' }}>{activeCollection || t('data.noCollection')}</h3>
             <span className="meta">{rowCount}</span>
           </div>
           {pendingBar && (
             <div className="wf-pending-bar show">
               <div className="wf-pending-bar-msg">{pendingBar.msg}</div>
-              <span className="demo-wf-wrap" data-tip="Select this app under Apps first">
+              <span className="demo-wf-wrap" data-tip={t('data.tip')}>
                 <button className="btn btn-primary btn-sm demo-wf-btn" onClick={openPendingWfModal}>{pendingBar.btnLabel}</button>
               </span>
             </div>
           )}
           <div className="data-table-wrap">
-            {!activeCollection && !loadingColl && <div className="empty"><p>Click a collection on the left to browse its records.</p></div>}
-            {loadingColl && <div className="empty"><p><span className="spinning">⟳</span> Loading records…</p></div>}
-            {!loadingColl && records && records.length === 0 && <div className="empty"><div className="ei">🗄️</div><p>No records yet — ingest some documents first.</p></div>}
+            {!activeCollection && !loadingColl && <div className="empty"><p>{t('data.browseHint')}</p></div>}
+            {loadingColl && <div className="empty"><p><span className="spinning">⟳</span> {t('data.loadingRecords')}</p></div>}
+            {!loadingColl && records && records.length === 0 && <div className="empty"><div className="ei">🗄️</div><p>{t('data.noRecords')}</p></div>}
             {!loadingColl && records && records.length > 0 && (
               <table className="data-tbl">
                 <thead><tr>{cols.map(c => <th key={c} title={c}>{c}</th>)}</tr></thead>

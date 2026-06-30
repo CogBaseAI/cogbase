@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import { useApp } from '../../context'
+import { useT } from '../../i18n'
 import { streamSSE } from '../../utils'
 
 export default function WfModal({ state, onClose }) {
   const { apiUrl } = useApp()
+  const { t } = useT()
   const [selectedValue, setSelectedValue] = useState('')
   const [running, setRunning] = useState(false)
   const [findings, setFindings] = useState([])
@@ -39,9 +41,9 @@ export default function WfModal({ state, onClose }) {
         `${apiUrl}/applications/${encodeURIComponent(state.appName)}/workflows/${encodeURIComponent(state.workflowName)}/stream`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ doc_id: selectedValue }) }
       )
-      if (!resp.ok) { setError(`Error ${resp.status}: ${await resp.text()}`); return }
+      if (!resp.ok) { setError(t('wfModal.errStatus', { status: resp.status, msg: await resp.text() })); return }
       for await (const data of streamSSE(resp)) {
-        if (data.error) { setError('Error: ' + data.error); continue }
+        if (data.error) { setError(t('common.error', { msg: data.error })); continue }
         const r = data.record || data
         localFindings.push(r)
         setFindings(prev => [...prev, r])
@@ -53,12 +55,12 @@ export default function WfModal({ state, onClose }) {
           counts[s] = (counts[s] || 0) + 1
         }
         const parts = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([s, n]) => `${s}: ${n}`)
-        setTally(`${localFindings.length} records — ${parts.join(' · ')}`)
+        setTally(t('wfModal.tallyDetail', { n: localFindings.length, detail: parts.join(' · ') }))
       } else {
-        setTally(`${localFindings.length} records`)
+        setTally(t('wfModal.tally', { n: localFindings.length }))
       }
     } catch (e) {
-      setError('Error: ' + e.message)
+      setError(t('common.error', { msg: e.message }))
     } finally {
       setRunning(false)
     }
@@ -69,17 +71,17 @@ export default function WfModal({ state, onClose }) {
       <div className="wf-modal-panel" role="dialog" aria-modal="true">
         <div className="wf-modal-hd">
           <h3>{state.label}</h3>
-          <button className="wf-modal-close" onClick={onClose} aria-label="Close">✕</button>
+          <button className="wf-modal-close" onClick={onClose} aria-label={t('wfModal.close')}>✕</button>
         </div>
         <div className="wf-modal-body">
           <p className="wf-modal-desc">{state.desc}</p>
           <div className="wf-modal-controls">
-            <label>{state.paramLabel || 'Document'}:</label>
+            <label>{state.paramLabel || t('wfModal.paramDocument')}:</label>
             <select value={selectedValue} onChange={e => setSelectedValue(e.target.value)} disabled={state.allDone || running}>
               {(state.values || []).map(v => <option key={v} value={v}>{v}</option>)}
             </select>
             <button className="btn btn-primary" disabled={state.allDone || running || !selectedValue} onClick={runWorkflow}>
-              {running ? 'Running…' : state.label}
+              {running ? t('wfModal.running') : state.label}
             </button>
           </div>
           {(findings.length > 0 || error || tally) && (

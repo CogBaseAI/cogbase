@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AppProvider, useApp } from '../context'
+import { I18nProvider } from '../i18n'
 import MemoryTab from '../components/tabs/MemoryTab'
 
 // Render MemoryTab inside a provider with `currentApp` pre-selected.
@@ -14,10 +15,12 @@ function SetApp({ name }) {
 
 function renderMemoryTab(appName = 'contract-analyst') {
   return render(
-    <AppProvider>
-      {appName ? <SetApp name={appName} /> : null}
-      <MemoryTab active={true} />
-    </AppProvider>
+    <I18nProvider>
+      <AppProvider>
+        {appName ? <SetApp name={appName} /> : null}
+        <MemoryTab active={true} />
+      </AppProvider>
+    </I18nProvider>
   )
 }
 
@@ -72,7 +75,7 @@ afterEach(() => vi.restoreAllMocks())
 
 it('does not load when inactive', () => {
   vi.spyOn(global, 'fetch')
-  render(<AppProvider><MemoryTab active={false} /></AppProvider>)
+  render(<I18nProvider><AppProvider><MemoryTab active={false} /></AppProvider></I18nProvider>)
   expect(global.fetch).not.toHaveBeenCalled()
 })
 

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { useApp } from '../../context'
+import { useT } from '../../i18n'
 import { streamSSE, simplifyExtractionSchemas } from '../../utils'
 
 function stripConfigMarkers(text) {
@@ -13,7 +14,8 @@ function stripConfigMarkers(text) {
 
 export default function BuildTab({ active }) {
   const { apiUrl, setCurrentApp } = useApp()
-  const [msgs, setMsgs] = useState([{ role: 'sys', text: "Describe the app you want to build — documents, facts to extract, kinds of questions you'll ask. The AI will guide you through schema design and produce a deployable config." }])
+  const { t } = useT()
+  const [msgs, setMsgs] = useState([{ role: 'sys', text: t('build.intro') }])
   const [input, setInput] = useState('')
   const [building, setBuilding] = useState(false)
   const [cfgYaml, setCfgYaml] = useState(null)
@@ -70,7 +72,7 @@ export default function BuildTab({ active }) {
       })
       if (!resp.ok) {
         const errText = await resp.text()
-        setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: `HTTP ${resp.status}: ${errText}` }])
+        setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: t('build.httpErr', { status: resp.status, msg: errText }) }])
         return
       }
 
@@ -86,7 +88,7 @@ export default function BuildTab({ active }) {
           if (d.result.content) raw = d.result.content
           setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: stripConfigMarkers(raw) }])
         } else if (d.error) {
-          setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: 'Error: ' + d.error }])
+          setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: t('common.error', { msg: d.error }) }])
         }
       }
 
@@ -95,12 +97,12 @@ export default function BuildTab({ active }) {
 
       if (cfgFound) {
         setCfgYaml(cfgFound)
-        setCfgStatus('Ready')
-        setMsgs(prev => [...prev, { role: 'sys', text: '✓ Config ready — click "Deploy App" to activate it.' }])
+        setCfgStatus(t('build.statusReady'))
+        setMsgs(prev => [...prev, { role: 'sys', text: t('build.configReady') }])
         setTimeout(scrollMsgs, 0)
       }
     } catch (e) {
-      setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: 'Network error: ' + e.message, error: true }])
+      setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: t('common.networkError', { msg: e.message }), error: true }])
     } finally {
       setBuilding(false)
     }
@@ -110,7 +112,7 @@ export default function BuildTab({ active }) {
     historyRef.current = []
     setCfgYaml(null)
     setCfgStatus('—')
-    setMsgs([{ role: 'sys', text: "Describe the app you want to build — documents, facts to extract, kinds of questions you'll ask. The AI will guide you through schema design and produce a deployable config." }])
+    setMsgs([{ role: 'sys', text: t('build.intro') }])
   }
 
   async function deployApp() {
@@ -123,15 +125,15 @@ export default function BuildTab({ active }) {
       })
       const data = await resp.json()
       if (!resp.ok) {
-        setMsgs(prev => [...prev, { role: 'sys', text: 'Deploy failed: ' + (data.detail || resp.statusText) }])
+        setMsgs(prev => [...prev, { role: 'sys', text: t('build.deployFailed', { msg: data.detail || resp.statusText }) }])
       } else if (data.status === 'active') {
-        setMsgs(prev => [...prev, { role: 'sys', text: `✓ "${data.name}" is live! Ingest your files and start chatting.` }])
+        setMsgs(prev => [...prev, { role: 'sys', text: t('build.deployLive', { name: data.name }) }])
         setCurrentApp(data.name)
       } else {
-        setMsgs(prev => [...prev, { role: 'sys', text: 'Deploy status: ' + data.status + (data.error ? ' — ' + data.error : '') }])
+        setMsgs(prev => [...prev, { role: 'sys', text: t('build.deployStatus', { status: data.status + (data.error ? ' — ' + data.error : '') }) }])
       }
     } catch (e) {
-      setMsgs(prev => [...prev, { role: 'sys', text: 'Error: ' + e.message }])
+      setMsgs(prev => [...prev, { role: 'sys', text: t('common.error', { msg: e.message }) }])
     }
     setTimeout(scrollMsgs, 0)
   }
@@ -167,7 +169,7 @@ export default function BuildTab({ active }) {
     return () => resizer.removeEventListener('mousedown', onDown)
   }, [])
 
-  const cfgDisplay = cfgYaml ? (cfgSimplified ? simplifyExtractionSchemas(cfgYaml) : cfgYaml) : 'No config yet — keep chatting.'
+  const cfgDisplay = cfgYaml ? (cfgSimplified ? simplifyExtractionSchemas(cfgYaml) : cfgYaml) : t('build.noConfig')
 
   return (
     <div className="chat-layout">
@@ -175,8 +177,8 @@ export default function BuildTab({ active }) {
         <div className="msgs" ref={msgsRef} onScroll={onMsgsScroll}>
           {msgs.map((m, i) => (
             <div key={i} className={`msg ${m.role}`}>
-              {m.role === 'user' && <div className="msg-who">You</div>}
-              {m.role === 'bot' && <div className="msg-who">CogBase AI</div>}
+              {m.role === 'user' && <div className="msg-who">{t('build.you')}</div>}
+              {m.role === 'bot' && <div className="msg-who">{t('build.ai')}</div>}
               <div className="msg-body" style={m.error ? { color: 'var(--red)' } : {}}>{m.text}</div>
             </div>
           ))}
@@ -185,14 +187,14 @@ export default function BuildTab({ active }) {
           <textarea
             ref={textareaRef}
             value={input}
-            placeholder="Describe your app…"
+            placeholder={t('build.placeholder')}
             rows={1}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBuild() } }}
             onChange={e => { setInput(e.target.value); autoResize(e.target) }}
             disabled={building}
           />
-          <button className="btn btn-ghost" title="Restart conversation" onClick={resetBuild}>↺</button>
-          <button className="btn btn-primary" disabled={building} onClick={sendBuild}>Send</button>
+          <button className="btn btn-ghost" title={t('build.restart')} onClick={resetBuild}>↺</button>
+          <button className="btn btn-primary" disabled={building} onClick={sendBuild}>{t('common.send')}</button>
         </div>
       </div>
 
@@ -200,13 +202,13 @@ export default function BuildTab({ active }) {
 
       <div className="chat-aside" id="buildAside" ref={asideRef} style={{ width: asideWidth }}>
         <div className="aside-hd">
-          <h3>Generated Config</h3>
+          <h3>{t('build.generatedConfig')}</h3>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 11, color: 'var(--muted)' }}>{cfgStatus}</span>
             {cfgYaml && (
               <button className="btn btn-ghost btn-sm" style={{ fontSize: 10, padding: '2px 7px' }}
                 onClick={() => setCfgSimplified(v => !v)}>
-                {cfgSimplified ? 'simplified' : 'raw'}
+                {cfgSimplified ? t('build.simplified') : t('build.raw')}
               </button>
             )}
           </div>
@@ -215,7 +217,7 @@ export default function BuildTab({ active }) {
           <pre className="cfg-pre">{cfgDisplay}</pre>
         </div>
         <div className="aside-ft">
-          <button className="btn btn-green" disabled={!cfgYaml} onClick={deployApp}>▲ Deploy App</button>
+          <button className="btn btn-green" disabled={!cfgYaml} onClick={deployApp}>{t('build.deployApp')}</button>
         </div>
       </div>
     </div>

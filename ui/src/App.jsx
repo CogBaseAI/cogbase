@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { AppProvider, useApp } from './context'
+import { I18nProvider, useT, LANGUAGES } from './i18n'
 import BuildTab from './components/tabs/BuildTab'
 import AppsTab from './components/tabs/AppsTab'
 import DemosTab from './components/tabs/DemosTab'
@@ -16,6 +17,7 @@ import TaskProgressModal from './components/modals/TaskProgressModal'
 
 function Layout() {
   const { apiUrl, setApiUrl, currentApp, llmConfigured, embConfigured } = useApp()
+  const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
   const [docModal, setDocModal] = useState(null)        // null | doc object
   const [configModal, setConfigModal] = useState(null)  // null | { demo }
@@ -36,12 +38,17 @@ function Layout() {
       <header>
         <h1>⚡ Cog<span>Base</span></h1>
         <div className="api-row">
-          <label htmlFor="apiUrl">API</label>
-          <input id="apiUrl" type="text" value={apiUrl} onChange={e => setApiUrl(e.target.value.replace(/\/$/, ''))} placeholder="http://localhost:8000" />
+          <label htmlFor="apiUrl">{t('header.apiLabel')}</label>
+          <input id="apiUrl" type="text" value={apiUrl} onChange={e => setApiUrl(e.target.value.replace(/\/$/, ''))} placeholder={t('header.apiPlaceholder')} />
         </div>
         <div className={`app-pill ${currentApp ? 'on' : ''}`}>
           <span className="dot" />
-          <span>{currentApp || 'No app selected'}</span>
+          <span>{currentApp || t('header.noApp')}</span>
+        </div>
+        <div className="lang-row" title={t('header.language')}>
+          <select className="lang-select" value={lang} onChange={e => setLang(e.target.value)} aria-label={t('header.language')}>
+            {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+          </select>
         </div>
       </header>
 
@@ -49,7 +56,7 @@ function Layout() {
       <nav>
         {tabs.map(tab => (
           <button key={tab} className={activeTab === tab ? 'active' : ''} onClick={() => switchTab(tab)}>
-            {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {t(`nav.${tab}`)}
           </button>
         ))}
       </nav>
@@ -123,5 +130,5 @@ function Layout() {
 }
 
 export default function App() {
-  return <AppProvider><Layout /></AppProvider>
+  return <I18nProvider><AppProvider><Layout /></AppProvider></I18nProvider>
 }

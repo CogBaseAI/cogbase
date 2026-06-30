@@ -4,6 +4,7 @@ import { render } from '@testing-library/react'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AppProvider, useApp } from '../context'
+import { I18nProvider } from '../i18n'
 import QueryTab from '../components/tabs/QueryTab'
 
 // Render QueryTab inside a provider with `currentApp` pre-selected.
@@ -15,10 +16,12 @@ function SetApp({ name }) {
 
 function renderQueryTab(appName = 'contract-analyst') {
   return render(
-    <AppProvider>
-      <SetApp name={appName} />
-      <QueryTab active={true} />
-    </AppProvider>
+    <I18nProvider>
+      <AppProvider>
+        <SetApp name={appName} />
+        <QueryTab active={true} />
+      </AppProvider>
+    </I18nProvider>
   )
 }
 

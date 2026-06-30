@@ -1,7 +1,12 @@
 import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render as rtlRender, screen, fireEvent } from '@testing-library/react'
+import { I18nProvider } from '../i18n'
 import DocModal from '../components/modals/DocModal'
+
+// The I18nProvider renders no DOM wrapper, so container.firstChild assertions
+// still reference the component's own root element.
+const render = (ui, options) => rtlRender(ui, { wrapper: I18nProvider, ...options })
 
 const DOC = {
   demoKey: 'contract-analyst',

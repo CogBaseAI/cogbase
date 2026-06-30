@@ -1,11 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { useApp } from '../../context'
+import { useT } from '../../i18n'
 import { streamSSE } from '../../utils'
 
 export default function QueryTab({ active }) {
   const { apiUrl, currentApp } = useApp()
-  const [msgs, setMsgs] = useState([{ role: 'sys', text: 'Select an app, then start asking questions in natural language.' }])
+  const { t } = useT()
+  const [msgs, setMsgs] = useState([{ role: 'sys', text: t('query.intro') }])
   const [input, setInput] = useState('')
   const [querying, setQuerying] = useState(false)
   const [chunks, setChunks] = useState([])
@@ -22,7 +24,7 @@ export default function QueryTab({ active }) {
       prevAppRef.current = currentApp
       closeSession(prevApp)
       if (currentApp) {
-        setMsgs(prev => [...prev, { role: 'sys', text: `Connected to "${currentApp}".` }])
+        setMsgs(prev => [...prev, { role: 'sys', text: t('query.connected', { app: currentApp }) }])
       }
     }
   }, [currentApp])
@@ -67,7 +69,7 @@ export default function QueryTab({ active }) {
     setQuerying(true)
 
     const userMsg = { role: 'user', text }
-    const botMsg = { role: 'bot', text: 'Thinking…', thinking: true }
+    const botMsg = { role: 'bot', text: t('query.thinking'), thinking: true }
     setMsgs(prev => [...prev, userMsg, botMsg])
     setTimeout(scrollMsgs, 0)
 
@@ -82,7 +84,7 @@ export default function QueryTab({ active }) {
       })
       if (!resp.ok) {
         const errText = await resp.text()
-        setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: `HTTP ${resp.status}: ${errText}`, error: true }])
+        setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: t('query.httpErr', { status: resp.status, msg: errText }), error: true }])
         return
       }
 
@@ -104,13 +106,13 @@ export default function QueryTab({ active }) {
           setChunks(d.result.chunks || [])
           setStructuredRecords(d.result.structured_records || [])
         } else if (d.error) {
-          setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: 'Error: ' + d.error, error: true }])
+          setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: t('common.error', { msg: d.error }), error: true }])
         }
       }
 
-      if (!started) setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: '(no response)', muted: true }])
+      if (!started) setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: t('query.noResponse'), muted: true }])
     } catch (e) {
-      setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: 'Network error: ' + e.message, error: true }])
+      setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: t('common.networkError', { msg: e.message }), error: true }])
     } finally {
       setQuerying(false)
     }
@@ -122,21 +124,21 @@ export default function QueryTab({ active }) {
     closeSession(currentApp)
     setChunks([])
     setStructuredRecords([])
-    setMsgs([{ role: 'sys', text: 'Session refreshed.' + (currentApp ? ` Connected to "${currentApp}".` : '') }])
+    setMsgs([{ role: 'sys', text: t('query.refreshed') + (currentApp ? ' ' + t('query.connected', { app: currentApp }) : '') }])
   }
 
   const totalRefs = chunks.length + structuredRecords.length
 
   return (
     <>
-      {!hasApp && <div className="warn-bar show">⚠ No app selected — go to Apps and click Use on an app first.</div>}
+      {!hasApp && <div className="warn-bar show">{t('common.noAppWarn')}</div>}
       <div className="chat-layout">
         <div className="chat-col">
           <div className="msgs" ref={msgsRef}>
             {msgs.map((m, i) => (
               <div key={i} className={`msg ${m.role}`}>
-                {m.role === 'user' && <div className="msg-who">You</div>}
-                {m.role === 'bot' && <div className="msg-who">CogBase</div>}
+                {m.role === 'user' && <div className="msg-who">{t('query.you')}</div>}
+                {m.role === 'bot' && <div className="msg-who">{t('query.bot')}</div>}
                 <div className="msg-body" style={{
                   color: m.error ? 'var(--red)' : m.thinking || m.muted ? 'var(--muted)' : undefined,
                   fontFamily: m.mono ? 'monospace' : undefined,
@@ -153,26 +155,26 @@ export default function QueryTab({ active }) {
             <textarea
               ref={textareaRef}
               value={input}
-              placeholder="Ask a question…"
+              placeholder={t('query.placeholder')}
               rows={1}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuery() } }}
               onChange={e => { setInput(e.target.value); autoResize(e.target) }}
               disabled={querying || !hasApp}
             />
-            <button className="btn btn-ghost" title="Refresh session" onClick={refreshSession}>↺</button>
-            <button className="btn btn-primary" disabled={querying || !hasApp} onClick={sendQuery}>Send</button>
+            <button className="btn btn-ghost" title={t('query.refreshSession')} onClick={refreshSession}>↺</button>
+            <button className="btn btn-primary" disabled={querying || !hasApp} onClick={sendQuery}>{t('common.send')}</button>
           </div>
         </div>
         <div className="chat-aside">
           <div className="aside-hd">
-            <h3>References</h3>
-            <span style={{ fontSize: 11, color: 'var(--muted)' }}>{totalRefs ? `${totalRefs} ref${totalRefs !== 1 ? 's' : ''}` : '—'}</span>
+            <h3>{t('query.references')}</h3>
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>{totalRefs ? (totalRefs !== 1 ? t('query.refs', { n: totalRefs }) : t('query.ref', { n: totalRefs })) : '—'}</span>
           </div>
           <div className="aside-body">
-            {!totalRefs && <div style={{ padding: '30px 10px', textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>References will appear here after a query.</div>}
+            {!totalRefs && <div style={{ padding: '30px 10px', textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>{t('query.refsEmpty')}</div>}
             {structuredRecords.length > 0 && (
               <>
-                <div className="ref-section-hd">Structured Records ({structuredRecords.length})</div>
+                <div className="ref-section-hd">{t('query.structuredRecords', { n: structuredRecords.length })}</div>
                 {structuredRecords.map((rec, i) => (
                   <div key={i} className="ref-card"><pre className="ref-code">{JSON.stringify(rec, null, 2)}</pre></div>
                 ))}
@@ -180,8 +182,8 @@ export default function QueryTab({ active }) {
             )}
             {chunks.length > 0 && (
               <>
-                <div className="ref-section-hd">Passages ({chunks.length})</div>
-                {chunks.map((ch, i) => <RefChunk key={i} chunk={ch} />)}
+                <div className="ref-section-hd">{t('query.passages', { n: chunks.length })}</div>
+                {chunks.map((ch, i) => <RefChunk key={i} chunk={ch} t={t} />)}
               </>
             )}
           </div>
@@ -191,7 +193,7 @@ export default function QueryTab({ active }) {
   )
 }
 
-function RefChunk({ chunk }) {
+function RefChunk({ chunk, t }) {
   const [expanded, setExpanded] = useState(false)
   const score = chunk.metadata?.score != null ? Number(chunk.metadata.score).toFixed(3) : null
   const collection = chunk.metadata?.collection || null
@@ -205,7 +207,7 @@ function RefChunk({ chunk }) {
         {score !== null && <span className="ref-score">{score}</span>}
       </div>
       <div className={`ref-text${long && !expanded ? ' collapsed' : ''}`}>{chunk.text}</div>
-      {long && <div className="ref-expand-hint">{expanded ? '▲ collapse' : '▼ expand'}</div>}
+      {long && <div className="ref-expand-hint">{expanded ? t('query.collapse') : t('query.expand')}</div>}
     </div>
   )
 }
