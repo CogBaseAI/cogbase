@@ -13,9 +13,12 @@ Tests are grouped by concern:
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from cogbase.memory import LongTermRecord, MemoryKind
 
 from cogbase.core.query_runner import (
     DocumentSlice,
@@ -23,6 +26,7 @@ from cogbase.core.query_runner import (
     QueryResult,
     QueryRunner as Runner,
     RetrievalResources,
+    _cited_block_memories,
     _extract_cited_ids,
     _filter_cited_chunks,
     _filter_cited_slices,
@@ -1135,6 +1139,69 @@ def test_filter_cited_slices_preserves_all_slices_order():
     cited = _extract_cited_ids(f"See [{s3.slice_id}] and [{s1.slice_id}].")
     result = _filter_cited_slices([s1, s2, s3], cited)
     assert result == [s1, s3]
+
+
+# ---------------------------------------------------------------------------
+# _cited_block_memories()
+# ---------------------------------------------------------------------------
+
+def _make_memory(content: str, memory_id: str) -> LongTermRecord:
+    return LongTermRecord(
+        memory_id=memory_id,
+        kind=MemoryKind.FACT,
+        content=content,
+        observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+
+def test_cited_block_memories_returns_all_records_of_a_cited_block():
+    """A block is all-or-nothing: citing its id surfaces every record in it."""
+    blocks = {
+        "memory-1": [_make_memory("alpha", "a"), _make_memory("beta", "b")],
+        "memory-2": [_make_memory("gamma", "c")],
+    }
+    cited = _extract_cited_ids("The user prefers alpha [memory-1].")
+    result = _cited_block_memories(blocks, cited)
+    assert [m.content for m in result] == ["alpha", "beta"]
+
+
+def test_cited_block_memories_unions_multiple_cited_blocks():
+    blocks = {
+        "memory-1": [_make_memory("alpha", "a")],
+        "memory-2": [_make_memory("gamma", "c")],
+    }
+    cited = _extract_cited_ids("From [memory-1] and [memory-2].")
+    result = _cited_block_memories(blocks, cited)
+    assert [m.content for m in result] == ["alpha", "gamma"]
+
+
+def test_cited_block_memories_dedupes_records_shared_across_blocks():
+    shared = _make_memory("shared", "s")
+    blocks = {
+        "memory-1": [shared, _make_memory("alpha", "a")],
+        "memory-2": [shared],
+    }
+    cited = _extract_cited_ids("See [memory-1] and [memory-2].")
+    result = _cited_block_memories(blocks, cited)
+    assert [m.memory_id for m in result] == ["s", "a"]
+
+
+def test_cited_block_memories_returns_empty_when_no_block_cited():
+    """No fall-back: an uncited memory block is dropped entirely."""
+    blocks = {"memory-1": [_make_memory("alpha", "a")]}
+    cited = _extract_cited_ids("Here is the answer with no citations at all.")
+    assert _cited_block_memories(blocks, cited) == []
+
+
+def test_cited_block_memories_ignores_non_block_citations():
+    blocks = {"memory-1": [_make_memory("alpha", "a")]}
+    cited = {"doc_0_0", "contract.pdf:0:100"}
+    assert _cited_block_memories(blocks, cited) == []
+
+
+def test_cited_block_memories_empty_blocks_returns_empty():
+    cited = _extract_cited_ids("anything [memory-1]")
+    assert _cited_block_memories({}, cited) == []
 
 
 # ---------------------------------------------------------------------------

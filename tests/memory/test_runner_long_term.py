@@ -81,6 +81,39 @@ async def test_recall_injects_memory_block():
 
 
 @pytest.mark.asyncio
+async def test_recall_block_surfaced_on_result_only_when_cited():
+    """The recall block is one citable passage: its records reach the QueryResult
+    only when the answer cites the block id, and as a whole when it does."""
+    lt = await _long_term()
+    await lt.promote(
+        candidate=MemoryCandidate(
+            content="user prefers dark mode", kind=MemoryKind.PREFERENCE,
+            confidence=0.7, observed_at=_OBSERVED_AT,
+        ),
+    )
+
+    # Answer cites the recall block id -> the block's records are surfaced.
+    llm_cited, _ = _capturing_llm("You prefer dark mode [memory-1].")
+    runner = QueryRunner(
+        app_id="app1", llm=llm_cited,
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(long_term=lt),
+    )
+    result = await _drain(runner, user_input="what theme do I like?")
+    assert [m.content for m in result.memories] == ["user prefers dark mode"]
+
+    # Same recall, but the answer cites nothing -> no memory on the result.
+    llm_uncited, _ = _capturing_llm("I am not sure.")
+    runner = QueryRunner(
+        app_id="app1", llm=llm_uncited,
+        resources=RetrievalResources(document_store=MagicMock()),
+        memory=MemoryTiers(long_term=lt),
+    )
+    result = await _drain(runner, user_input="what theme do I like?")
+    assert result.memories == []
+
+
+@pytest.mark.asyncio
 async def test_no_recall_when_nothing_relevant_injects_no_block():
     lt = await _long_term()
     llm, captured = _capturing_llm("ok")

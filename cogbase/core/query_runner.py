@@ -111,9 +111,11 @@ class QueryResult(BaseModel):
         structured_records:  All records returned by structured_lookup calls.
         chunks:              All chunks returned by vector_search calls.
         document_slices:     Document text slices fetched by read_document calls.
-        memories:            Long-term memories that informed the answer — those
-                             recalled into context and any fetched via
-                             memory_lookup. Empty when no memory was used.
+        memories:            Long-term memories the answer actually used — the
+                             records of every injected memory block (recall and
+                             memory_lookup) whose block id the answer cited in
+                             brackets. A block is all-or-nothing. Empty when no
+                             memory block was cited.
         passthrough:         True when records were returned directly without
                              LLM synthesis (token threshold exceeded).
         input_tokens:        Total prompt tokens consumed across all LLM calls.
@@ -395,7 +397,12 @@ _MEMORY_EVIDENCE_POLICY = (
 
 
 def _format_memory_line(m: LongTermRecord) -> str:
-    """One recalled memory as a dated, attributed line for an injected block.
+    """One recalled memory as a dated, attributed line within a memory block.
+
+    A whole memory block is cited as one passage (its block id leads the block
+    header — see ``_recall_memory_block`` / ``_run_memory_lookup``), so the
+    individual records need no per-record id; the opaque ``memory_id`` UUID would
+    only add noise the model cannot meaningfully cite.
 
     The "as of" anchor is the memory's ``observed_at`` (when its source turn was
     asserted — see LongTermRecord.observed_at), which is always set on a promoted
@@ -497,6 +504,53 @@ def _filter_cited_slices(all_slices: list[DocumentSlice], cited_ids: set[str]) -
     """
     matched = [s for s in all_slices if s.slice_id in cited_ids]
     return matched if (matched or cited_ids) else all_slices
+
+
+def _format_memory_block(title: str, block_id: str, memories: list[LongTermRecord]) -> str:
+    """Render *memories* as one citable block led by *block_id*.
+
+    The block is a single passage: the header tells the model to cite ``[block_id]``
+    if it uses any of the block, and ``_cited_block_memories`` then surfaces all of
+    the block's records on the QueryResult when that id appears in the answer.
+
+    Lines are rendered oldest -> newest so the dated entries read as a timeline: the
+    model can follow how a belief evolved (a correction sits after what it corrects)
+    and the most-current fact lands last, lining up with the recency the precedence
+    policy tells it to prefer.  Stable sort on the relevance-ordered input keeps
+    vector relevance as the tiebreaker within a single date; only the rendering is
+    reordered — the returned records keep recall/lookup's native order, the contract
+    callers expect.
+    """
+    ordered = sorted(memories, key=lambda m: m.observed_at)
+    lines = "\n".join(_format_memory_line(m) for m in ordered)
+    return (
+        f"{title} Cite [{block_id}] in your answer if you use any of it.\n"
+        + _MEMORY_EVIDENCE_POLICY + "\n" + lines
+    )
+
+
+def _cited_block_memories(
+    memory_blocks: dict[str, list[LongTermRecord]], cited_ids: set[str]
+) -> list[LongTermRecord]:
+    """Return the records of every memory block the answer cited.
+
+    Each injected memory block is one citable passage keyed by its block id, so a
+    block is all-or-nothing: cite the block id and you get all its records.  Unlike
+    chunks/slices there is no fall-back to all — memory is memory-derived
+    background, not the document evidence the answer is grounded in, so a block the
+    answer never cites was not used and is dropped from the QueryResult entirely.
+    Records shared across cited blocks are de-duplicated by ``memory_id``.
+    """
+    out: list[LongTermRecord] = []
+    seen: set[str] = set()
+    for block_id, records in memory_blocks.items():
+        if block_id not in cited_ids:
+            continue
+        for m in records:
+            if m.memory_id not in seen:
+                out.append(m)
+                seen.add(m.memory_id)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -753,13 +807,15 @@ class QueryRunner:
             messages.extend(history or [])
             messages.append({"role": "user", "content": user_input})
 
-        # Memories that informed this answer: recalled (push) below, plus any
-        # fetched by memory_lookup (pull) during the loop.  Surfaced on the final
-        # QueryResult so the caller can show what memory the answer drew on.
         all_records: list[dict] = []
         all_chunks: list[Chunk] = []
         all_slices: list[DocumentSlice] = []
-        all_memories: list[LongTermRecord] = []
+        # Each injected memory block (the recall block below, plus any memory_lookup
+        # results during the loop) is one citable passage keyed by its block id.
+        # Only the blocks the answer cites are surfaced on the final QueryResult, so
+        # the caller sees the memory the answer actually drew on — see
+        # _cited_block_memories.
+        memory_blocks: dict[str, list[LongTermRecord]] = {}
 
         # Long-term recall: relevant curated memories injected as a system
         # block marked memory-derived, so the evidence policy keeps them distinct
@@ -771,10 +827,11 @@ class QueryRunner:
             # signal on its own.
             prior = context if memory_active else (history or [])
             recall_query = self._compose_recall_query(user_input, prior)
-            memory_block, recalled = await self._recall_memory_block(recall_query)
+            block_id = f"memory-{len(memory_blocks) + 1}"
+            memory_block, recalled = await self._recall_memory_block(recall_query, block_id)
             if memory_block:
                 messages.insert(1, {"role": "system", "content": memory_block})
-                self._merge_memories(all_memories, recalled)
+                memory_blocks[block_id] = recalled
 
         total_input_tokens: int = 0
         total_output_tokens: int = 0
@@ -832,7 +889,7 @@ class QueryRunner:
                     structured_records=all_records,
                     chunks=_filter_cited_chunks(all_chunks, cited_ids),
                     document_slices=_filter_cited_slices(all_slices, cited_ids),
-                    memories=all_memories,
+                    memories=_cited_block_memories(memory_blocks, cited_ids),
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                 )
@@ -884,7 +941,9 @@ class QueryRunner:
                             structured_records=all_records,
                             chunks=all_chunks,
                             document_slices=all_slices,
-                            memories=all_memories,
+                            # Passthrough returns the records directly with no LLM
+                            # synthesis, so no memory was cited / used.
+                            memories=[],
                             passthrough=True,
                             input_tokens=total_input_tokens,
                             output_tokens=total_output_tokens,
@@ -899,8 +958,10 @@ class QueryRunner:
                     if doc_slice is not None:
                         all_slices.append(doc_slice)
                 elif name == "memory_lookup":
-                    tool_output, looked_up = await self._run_memory_lookup(inputs)
-                    self._merge_memories(all_memories, looked_up)
+                    block_id = f"memory-{len(memory_blocks) + 1}"
+                    tool_output, looked_up = await self._run_memory_lookup(inputs, block_id)
+                    if looked_up:
+                        memory_blocks[block_id] = looked_up
                 else:
                     tool_output = await self._execute_tool(name, inputs, current_skill)
                     logger.info("[runner] execute_tool done: %s", tool_output[:300])
@@ -921,13 +982,14 @@ class QueryRunner:
         )
         if episodic_on:
             await self._episodic_final_answer(session_id, answer)
-        # limit the number of references to avoid large context
+        # limit the number of references to avoid large context; the canned answer
+        # cites nothing, so no memory was used and none is returned.
         yield QueryResult(
             answer=answer,
             structured_records=all_records[:2],
             chunks=all_chunks[:2],
             document_slices=all_slices[:2],
-            memories=all_memories[:2],
+            memories=[],
             input_tokens=total_input_tokens,
             output_tokens=total_output_tokens,
         )
@@ -1112,13 +1174,16 @@ class QueryRunner:
     # Long-term memory recall
     # ------------------------------------------------------------------
 
-    async def _run_memory_lookup(self, inputs: dict) -> tuple[str, list[LongTermRecord]]:
+    async def _run_memory_lookup(
+        self, inputs: dict, block_id: str = "memory-1"
+    ) -> tuple[str, list[LongTermRecord]]:
         """Execute the memory_lookup tool against the long-term store.
 
         Returns the formatted tool output and the records it surfaced (empty on
         error or no match), so the caller can attach them to the QueryResult.
-        ``status=active`` filtering is enforced inside ``LongTermMemory.lookup``,
-        never from LLM-supplied arguments.
+        The result is one citable block keyed by *block_id*; ``status=active``
+        filtering is enforced inside ``LongTermMemory.lookup``, never from
+        LLM-supplied arguments.
         """
         if self._long_term is None:
             return "memory_lookup is unavailable (no long-term memory configured)", []
@@ -1147,26 +1212,10 @@ class QueryRunner:
         logger.info("[runner] memory_lookup.result memories=%d", len(memories))
         if not memories:
             return "(no matching memories)", []
-        # Render oldest -> newest so the dated lines read as a timeline (see
-        # _recall_memory_block).  Stable sort keeps lookup's own order — vector
-        # relevance, or recency when no query — as the tiebreaker within a date.
-        # Only the rendering is reordered; the returned records keep lookup's order.
-        ordered = sorted(memories, key=lambda m: m.observed_at)
-        lines = "\n".join(_format_memory_line(m) for m in ordered)
-        return (
-            "Memories (recalled from long-term memory):\n"
-            + _MEMORY_EVIDENCE_POLICY + "\n" + lines,
-            memories,
+        block = _format_memory_block(
+            "Memories (recalled from long-term memory).", block_id, memories
         )
-
-    @staticmethod
-    def _merge_memories(acc: list[LongTermRecord], new: list[LongTermRecord]) -> None:
-        """Append *new* memories to *acc*, skipping ones already present by id."""
-        seen = {m.memory_id for m in acc}
-        for m in new:
-            if m.memory_id not in seen:
-                acc.append(m)
-                seen.add(m.memory_id)
+        return block, memories
 
     @staticmethod
     def _compose_recall_query(
@@ -1211,13 +1260,16 @@ class QueryRunner:
         parts.append(user_input)
         return "\n".join(parts)
 
-    async def _recall_memory_block(self, query: str) -> tuple[str | None, list[LongTermRecord]]:
+    async def _recall_memory_block(
+        self, query: str, block_id: str = "memory-1"
+    ) -> tuple[str | None, list[LongTermRecord]]:
         """Recall memories relevant to *query* and format them as a system block.
 
         Returns the block (or ``None`` to inject nothing) together with the
         recalled records, so the caller can surface them on the QueryResult.
-        Yields ``(None, [])`` when nothing is recalled or recall fails —
-        long-term recall is an enrichment, never allowed to break a turn.
+        The block is one citable passage keyed by *block_id*.  Yields ``(None, [])``
+        when nothing is recalled or recall fails — long-term recall is an
+        enrichment, never allowed to break a turn.
         """
         try:
             memories = await self._long_term.recall(query=query)
@@ -1226,21 +1278,13 @@ class QueryRunner:
             return None, []
         if not memories:
             return None, []
-        # Render oldest -> newest so the dated lines read as a timeline: the model
-        # can follow how a belief evolved (a correction sits after what it corrects)
-        # and the most-current fact lands last, which lines up with the recency the
-        # precedence policy tells it to prefer.  Stable sort on the relevance-ordered
-        # list keeps vector relevance as the tiebreaker within a single date.  Only
-        # the rendering is reordered; the returned records keep recall's relevance
-        # order, which is the contract callers (e.g. QueryResult.recalled) expect.
-        ordered = sorted(memories, key=lambda m: m.observed_at)
-        lines = "\n".join(_format_memory_line(m) for m in ordered)
-        logger.info("[runner] long-term recall injected %d memories", len(memories))
-        return (
-            "Relevant long-term memory about the user, topic, or entity (recalled):\n"
-            + _MEMORY_EVIDENCE_POLICY + "\n" + lines,
+        block = _format_memory_block(
+            "Relevant long-term memory about the user, topic, or entity (recalled).",
+            block_id,
             memories,
         )
+        logger.info("[runner] long-term recall injected %d memories", len(memories))
+        return block, memories
 
     # ------------------------------------------------------------------
     # Episodic memory recording
