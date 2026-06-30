@@ -25,8 +25,24 @@ export default function BuildTab({ active }) {
   const textareaRef = useRef(null)
   const resizerRef = useRef(null)
   const asideRef = useRef(null)
+  const stickToBottomRef = useRef(true)
 
-  const scrollMsgs = () => { if (msgsRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight }
+  // Pin to bottom only while the user hasn't scrolled up. During streaming we
+  // call scrollMsgs on every token, so without this a user can never scroll up
+  // to read the head of a long output.
+  const scrollMsgs = () => {
+    if (msgsRef.current && stickToBottomRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight
+  }
+  // Force scroll to bottom and re-pin (used when the user sends a message).
+  const scrollMsgsForce = () => {
+    stickToBottomRef.current = true
+    if (msgsRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight
+  }
+  function onMsgsScroll() {
+    const el = msgsRef.current
+    if (!el) return
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+  }
 
   function autoResize(el) {
     el.style.height = 'auto'
@@ -44,7 +60,7 @@ export default function BuildTab({ active }) {
     const userMsg = { role: 'user', text }
     const botMsg = { role: 'bot', text: '' }
     setMsgs(prev => [...prev, userMsg, botMsg])
-    setTimeout(scrollMsgs, 0)
+    setTimeout(scrollMsgsForce, 0)
 
     try {
       const resp = await fetch(`${apiUrl}/generate/chat/stream`, {
@@ -156,7 +172,7 @@ export default function BuildTab({ active }) {
   return (
     <div className="chat-layout">
       <div className="chat-col">
-        <div className="msgs" ref={msgsRef}>
+        <div className="msgs" ref={msgsRef} onScroll={onMsgsScroll}>
           {msgs.map((m, i) => (
             <div key={i} className={`msg ${m.role}`}>
               {m.role === 'user' && <div className="msg-who">You</div>}
