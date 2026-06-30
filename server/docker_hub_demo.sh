@@ -12,6 +12,9 @@ Commands:
   build               Build and tag the image with the current hatch version + :latest
   push                Push the versioned tag and :latest to Docker Hub
   release             build + push in one step
+  build-latest        Build and tag :latest only from the current code (no hatch version)
+  push-latest         Push :latest only to Docker Hub (no hatch version)
+  release-latest      build-latest + push-latest in one step
   pull [VERSION]      Pull VERSION from Docker Hub (default: latest)
   run [VERSION] [DIR] Start the container from a local image (use pull first for hub images)
                         DIR  optional host path mounted to /data
@@ -38,6 +41,21 @@ cmd_push() {
   docker push "$DOCKER_REPO:$VERSION"
   docker push "$DOCKER_REPO:latest"
   echo "Done: $DOCKER_REPO:$VERSION"
+}
+
+cmd_build_latest() {
+  echo "Building $DOCKER_REPO:latest from the current code"
+  docker build \
+    -f server/Dockerfile.demo \
+    -t "$DOCKER_REPO:latest" \
+    .
+  echo "Built $DOCKER_REPO:latest"
+}
+
+cmd_push_latest() {
+  echo "Pushing $DOCKER_REPO:latest"
+  docker push "$DOCKER_REPO:latest"
+  echo "Done: $DOCKER_REPO:latest"
 }
 
 cmd_pull() {
@@ -79,6 +97,9 @@ case "${1:-}" in
   build)   cmd_build ;;
   push)    cmd_push ;;
   release) cmd_build && cmd_push ;;
+  build-latest)   cmd_build_latest ;;
+  push-latest)    cmd_push_latest ;;
+  release-latest) cmd_build_latest && cmd_push_latest ;;
   pull)    shift; cmd_pull "$@" ;;
   run)     shift; cmd_run "$@" ;;
   stop)    cmd_stop ;;
