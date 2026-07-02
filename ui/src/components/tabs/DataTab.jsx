@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
+import { copyText } from '../../utils'
 
 export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, onWfCompleteHandled }) {
   const { apiUrl, currentApp, demoCatalog } = useApp()
@@ -397,7 +398,7 @@ function RecordDetail({ row, cols, onClose }) {
   }
 
   async function copy(key, val) {
-    try { await navigator.clipboard.writeText(fmt(val)); setCopied(key); setTimeout(() => setCopied(null), 1500) } catch {}
+    if (await copyText(fmt(val))) { setCopied(key); setTimeout(() => setCopied(null), 1500) }
   }
 
   return (

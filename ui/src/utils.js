@@ -1,3 +1,35 @@
+// Copy text to the clipboard, returning true on success. Prefers the async
+// Clipboard API, but that requires a secure context (HTTPS or localhost) — when
+// the app is served over plain HTTP to a remote host, navigator.clipboard is
+// undefined (or writeText rejects), so we fall back to a hidden <textarea> +
+// execCommand('copy'), which still works in insecure contexts.
+export async function copyText(value) {
+  const text = String(value ?? '')
+  if (navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      // fall through to the legacy path
+    }
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    // Keep it out of view and non-interactive, but still selectable.
+    ta.style.position = 'fixed'
+    ta.style.top = '-9999px'
+    ta.setAttribute('readonly', '')
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
+}
+
 export function esc(s) {
   return String(s)
     .replace(/&/g, '&amp;')

@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
-import { streamSSE } from '../../utils'
+import { streamSSE, copyText } from '../../utils'
 
 export default function QueryTab({ active }) {
   const { apiUrl, currentApp } = useApp()
@@ -227,11 +227,10 @@ function CopyButton({ text, title, copiedTitle, className = 'icon-copy-btn' }) {
   async function copy(e) {
     e.stopPropagation()
     const value = typeof text === 'function' ? text() : text
-    try {
-      await navigator.clipboard.writeText(value)
+    if (await copyText(value)) {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
-    } catch {}
+    }
   }
   return (
     <button
