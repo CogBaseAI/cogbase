@@ -2,6 +2,13 @@ import React, { useState, useEffect, useRef } from 'react'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
 import { fmtBytes, waitForTasks } from '../../utils'
+import DataTable from '../DataTable'
+
+// Flatten a document's metadata dict to a "k: v, k: v" string for display.
+function metaString(doc) {
+  const meta = doc.metadata || {}
+  return Object.keys(meta).length ? Object.entries(meta).map(([k, v]) => `${k}: ${v}`).join(', ') : ''
+}
 
 export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOpenWfModal }) {
   const { apiUrl, currentApp } = useApp()
@@ -204,57 +211,51 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
                 {t('ingest.wfAlert')}
               </div>
             )}
-            <div className="ingest-docs-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>{t('ingest.colDocId')}</th><th>{t('ingest.colMeta')}</th><th>{t('ingest.colIngestedAt')}</th><th>{t('ingest.colIngest')}</th>
-                    {wfNames.map(wf => <th key={wf}>{wf}</th>)}
-                    <th>{t('ingest.colActions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {docs.map(doc => {
-                    const meta = doc.metadata || {}
-                    const metaStr = Object.keys(meta).length ? Object.entries(meta).map(([k, v]) => `${k}: ${v}`).join(', ') : ''
-                    const pendingWf = wfNames.find(wf => ACTIVE_WF.has(wfMaps[wf]?.[doc.doc_id]))
+            <DataTable
+              rows={docs}
+              rowKey={doc => doc.doc_id}
+              rowClassName={doc => (wfNames.find(wf => ACTIVE_WF.has(wfMaps[wf]?.[doc.doc_id])) ? 'wf-pending' : undefined)}
+              onRowClick={doc => {
+                const pendingWf = wfNames.find(wf => ACTIVE_WF.has(wfMaps[wf]?.[doc.doc_id]))
+                if (pendingWf) onOpenTaskProgress({ appName: currentApp, workflowName: pendingWf, docId: doc.doc_id })
+              }}
+              columns={[
+                { key: 'doc_id', label: t('ingest.colDocId'), cellClassName: 'doc-id-cell', value: doc => doc.doc_id },
+                { key: 'meta', label: t('ingest.colMeta'), value: doc => metaString(doc) },
+                {
+                  key: 'ingested_at', label: t('ingest.colIngestedAt'), sortValue: doc => doc.ingested_at || '',
+                  value: doc => (doc.ingested_at ? doc.ingested_at.replace('T', ' ').slice(0, 16) : ''),
+                },
+                { key: 'ingest_status', label: t('ingest.colIngest'), text: doc => doc.status || '', render: doc => statusBadge(doc.status) },
+                ...wfNames.map(wf => ({
+                  key: `wf:${wf}`, label: wf, text: doc => wfMaps[wf]?.[doc.doc_id] || '',
+                  render: doc => {
+                    const wfStatus = wfMaps[wf]?.[doc.doc_id]
+                    const canRun = wfStatus != null && wfStatus !== 'done' && !ACTIVE_WF.has(wfStatus)
                     return (
-                      <tr
-                        key={doc.doc_id}
-                        className={pendingWf ? 'wf-pending' : ''}
-                        onClick={pendingWf ? () => onOpenTaskProgress({ appName: currentApp, workflowName: pendingWf, docId: doc.doc_id }) : undefined}
-                      >
-                        <td className="doc-id-cell" title={doc.doc_id}>{doc.doc_id}</td>
-                        <td title={metaStr}>{metaStr}</td>
-                        <td>{doc.ingested_at ? doc.ingested_at.replace('T', ' ').slice(0, 16) : ''}</td>
-                        <td>{statusBadge(doc.status)}</td>
-                        {wfNames.map(wf => {
-                          const wfStatus = wfMaps[wf]?.[doc.doc_id]
-                          const canRun = wfStatus != null && wfStatus !== 'done' && !ACTIVE_WF.has(wfStatus)
-                          return (
-                            <td key={wf}>
-                              {statusBadge(wfStatus)}
-                              {canRun && (
-                                <button className="ingest-run-btn" onClick={e => { e.stopPropagation(); openWfModalDirect(wf, doc.doc_id) }}>{t('ingest.run')}</button>
-                              )}
-                            </td>
-                          )
-                        })}
-                        <td>
-                          <button
-                            className="btn btn-red btn-sm"
-                            disabled={deleting === doc.doc_id}
-                            onClick={e => { e.stopPropagation(); deleteDoc(doc.doc_id) }}
-                          >
-                            {deleting === doc.doc_id ? <span className="spinning">⟳</span> : t('common.delete')}
-                          </button>
-                        </td>
-                      </tr>
+                      <>
+                        {statusBadge(wfStatus)}
+                        {canRun && (
+                          <button className="ingest-run-btn" onClick={e => { e.stopPropagation(); openWfModalDirect(wf, doc.doc_id) }}>{t('ingest.run')}</button>
+                        )}
+                      </>
                     )
-                  })}
-                </tbody>
-              </table>
-            </div>
+                  },
+                })),
+                {
+                  key: 'actions', label: t('ingest.colActions'), sortable: false, cellClassName: 'actions-cell',
+                  render: doc => (
+                    <button
+                      className="btn btn-red btn-sm"
+                      disabled={deleting === doc.doc_id}
+                      onClick={e => { e.stopPropagation(); deleteDoc(doc.doc_id) }}
+                    >
+                      {deleting === doc.doc_id ? <span className="spinning">⟳</span> : t('common.delete')}
+                    </button>
+                  ),
+                },
+              ]}
+            />
           </div>
         )}
         {docs && docs.length === 0 && <p style={{ color: 'var(--muted)', fontSize: 12, marginTop: 20 }}>{t('ingest.noDocs')}</p>}

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
 import AppDetailModal from '../modals/AppDetailModal'
+import DataTable from '../DataTable'
 
 export default function AppsTab({ active, onSwitchTab }) {
   const { apiUrl, currentApp, setCurrentApp } = useApp()
@@ -55,33 +56,46 @@ export default function AppsTab({ active, onSwitchTab }) {
       {error && <div className="empty"><p style={{ color: 'var(--red)' }}>{t('common.failed', { msg: error })}</p></div>}
       {apps && apps.length === 0 && <div className="empty"><div className="ei">📭</div><p>{t('apps.empty')}</p></div>}
       {apps && apps.length > 0 && (
-        <table>
-          <thead><tr><th>{t('apps.colName')}</th><th>{t('apps.colStatus')}</th><th>{t('apps.colCreated')}</th><th style={{ width: 140 }}>{t('apps.colActions')}</th></tr></thead>
-          <tbody>
-            {apps.map(a => {
-              const sc = a.status === 'active' ? 'b-active' : a.status === 'error' ? 'b-error' : 'b-init'
-              const ts = a.created_at ? new Date(a.created_at).toLocaleString() : '—'
-              const cur = a.name === currentApp
-              return (
-                <tr key={a.name}>
-                  <td style={{ fontWeight: cur ? 600 : 400 }}>
+        <DataTable
+          rows={apps}
+          rowKey={a => a.name}
+          columns={[
+            {
+              key: 'name', label: t('apps.colName'), text: a => a.name,
+              render: a => {
+                const cur = a.name === currentApp
+                return (
+                  <span style={{ fontWeight: cur ? 600 : 400 }}>
                     <button className="link-btn" onClick={() => viewApp(a)} title={t('appDetail.view')}>{a.name}</button>
                     {cur && <span style={{ fontSize: 10, color: 'var(--accent)', marginLeft: 4 }}>{t('apps.selected')}</span>}
-                  </td>
-                  <td><span className={`badge ${sc}`}>{a.status}</span></td>
-                  <td style={{ color: 'var(--muted)', fontSize: 11 }}>{ts}</td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <button className="btn btn-ghost btn-sm" onClick={() => viewApp(a)}>{t('appDetail.details')}</button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name); loadApps() }}>{t('common.use')}</button>
-                      <button className="btn btn-red btn-sm" onClick={() => deleteApp(a.name)}>{t('common.delete')}</button>
-                    </div>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+                  </span>
+                )
+              },
+            },
+            {
+              key: 'status', label: t('apps.colStatus'), text: a => a.status,
+              render: a => {
+                const sc = a.status === 'active' ? 'b-active' : a.status === 'error' ? 'b-error' : 'b-init'
+                return <span className={`badge ${sc}`}>{a.status}</span>
+              },
+            },
+            {
+              key: 'created', label: t('apps.colCreated'), sortValue: a => a.created_at || '',
+              cellClassName: 'muted-cell',
+              render: a => a.created_at ? new Date(a.created_at).toLocaleString() : '—',
+            },
+            {
+              key: 'actions', label: t('apps.colActions'), sortable: false, cellClassName: 'actions-cell',
+              render: a => (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => viewApp(a)}>{t('appDetail.details')}</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name); loadApps() }}>{t('common.use')}</button>
+                  <button className="btn btn-red btn-sm" onClick={() => deleteApp(a.name)}>{t('common.delete')}</button>
+                </div>
+              ),
+            },
+          ]}
+        />
       )}
       {detailApp && <AppDetailModal app={detailApp} onClose={() => setDetailApp(null)} />}
     </div>

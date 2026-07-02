@@ -664,20 +664,6 @@ tr:hover td { background: var(--bg3); }
   margin: 28px 0 10px;
 }
 .ingest-docs-hd h3 { font-size: 14px; font-weight: 600; }
-.ingest-docs-wrap { overflow-x: auto; }
-.ingest-docs-wrap table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.ingest-docs-wrap th {
-  text-align: left; padding: 5px 10px; background: var(--bg3);
-  border-bottom: 1px solid var(--border); color: var(--muted); font-weight: 500;
-  white-space: nowrap;
-}
-.ingest-docs-wrap td {
-  padding: 6px 10px; border-bottom: 1px solid var(--border);
-  vertical-align: middle; max-width: 220px; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap;
-}
-.ingest-docs-wrap tr:last-child td { border-bottom: none; }
-.ingest-docs-wrap .doc-id-cell { font-family: monospace; font-size: 11px; }
 .ingest-status { display: inline-block; border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 500; }
 .ingest-status.active  { background: rgba(52,211,153,.15); color: var(--green); }
 .ingest-status.failed  { background: rgba(239,68,68,.12);  color: var(--red);   }
@@ -700,8 +686,6 @@ tr:hover td { background: var(--bg3); }
   border-radius: 8px; font-size: 12px; color: var(--yellow);
 }
 .ingest-wf-alert.show { display: flex; }
-.ingest-docs-wrap tr.wf-pending { cursor: pointer; }
-.ingest-docs-wrap tr.wf-pending:hover td { background: rgba(245,158,11,.05); }
 
 /* ── Task progress modal ── */
 .task-progress-modal {
@@ -859,6 +843,23 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 
 /* Clickable rows open the detail drawer */
 .data-tbl tr.data-row { cursor: pointer; }
+
+/* Shared DataTable toolbar (search + optional filters + count) */
+.dt-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.dt-toolbar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.dt-toolbar .meta { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.dt-wrap { overflow-x: auto; }
+.data-tbl td.ta-right, .data-tbl th.ta-right { text-align: right; }
+.data-tbl td.ta-center, .data-tbl th.ta-center { text-align: center; }
+/* Cell styles reused by tabs now rendering through .data-tbl */
+.data-tbl .doc-id-cell { font-family: monospace; font-size: 11px; }
+.data-tbl .muted-cell { color: var(--muted); font-size: 11px; }
+.data-tbl .mono-cell { font-family: monospace; font-size: 11px; }
+/* Action-button columns size to their buttons and never clip, so the last
+   button (e.g. Delete) stays visible; width:1% shrinks the column to content. */
+.data-tbl td.actions-cell { width: 1%; max-width: none; overflow: visible; white-space: nowrap; }
+.data-tbl tr.wf-pending { cursor: pointer; }
+.data-tbl tr.wf-pending:hover td { background: rgba(245, 158, 11, .05); }
 
 /* Floating full-text preview for truncated cells */
 .cell-tip {

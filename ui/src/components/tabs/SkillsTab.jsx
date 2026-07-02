@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
+import DataTable from '../DataTable'
 
 export default function SkillsTab({ active }) {
   const { apiUrl, currentApp } = useApp()
@@ -180,47 +181,52 @@ export default function SkillsTab({ active }) {
         {error && <div className="empty"><p style={{ color: 'var(--red)' }}>{t('common.failed', { msg: error })}</p></div>}
         {skills && skills.length === 0 && <div className="empty"><div className="ei">🧩</div><p>{t('skills.noSkills')}</p></div>}
         {skills && skills.length > 0 && (
-          <table>
-            <thead>
-              <tr>
-                <th style={{ width: 90 }}>{t('skills.colAssigned')}</th>
-                <th>{t('skills.colName')}</th>
-                <th>{t('skills.colDescription')}</th>
-                <th style={{ width: 160 }}>{t('skills.colActions')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {skills.map(s => {
-                const on = assigned.has(s.name)
-                const busy = busyId === s.name
-                return (
-                  <tr key={s.id}>
-                    <td>
-                      <button
-                        className={`btn btn-sm ${on ? 'btn-primary' : 'btn-ghost'}`}
-                        disabled={!currentApp || busy}
-                        title={currentApp ? (on ? t('skills.removeFromApp') : t('skills.addToApp')) : t('skills.selectAppFirst')}
-                        onClick={() => toggleAssign(s)}
-                      >
-                        {on ? t('skills.on') : t('skills.add')}
-                      </button>
-                    </td>
-                    <td style={{ fontWeight: 500 }}>
-                      {s.name}
-                      <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace' }}>{s.id}</div>
-                    </td>
-                    <td style={{ color: 'var(--muted)', fontSize: 12 }}>{s.description}</td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => startReplace(s.name)}>{t('common.replace')}</button>
-                        <button className="btn btn-red btn-sm" disabled={busy} onClick={() => deleteSkill(s)}>{t('common.delete')}</button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+          <DataTable
+            rows={skills}
+            rowKey={s => s.id}
+            columns={[
+              {
+                key: 'assigned', label: t('skills.colAssigned'), width: 90,
+                sortable: false, searchable: false,
+                render: s => {
+                  const on = assigned.has(s.name)
+                  const busy = busyId === s.name
+                  return (
+                    <button
+                      className={`btn btn-sm ${on ? 'btn-primary' : 'btn-ghost'}`}
+                      disabled={!currentApp || busy}
+                      title={currentApp ? (on ? t('skills.removeFromApp') : t('skills.addToApp')) : t('skills.selectAppFirst')}
+                      onClick={() => toggleAssign(s)}
+                    >
+                      {on ? t('skills.on') : t('skills.add')}
+                    </button>
+                  )
+                },
+              },
+              {
+                key: 'name', label: t('skills.colName'), text: s => `${s.name} ${s.id}`,
+                render: s => (
+                  <span style={{ fontWeight: 500 }}>
+                    {s.name}
+                    <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace' }}>{s.id}</div>
+                  </span>
+                ),
+              },
+              { key: 'description', label: t('skills.colDescription'), value: s => s.description, cellClassName: 'muted-cell' },
+              {
+                key: 'actions', label: t('skills.colActions'), sortable: false, cellClassName: 'actions-cell',
+                render: s => {
+                  const busy = busyId === s.name
+                  return (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => startReplace(s.name)}>{t('common.replace')}</button>
+                      <button className="btn btn-red btn-sm" disabled={busy} onClick={() => deleteSkill(s)}>{t('common.delete')}</button>
+                    </div>
+                  )
+                },
+              },
+            ]}
+          />
         )}
       </div>
     </div>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
+import DataTable from '../DataTable'
 
 // Behaviour-affecting kinds are the ones gated to pending_review; the rest
 // (preferences, retrieval hints) go active without review. Filter accordingly.
@@ -221,29 +222,28 @@ function DistillRuns({ runs, expanded, onToggle, t }) {
             <div className="sub" style={{ padding: '8px 2px' }}>{t('memory.noRuns')}</div>
           )}
           {runs && runs.length > 0 && (
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ width: 100 }}>{t('memory.colStatus')}</th>
-                  <th>{t('memory.colSession')}</th>
-                  <th style={{ width: 170 }}>{t('memory.colStarted')}</th>
-                  <th style={{ width: 170 }}>{t('memory.colFinished')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map(r => (
-                  <tr key={r.task_id}>
-                    <td><span className={`badge ${STATUS_BADGE[r.status] || 'b-init'}`}>{r.status}</span></td>
-                    <td style={{ fontFamily: 'monospace', fontSize: 11 }} title={r.error || undefined}>
+            <DataTable
+              rows={runs}
+              rowKey={r => r.task_id}
+              columns={[
+                {
+                  key: 'status', label: t('memory.colStatus'), width: 100, text: r => r.status,
+                  render: r => <span className={`badge ${STATUS_BADGE[r.status] || 'b-init'}`}>{r.status}</span>,
+                },
+                {
+                  key: 'session', label: t('memory.colSession'), text: r => `${r.doc_id || ''} ${r.error || ''}`,
+                  cellClassName: 'mono-cell',
+                  render: r => (
+                    <span title={r.error || undefined}>
                       {r.doc_id || '—'}
                       {r.error && <div style={{ color: 'var(--red)', fontSize: 10 }}>{r.error}</div>}
-                    </td>
-                    <td style={{ color: 'var(--muted)', fontSize: 11 }}>{fmtTime(r.started_at)}</td>
-                    <td style={{ color: 'var(--muted)', fontSize: 11 }}>{fmtTime(r.completed_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </span>
+                  ),
+                },
+                { key: 'started', label: t('memory.colStarted'), width: 170, cellClassName: 'muted-cell', sortValue: r => r.started_at || '', render: r => fmtTime(r.started_at) },
+                { key: 'finished', label: t('memory.colFinished'), width: 170, cellClassName: 'muted-cell', sortValue: r => r.completed_at || '', render: r => fmtTime(r.completed_at) },
+              ]}
+            />
           )}
         </div>
       )}
@@ -254,30 +254,31 @@ function DistillRuns({ runs, expanded, onToggle, t }) {
 // Read-only table of stored memory records (the Records mode of the tab).
 function RecordsTable({ records, t }) {
   return (
-    <table className="data-tbl">
-      <thead>
-        <tr>
-          <th style={{ width: 90 }}>{t('memory.colKind')}</th>
-          <th>{t('memory.colContent')}</th>
-          <th>{t('memory.colEntities')}</th>
-          <th style={{ width: 60 }}>{t('memory.colConf')}</th>
-          <th style={{ width: 110 }}>{t('memory.colStatus')}</th>
-          <th style={{ width: 110 }}>{t('memory.colObserved')}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {records.map(m => (
-          <tr key={m.memory_id}>
-            <td><span className="badge b-init">{m.kind}</span></td>
-            <td>{m.content}</td>
-            <td style={{ fontSize: 11, color: 'var(--muted)' }}>{(m.entities || []).join(', ') || '—'}</td>
-            <td>{m.confidence != null ? Number(m.confidence).toFixed(2) : '—'}</td>
-            <td><span className={`badge ${MEM_STATUS_BADGE[m.status] || 'b-init'}`}>{m.status}</span></td>
-            <td style={{ fontSize: 11, color: 'var(--muted)' }} title={m.observed_at || ''}>{fmtDate(m.observed_at)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataTable
+      rows={records}
+      rowKey={m => m.memory_id}
+      columns={[
+        {
+          key: 'kind', label: t('memory.colKind'), width: 90, text: m => m.kind,
+          render: m => <span className="badge b-init">{m.kind}</span>,
+        },
+        { key: 'content', label: t('memory.colContent'), value: m => m.content },
+        { key: 'entities', label: t('memory.colEntities'), cellClassName: 'muted-cell', value: m => (m.entities || []).join(', ') || '—' },
+        {
+          key: 'conf', label: t('memory.colConf'), width: 60, align: 'right',
+          sortValue: m => (m.confidence != null ? Number(m.confidence) : null),
+          render: m => (m.confidence != null ? Number(m.confidence).toFixed(2) : '—'),
+        },
+        {
+          key: 'status', label: t('memory.colStatus'), width: 110, text: m => m.status,
+          render: m => <span className={`badge ${MEM_STATUS_BADGE[m.status] || 'b-init'}`}>{m.status}</span>,
+        },
+        {
+          key: 'observed', label: t('memory.colObserved'), width: 110, cellClassName: 'muted-cell',
+          sortValue: m => m.observed_at || '', render: m => fmtDate(m.observed_at),
+        },
+      ]}
+    />
   )
 }
 
