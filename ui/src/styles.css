@@ -805,11 +805,15 @@ tr:hover td { background: var(--bg3); }
 .data-tbl th.sortable:hover { color: inherit; }
 .data-tbl .th-label { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 .data-tbl .sort-caret { font-size: 9px; }
+/* Persistent vertical separators so column boundaries (and the drag target)
+   are visible without hovering. */
+.data-tbl th:not(:last-child), .data-tbl td:not(:last-child) { border-right: 1px solid var(--border); }
 .data-tbl th .col-resize-handle {
-  position: absolute; top: 0; right: 0; width: 7px; height: 100%;
-  cursor: col-resize; user-select: none;
+  position: absolute; top: 0; right: -1px; width: 9px; height: 100%;
+  cursor: col-resize; user-select: none; z-index: 2;
 }
-.data-tbl th .col-resize-handle:hover { background: var(--border); }
+/* Thicken the boundary line into an accent bar while hovering the handle. */
+.data-tbl th .col-resize-handle:hover { border-right: 2px solid var(--accent); }
 body.col-resizing { cursor: col-resize; user-select: none; }
 
 /* Column visibility menu */
