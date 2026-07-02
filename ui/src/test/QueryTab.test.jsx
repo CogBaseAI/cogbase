@@ -118,6 +118,45 @@ it('renders a markdown table answer as an HTML table', async () => {
   expect(screen.queryByText(/\| --- \|/)).not.toBeInTheDocument()
 })
 
+it('copies the question and the answer via their copy buttons', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  mockFetch({ streamEvents: [{ result: { answer: 'The term is 12 months.', chunks: [], structured_records: [] } }] })
+  const user = userEvent.setup()
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+  renderQueryTab()
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+
+  await ask(user, 'What is the term?')
+  await waitFor(() => expect(screen.getByText('The term is 12 months.')).toBeInTheDocument())
+
+  // Each user and bot message exposes a Copy button.
+  const copyButtons = screen.getAllByRole('button', { name: 'Copy' })
+  expect(copyButtons).toHaveLength(2)
+
+  await user.click(copyButtons[0]) // question
+  await waitFor(() => expect(writeText).toHaveBeenLastCalledWith('What is the term?'))
+  await user.click(copyButtons[1]) // answer
+  await waitFor(() => expect(writeText).toHaveBeenLastCalledWith('The term is 12 months.'))
+})
+
+it('copies a markdown table as tab-separated rows', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  const table = '| Name | Term |\n| --- | --- |\n| Acme | 12 months |\n| Globex | 24 months |'
+  mockFetch({ streamEvents: [{ result: { answer: table, chunks: [], structured_records: [] } }] })
+  const user = userEvent.setup()
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+  renderQueryTab()
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+
+  await ask(user, 'summarize the contracts')
+  await waitFor(() => expect(document.querySelector('.md table')).toBeTruthy())
+
+  await user.click(screen.getByRole('button', { name: 'Copy table' }))
+  await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(
+    'Name\tTerm\nAcme\t12 months\nGlobex\t24 months'
+  ))
+})
+
 it('reuses the same session across multiple questions', async () => {
   const fetchSpy = mockFetch()
   const user = userEvent.setup()

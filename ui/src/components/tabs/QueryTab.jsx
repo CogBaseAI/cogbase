@@ -149,9 +149,14 @@ export default function QueryTab({ active }) {
                   fontSize: m.mono ? 11 : undefined,
                 }}>
                   {m.role === 'bot' && !m.mono && !m.thinking
-                    ? <div className="md"><ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown></div>
+                    ? <div className="md"><ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents(t)}>{m.text}</ReactMarkdown></div>
                     : m.text}
                 </div>
+                {(m.role === 'user' || m.role === 'bot') && !m.thinking && !m.error && !m.muted && (
+                  <div className="msg-actions">
+                    <CopyButton text={m.text} title={t('query.copy')} copiedTitle={t('query.copied')} />
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -195,6 +200,82 @@ export default function QueryTab({ active }) {
       </div>
     </>
   )
+}
+
+// Clipboard / check glyphs, sized to the current font.
+function CopyIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  )
+}
+function CheckIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  )
+}
+
+// An icon copy button that flips to a check on success. `text` may be a string
+// or a function returning the text to copy (deferred so the DOM can be read at
+// click time). Always visible, styled like ChatGPT/Claude.
+function CopyButton({ text, title, copiedTitle, className = 'icon-copy-btn' }) {
+  const [copied, setCopied] = useState(false)
+  async function copy(e) {
+    e.stopPropagation()
+    const value = typeof text === 'function' ? text() : text
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {}
+  }
+  return (
+    <button
+      type="button"
+      className={`${className}${copied ? ' copied' : ''}`}
+      onClick={copy}
+      title={copied ? copiedTitle : title}
+      aria-label={copied ? copiedTitle : title}
+    >
+      {copied ? <CheckIcon /> : <CopyIcon />}
+    </button>
+  )
+}
+
+// Serialize a rendered <table> DOM node to tab-separated rows, so it pastes
+// cleanly into spreadsheets.
+function tableToTSV(table) {
+  if (!table) return ''
+  return [...table.querySelectorAll('tr')]
+    .map(tr => [...tr.querySelectorAll('th,td')].map(c => c.textContent.trim()).join('\t'))
+    .join('\n')
+}
+
+// Wrap each markdown table with a floating "Copy table" button.
+function CopyTableWrapper({ children, t }) {
+  const ref = useRef(null)
+  return (
+    <div className="md-table-wrap">
+      <CopyButton
+        className="md-table-copy-btn"
+        text={() => tableToTSV(ref.current)}
+        title={t('query.copyTable')}
+        copiedTitle={t('query.copied')}
+      />
+      <table ref={ref}>{children}</table>
+    </div>
+  )
+}
+
+// ReactMarkdown component overrides. Memoized per-`t` so the object is stable.
+function mdComponents(t) {
+  return {
+    table: ({ children }) => <CopyTableWrapper t={t}>{children}</CopyTableWrapper>,
+  }
 }
 
 function RefChunk({ chunk, t }) {

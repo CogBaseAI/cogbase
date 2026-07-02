@@ -221,6 +221,9 @@ const translations = {
       collapse: '▲ collapse',
       expand: '▼ expand',
       httpErr: 'HTTP {status}: {msg}',
+      copy: 'Copy',
+      copyTable: 'Copy table',
+      copied: 'Copied',
     },
     memory: {
       title: 'Memory',
@@ -574,6 +577,9 @@ const translations = {
       collapse: '▲ 收起',
       expand: '▼ 展开',
       httpErr: 'HTTP {status}：{msg}',
+      copy: '复制',
+      copyTable: '复制表格',
+      copied: '已复制',
     },
     memory: {
       title: '记忆',

@@ -106,6 +106,15 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 .msg.bot   { align-self: flex-start; }
 .msg.sys   { align-self: center; max-width: 500px; }
 .msg-who { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.msg-actions { display: flex; gap: 4px; margin-top: 1px; }
+.msg.user .msg-actions { justify-content: flex-end; }
+.icon-copy-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; cursor: pointer; color: var(--muted);
+  padding: 4px; border-radius: 6px; transition: background .12s, color .12s;
+}
+.icon-copy-btn:hover { background: var(--bg3); color: inherit; }
+.icon-copy-btn.copied { color: var(--green, #22c55e); }
 .msg-body {
   padding: 9px 13px; border-radius: 12px;
   font-size: 13px; line-height: 1.55;
@@ -128,7 +137,17 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 .md pre code { background: none; border: none; padding: 0; }
 .md blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 3px solid var(--border); color: var(--muted); }
 .md a { color: var(--accent); }
-.md table { border-collapse: collapse; margin: 0 0 8px; display: block; overflow-x: auto; max-width: 100%; }
+.md-table-wrap { position: relative; margin: 0 0 8px; }
+.md-table-copy-btn {
+  position: absolute; top: 4px; right: 4px; z-index: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg2); border: 1px solid var(--border); cursor: pointer;
+  color: var(--muted); padding: 4px; border-radius: 6px;
+  transition: background .12s, color .12s;
+}
+.md-table-copy-btn:hover { background: var(--bg3); color: inherit; }
+.md-table-copy-btn.copied { color: var(--green, #22c55e); border-color: var(--green, #22c55e); }
+.md table { border-collapse: collapse; margin: 0; display: block; overflow-x: auto; max-width: 100%; }
 .md th, .md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
 .md th { background: var(--bg2); font-weight: 600; }
 .md tbody tr:nth-child(even) { background: var(--bg2); }
