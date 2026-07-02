@@ -98,6 +98,26 @@ it('starts a session on the first question and threads session_id into the query
   await waitFor(() => expect(screen.getByText('Hello there')).toBeInTheDocument())
 })
 
+it('renders a markdown table answer as an HTML table', async () => {
+  const table = '| Name | Term |\n| --- | --- |\n| Acme | 12 months |\n| Globex | 24 months |'
+  mockFetch({ streamEvents: [{ result: { answer: table, chunks: [], structured_records: [] } }] })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+
+  await ask(user, 'summarize the contracts')
+
+  // remark-gfm turns the pipe syntax into a real <table>, not raw text.
+  const tableEl = await waitFor(() => document.querySelector('.md table'))
+  expect(tableEl).toBeTruthy()
+  expect(tableEl.querySelectorAll('th')).toHaveLength(2)
+  expect(tableEl.querySelectorAll('tbody tr')).toHaveLength(2)
+  expect(screen.getByRole('columnheader', { name: 'Name' })).toBeInTheDocument()
+  expect(screen.getByRole('cell', { name: 'Globex' })).toBeInTheDocument()
+  // The raw pipe markup must not leak through as text.
+  expect(screen.queryByText(/\| --- \|/)).not.toBeInTheDocument()
+})
+
 it('reuses the same session across multiple questions', async () => {
   const fetchSpy = mockFetch()
   const user = userEvent.setup()

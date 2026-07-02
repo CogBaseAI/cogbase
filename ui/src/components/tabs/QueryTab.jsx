@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
 import { streamSSE } from '../../utils'
@@ -148,7 +149,7 @@ export default function QueryTab({ active }) {
                   fontSize: m.mono ? 11 : undefined,
                 }}>
                   {m.role === 'bot' && !m.mono && !m.thinking
-                    ? <div className="md"><ReactMarkdown>{m.text}</ReactMarkdown></div>
+                    ? <div className="md"><ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown></div>
                     : m.text}
                 </div>
               </div>
