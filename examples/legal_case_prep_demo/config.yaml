@@ -204,6 +204,10 @@ workflows:
             tool: structured-save
             collection: contradictions
             primary_fields: [contradiction_id]
+            # Contradictions link two docs; purge by either so a re-ingest of one
+            # doc drops its resolved contradictions without touching pairs between
+            # two other docs (those refresh when one of THEM is re-ingested).
+            purge_by: [doc_a_id, doc_b_id]
             records:
               - "{{ item }}"
 

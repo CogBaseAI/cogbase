@@ -253,6 +253,18 @@ class CogBaseApp:
                 if trigger.type != "after_ingest":
                     continue
 
+                # Purge this doc's prior output for this workflow before regenerating,
+                # so a re-ingest replaces the doc's findings instead of orphaning
+                # resolved ones. Once per (doc, workflow), before the param-set
+                # fan-out below, so the param-sets don't purge each other's writes.
+                try:
+                    await wf_runner.purge_document(doc.doc_id)
+                except Exception:
+                    logger.exception(
+                        "app.workflow.purge_failed workflow=%s doc_id=%s",
+                        wf_runner.workflow.name, doc.doc_id,
+                    )
+
                 # TODO create_workflow_task in batch
                 task_params: list[tuple[dict, str | None]] = []
                 for params in workflow_params:

@@ -378,6 +378,17 @@ class StructuredSaveStepConfig(WorkflowStepBase):
             "a Pydantic model or dict (e.g. '{{ steps.judge.output }}')."
         ),
     )
+    purge_by: list[str] = Field(
+        default_factory=lambda: ["doc_id"],
+        description=(
+            "Doc-linkage fields on this collection that reference a source document. "
+            "Before a workflow re-runs for a re-ingested doc, rows where ANY of these "
+            "fields == that doc_id are deleted, so resolved findings disappear instead "
+            "of orphaning. Multiple fields are OR-ed (e.g. [doc_a_id, doc_b_id] for a "
+            "cross-document finding). Default [doc_id]. Set [] to disable purge for "
+            "outputs that aren't doc-scoped."
+        ),
+    )
 
 
 WorkflowLeafStepConfig = Annotated[

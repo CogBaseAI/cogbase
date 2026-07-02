@@ -8,11 +8,11 @@ from typing import Any, TYPE_CHECKING
 
 from cogbase.embeddings.base import EmbeddingBase
 from cogbase.llms.base import LLMBase
-from cogbase.stores import StructuredStoreBase, VectorStoreBase
+from cogbase.stores import Col, StructuredStoreBase, VectorStoreBase
 from cogbase.workflows.context import render_value
 from cogbase.workflows.tools import run_tool
 
-from cogbase.config.config import ForeachStepConfig, StructuredSaveStepConfig
+from cogbase.config.config import ForeachStepConfig, StructuredSaveStepConfig, _iter_save_steps
 
 if TYPE_CHECKING:
     from cogbase.config.config import WorkflowConfig, WorkflowStepConfig
@@ -53,6 +53,32 @@ class WorkflowRunner:
         self._vector_store = vector_store
         self._embedder = embedder
         self._llm = llm
+
+    async def purge_document(self, doc_id: str) -> None:
+        """Delete this doc's prior output from every structured-save collection.
+
+        For each ``structured-save`` step, delete rows where any of the step's
+        ``purge_by`` fields equals ``doc_id`` (OR across fields via one delete
+        each). Deletes only rows referencing this doc, so a re-run replaces the
+        doc's own findings and never removes cross-document findings it isn't
+        authoritative for (e.g. a contradiction between two *other* docs).
+        Deleting a ``doc_id`` absent from a collection is a no-op — safe on first
+        ingest. Call once per (doc, workflow) before the param-set fan-out, so
+        multiple param-sets can't purge each other's regenerated rows.
+        """
+        if self._structured_store is None:
+            return
+
+        # collection -> linkage fields (union across steps writing the collection)
+        targets: dict[str, set[str]] = {}
+        for step in _iter_save_steps(self.workflow.steps):
+            targets.setdefault(step.collection, set()).update(step.purge_by)
+
+        for collection, fields in targets.items():
+            for field in sorted(fields):
+                await self._structured_store.delete_records(
+                    collection, [Col(field) == doc_id]
+                )
 
     async def run(self, params: dict[str, Any]) -> AsyncGenerator[dict, None]:
         """Execute the workflow with *params* and yield each saved record."""

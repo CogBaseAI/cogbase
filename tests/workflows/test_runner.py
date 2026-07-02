@@ -547,3 +547,137 @@ class TestStreaming:
 
         assert len(records) == 3
         assert [r["finding_id"] for r in records] == ["f1", "f2", "f3"]
+
+
+# ---------------------------------------------------------------------------
+# purge_document — pre-regeneration cleanup of a re-ingested doc's output
+# ---------------------------------------------------------------------------
+
+_DOC_FINDINGS_SCHEMA = CollectionSchema(
+    name="doc_findings",
+    primary_fields=["doc_id", "finding_id"],
+    description="Per-document findings",
+    fields={
+        "doc_id":     FieldSchema(type=FieldType.STRING),
+        "finding_id": FieldSchema(type=FieldType.STRING),
+    },
+)
+
+_CONTRADICTIONS_SCHEMA = CollectionSchema(
+    name="contradictions",
+    primary_fields=["contradiction_id"],
+    description="Cross-document contradictions",
+    fields={
+        "contradiction_id": FieldSchema(type=FieldType.STRING),
+        "issue":            FieldSchema(type=FieldType.STRING),
+        "doc_a_id":         FieldSchema(type=FieldType.STRING),
+        "doc_b_id":         FieldSchema(type=FieldType.STRING),
+    },
+)
+
+
+async def _store_with(schema: CollectionSchema, rows: list[dict], **field_types) -> InMemoryStructuredStore:
+    store = InMemoryStructuredStore()
+    await store.create_collection(schema)
+    if rows:
+        from pydantic import create_model
+        Row = create_model("Row", **{k: (t, ...) for k, t in field_types.items()})
+        await store.save(schema.name, [Row(**r) for r in rows])
+    return store
+
+
+class TestPurgeDocument:
+    async def test_per_doc_purge_removes_only_that_docs_rows(self):
+        store = await _store_with(
+            _DOC_FINDINGS_SCHEMA,
+            [
+                {"doc_id": "A", "finding_id": "f1"},
+                {"doc_id": "A", "finding_id": "f2"},
+                {"doc_id": "B", "finding_id": "f3"},
+            ],
+            doc_id=str, finding_id=str,
+        )
+        # Default purge_by == [doc_id]
+        save = _make_step(id="save", tool="structured-save", collection="doc_findings",
+                          records=["{{ item }}"])
+        runner = WorkflowRunner(_make_workflow([save]), structured_store=store)
+
+        await runner.purge_document("A")
+
+        remaining = await store.query("doc_findings")
+        assert {r["finding_id"] for r in remaining} == {"f3"}
+
+    async def test_cross_doc_purge_leaves_unrelated_pair_intact(self):
+        # The key regression guard: re-ingesting A drops A's contradictions but
+        # NOT the B–C pair, which A is not authoritative for.
+        store = await _store_with(
+            _CONTRADICTIONS_SCHEMA,
+            [
+                {"contradiction_id": "AB", "issue": "i", "doc_a_id": "A", "doc_b_id": "B"},
+                {"contradiction_id": "AC", "issue": "i", "doc_a_id": "A", "doc_b_id": "C"},
+                {"contradiction_id": "BC", "issue": "i", "doc_a_id": "B", "doc_b_id": "C"},
+            ],
+            contradiction_id=str, issue=str, doc_a_id=str, doc_b_id=str,
+        )
+        save = _make_step(id="save", tool="structured-save", collection="contradictions",
+                          purge_by=["doc_a_id", "doc_b_id"], records=["{{ item }}"])
+        runner = WorkflowRunner(_make_workflow([save]), structured_store=store)
+
+        await runner.purge_document("A")
+
+        remaining = await store.query("contradictions")
+        assert {r["contradiction_id"] for r in remaining} == {"BC"}
+
+    async def test_purge_by_empty_disables_purge(self):
+        store = await _store_with(
+            _DOC_FINDINGS_SCHEMA,
+            [{"doc_id": "A", "finding_id": "f1"}],
+            doc_id=str, finding_id=str,
+        )
+        save = _make_step(id="save", tool="structured-save", collection="doc_findings",
+                          purge_by=[], records=["{{ item }}"])
+        runner = WorkflowRunner(_make_workflow([save]), structured_store=store)
+
+        await runner.purge_document("A")
+
+        remaining = await store.query("doc_findings")
+        assert len(remaining) == 1
+
+    async def test_purge_recurses_into_foreach(self):
+        store = await _store_with(
+            _DOC_FINDINGS_SCHEMA,
+            [{"doc_id": "A", "finding_id": "f1"}],
+            doc_id=str, finding_id=str,
+        )
+        # save step lives inside a foreach — purge must still discover it
+        loop = _make_step(
+            id="loop",
+            foreach="{{ steps.load.records }}",
+            steps=[_make_step(id="save", tool="structured-save",
+                              collection="doc_findings", records=["{{ item }}"])],
+        )
+        runner = WorkflowRunner(_make_workflow([loop]), structured_store=store)
+
+        await runner.purge_document("A")
+
+        remaining = await store.query("doc_findings")
+        assert remaining == []
+
+    async def test_purge_absent_doc_is_noop(self):
+        store = await _store_with(
+            _DOC_FINDINGS_SCHEMA,
+            [{"doc_id": "A", "finding_id": "f1"}],
+            doc_id=str, finding_id=str,
+        )
+        save = _make_step(id="save", tool="structured-save", collection="doc_findings",
+                          records=["{{ item }}"])
+        runner = WorkflowRunner(_make_workflow([save]), structured_store=store)
+
+        await runner.purge_document("Z")  # never ingested
+
+        remaining = await store.query("doc_findings")
+        assert len(remaining) == 1
+
+    async def test_purge_without_store_is_noop(self):
+        runner = WorkflowRunner(_make_workflow([]), structured_store=None)
+        await runner.purge_document("A")  # must not raise

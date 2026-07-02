@@ -1318,6 +1318,17 @@ async def stream_workflow(
 
     async def event_stream():
         all_ok = True
+        # Purge this doc's prior output for this workflow before regenerating, so a
+        # manual re-run after a re-ingest replaces the doc's findings instead of
+        # orphaning resolved ones. Once, before the param-set fan-out below.
+        if body.doc_id:
+            try:
+                await wf_runner.purge_document(body.doc_id)
+            except Exception:
+                logger.exception(
+                    "stream_workflow purge failed app=%s workflow=%s doc_id=%s",
+                    app_name, workflow_name, body.doc_id,
+                )
         for task in pending:
             params = json.loads(task.params_json) if task.params_json else {}
             await system_store.update_task(task.task_id, status=TaskStatus.RUNNING, started_at=_now())
