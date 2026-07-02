@@ -215,6 +215,7 @@ class LongTermMemory:
         self._dimensions: int | None = None
         self._max_retries = max_retries
         self._ensured = False
+        self._structured_ensured = False
 
     # ------------------------------------------------------------------
     # Setup
@@ -246,9 +247,7 @@ class LongTermMemory:
         if self._ensured:
             return
         self._dimensions = dimensions
-        await self._structured.create_collection(
-            LongTermRecord.collection_schema(self._structured_collection)
-        )
+        await self._ensure_structured()
         await self._vector.create_collection(
             VectorCollectionSchema(
                 name=self._vector_collection,
@@ -267,6 +266,21 @@ class LongTermMemory:
             self._app_id, self._structured_collection,
             self._vector_collection, dimensions,
         )
+
+    async def _ensure_structured(self) -> None:
+        """Create just the structured collection; idempotent and cached.
+
+        The structured schema is dimension-free, so read paths (``lookup``,
+        ``list_pending``, ``list_records``) can guarantee the collection exists
+        without an embedding to learn the vector dimensionality from — before
+        the first distillation write has ever run ``_ensure``.
+        """
+        if self._structured_ensured or self._ensured:
+            return
+        await self._structured.create_collection(
+            LongTermRecord.collection_schema(self._structured_collection)
+        )
+        self._structured_ensured = True
 
     # ------------------------------------------------------------------
     # Recall (online, query-time)
@@ -423,6 +437,7 @@ class LongTermMemory:
 
         # No query: a structured scan filtered by kind/status/entity overlap,
         # all pushed down to the store.
+        await self._ensure_structured()
         filters = [Col("status") == MemoryStatus.ACTIVE.value]
         if kind:
             filters.append(Col("kind") == kind.value)
@@ -459,6 +474,7 @@ class LongTermMemory:
         """
         if limit <= 0:
             return []
+        await self._ensure_structured()
         filters = [Col("status") == MemoryStatus.PENDING_REVIEW.value]
         if kind:
             filters.append(Col("kind") == kind.value)
@@ -491,6 +507,7 @@ class LongTermMemory:
         """
         if limit <= 0:
             return []
+        await self._ensure_structured()
         filters = []
         if status:
             filters.append(Col("status") == status.value)

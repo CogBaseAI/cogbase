@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -638,6 +638,27 @@ async def test_recall_isolated_across_apps():
 # ---------------------------------------------------------------------------
 # promotion review (pending_review -> active / superseded)
 # ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reads_tolerate_uncreated_collection():
+    """Reading before the first distillation write must not raise.
+
+    When the embedder can't report its dimensionality, ``setup`` skips eager
+    creation and the collections are made lazily on the first write.  A review
+    surface (the Memory tab) that lists records before any distillation has run
+    must see an empty result, not a missing-collection ``KeyError``.
+    """
+    structured = InMemoryStructuredStore().with_scope(AppScope(app_id="app1"))
+    vector = FAISSMemoryVectorStore().with_scope(AppScope(app_id="app1"))
+    embedder = HashingEmbedding()
+    # Force the "dimensions unknown up front" path so setup creates nothing.
+    with patch.object(type(embedder), "dimensions", property(lambda self: None)):
+        svc = LongTermMemory(structured, vector, MagicMock(), embedder, app_id="app1")
+        await svc.setup()
+        assert await svc.list_pending() == []
+        assert await svc.list_records() == []
+        assert await svc.lookup(kind=MemoryKind.FACT) == []
+
 
 @pytest.mark.asyncio
 async def test_list_pending_returns_gated_records_oldest_first():
