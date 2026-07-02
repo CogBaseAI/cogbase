@@ -36,6 +36,10 @@ export default function SkillsTab({ active }) {
     } catch { setAssigned(new Set()) }
   }
 
+  // Drop the previous app's assignments when the selection changes/clears, so a
+  // deleted app's skills don't stay marked "on" until the tab is reopened.
+  useEffect(() => { setAssigned(new Set()) }, [currentApp])
+
   useEffect(() => { if (active) { loadSkills(); loadAssigned() } }, [active, currentApp])
 
   async function uploadSkill() {

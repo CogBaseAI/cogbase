@@ -54,6 +54,19 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
     }
   }
 
+  // Drop the previous app's docs the moment the selection changes (including
+  // being deleted/cleared). The load effect below only fetches when the tab is
+  // active or explicitly refreshed, so without this the deleted app's documents
+  // would linger in the table.
+  useEffect(() => {
+    setDocs(null)
+    setWfMaps({})
+    setWfNames([])
+    setAnyPendingWf(false)
+    setUploadLog(null)
+    setUploadErr(null)
+  }, [currentApp])
+
   useEffect(() => { if (active || refreshKey > 0) loadIngestDocs() }, [active, currentApp, refreshKey])
 
   function handleFiles(fileList) {

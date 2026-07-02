@@ -23,6 +23,9 @@ export default function QueryTab({ active }) {
       const prevApp = prevAppRef.current
       prevAppRef.current = currentApp
       closeSession(prevApp)
+      // Drop the previous app's retrieved references so they don't linger.
+      setChunks([])
+      setStructuredRecords([])
       if (currentApp) {
         setMsgs(prev => [...prev, { role: 'sys', text: t('query.connected', { app: currentApp }) }])
       }

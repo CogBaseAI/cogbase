@@ -29,6 +29,19 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
     } catch (e) { setCollError(e.message) }
   }
 
+  // Drop the previous app's view the moment the selection changes (including
+  // being deleted/cleared). The load effect below only fetches when the tab is
+  // active, so without this the deleted app's records would linger in the table.
+  useEffect(() => {
+    setCollections([])
+    setActiveCollectionState('')
+    setRecords(null)
+    setCols([])
+    setRowCount('')
+    setPendingBar(null)
+    setCollError(null)
+  }, [currentApp])
+
   useEffect(() => { if (active) loadCollections() }, [active, currentApp])
 
   // Refresh if WfModal completed for our active collection
