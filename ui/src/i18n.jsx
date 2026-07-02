@@ -144,6 +144,9 @@ const translations = {
       noDocs: 'No documents ingested yet.',
       wfDesc: 'Run workflow for document: {docId}',
       paramDocument: 'Document',
+      colActions: 'Actions',
+      confirmDelete: 'Delete document "{docId}" and all its ingested data?',
+      deleteFailed: 'Delete failed: {msg}',
     },
     data: {
       collections: 'Collections',
@@ -456,6 +459,9 @@ const translations = {
       noDocs: '尚未导入任何文档。',
       wfDesc: '为文档运行工作流：{docId}',
       paramDocument: '文档',
+      colActions: '操作',
+      confirmDelete: '删除文档 "{docId}" 及其所有已导入数据？',
+      deleteFailed: '删除失败：{msg}',
     },
     data: {
       collections: '集合',

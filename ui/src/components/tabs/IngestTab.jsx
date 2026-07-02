@@ -15,6 +15,7 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
   const [wfMaps, setWfMaps] = useState({}) // {wfName -> {docId -> wfStatus}}
   const [wfNames, setWfNames] = useState([])
   const [anyPendingWf, setAnyPendingWf] = useState(false)
+  const [deleting, setDeleting] = useState(null) // docId currently being deleted
   const fileInputRef = useRef(null)
   const hasApp = !!currentApp
 
@@ -90,6 +91,24 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
   }
 
   const ACTIVE_WF = new Set(['pending', 'running'])
+
+  async function deleteDoc(docId) {
+    if (!currentApp || deleting) return
+    if (!confirm(t('ingest.confirmDelete', { docId }))) return
+    setDeleting(docId)
+    try {
+      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/docs/${encodeURIComponent(docId)}`, { method: 'DELETE' })
+      if (resp.ok || resp.status === 204 || resp.status === 404) {
+        loadIngestDocs()
+      } else {
+        alert(t('ingest.deleteFailed', { msg: resp.statusText }))
+      }
+    } catch (e) {
+      alert(t('ingest.deleteFailed', { msg: e.message }))
+    } finally {
+      setDeleting(null)
+    }
+  }
 
   function openWfModalDirect(wf, docId) {
     onOpenWfModal({
@@ -178,6 +197,7 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
                   <tr>
                     <th>{t('ingest.colDocId')}</th><th>{t('ingest.colMeta')}</th><th>{t('ingest.colIngestedAt')}</th><th>{t('ingest.colIngest')}</th>
                     {wfNames.map(wf => <th key={wf}>{wf}</th>)}
+                    <th>{t('ingest.colActions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -207,6 +227,15 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
                             </td>
                           )
                         })}
+                        <td>
+                          <button
+                            className="btn btn-red btn-sm"
+                            disabled={deleting === doc.doc_id}
+                            onClick={e => { e.stopPropagation(); deleteDoc(doc.doc_id) }}
+                          >
+                            {deleting === doc.doc_id ? <span className="spinning">⟳</span> : t('common.delete')}
+                          </button>
+                        </td>
                       </tr>
                     )
                   })}
