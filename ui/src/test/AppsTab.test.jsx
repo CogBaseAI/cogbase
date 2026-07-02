@@ -49,6 +49,37 @@ it('does not load when inactive', () => {
   expect(global.fetch).not.toHaveBeenCalled()
 })
 
+describe('detail drawer', () => {
+  const APP_WITH_CONFIG = {
+    name: 'contract-analyst',
+    status: 'active',
+    created_at: '2024-01-15T10:00:00Z',
+    config: {
+      vector_collections: [{ name: 'doc_chunks', description: 'Passage chunks' }],
+      structured_collections: [{ name: 'contracts', description: 'Contract records', primary_fields: ['doc_id'], schema: '{"type":"object"}' }],
+      pipelines: [{ name: 'contract', routing_description: 'All contracts', steps: [{ tool: 'extract-structured', collection: 'contracts', extractor: { record_mode: 'one', extraction_schema: '{"a":1}', prompt: 'Extract fields.' } }] }],
+      workflows: [{ name: 'detect-risks', trigger: { type: 'after_ingest' }, steps: [{ id: 'judge', tool: 'llm-structured', prompt: 'Judge risk.' }] }],
+    },
+  }
+
+  it('opens the drawer with config sections on name click', async () => {
+    vi.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ applications: APPS }) }) // loadApps
+      .mockResolvedValueOnce({ ok: true, json: async () => APP_WITH_CONFIG })          // viewApp fetch
+
+    const user = userEvent.setup()
+    renderWithCtx(<AppsTab active={true} />)
+    await waitFor(() => screen.getByText('contract-analyst'))
+    await user.click(screen.getByText('contract-analyst'))
+
+    await waitFor(() => expect(screen.getByText(/contract-analyst — details/)).toBeInTheDocument())
+    expect(screen.getByText('Vector collections')).toBeInTheDocument()
+    expect(screen.getByText('Structured collections')).toBeInTheDocument()
+    expect(screen.getByText('Pipelines')).toBeInTheDocument()
+    expect(screen.getByText('Workflows')).toBeInTheDocument()
+  })
+})
+
 describe('delete', () => {
   it('calls DELETE and reloads on confirm', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)

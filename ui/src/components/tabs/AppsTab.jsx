@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
+import AppDetailModal from '../modals/AppDetailModal'
 
 export default function AppsTab({ active, onSwitchTab }) {
   const { apiUrl, currentApp, setCurrentApp } = useApp()
   const { t } = useT()
   const [apps, setApps] = useState(null) // null=loading, []|[...]=loaded
   const [error, setError] = useState(null)
+  const [detailApp, setDetailApp] = useState(null)
 
   async function loadApps() {
     setApps(null); setError(null)
@@ -19,6 +21,16 @@ export default function AppsTab({ active, onSwitchTab }) {
   }
 
   useEffect(() => { if (active) loadApps() }, [active])
+
+  async function viewApp(a) {
+    // The list response already carries the full resolved config, but fetch
+    // the single-app endpoint so the drawer always shows the freshest config.
+    try {
+      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(a.name)}`)
+      if (resp.ok) { setDetailApp(await resp.json()); return }
+    } catch {}
+    setDetailApp(a)
+  }
 
   async function deleteApp(name) {
     if (!confirm(t('apps.confirmDelete', { name }))) return
@@ -53,13 +65,14 @@ export default function AppsTab({ active, onSwitchTab }) {
               return (
                 <tr key={a.name}>
                   <td style={{ fontWeight: cur ? 600 : 400 }}>
-                    {a.name}
+                    <button className="link-btn" onClick={() => viewApp(a)} title={t('appDetail.view')}>{a.name}</button>
                     {cur && <span style={{ fontSize: 10, color: 'var(--accent)', marginLeft: 4 }}>{t('apps.selected')}</span>}
                   </td>
                   <td><span className={`badge ${sc}`}>{a.status}</span></td>
                   <td style={{ color: 'var(--muted)', fontSize: 11 }}>{ts}</td>
                   <td>
                     <div style={{ display: 'flex', gap: 6 }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => viewApp(a)}>{t('appDetail.details')}</button>
                       <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name); loadApps() }}>{t('common.use')}</button>
                       <button className="btn btn-red btn-sm" onClick={() => deleteApp(a.name)}>{t('common.delete')}</button>
                     </div>
@@ -70,6 +83,7 @@ export default function AppsTab({ active, onSwitchTab }) {
           </tbody>
         </table>
       )}
+      {detailApp && <AppDetailModal app={detailApp} onClose={() => setDetailApp(null)} />}
     </div>
   )
 }
