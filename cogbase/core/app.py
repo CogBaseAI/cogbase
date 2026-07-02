@@ -164,8 +164,16 @@ class CogBaseApp:
 
         store_failures: dict[str, Exception] = {}
         docs_to_process: list[Document] = []
+        # A doc_id already in the doc store was ingested before, so its derived
+        # data must be purged before re-ingest. A doc_id absent here is new: text
+        # is always saved before any derived data (below), so there is nothing to
+        # purge and the pipeline/workflow purge is skipped. This existence check
+        # MUST run before the save — after it, every doc_id would look re-ingested.
+        reingested_ids: set[str] = set()
         for doc in documents:
             try:
+                if await self._document_store.exists(self.app_id, doc.doc_id):
+                    reingested_ids.add(doc.doc_id)
                 await self._document_store.save(self.app_id, doc.doc_id, doc.text)
                 docs_to_process.append(doc)
             except Exception as exc:  # noqa: BLE001
@@ -185,7 +193,8 @@ class CogBaseApp:
                 pipeline_groups[pid][1].append(doc)
 
         group_results_lists = await asyncio.gather(
-            *(p.ingest_documents(docs) for p, docs in pipeline_groups.values())
+            *(p.ingest_documents(docs, reingested_ids=reingested_ids)
+              for p, docs in pipeline_groups.values())
         )
         results_by_id: dict[str, IngestResult] = {}
         for group_results in group_results_lists:
@@ -286,18 +295,27 @@ class CogBaseApp:
         return results
 
     async def delete_document(self, doc_id: str) -> None:
-        """Purge a document's ingested data from every pipeline and the doc store.
+        """Purge a document's ingested data from every pipeline, workflow, and the doc store.
 
         Removes the document's vector chunks and structured records from every
-        pipeline's collections, then deletes the parsed text the app persisted at
-        ingest time.  A document is not tagged with the pipeline that ingested it,
-        so every pipeline is purged; a ``doc_id`` absent from a collection is a
-        no-op.  Does not touch the task/document registry — the API layer owns
-        that, along with the raw uploaded file.
+        pipeline's collections, purges any workflow output derived from the
+        document, then deletes the parsed text the app persisted at ingest time.
+        A document is not tagged with the pipeline or workflow that produced its
+        data, so every pipeline and workflow is purged; a ``doc_id`` absent from a
+        collection is a no-op.  Does not touch the task/document registry — the
+        API layer owns that, along with the raw uploaded file.
         """
         logger.info("app.delete_document.start app=%s doc_id=%s", self.name, doc_id)
         for pipeline in self._pipelines:
             await pipeline.purge_document(doc_id)
+        for wf_runner in self._workflows.values():
+            try:
+                await wf_runner.purge_document(doc_id)
+            except Exception:
+                logger.exception(
+                    "app.delete_document.workflow_purge_failed workflow=%s doc_id=%s",
+                    wf_runner.workflow.name, doc_id,
+                )
         try:
             await self._document_store.delete(self.app_id, doc_id)
         except Exception:

@@ -703,6 +703,73 @@ class TestIngestMany:
 
 
 # ---------------------------------------------------------------------------
+# delete_document()
+# ---------------------------------------------------------------------------
+
+class TestDeleteDocument:
+    @staticmethod
+    def _make_workflow_runner(name: str) -> MagicMock:
+        wf = MagicMock()
+        wf.workflow.name = name
+        wf.purge_document = AsyncMock()
+        return wf
+
+    async def _make_app_with_workflows(
+        self, workflows: dict[str, MagicMock]
+    ) -> CogBaseApp:
+        app = await _make_app(_make_llm("{}"), InMemoryStructuredStore())
+        app._workflows = workflows
+        return app
+
+    @pytest.mark.asyncio
+    async def test_purges_pipelines_workflows_and_doc_store(self):
+        wf_a = self._make_workflow_runner("wf-a")
+        wf_b = self._make_workflow_runner("wf-b")
+        app = await self._make_app_with_workflows({"wf-a": wf_a, "wf-b": wf_b})
+
+        app._pipelines[0].purge_document = AsyncMock()
+        doc_store = MagicMock(spec=DocumentStoreBase)
+        doc_store.delete = AsyncMock()
+        app._document_store = doc_store
+
+        await app.delete_document("c-001")
+
+        app._pipelines[0].purge_document.assert_awaited_once_with("c-001")
+        wf_a.purge_document.assert_awaited_once_with("c-001")
+        wf_b.purge_document.assert_awaited_once_with("c-001")
+        doc_store.delete.assert_awaited_once_with(app.app_id, "c-001")
+
+    @pytest.mark.asyncio
+    async def test_workflow_purge_failure_does_not_block_others(self):
+        wf_fail = self._make_workflow_runner("wf-fail")
+        wf_fail.purge_document = AsyncMock(side_effect=RuntimeError("boom"))
+        wf_ok = self._make_workflow_runner("wf-ok")
+        app = await self._make_app_with_workflows(
+            {"wf-fail": wf_fail, "wf-ok": wf_ok}
+        )
+
+        doc_store = MagicMock(spec=DocumentStoreBase)
+        doc_store.delete = AsyncMock()
+        app._document_store = doc_store
+
+        await app.delete_document("c-001")
+
+        wf_ok.purge_document.assert_awaited_once_with("c-001")
+        doc_store.delete.assert_awaited_once_with(app.app_id, "c-001")
+
+    @pytest.mark.asyncio
+    async def test_no_workflows_is_noop(self):
+        app = await self._make_app_with_workflows({})
+        doc_store = MagicMock(spec=DocumentStoreBase)
+        doc_store.delete = AsyncMock()
+        app._document_store = doc_store
+
+        await app.delete_document("c-001")
+
+        doc_store.delete.assert_awaited_once_with(app.app_id, "c-001")
+
+
+# ---------------------------------------------------------------------------
 # RoutingStrategy.AUTO — metadata back-fill after LLM fallback
 # ---------------------------------------------------------------------------
 
