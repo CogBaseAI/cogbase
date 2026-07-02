@@ -269,7 +269,7 @@ class WorkflowParamsFromCollectionConfig(ConfigPromptMixin, BaseModel):
 
 class WorkflowTriggerConfig(ConfigPromptMixin, BaseModel):
     type: Literal["manual", "after_ingest"] = Field(
-        default="manual",
+        default="after_ingest",
         description="Workflow trigger type.",
     )
     when: WhenCondition | None = Field(
