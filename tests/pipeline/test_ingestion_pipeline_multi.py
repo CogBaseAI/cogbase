@@ -796,3 +796,42 @@ class TestReingestIdempotent:
         kept = await structured_store.query("word_tags", [Col("doc_id") == "keep"])
         assert len(kept) == 3
         assert vector_store.ntotal("chunks") == keep_chunks
+
+    @pytest.mark.asyncio
+    async def test_ingest_skips_purge_when_not_marked_reingested(self, make_vector_store, make_structured_store):
+        pipeline, _, _ = await self._build(make_vector_store, make_structured_store)
+        pipeline.purge_document = AsyncMock()
+
+        # d-1 is absent from reingested_ids -> treated as a first ingest, no purge.
+        await pipeline.ingest_documents([Document(doc_id="d-1", text="alpha beta")], reingested_ids=set())
+
+        pipeline.purge_document.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ingest_purges_only_reingested_ids(self, make_vector_store, make_structured_store):
+        pipeline, _, _ = await self._build(make_vector_store, make_structured_store)
+        pipeline.purge_document = AsyncMock()
+
+        await pipeline.ingest_documents(
+            [
+                Document(doc_id="old", text="alpha beta"),
+                Document(doc_id="new", text="gamma delta"),
+            ],
+            reingested_ids={"old"},
+        )
+
+        pipeline.purge_document.assert_awaited_once_with("old")
+
+    @pytest.mark.asyncio
+    async def test_ingest_none_reingested_ids_purges_all(self, make_vector_store, make_structured_store):
+        pipeline, _, _ = await self._build(make_vector_store, make_structured_store)
+        pipeline.purge_document = AsyncMock()
+
+        # None (the default) is the conservative path: every doc is purged.
+        await pipeline.ingest_documents([
+            Document(doc_id="a", text="alpha"),
+            Document(doc_id="b", text="beta"),
+        ])
+
+        purged = {c.args[0] for c in pipeline.purge_document.await_args_list}
+        assert purged == {"a", "b"}

@@ -247,7 +247,7 @@ class IngestionPipeline:
             if sc is not None:
                 await sc.store.delete_records(sc.schema.name, [Col("doc_id") == doc_id])
 
-    async def _ingest(self, doc: Document) -> tuple[int, int, bool]:
+    async def _ingest(self, doc: Document, *, purge: bool = True) -> tuple[int, int, bool]:
         """Ingest a document by executing each step, sequentially or in parallel.
 
         Returns:
@@ -264,7 +264,10 @@ class IngestionPipeline:
         # replaces the document's data rather than duplicating structured rows or
         # leaving orphaned vector chunks. Must complete before any step runs —
         # including the parallel path, where steps would otherwise race the delete.
-        await self.purge_document(doc.doc_id)
+        # Skipped on a first ingest (``purge=False``): the caller knows the doc_id
+        # is new, so there is nothing to purge and the deletes would be no-ops.
+        if purge:
+            await self.purge_document(doc.doc_id)
 
         if self.parallel:
             results = await asyncio.gather(*[self._run_step(doc, step) for step in self._steps])
@@ -458,6 +461,8 @@ class IngestionPipeline:
     async def ingest_documents(
         self,
         documents: Sequence[Document],
+        *,
+        reingested_ids: set[str] | None = None,
     ) -> list[IngestResult]:
         """Ingest a sequence of documents concurrently.
 
@@ -465,10 +470,21 @@ class IngestionPipeline:
         not abort the others — the error is captured in the corresponding
         ``IngestResult`` and ingestion continues for the remaining documents.
         Results are returned in the same order as *documents*.
+
+        ``reingested_ids`` names the doc_ids known to have been ingested before;
+        only those are purged first.  Any doc_id absent from the set is treated as
+        a first ingest and skips the purge (see ``_ingest``).  ``None`` (the
+        default) purges every document — the conservative behaviour for callers
+        that cannot tell new docs from re-ingests.
         """
+        purge_all = reingested_ids is None
+
         async def _ingest_one(doc: Document) -> IngestResult:
             try:
-                records_extracted, chunks_written, extraction_failed = await self._ingest(doc)
+                purge = purge_all or doc.doc_id in reingested_ids
+                records_extracted, chunks_written, extraction_failed = await self._ingest(
+                    doc, purge=purge
+                )
                 return IngestResult(
                     doc_id=doc.doc_id,
                     success=True,

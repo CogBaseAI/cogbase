@@ -632,6 +632,95 @@ class TestIngestMany:
         assert results == []
 
     @pytest.mark.asyncio
+    async def test_first_ingest_skips_purge(self):
+        store = InMemoryStructuredStore()
+        app = await _make_app(_make_llm(_contract_payload()), store)
+        app._pipelines[0].purge_document = AsyncMock()
+
+        await app.ingest_documents([Document(doc_id="c-001", text="contract text")])
+
+        app._pipelines[0].purge_document.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reingest_purges_existing_doc(self):
+        store = InMemoryStructuredStore()
+        app = await _make_app(_make_llm(_contract_payload()), store)
+
+        await app.ingest_documents([Document(doc_id="c-001", text="contract text")])
+        app._pipelines[0].purge_document = AsyncMock()
+        await app.ingest_documents([Document(doc_id="c-001", text="revised text")])
+
+        app._pipelines[0].purge_document.assert_awaited_once_with("c-001")
+
+    @pytest.mark.asyncio
+    async def test_reingest_does_not_duplicate_structured_rows(self):
+        store = InMemoryStructuredStore()
+        app = await _make_app(_make_llm(_contract_payload()), store)
+
+        await app.ingest_documents([Document(doc_id="c-001", text="contract text")])
+        await app.ingest_documents([Document(doc_id="c-001", text="revised text")])
+
+        rows = await store.query(_CONTRACTS_COLLECTION)
+        assert [r["doc_id"] for r in rows] == ["c-001"]
+
+    @pytest.mark.asyncio
+    async def test_batch_reingest_purges_all_before_firing_any_workflow(self):
+        # A cross-document workflow must not run against another re-ingested doc's
+        # stale rows: every workflow purge in the batch precedes every task create.
+        store = InMemoryStructuredStore()
+        app = await _make_app(_make_llm(_contract_payload()), store)
+
+        events: list[str] = []
+
+        wf = MagicMock()
+        wf.workflow.name = "contradictions"
+        wf.workflow.trigger.type = "after_ingest"
+        wf.workflow.trigger.when = None
+
+        async def _purge(doc_id: str) -> None:
+            events.append(f"purge:{doc_id}")
+
+        wf.purge_document = AsyncMock(side_effect=_purge)
+
+        async def _run(params):
+            return
+            yield  # pragma: no cover — make this an async generator
+
+        wf.run = _run
+        app._workflows = {"contradictions": wf}
+        app.resolve_workflow_params = AsyncMock(
+            side_effect=lambda runner, doc_id: [{"doc_id": doc_id}]
+        )
+
+        app._task_store.upsert_doc_workflow_status = AsyncMock()
+
+        async def _create(app_id, wf_name, doc_id, params_json):
+            events.append(f"create:{doc_id}")
+            return None
+
+        app._task_store.create_workflow_task = AsyncMock(side_effect=_create)
+
+        # Pre-seed the doc store so both docs are treated as re-ingests.
+        await app._document_store.save(app.app_id, "c-001", "old")
+        await app._document_store.save(app.app_id, "c-002", "old")
+
+        await app.ingest_documents([
+            Document(doc_id="c-001", text="contract one"),
+            Document(doc_id="c-002", text="contract two"),
+        ])
+        # Drain the fire-and-forget background workflow runs so they don't leak
+        # into teardown (the ordering under test is already settled by now).
+        leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if leftover:
+            await asyncio.gather(*leftover, return_exceptions=True)
+
+        purge_idx = [i for i, e in enumerate(events) if e.startswith("purge:")]
+        create_idx = [i for i, e in enumerate(events) if e.startswith("create:")]
+        assert {events[i] for i in purge_idx} == {"purge:c-001", "purge:c-002"}
+        assert {events[i] for i in create_idx} == {"create:c-001", "create:c-002"}
+        assert max(purge_idx) < min(create_idx)
+
+    @pytest.mark.asyncio
     async def test_document_store_save_failure_recorded(self):
         store = InMemoryStructuredStore()
         app = await _make_app(_make_llm(_contract_payload()), store)
@@ -783,7 +872,7 @@ class TestRoutingStrategyAuto:
         p.match = match
         p.description = name
 
-        async def _ingest(docs):
+        async def _ingest(docs, *, reingested_ids=None):
             return [IngestResult(doc_id=d.doc_id, success=True) for d in docs]
 
         p.ingest_documents = AsyncMock(side_effect=_ingest)

@@ -224,7 +224,15 @@ class CogBaseApp:
         import json as _json
 
         # For each successfully ingested document, determine which workflows apply
-        # and mark them pending. Fire after_ingest workflows immediately.
+        # and mark them pending. Fire after_ingest workflows in two phases so a
+        # cross-document workflow (e.g. contradiction detection in
+        # legal_case_prep_demo) never reads records about to be purged:
+        #   1. purge every re-ingested doc's prior workflow output across the
+        #      whole batch, then
+        #   2. create and fire the background tasks.
+        # Firing per-doc as we go would let one re-ingested doc's workflow run
+        # against another re-ingested doc's stale rows before those are purged.
+        pending: list[tuple["WorkflowRunner", str, list[dict]]] = []
         for result in results:
             if not result.success:
                 continue
@@ -262,35 +270,42 @@ class CogBaseApp:
                 if trigger.type != "after_ingest":
                     continue
 
-                # Purge this doc's prior output for this workflow before regenerating,
-                # so a re-ingest replaces the doc's findings instead of orphaning
-                # resolved ones. Once per (doc, workflow), before the param-set
-                # fan-out below, so the param-sets don't purge each other's writes.
-                try:
-                    await wf_runner.purge_document(doc.doc_id)
-                except Exception:
-                    logger.exception(
-                        "app.workflow.purge_failed workflow=%s doc_id=%s",
-                        wf_runner.workflow.name, doc.doc_id,
-                    )
-
-                # TODO create_workflow_task in batch
-                task_params: list[tuple[dict, str | None]] = []
-                for params in workflow_params:
-                    task_id: str | None = None
+                # Purge this doc's prior output for this workflow before any task
+                # in the batch runs, so a re-ingest replaces the doc's findings
+                # instead of orphaning resolved ones — and so cross-document
+                # workflows don't compare against soon-to-be-purged rows. Once per
+                # (doc, workflow). Skipped for a first ingest — no prior output.
+                if doc.doc_id in reingested_ids:
                     try:
-                        task_id = await self._task_store.create_workflow_task(
-                            self.app_id, wf_runner.workflow.name, doc.doc_id, _json.dumps(params)
-                        )
+                        await wf_runner.purge_document(doc.doc_id)
                     except Exception:
                         logger.exception(
-                            "app.task_store.create_workflow_task.failed workflow=%s doc_id=%s",
+                            "app.workflow.purge_failed workflow=%s doc_id=%s",
                             wf_runner.workflow.name, doc.doc_id,
                         )
-                    task_params.append((params, task_id))
-                asyncio.create_task(
-                    self._run_workflow_tasks_bg(wf_runner, doc.doc_id, task_params)
-                )
+
+                pending.append((wf_runner, doc.doc_id, workflow_params))
+
+        # Phase 2: every purge above has completed, so the batch's structured
+        # state is final. Now create tasks and fire the background runs.
+        for wf_runner, doc_id, workflow_params in pending:
+            # TODO create_workflow_task in batch
+            task_params: list[tuple[dict, str | None]] = []
+            for params in workflow_params:
+                task_id: str | None = None
+                try:
+                    task_id = await self._task_store.create_workflow_task(
+                        self.app_id, wf_runner.workflow.name, doc_id, _json.dumps(params)
+                    )
+                except Exception:
+                    logger.exception(
+                        "app.task_store.create_workflow_task.failed workflow=%s doc_id=%s",
+                        wf_runner.workflow.name, doc_id,
+                    )
+                task_params.append((params, task_id))
+            asyncio.create_task(
+                self._run_workflow_tasks_bg(wf_runner, doc_id, task_params)
+            )
 
         return results
 
