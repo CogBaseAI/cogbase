@@ -16,6 +16,10 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState(null) // null | {col, dir: 'asc'|'desc'}
   const [detailRow, setDetailRow] = useState(null) // null | record object
+  const [tip, setTip] = useState(null) // null | {text, x, y} — hover preview of a truncated cell
+  const [colWidths, setColWidths] = useState({}) // {col -> px} — user-resized widths
+  const [hiddenCols, setHiddenCols] = useState(() => new Set()) // columns toggled off
+  const [showColMenu, setShowColMenu] = useState(false)
   const hasApp = !!currentApp
 
   async function loadCollections() {
@@ -46,6 +50,9 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
     setSearch('')
     setSort(null)
     setDetailRow(null)
+    setColWidths({})
+    setHiddenCols(new Set())
+    setShowColMenu(false)
   }, [currentApp])
 
   useEffect(() => { if (active) loadCollections() }, [active, currentApp])
@@ -67,6 +74,9 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
     setSearch('')
     setSort(null)
     setDetailRow(null)
+    setColWidths({})
+    setHiddenCols(new Set())
+    setShowColMenu(false)
     try {
       const resp = await fetch(
         `${apiUrl}/applications/${encodeURIComponent(currentApp)}/collections/${encodeURIComponent(name)}/query`,
@@ -149,12 +159,56 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
     })
   }
 
-  // Filter (across all columns) then sort — both client-side over loaded records.
+  // Columns the user has chosen to keep visible, in original order.
+  const visibleCols = React.useMemo(() => cols.filter(c => !hiddenCols.has(c)), [cols, hiddenCols])
+
+  function toggleCol(col) {
+    setHiddenCols(prev => {
+      const next = new Set(prev)
+      if (next.has(col)) next.delete(col)
+      else next.add(col)
+      if (next.size >= cols.length) return prev // never hide the last column
+      return next
+    })
+  }
+
+  const allVisible = hiddenCols.size === 0
+  function showAllCols() { setHiddenCols(new Set()) }
+  // Deselecting all keeps the first column so the table is never empty.
+  function hideAllCols() { setHiddenCols(new Set(cols.slice(1))) }
+
+  // Drag the handle on a header's right edge to set an explicit width for that
+  // column; widening a column lets its cells show more text before truncating.
+  function startResize(col, e) {
+    e.preventDefault()
+    e.stopPropagation()
+    const startX = e.clientX
+    const startW = e.currentTarget.parentElement.getBoundingClientRect().width
+    const onMove = ev => setColWidths(prev => ({ ...prev, [col]: Math.max(60, Math.round(startW + ev.clientX - startX)) }))
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.classList.remove('col-resizing')
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+    document.body.classList.add('col-resizing')
+  }
+
+  // Close the column menu on an outside click.
+  useEffect(() => {
+    if (!showColMenu) return
+    const onDoc = e => { if (!e.target.closest('.col-menu-wrap')) setShowColMenu(false) }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [showColMenu])
+
+  // Filter (across visible columns) then sort — both client-side over loaded records.
   const viewRows = React.useMemo(() => {
     if (!records) return []
     const q = search.trim().toLowerCase()
     let rows = q
-      ? records.filter(row => cols.some(c => cellText(row[c]).toLowerCase().includes(q)))
+      ? records.filter(row => visibleCols.some(c => cellText(row[c]).toLowerCase().includes(q)))
       : records.slice()
     if (sort) {
       const { col, dir } = sort
@@ -171,22 +225,32 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
       })
     }
     return rows
-  }, [records, cols, search, sort])
+  }, [records, visibleCols, search, sort])
 
   const countLabel = records && search.trim()
     ? t('data.rowsFiltered', { shown: viewRows.length, total: records.length })
     : rowCount
 
-  function renderCell(val) {
-    if (val === null || val === undefined) return <td className="null-val">—</td>
-    if (typeof val === 'object') {
-      const str = JSON.stringify(val)
-      if (str.length > 80) return <td className="long-cell obj-val"><LongVal text={str} /></td>
-      return <td className="obj-val">{str}</td>
+  // Cells stay single-line (truncated with ellipsis). Long values reveal their
+  // full content in a floating preview on hover; a row click opens the drawer.
+  function renderCell(val, width) {
+    const style = width ? { maxWidth: width, width } : undefined
+    if (val === null || val === undefined) return <td className="null-val" style={style}>—</td>
+    const isObj = typeof val === 'object'
+    const str = isObj ? JSON.stringify(val) : String(val)
+    if (str.length > 80) {
+      const full = isObj ? JSON.stringify(val, null, 2) : str
+      return (
+        <td
+          className={isObj ? 'obj-val' : ''}
+          style={style}
+          onMouseEnter={e => setTip({ text: full, x: e.clientX, y: e.clientY })}
+          onMouseMove={e => setTip(prev => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev))}
+          onMouseLeave={() => setTip(null)}
+        >{str}</td>
+      )
     }
-    const str = String(val)
-    if (str.length > 80) return <td className="long-cell"><LongVal text={str} /></td>
-    return <td title={str}>{str}</td>
+    return <td className={isObj ? 'obj-val' : ''} style={style} title={str}>{str}</td>
   }
 
   return (
@@ -223,6 +287,27 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
                   placeholder={t('data.searchPlaceholder')}
                 />
               )}
+              {records && records.length > 0 && cols.length > 0 && (
+                <div className="col-menu-wrap">
+                  <button className="btn btn-ghost btn-sm" onClick={() => setShowColMenu(v => !v)}>
+                    {t('data.columns')} ({visibleCols.length}/{cols.length}) ▾
+                  </button>
+                  {showColMenu && (
+                    <div className="col-menu">
+                      <div className="col-menu-actions">
+                        <button className="col-menu-link" disabled={allVisible} onClick={showAllCols}>{t('data.selectAll')}</button>
+                        <button className="col-menu-link" onClick={hideAllCols}>{t('data.deselectAll')}</button>
+                      </div>
+                      {cols.map(c => (
+                        <label key={c} className="col-menu-item">
+                          <input type="checkbox" checked={!hiddenCols.has(c)} onChange={() => toggleCol(c)} />
+                          <span title={c}>{c}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <span className="meta">{countLabel}</span>
             </div>
           </div>
@@ -246,11 +331,19 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
                 <thead>
                   <tr>
                     <th className="row-num-th">#</th>
-                    {cols.map(c => {
+                    {visibleCols.map(c => {
                       const dir = sort?.col === c ? sort.dir : null
+                      const w = colWidths[c]
                       return (
-                        <th key={c} title={c} className="sortable" onClick={() => toggleSort(c)}>
-                          {c}<span className="sort-caret">{dir === 'asc' ? ' ▲' : dir === 'desc' ? ' ▼' : ''}</span>
+                        <th
+                          key={c}
+                          className="sortable"
+                          style={w ? { width: w, minWidth: w, maxWidth: w } : undefined}
+                          onClick={() => toggleSort(c)}
+                        >
+                          <span className="th-label" title={c}>{c}</span>
+                          <span className="sort-caret">{dir === 'asc' ? ' ▲' : dir === 'desc' ? ' ▼' : ''}</span>
+                          <span className="col-resize-handle" onClick={e => e.stopPropagation()} onMouseDown={e => startResize(c, e)} />
                         </th>
                       )
                     })}
@@ -258,9 +351,9 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
                 </thead>
                 <tbody>
                   {viewRows.map((row, i) => (
-                    <tr key={i} className="data-row" onClick={() => setDetailRow(row)}>
+                    <tr key={i} className="data-row" onClick={() => { setTip(null); setDetailRow(row) }}>
                       <td className="row-num">{i + 1}</td>
-                      {cols.map(col => <React.Fragment key={col}>{renderCell(row[col])}</React.Fragment>)}
+                      {visibleCols.map(col => <React.Fragment key={col}>{renderCell(row[col], colWidths[col])}</React.Fragment>)}
                     </tr>
                   ))}
                 </tbody>
@@ -270,13 +363,19 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
         </div>
       </div>
       {detailRow && <RecordDetail row={detailRow} cols={cols} onClose={() => setDetailRow(null)} />}
+      {tip && <CellTip text={tip.text} x={tip.x} y={tip.y} />}
     </>
   )
 }
 
-function LongVal({ text }) {
-  const [expanded, setExpanded] = useState(false)
-  return <div className={`long-val${expanded ? ' exp' : ''}`} onClick={() => setExpanded(v => !v)}>{text}</div>
+// Floating preview of a truncated cell, following the cursor and flipping away
+// from the viewport edges. pointer-events:none (in CSS) keeps it from stealing
+// the hover, so the cell's own mouseleave still fires.
+function CellTip({ text, x, y }) {
+  const W = 380, GAP = 14
+  const left = x + GAP + W > window.innerWidth ? Math.max(8, x - GAP - W) : x + GAP
+  const top = Math.min(y + GAP, Math.max(8, window.innerHeight - 8 - 240))
+  return <div className="cell-tip" style={{ left, top, maxWidth: W }}>{text}</div>
 }
 
 // Slide-over drawer showing one record's fields in full, with pretty-printed

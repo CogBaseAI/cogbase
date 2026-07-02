@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AppProvider, useApp } from '../context'
 import { I18nProvider } from '../i18n'
@@ -145,4 +145,91 @@ it('opens a detail drawer with all fields when a row is clicked', async () => {
 
   await userEvent.click(within(drawer).getByTitle('Close'))
   await waitFor(() => expect(screen.queryByText('Record detail')).not.toBeInTheDocument())
+})
+
+it('shows a floating preview when hovering a long cell, and hides it on leave', async () => {
+  const longText = 'X'.repeat(120)
+  mockFetch({ app1: { collections: ['contracts'], records: [{ id: 1, note: longText }] } })
+  render(<Harness appName="app1" />)
+  const cell = await screen.findByText(longText)
+
+  expect(document.querySelector('.cell-tip')).toBeNull()
+
+  await userEvent.hover(cell)
+  await waitFor(() => expect(document.querySelector('.cell-tip')).not.toBeNull())
+  expect(document.querySelector('.cell-tip').textContent).toBe(longText)
+
+  await userEvent.unhover(cell)
+  await waitFor(() => expect(document.querySelector('.cell-tip')).toBeNull())
+})
+
+it('hides and restores a column via the Columns menu', async () => {
+  mockFetch({ app1: { collections: ['contracts'], records: [{ id: 1, party: 'Acme' }] } })
+  render(<Harness appName="app1" />)
+  await waitFor(() => expect(screen.getByText('Acme')).toBeInTheDocument())
+  expect(screen.getByRole('columnheader', { name: /party/i })).toBeInTheDocument()
+
+  await userEvent.click(screen.getByRole('button', { name: /Columns/i }))
+  const menu = document.querySelector('.col-menu')
+  await userEvent.click(within(menu).getByText('party'))
+
+  expect(screen.queryByRole('columnheader', { name: /party/i })).not.toBeInTheDocument()
+  expect(screen.queryByText('Acme')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /Columns \(1\/2\)/ })).toBeInTheDocument()
+
+  // Re-check it to bring the column back.
+  await userEvent.click(within(document.querySelector('.col-menu')).getByText('party'))
+  expect(screen.getByRole('columnheader', { name: /party/i })).toBeInTheDocument()
+  expect(screen.getByText('Acme')).toBeInTheDocument()
+})
+
+it('deselects all (keeping one column) and re-selects all from the menu', async () => {
+  mockFetch({ app1: { collections: ['contracts'], records: [{ id: 1, party: 'Acme', region: 'EU' }] } })
+  render(<Harness appName="app1" />)
+  await waitFor(() => expect(screen.getByText('Acme')).toBeInTheDocument())
+
+  await userEvent.click(screen.getByRole('button', { name: /Columns/i }))
+  const menu = document.querySelector('.col-menu')
+
+  await userEvent.click(within(menu).getByText('Deselect all'))
+  // Only the first column (id) survives; the rest are hidden.
+  expect(screen.getByRole('columnheader', { name: /id/i })).toBeInTheDocument()
+  expect(screen.queryByRole('columnheader', { name: /party/i })).not.toBeInTheDocument()
+  expect(screen.queryByRole('columnheader', { name: /region/i })).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /Columns \(1\/3\)/ })).toBeInTheDocument()
+
+  await userEvent.click(within(menu).getByText('Select all'))
+  expect(screen.getByRole('columnheader', { name: /party/i })).toBeInTheDocument()
+  expect(screen.getByRole('columnheader', { name: /region/i })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /Columns \(3\/3\)/ })).toBeInTheDocument()
+})
+
+it('never hides the last remaining column', async () => {
+  mockFetch({ app1: { collections: ['contracts'], records: [{ id: 1, party: 'Acme' }] } })
+  render(<Harness appName="app1" />)
+  await waitFor(() => expect(screen.getByText('Acme')).toBeInTheDocument())
+
+  await userEvent.click(screen.getByRole('button', { name: /Columns/i }))
+  const menu = document.querySelector('.col-menu')
+  await userEvent.click(within(menu).getByText('party'))
+  // Trying to hide the only column left is a no-op.
+  await userEvent.click(within(menu).getByText('id'))
+
+  expect(screen.getByRole('columnheader', { name: /id/i })).toBeInTheDocument()
+})
+
+it('resizes a column by dragging its handle', async () => {
+  mockFetch({ app1: { collections: ['contracts'], records: [{ id: 1, party: 'Acme' }] } })
+  render(<Harness appName="app1" />)
+  await waitFor(() => expect(screen.getByText('Acme')).toBeInTheDocument())
+
+  const header = screen.getByRole('columnheader', { name: /party/i })
+  fireEvent.mouseDown(header.querySelector('.col-resize-handle'), { clientX: 100 })
+  fireEvent.mouseMove(document, { clientX: 260 })
+  fireEvent.mouseUp(document)
+
+  // startWidth is 0 under jsdom, so width = max(60, 260 - 100) = 160px.
+  expect(header.style.width).toBe('160px')
+  // Dragging must not trigger the column's sort.
+  expect(header.querySelector('.sort-caret').textContent).toBe('')
 })

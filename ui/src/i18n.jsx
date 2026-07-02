@@ -169,6 +169,9 @@ const translations = {
       recordDetail: 'Record detail',
       copied: 'Copied',
       close: 'Close',
+      columns: 'Columns',
+      selectAll: 'Select all',
+      deselectAll: 'Deselect all',
     },
     query: {
       intro: 'Select an app, then start asking questions in natural language.',
@@ -490,6 +493,9 @@ const translations = {
       recordDetail: '记录详情',
       copied: '已复制',
       close: '关闭',
+      columns: '列',
+      selectAll: '全选',
+      deselectAll: '取消全选',
     },
     query: {
       intro: '选择一个应用，然后用自然语言开始提问。',

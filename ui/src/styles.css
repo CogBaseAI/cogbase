@@ -781,7 +781,6 @@ tr:hover td { background: var(--bg3); }
   max-width: 280px; overflow: hidden; text-overflow: ellipsis;
   vertical-align: top;
 }
-.data-tbl td.long-cell { white-space: normal; max-width: 320px; overflow: visible; text-overflow: unset; }
 .data-tbl tbody tr:nth-child(even) td { background: rgba(127, 127, 127, .04); }
 .data-tbl tr:hover td { background: var(--bg3); }
 .data-tbl .null-val { color: var(--muted); font-style: italic; }
@@ -796,10 +795,42 @@ tr:hover td { background: var(--bg3); }
 }
 .data-search:focus { border-color: var(--muted); }
 
-/* Sortable headers */
-.data-tbl th.sortable { cursor: pointer; user-select: none; }
+/* Sortable + resizable headers */
+.data-tbl th.sortable { cursor: pointer; user-select: none; position: sticky; }
 .data-tbl th.sortable:hover { color: inherit; }
+.data-tbl .th-label { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 .data-tbl .sort-caret { font-size: 9px; }
+.data-tbl th .col-resize-handle {
+  position: absolute; top: 0; right: 0; width: 7px; height: 100%;
+  cursor: col-resize; user-select: none;
+}
+.data-tbl th .col-resize-handle:hover { background: var(--border); }
+body.col-resizing { cursor: col-resize; user-select: none; }
+
+/* Column visibility menu */
+.col-menu-wrap { position: relative; }
+.col-menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 20;
+  min-width: 180px; max-height: 320px; overflow: auto;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .3); padding: 6px;
+}
+.col-menu-actions {
+  display: flex; gap: 10px; padding: 4px 8px 8px;
+  margin-bottom: 4px; border-bottom: 1px solid var(--border);
+}
+.col-menu-link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-size: 11px; color: var(--muted);
+}
+.col-menu-link:hover:not(:disabled) { color: inherit; text-decoration: underline; }
+.col-menu-link:disabled { opacity: .4; cursor: default; }
+.col-menu-item {
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+  font-size: 12px; border-radius: 5px; cursor: pointer;
+}
+.col-menu-item:hover { background: var(--bg3); }
+.col-menu-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .data-tbl th.row-num-th, .data-tbl td.row-num {
   width: 1%; text-align: right; color: var(--muted);
   font-variant-numeric: tabular-nums; padding-right: 10px;
@@ -807,6 +838,18 @@ tr:hover td { background: var(--bg3); }
 
 /* Clickable rows open the detail drawer */
 .data-tbl tr.data-row { cursor: pointer; }
+
+/* Floating full-text preview for truncated cells */
+.cell-tip {
+  position: fixed; z-index: 60; pointer-events: none;
+  max-height: 40vh; overflow: hidden;
+  padding: 8px 10px; border-radius: 6px;
+  background: var(--bg); border: 1px solid var(--border); color: inherit;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+}
 
 /* ── Record detail drawer ── */
 .record-detail-overlay {
