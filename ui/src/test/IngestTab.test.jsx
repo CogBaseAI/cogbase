@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { AppProvider, useApp } from '../context'
 import { I18nProvider } from '../i18n'
 import IngestTab from '../components/tabs/IngestTab'
@@ -67,4 +68,104 @@ it('does not show a previous app docs after switching apps', async () => {
 
   await waitFor(() => expect(screen.getByText('doc-beta')).toBeInTheDocument())
   expect(screen.queryByText('doc-alpha')).not.toBeInTheDocument()
+})
+
+// Routes /docs off a mutable store so the reload after a delete returns the
+// updated list, and captures every DELETE request. `deleteResponse` controls
+// what the DELETE call resolves to (or rejects with, when it's an Error).
+function mockFetchDeletable(docs, deleteResponse = { ok: true, status: 200 }) {
+  const store = { docs: [...docs] }
+  const deleteCalls = []
+  vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
+    const u = String(url)
+    if (opts?.method === 'DELETE') {
+      deleteCalls.push(u)
+      if (deleteResponse instanceof Error) return Promise.reject(deleteResponse)
+      return Promise.resolve(deleteResponse)
+    }
+    if (u.endsWith('/docs')) {
+      return Promise.resolve({ ok: true, json: async () => ({ docs: store.docs }) })
+    }
+    if (u.endsWith('/workflows')) {
+      return Promise.resolve({ ok: true, json: async () => ({ workflows: [] }) })
+    }
+    return Promise.resolve({ ok: true, json: async () => ({}) })
+  })
+  return { store, deleteCalls }
+}
+
+it('deletes a document after confirmation and reloads the list', async () => {
+  const { store, deleteCalls } = mockFetchDeletable([
+    { doc_id: 'doc-alpha', metadata: {}, status: 'done' },
+    { doc_id: 'doc-beta', metadata: {}, status: 'done' },
+  ])
+  const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+  render(<Harness appName="app1" />)
+  await waitFor(() => expect(screen.getByText('doc-alpha')).toBeInTheDocument())
+
+  // Simulate the backend dropping the doc, so the reload returns the shorter list.
+  store.docs = store.docs.filter(d => d.doc_id !== 'doc-alpha')
+
+  const rows = screen.getAllByText('Delete')
+  await userEvent.click(rows[0])
+
+  expect(confirmSpy).toHaveBeenCalledTimes(1)
+  await waitFor(() => expect(screen.queryByText('doc-alpha')).not.toBeInTheDocument())
+  expect(screen.getByText('doc-beta')).toBeInTheDocument()
+  expect(deleteCalls).toHaveLength(1)
+  expect(deleteCalls[0]).toMatch(/\/applications\/app1\/docs\/doc-alpha$/)
+})
+
+it('does not delete when the confirmation is cancelled', async () => {
+  const { deleteCalls } = mockFetchDeletable([
+    { doc_id: 'doc-alpha', metadata: {}, status: 'done' },
+  ])
+  vi.spyOn(window, 'confirm').mockReturnValue(false)
+
+  render(<Harness appName="app1" />)
+  await waitFor(() => expect(screen.getByText('doc-alpha')).toBeInTheDocument())
+
+  await userEvent.click(screen.getByText('Delete'))
+
+  expect(deleteCalls).toHaveLength(0)
+  expect(screen.getByText('doc-alpha')).toBeInTheDocument()
+})
+
+it('treats a 404 as a successful delete and reloads', async () => {
+  const { store, deleteCalls } = mockFetchDeletable(
+    [{ doc_id: 'doc-alpha', metadata: {}, status: 'done' }],
+    { ok: false, status: 404 },
+  )
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+  render(<Harness appName="app1" />)
+  await waitFor(() => expect(screen.getByText('doc-alpha')).toBeInTheDocument())
+
+  store.docs = []
+  await userEvent.click(screen.getByText('Delete'))
+
+  await waitFor(() => expect(screen.queryByText('doc-alpha')).not.toBeInTheDocument())
+  expect(deleteCalls).toHaveLength(1)
+})
+
+it('alerts and keeps the doc when the delete fails', async () => {
+  const { store, deleteCalls } = mockFetchDeletable(
+    [{ doc_id: 'doc-alpha', metadata: {}, status: 'done' }],
+    { ok: false, status: 500, statusText: 'Server Error' },
+  )
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+
+  render(<Harness appName="app1" />)
+  await waitFor(() => expect(screen.getByText('doc-alpha')).toBeInTheDocument())
+
+  // A failed delete should not remove the row even if the store later changes.
+  store.docs = []
+  await userEvent.click(screen.getByText('Delete'))
+
+  await waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1))
+  expect(alertSpy.mock.calls[0][0]).toContain('Server Error')
+  expect(deleteCalls).toHaveLength(1)
+  expect(screen.getByText('doc-alpha')).toBeInTheDocument()
 })

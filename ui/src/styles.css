@@ -782,9 +782,64 @@ tr:hover td { background: var(--bg3); }
   vertical-align: top;
 }
 .data-tbl td.long-cell { white-space: normal; max-width: 320px; overflow: visible; text-overflow: unset; }
+.data-tbl tbody tr:nth-child(even) td { background: rgba(127, 127, 127, .04); }
 .data-tbl tr:hover td { background: var(--bg3); }
 .data-tbl .null-val { color: var(--muted); font-style: italic; }
 .data-tbl .obj-val  { color: var(--muted); font-family: monospace; font-size: 11px; }
+
+/* Search + filtered count in the header */
+.data-main-hd-right { display: flex; align-items: center; gap: 12px; }
+.data-search {
+  font-size: 12px; padding: 4px 9px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg); color: inherit;
+  width: 200px; outline: none;
+}
+.data-search:focus { border-color: var(--muted); }
+
+/* Sortable headers */
+.data-tbl th.sortable { cursor: pointer; user-select: none; }
+.data-tbl th.sortable:hover { color: inherit; }
+.data-tbl .sort-caret { font-size: 9px; }
+.data-tbl th.row-num-th, .data-tbl td.row-num {
+  width: 1%; text-align: right; color: var(--muted);
+  font-variant-numeric: tabular-nums; padding-right: 10px;
+}
+
+/* Clickable rows open the detail drawer */
+.data-tbl tr.data-row { cursor: pointer; }
+
+/* ── Record detail drawer ── */
+.record-detail-overlay {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(0, 0, 0, .35); display: flex; justify-content: flex-end;
+}
+.record-detail {
+  width: min(520px, 92vw); height: 100%; background: var(--bg2);
+  border-left: 1px solid var(--border); display: flex; flex-direction: column;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, .25);
+}
+.record-detail-hd {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.record-detail-hd h3 { font-size: 14px; font-weight: 600; }
+.record-detail-body { flex: 1; overflow: auto; padding: 8px 16px 24px; }
+.record-field { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.record-field-key {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .4px; margin-bottom: 5px;
+}
+.record-copy-btn {
+  background: none; border: none; cursor: pointer; color: var(--muted);
+  font-size: 11px; padding: 1px 5px; border-radius: 4px;
+}
+.record-copy-btn:hover { background: var(--bg3); color: inherit; }
+.record-field-val {
+  margin: 0; font-size: 12px; white-space: pre-wrap; word-break: break-word;
+  font-family: inherit;
+}
+.record-field-val.null-val { color: var(--muted); font-style: italic; }
 
 /* ── References aside ── */
 .ref-section-hd {

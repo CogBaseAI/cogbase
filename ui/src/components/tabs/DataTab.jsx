@@ -13,6 +13,9 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
   const [loadingColl, setLoadingColl] = useState(false)
   const [collError, setCollError] = useState(null)
   const [pendingBar, setPendingBar] = useState(null) // null | {msg, btnLabel, pendingState}
+  const [search, setSearch] = useState('')
+  const [sort, setSort] = useState(null) // null | {col, dir: 'asc'|'desc'}
+  const [detailRow, setDetailRow] = useState(null) // null | record object
   const hasApp = !!currentApp
 
   async function loadCollections() {
@@ -40,6 +43,9 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
     setRowCount('')
     setPendingBar(null)
     setCollError(null)
+    setSearch('')
+    setSort(null)
+    setDetailRow(null)
   }, [currentApp])
 
   useEffect(() => { if (active) loadCollections() }, [active, currentApp])
@@ -58,6 +64,9 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
     setLoadingColl(true)
     setRecords(null)
     setRowCount('')
+    setSearch('')
+    setSort(null)
+    setDetailRow(null)
     try {
       const resp = await fetch(
         `${apiUrl}/applications/${encodeURIComponent(currentApp)}/collections/${encodeURIComponent(name)}/query`,
@@ -125,6 +134,49 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
   const demo = demoCatalog.find(d => d.name === currentApp)
   const wfSaveColls = new Set((demo?.workflow_save_targets || []).map(t => t.save_collection))
 
+  // Flatten a cell value to a plain string for search/sort.
+  function cellText(val) {
+    if (val === null || val === undefined) return ''
+    if (typeof val === 'object') return JSON.stringify(val)
+    return String(val)
+  }
+
+  function toggleSort(col) {
+    setSort(prev => {
+      if (!prev || prev.col !== col) return { col, dir: 'asc' }
+      if (prev.dir === 'asc') return { col, dir: 'desc' }
+      return null // third click clears the sort
+    })
+  }
+
+  // Filter (across all columns) then sort — both client-side over loaded records.
+  const viewRows = React.useMemo(() => {
+    if (!records) return []
+    const q = search.trim().toLowerCase()
+    let rows = q
+      ? records.filter(row => cols.some(c => cellText(row[c]).toLowerCase().includes(q)))
+      : records.slice()
+    if (sort) {
+      const { col, dir } = sort
+      rows.sort((a, b) => {
+        const av = a[col], bv = b[col]
+        // Nulls always sort last, regardless of direction.
+        const aNull = av === null || av === undefined
+        const bNull = bv === null || bv === undefined
+        if (aNull || bNull) return aNull === bNull ? 0 : aNull ? 1 : -1
+        let cmp
+        if (typeof av === 'number' && typeof bv === 'number') cmp = av - bv
+        else cmp = cellText(av).localeCompare(cellText(bv), undefined, { numeric: true, sensitivity: 'base' })
+        return dir === 'asc' ? cmp : -cmp
+      })
+    }
+    return rows
+  }, [records, cols, search, sort])
+
+  const countLabel = records && search.trim()
+    ? t('data.rowsFiltered', { shown: viewRows.length, total: records.length })
+    : rowCount
+
   function renderCell(val) {
     if (val === null || val === undefined) return <td className="null-val">—</td>
     if (typeof val === 'object') {
@@ -161,7 +213,18 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
         <div className="data-main">
           <div className="data-main-hd">
             <h3 style={{ color: activeCollection ? '' : 'var(--muted)' }}>{activeCollection || t('data.noCollection')}</h3>
-            <span className="meta">{rowCount}</span>
+            <div className="data-main-hd-right">
+              {records && records.length > 0 && (
+                <input
+                  className="data-search"
+                  type="search"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder={t('data.searchPlaceholder')}
+                />
+              )}
+              <span className="meta">{countLabel}</span>
+            </div>
           </div>
           {pendingBar && (
             <div className="wf-pending-bar show">
@@ -175,12 +238,30 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
             {!activeCollection && !loadingColl && <div className="empty"><p>{t('data.browseHint')}</p></div>}
             {loadingColl && <div className="empty"><p><span className="spinning">⟳</span> {t('data.loadingRecords')}</p></div>}
             {!loadingColl && records && records.length === 0 && <div className="empty"><div className="ei">🗄️</div><p>{t('data.noRecords')}</p></div>}
-            {!loadingColl && records && records.length > 0 && (
+            {!loadingColl && records && records.length > 0 && viewRows.length === 0 && (
+              <div className="empty"><div className="ei">🔍</div><p>{t('data.noMatch')}</p></div>
+            )}
+            {!loadingColl && records && records.length > 0 && viewRows.length > 0 && (
               <table className="data-tbl">
-                <thead><tr>{cols.map(c => <th key={c} title={c}>{c}</th>)}</tr></thead>
+                <thead>
+                  <tr>
+                    <th className="row-num-th">#</th>
+                    {cols.map(c => {
+                      const dir = sort?.col === c ? sort.dir : null
+                      return (
+                        <th key={c} title={c} className="sortable" onClick={() => toggleSort(c)}>
+                          {c}<span className="sort-caret">{dir === 'asc' ? ' ▲' : dir === 'desc' ? ' ▼' : ''}</span>
+                        </th>
+                      )
+                    })}
+                  </tr>
+                </thead>
                 <tbody>
-                  {records.map((row, i) => (
-                    <tr key={i}>{cols.map(col => <React.Fragment key={col}>{renderCell(row[col])}</React.Fragment>)}</tr>
+                  {viewRows.map((row, i) => (
+                    <tr key={i} className="data-row" onClick={() => setDetailRow(row)}>
+                      <td className="row-num">{i + 1}</td>
+                      {cols.map(col => <React.Fragment key={col}>{renderCell(row[col])}</React.Fragment>)}
+                    </tr>
                   ))}
                 </tbody>
               </table>
@@ -188,6 +269,7 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
           </div>
         </div>
       </div>
+      {detailRow && <RecordDetail row={detailRow} cols={cols} onClose={() => setDetailRow(null)} />}
     </>
   )
 }
@@ -195,4 +277,55 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
 function LongVal({ text }) {
   const [expanded, setExpanded] = useState(false)
   return <div className={`long-val${expanded ? ' exp' : ''}`} onClick={() => setExpanded(v => !v)}>{text}</div>
+}
+
+// Slide-over drawer showing one record's fields in full, with pretty-printed
+// JSON for object values and click-to-copy on each field.
+function RecordDetail({ row, cols, onClose }) {
+  const { t } = useT()
+  const [copied, setCopied] = useState(null)
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  function fmt(val) {
+    if (val === null || val === undefined) return '—'
+    if (typeof val === 'object') return JSON.stringify(val, null, 2)
+    return String(val)
+  }
+
+  async function copy(key, val) {
+    try { await navigator.clipboard.writeText(fmt(val)); setCopied(key); setTimeout(() => setCopied(null), 1500) } catch {}
+  }
+
+  return (
+    <div className="record-detail-overlay" onClick={onClose}>
+      <div className="record-detail" onClick={e => e.stopPropagation()}>
+        <div className="record-detail-hd">
+          <h3>{t('data.recordDetail')}</h3>
+          <button className="btn btn-ghost btn-sm" onClick={onClose} title={t('data.close')}>✕</button>
+        </div>
+        <div className="record-detail-body">
+          {cols.map(col => {
+            const val = row[col]
+            const isNull = val === null || val === undefined
+            return (
+              <div key={col} className="record-field">
+                <div className="record-field-key">
+                  <span>{col}</span>
+                  <button className="record-copy-btn" onClick={() => copy(col, val)}>
+                    {copied === col ? t('data.copied') : '⧉'}
+                  </button>
+                </div>
+                <pre className={`record-field-val${isNull ? ' null-val' : ''}`}>{fmt(val)}</pre>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
 }
