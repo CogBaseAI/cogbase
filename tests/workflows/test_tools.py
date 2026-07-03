@@ -419,16 +419,54 @@ class TestStructuredSaveTool:
         assert len(rows) == 1
         assert rows[0]["finding_id"] == "f3"
 
-    async def test_empty_records_skips_save(self):
+    async def test_empty_records_from_skips_save(self):
+        """records_from resolving to an empty list (e.g. judge found nothing) skips save."""
         store = MagicMock(spec=InMemoryStructuredStore)
         store.save = AsyncMock()
-        step = _make_step(tool="structured-save", collection="findings", records=[])
-        output = await ss_run(step, {}, store)
+        ctx = {"steps": {"judge": {"output": {"findings": []}}}}
+        step = _make_step(
+            tool="structured-save",
+            collection="findings",
+            records_from="{{ steps.judge.output.findings }}",
+        )
+        output = await ss_run(step, ctx, store)
         store.save.assert_not_called()
         assert output["records"] == []
 
+    async def test_records_from_saves_list(self):
+        """records_from resolving to a list saves every element as its own record."""
+        store = await self._make_finding_store()
+        ctx = {"steps": {"judge": {"output": {"findings": [
+            {"finding_id": "f1", "status": "compliant"},
+            {"finding_id": "f2", "status": "non_compliant"},
+        ]}}}}
+        step = _make_step(
+            tool="structured-save",
+            collection="findings",
+            records_from="{{ steps.judge.output.findings }}",
+        )
+        output = await ss_run(step, ctx, store)
+        assert len(output["records"]) == 2
+        rows = await store.query("findings")
+        assert {r["finding_id"] for r in rows} == {"f1", "f2"}
+
+    async def test_records_from_non_list_raises(self):
+        store = await self._make_finding_store()
+        ctx = {"steps": {"judge": {"output": {"finding_id": "f1", "status": "compliant"}}}}
+        step = _make_step(
+            tool="structured-save",
+            collection="findings",
+            records_from="{{ steps.judge.output }}",
+        )
+        with pytest.raises(RuntimeError, match="must resolve to a list"):
+            await ss_run(step, ctx, store)
+
     async def test_missing_store_raises(self):
-        step = _make_step(tool="structured-save", collection="findings")
+        step = _make_step(
+            tool="structured-save",
+            collection="findings",
+            records=["{{ steps.judge.output }}"],
+        )
         with pytest.raises(RuntimeError, match="structured store"):
             await ss_run(step, {}, None)
 

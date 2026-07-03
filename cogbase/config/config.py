@@ -375,7 +375,17 @@ class StructuredSaveStepConfig(WorkflowStepBase):
         default_factory=list,
         description=(
             "List of records to save. Each entry is a Jinja2 template that resolves to "
-            "a Pydantic model or dict (e.g. '{{ steps.judge.output }}')."
+            "a Pydantic model or dict (e.g. '{{ steps.judge.output }}'). One entry saves "
+            "one record. Mutually exclusive with `records_from`."
+        ),
+    )
+    records_from: str | None = Field(
+        default=None,
+        description=(
+            "Single Jinja2 template resolving to a LIST of records to save "
+            "(e.g. '{{ steps.judge.output.contradictions }}'). Use to batch-save a "
+            "runtime-sized list from one llm-structured call instead of a foreach. "
+            "Mutually exclusive with `records`."
         ),
     )
     purge_by: list[str] = Field(
@@ -389,6 +399,15 @@ class StructuredSaveStepConfig(WorkflowStepBase):
             "outputs that aren't doc-scoped."
         ),
     )
+
+    @model_validator(mode="after")
+    def _one_of_records(self) -> "StructuredSaveStepConfig":
+        if bool(self.records) == bool(self.records_from):
+            raise ValueError(
+                "structured-save: set exactly one of `records` (per-record templates) "
+                "or `records_from` (one template resolving to a list)."
+            )
+        return self
 
 
 WorkflowLeafStepConfig = Annotated[
@@ -440,7 +459,47 @@ def _iter_all_leaf_steps(steps: list) -> "list[WorkflowLeafStepConfig]":
     return out
 
 
-_STEP_OUTPUT_RE = re.compile(r"\{\{\s*steps\.([A-Za-z_][A-Za-z0-9_]*)\.output\s*\}\}")
+_STEP_OUTPUT_RE = re.compile(
+    r"\{\{\s*steps\.([A-Za-z_][A-Za-z0-9_]*)\.output"
+    r"((?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*\}\}"
+)
+
+
+def _deref(node: Any, root: dict) -> Any:
+    """Resolve a JSON-Schema ``$ref`` (e.g. ``#/$defs/Contradiction``) against ``root``."""
+    if isinstance(node, dict) and "$ref" in node:
+        ref = node["$ref"]
+        if ref.startswith("#/"):
+            target: Any = root
+            for part in ref[2:].split("/"):
+                if not isinstance(target, dict):
+                    return node
+                target = target.get(part)
+            return target if target is not None else node
+    return node
+
+
+def _resolve_output_properties(schema: dict, path: str) -> "dict | None":
+    """Return the object ``properties`` a ``steps.<id>.output<path>`` reference points at.
+
+    ``path`` is the dotted suffix after ``.output`` (e.g. ``.contradictions`` or ``""``).
+    Array properties are descended into via their ``items``, and ``$ref`` nodes are
+    dereferenced against the schema's ``$defs``, so primary_fields declared on list
+    elements resolve. Returns None if the path can't be resolved.
+    """
+    node: Any = _deref(schema, schema)
+    for segment in [s for s in path.split(".") if s]:
+        if not isinstance(node, dict):
+            return None
+        node = node.get("properties", {}).get(segment)
+        if node is None:
+            return None
+        node = _deref(node, schema)
+        if isinstance(node, dict) and node.get("type") == "array":
+            node = _deref(node.get("items"), schema)
+    if not isinstance(node, dict):
+        return None
+    return node.get("properties", {})
 
 
 def _index_llm_structured_steps(steps: list) -> "dict[str, LLMStructuredStepConfig]":
@@ -466,7 +525,10 @@ def _validate_save_primary_fields(workflow: "WorkflowConfig") -> None:
     for save_step in _iter_save_steps(workflow.steps):
         if not save_step.primary_fields:
             continue
-        for record in save_step.records:
+        sources = list(save_step.records)
+        if save_step.records_from:
+            sources.append(save_step.records_from)
+        for record in sources:
             if not isinstance(record, str):
                 continue
             match = _STEP_OUTPUT_RE.search(record)
@@ -482,7 +544,11 @@ def _validate_save_primary_fields(workflow: "WorkflowConfig") -> None:
                     f"Workflow {workflow.name!r} step {upstream.id!r}: "
                     f"output_schema is not valid JSON: {exc}"
                 ) from exc
-            properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+            if not isinstance(schema, dict):
+                continue
+            properties = _resolve_output_properties(schema, match.group(2))
+            if properties is None:
+                continue
             missing = [f for f in save_step.primary_fields if f not in properties]
             if missing:
                 raise ValueError(

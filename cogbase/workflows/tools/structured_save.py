@@ -22,7 +22,15 @@ async def run(
     if structured_store is None:
         raise RuntimeError("structured-save requires a structured store")
 
-    records = [render_value(r, ctx) for r in step.records]
+    if step.records_from:
+        records = render_value(step.records_from, ctx)
+        if not isinstance(records, list):
+            raise RuntimeError(
+                "structured-save records_from must resolve to a list, got "
+                f"{type(records).__name__}"
+            )
+    else:
+        records = [render_value(r, ctx) for r in step.records]
     if records:
         await structured_store.save(step.collection, records)
     logger.info(

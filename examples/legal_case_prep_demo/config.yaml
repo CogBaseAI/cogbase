@@ -197,19 +197,15 @@ workflows:
           facts: "{{ steps.load_facts.records }}"
         output_schema: contradiction_list_schema.json
 
-      - id: save_each
-        foreach: "{{ steps.judge.output.contradictions }}"
-        steps:
-          - id: save_one
-            tool: structured-save
-            collection: contradictions
-            primary_fields: [contradiction_id]
-            # Contradictions link two docs; purge by either so a re-ingest of one
-            # doc drops its resolved contradictions without touching pairs between
-            # two other docs (those refresh when one of THEM is re-ingested).
-            purge_by: [doc_a_id, doc_b_id]
-            records:
-              - "{{ item }}"
+      - id: save_all
+        tool: structured-save
+        collection: contradictions
+        primary_fields: [contradiction_id]
+        # Contradictions link two docs; purge by either so a re-ingest of one
+        # doc drops its resolved contradictions without touching pairs between
+        # two other docs (those refresh when one of THEM is re-ingested).
+        purge_by: [doc_a_id, doc_b_id]
+        records_from: "{{ steps.judge.output.contradictions }}"
 
   - name: identify-evidence-gaps
     trigger:
@@ -242,12 +238,8 @@ workflows:
           structured_data: "{{ steps.load_structured_data.records }}"
         output_schema: evidence_gap_list_schema.json
 
-      - id: save_each
-        foreach: "{{ steps.judge.output.gaps }}"
-        steps:
-          - id: save_one
-            tool: structured-save
-            collection: evidence_gaps
-            primary_fields: [gap_id]
-            records:
-              - "{{ item }}"
+      - id: save_all
+        tool: structured-save
+        collection: evidence_gaps
+        primary_fields: [gap_id]
+        records_from: "{{ steps.judge.output.gaps }}"
