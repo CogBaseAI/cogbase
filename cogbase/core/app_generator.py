@@ -418,6 +418,26 @@ the workflow steps.
    will break YAML parsing. Always wrap such values in double quotes. \
    Example — BAD:  description: Findings produced by the workflow: compliance status, severity. \
    Example — GOOD: description: "Findings produced by the workflow: compliance status, severity."
+8. structured-save has two mutually exclusive input modes — pick by how the upstream \
+   llm-structured step emits records: \
+   (a) `records` — a list of per-record templates, one entry per saved record. Use INSIDE a \
+       `foreach` where each iteration's llm-structured call produces exactly ONE record \
+       (e.g. judging each clause independently against reference material — the point 6 \
+       "judge a record against unstructured reference" case). \
+       Example: `records: ["{{ steps.judge.output }}"]`. \
+   (b) `records_from` — a SINGLE template resolving to a runtime-sized LIST. Use when ONE \
+       llm-structured call inspects a set of loaded peer records and emits a variable-length \
+       list (the point 6 "judge relationships among structured records" case — contradictions, \
+       evidence gaps, reconciliations, cross-record consistency). There is NO foreach: load the \
+       peers with a selective structured-query, pass them all to one llm-structured call, and \
+       save its list directly. \
+       Example: `records_from: "{{ steps.judge.output.gaps }}"`. \
+   When using `records_from`, the upstream `output_schema` is an OBJECT with a single array \
+   property (e.g. `gaps` / `contradictions`), and the structured-save `primary_fields` \
+   (e.g. `gap_id`) live on each ARRAY ITEM, not at the top level — this refines point 4(a): \
+   for records_from, the primary fields must be properties of the array item schema, and the \
+   prompt must instruct the LLM to populate a unique identifier on every item. Never wrap a \
+   relationship-judging step in a foreach just to reuse `records`.
 
 ## Config format — workflow output collection
 
