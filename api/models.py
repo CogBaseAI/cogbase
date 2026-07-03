@@ -356,10 +356,10 @@ class AddMemoryResponse(BaseModel):
 
 class QueryResponse(BaseModel):
     answer: str
-    structured_records: list[dict] = []
-    chunks: list[ChunkResponse] = []
-    document_slices: list[DocumentSliceResponse] = []
-    memories: list[QueryMemoryResponse] = []
+    references: AnswerReferences = Field(
+        default_factory=AnswerReferences,
+        description="The evidence the answer drew on — same shape a transcript turn carries.",
+    )
     input_tokens: int = 0
     output_tokens: int = 0
     session_id: str | None = Field(

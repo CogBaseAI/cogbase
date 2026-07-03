@@ -348,8 +348,9 @@ class CogBaseClient:
                     print(data["token"], end="", flush=True)
                 elif "result" in data:
                     result = data["result"]
-                    if result.get("passthrough") and result.get("structured_records"):
-                        formatted = json.dumps(result["structured_records"], indent=2)
+                    references = result.get("references") or {}
+                    if result.get("passthrough") and references.get("structured_records"):
+                        formatted = json.dumps(references["structured_records"], indent=2)
                         print(formatted)
                 elif "error" in data:
                     print(f"\n  ERROR: {data['error']}")

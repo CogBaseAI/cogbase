@@ -160,6 +160,10 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 .msg.user .msg-body  { background: var(--accent); color: #fff; border-bottom-right-radius: 3px; }
 .msg.bot  .msg-body  { background: var(--bg3); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
 .msg.sys  .msg-body  { background: transparent; border: 1px solid var(--border); color: var(--muted); font-size: 12px; text-align: center; }
+/* An answer whose references can fill the pane; the selected one is accented. */
+.msg.selectable { cursor: pointer; }
+.msg.selectable:hover .msg-body { border-color: var(--accent); }
+.msg.ref-selected .msg-body { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 
 /* ── Markdown-rendered bot answers ── */
 .md { white-space: normal; }

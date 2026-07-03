@@ -52,7 +52,7 @@ function sseResponse(events) {
 // when a past chat is opened.
 function mockFetch({
   sessionId = 'sess-1',
-  streamEvents = [{ result: { answer: 'Hello there', chunks: [], structured_records: [] } }],
+  streamEvents = [{ result: { answer: 'Hello there', references: { chunks: [], structured_records: [] } } }],
   sessions = [],
   transcript = { messages: [] },
 } = {}) {
@@ -128,7 +128,7 @@ it('starts a session on the first question and threads session_id into the query
 
 it('renders a markdown table answer as an HTML table', async () => {
   const table = '| Name | Term |\n| --- | --- |\n| Acme | 12 months |\n| Globex | 24 months |'
-  mockFetch({ streamEvents: [{ result: { answer: table, chunks: [], structured_records: [] } }] })
+  mockFetch({ streamEvents: [{ result: { answer: table, references: { chunks: [], structured_records: [] } } }] })
   const user = userEvent.setup()
   renderQueryTab()
   await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
@@ -148,7 +148,7 @@ it('renders a markdown table answer as an HTML table', async () => {
 
 it('copies the question and the answer via their copy buttons', async () => {
   const writeText = vi.fn().mockResolvedValue(undefined)
-  mockFetch({ streamEvents: [{ result: { answer: 'The term is 12 months.', chunks: [], structured_records: [] } }] })
+  mockFetch({ streamEvents: [{ result: { answer: 'The term is 12 months.', references: { chunks: [], structured_records: [] } } }] })
   const user = userEvent.setup()
   Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
   renderQueryTab()
@@ -170,7 +170,7 @@ it('copies the question and the answer via their copy buttons', async () => {
 it('copies a markdown table as tab-separated rows', async () => {
   const writeText = vi.fn().mockResolvedValue(undefined)
   const table = '| Name | Term |\n| --- | --- |\n| Acme | 12 months |\n| Globex | 24 months |'
-  mockFetch({ streamEvents: [{ result: { answer: table, chunks: [], structured_records: [] } }] })
+  mockFetch({ streamEvents: [{ result: { answer: table, references: { chunks: [], structured_records: [] } } }] })
   const user = userEvent.setup()
   Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
   renderQueryTab()
@@ -275,6 +275,76 @@ it('opens a past chat, loads its transcript, and resumes it on the next question
   const streamCall = fetchSpy.mock.calls.find(([u]) => String(u).endsWith('/query/stream'))
   expect(JSON.parse(streamCall[1].body).session_id).toBe('s-1')
   expect(startSessionCalls(fetchSpy)).toHaveLength(0)
+})
+
+it('restores the references pane from a past chat transcript', async () => {
+  mockFetch({
+    sessions: SESSIONS_FIXTURE,
+    transcript: { messages: [
+      { role: 'user', content: 'old question', references: null },
+      {
+        role: 'assistant',
+        content: 'old answer',
+        references: {
+          structured_records: [{ contract_type: 'NDA' }],
+          chunks: [{ chunk_id: 'doc_0_0', doc_id: 'doc_0', text: 'net 30 payment terms' }],
+          document_slices: [],
+          memories: [],
+        },
+      },
+    ] },
+  })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.getByText('What is the term?')).toBeInTheDocument())
+
+  await user.click(screen.getByText('What is the term?'))
+  await waitFor(() => expect(screen.getByText('old answer')).toBeInTheDocument())
+
+  // The assistant turn's references are surfaced in the pane, not left empty.
+  expect(screen.getByText('net 30 payment terms')).toBeInTheDocument()
+  expect(screen.getByText(/NDA/)).toBeInTheDocument()
+})
+
+it('switches the references pane to the clicked answer in a multi-turn chat', async () => {
+  mockFetch({
+    sessions: SESSIONS_FIXTURE,
+    transcript: { messages: [
+      { role: 'user', content: 'first question', references: null },
+      {
+        role: 'assistant',
+        content: 'first answer',
+        references: {
+          structured_records: [],
+          chunks: [{ chunk_id: 'c-1', doc_id: 'd-1', text: 'evidence for the first answer' }],
+          document_slices: [], memories: [],
+        },
+      },
+      { role: 'user', content: 'second question', references: null },
+      {
+        role: 'assistant',
+        content: 'second answer',
+        references: {
+          structured_records: [],
+          chunks: [{ chunk_id: 'c-2', doc_id: 'd-2', text: 'evidence for the second answer' }],
+          document_slices: [], memories: [],
+        },
+      },
+    ] },
+  })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.getByText('What is the term?')).toBeInTheDocument())
+  await user.click(screen.getByText('What is the term?'))
+
+  // Loads defaulting to the latest answer's references.
+  await waitFor(() => expect(screen.getByText('evidence for the second answer')).toBeInTheDocument())
+  expect(screen.queryByText('evidence for the first answer')).not.toBeInTheDocument()
+
+  // Clicking the earlier answer re-points the pane at that turn's evidence.
+  await user.click(screen.getByText('first answer'))
+  await waitFor(() => expect(screen.getByText('evidence for the first answer')).toBeInTheDocument())
+  expect(screen.queryByText('evidence for the second answer')).not.toBeInTheDocument()
 })
 
 // DELETE /sessions/{id} calls only.

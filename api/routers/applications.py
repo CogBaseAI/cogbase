@@ -637,10 +637,7 @@ async def query_application(
     await _record_session_turn(system_store, app, body.session_id, body.text)
     return QueryResponse(
         answer=result.answer,
-        structured_records=result.structured_records,
-        chunks=[ChunkResponse(**c.model_dump(exclude={"embedding"})) for c in result.chunks],
-        document_slices=[DocumentSliceResponse(**s.model_dump()) for s in result.document_slices],
-        memories=[_to_query_memory(m) for m in result.memories],
+        references=_to_answer_references(result),
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         session_id=body.session_id,
@@ -658,7 +655,9 @@ async def query_application_stream(
     """Stream a natural-language query response as Server-Sent Events.
 
     Token events: ``{"token": "<text>"}``
-    Final event:  ``{"result": {answer, structured_records, chunks, memories}}``
+    Final event:  ``{"result": {answer, passthrough, references, input_tokens, output_tokens}}``
+                  where ``references`` is the shared ``AnswerReferences`` shape
+                  (structured_records, chunks, document_slices, memories).
     Sentinel:     ``data: [DONE]``
     """
     app = await _get_active_app(app_name, app_cache, system_store, system_resources)
@@ -673,9 +672,8 @@ async def query_application_stream(
                     payload = {
                         "result": {
                             "answer": item.answer,
-                            "structured_records": item.structured_records,
-                            "chunks": [c.model_dump(exclude={"embedding"}) for c in item.chunks],
-                            "memories": [_to_query_memory(m).model_dump() for m in item.memories],
+                            "passthrough": item.passthrough,
+                            "references": _to_answer_references(item).model_dump(),
                             "input_tokens": item.input_tokens,
                             "output_tokens": item.output_tokens,
                         }
@@ -887,6 +885,20 @@ def _to_query_memory(record) -> QueryMemoryResponse:
         kind=record.kind.value,
         content=record.content,
         entities=list(record.entities),
+    )
+
+
+def _to_answer_references(result) -> AnswerReferences:
+    """Project a runner ``QueryResult``'s evidence into the shared references shape.
+
+    The single builder both the blocking and streaming query endpoints use, so a
+    live answer and a replayed transcript turn carry identical references.
+    """
+    return AnswerReferences(
+        structured_records=result.structured_records,
+        chunks=[ChunkResponse(**c.model_dump(exclude={"embedding"})) for c in result.chunks],
+        document_slices=[DocumentSliceResponse(**s.model_dump()) for s in result.document_slices],
+        memories=[_to_query_memory(m) for m in result.memories],
     )
 
 

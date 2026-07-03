@@ -11,8 +11,10 @@ export default function QueryTab({ active }) {
   const [msgs, setMsgs] = useState([{ role: 'sys', text: t('query.intro') }])
   const [input, setInput] = useState('')
   const [querying, setQuerying] = useState(false)
-  const [chunks, setChunks] = useState([])
-  const [structuredRecords, setStructuredRecords] = useState([])
+  // Index into `msgs` of the answer whose references fill the pane. Each bot
+  // answer carries its own `refs`, so clicking a past answer re-points the pane
+  // at that turn's evidence; -1 shows the empty state.
+  const [selectedRefIdx, setSelectedRefIdx] = useState(-1)
   const [sessions, setSessions] = useState([])
   const [activeSid, setActiveSid] = useState(null)
   const msgsRef = useRef(null)
@@ -28,8 +30,7 @@ export default function QueryTab({ active }) {
       closeSession(prevApp)
       // Drop the previous app's retrieved references + session pointer so they
       // don't linger across the switch.
-      setChunks([])
-      setStructuredRecords([])
+      setSelectedRefIdx(-1)
       setActiveSid(null)
       if (currentApp) {
         setMsgs(prev => [...prev, { role: 'sys', text: t('query.connected', { app: currentApp }) }])
@@ -65,14 +66,22 @@ export default function QueryTab({ active }) {
       const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}`)
       if (!resp.ok) return
       const data = await resp.json()
-      const loaded = (data.messages || []).map(m => ({
+      const rawMsgs = data.messages || []
+      // Carry each assistant turn's references onto its message so clicking any
+      // past answer re-points the pane at that turn's evidence.
+      const loaded = rawMsgs.map(m => ({
         role: m.role === 'assistant' ? 'bot' : 'user',
         text: m.content,
+        ...(m.role === 'assistant' ? { refs: m.references || {} } : {}),
       }))
       sessionIdRef.current = sid
       setActiveSid(sid)
-      setChunks([])
-      setStructuredRecords([])
+      // Default the pane to the latest answer, matching a live turn's behavior.
+      let lastBot = -1
+      for (let i = loaded.length - 1; i >= 0; i--) {
+        if (loaded[i].role === 'bot') { lastBot = i; break }
+      }
+      setSelectedRefIdx(lastBot)
       setMsgs(loaded.length ? loaded : [{ role: 'sys', text: t('query.emptySession') }])
       setTimeout(scrollMsgs, 0)
     } catch {}
@@ -93,8 +102,7 @@ export default function QueryTab({ active }) {
     if (sid === sessionIdRef.current) {
       sessionIdRef.current = null
       setActiveSid(null)
-      setChunks([])
-      setStructuredRecords([])
+      setSelectedRefIdx(-1)
       setMsgs([{ role: 'sys', text: t('query.refreshed') + (currentApp ? ' ' + t('query.connected', { app: currentApp }) : '') }])
     }
     loadSessions()
@@ -141,7 +149,11 @@ export default function QueryTab({ active }) {
 
     const userMsg = { role: 'user', text }
     const botMsg = { role: 'bot', text: t('query.thinking'), thinking: true }
-    setMsgs(prev => [...prev, userMsg, botMsg])
+    // The bot answer stays at this fixed index for the whole turn (token updates
+    // replace the last message in place), so the final result can attach its
+    // references there and select it.
+    let botIdx = -1
+    setMsgs(prev => { botIdx = prev.length + 1; return [...prev, userMsg, botMsg] })
     setTimeout(scrollMsgs, 0)
 
     let answer = ''
@@ -168,15 +180,18 @@ export default function QueryTab({ active }) {
           setTimeout(scrollMsgs, 0)
         } else if (d.result) {
           if (!started) started = true
-          if (d.result.passthrough && d.result.structured_records) {
-            answer = JSON.stringify(d.result.structured_records, null, 2)
-            setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: answer, mono: true }])
+          const refs = d.result.references || {}
+          let mono = false
+          if (d.result.passthrough && refs.structured_records) {
+            answer = JSON.stringify(refs.structured_records, null, 2)
+            mono = true
           } else if (d.result.answer) {
             answer = d.result.answer
-            setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: answer }])
           }
-          setChunks(d.result.chunks || [])
-          setStructuredRecords(d.result.structured_records || [])
+          // Replace the streamed placeholder with the final answer, carrying its
+          // references, then point the pane at this turn.
+          setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: answer, mono: mono || undefined, refs }])
+          setSelectedRefIdx(botIdx)
         } else if (d.error) {
           setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: t('common.error', { msg: d.error }), error: true }])
         }
@@ -198,12 +213,16 @@ export default function QueryTab({ active }) {
   function newChat() {
     closeSession(currentApp)
     setActiveSid(null)
-    setChunks([])
-    setStructuredRecords([])
+    setSelectedRefIdx(-1)
     setMsgs([{ role: 'sys', text: t('query.refreshed') + (currentApp ? ' ' + t('query.connected', { app: currentApp }) : '') }])
     loadSessions()
   }
 
+  // The pane reflects the selected answer's references (live turns auto-select
+  // the newest; a loaded transcript defaults to its latest answer).
+  const selectedRefs = msgs[selectedRefIdx]?.refs || {}
+  const chunks = selectedRefs.chunks || []
+  const structuredRecords = selectedRefs.structured_records || []
   const totalRefs = chunks.length + structuredRecords.length
 
   return (
@@ -246,8 +265,15 @@ export default function QueryTab({ active }) {
         </div>
         <div className="chat-col">
           <div className="msgs" ref={msgsRef}>
-            {msgs.map((m, i) => (
-              <div key={i} className={`msg ${m.role}`}>
+            {msgs.map((m, i) => {
+              const selectable = m.role === 'bot' && !!m.refs
+              return (
+              <div
+                key={i}
+                className={`msg ${m.role}${selectable ? ' selectable' : ''}${selectable && i === selectedRefIdx ? ' ref-selected' : ''}`}
+                onClick={selectable ? () => setSelectedRefIdx(i) : undefined}
+                title={selectable ? t('query.showRefs') : undefined}
+              >
                 {m.role === 'user' && <div className="msg-who">{t('query.you')}</div>}
                 {m.role === 'bot' && <div className="msg-who">{t('query.bot')}</div>}
                 <div className="msg-body" style={{
@@ -265,7 +291,8 @@ export default function QueryTab({ active }) {
                   </div>
                 )}
               </div>
-            ))}
+              )
+            })}
           </div>
           <div className="chat-input">
             <textarea

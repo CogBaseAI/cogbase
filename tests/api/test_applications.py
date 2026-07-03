@@ -1172,8 +1172,8 @@ class TestQueryApplication:
         )
 
         data = resp.json()
-        assert len(data["structured_records"]) == 1
-        assert data["structured_records"][0]["contract_type"] == "NDA"
+        assert len(data["references"]["structured_records"]) == 1
+        assert data["references"]["structured_records"][0]["contract_type"] == "NDA"
 
     @pytest.mark.asyncio
     async def test_includes_chunks(self, client):
@@ -1187,10 +1187,10 @@ class TestQueryApplication:
         )
 
         data = resp.json()
-        assert len(data["chunks"]) == 1
-        assert data["chunks"][0]["chunk_id"] == "doc_0_0"
-        assert data["chunks"][0]["doc_id"] == "doc_0"
-        assert data["chunks"][0]["text"] == "Payment terms are net 30."
+        assert len(data["references"]["chunks"]) == 1
+        assert data["references"]["chunks"][0]["chunk_id"] == "doc_0_0"
+        assert data["references"]["chunks"][0]["doc_id"] == "doc_0"
+        assert data["references"]["chunks"][0]["text"] == "Payment terms are net 30."
 
     @pytest.mark.asyncio
     async def test_includes_document_slices(self, client):
@@ -1204,8 +1204,8 @@ class TestQueryApplication:
         )
 
         data = resp.json()
-        assert len(data["document_slices"]) == 1
-        s = data["document_slices"][0]
+        assert len(data["references"]["document_slices"]) == 1
+        s = data["references"]["document_slices"][0]
         assert s["doc_id"] == "doc_0"
         assert s["offset"] == 100
         assert s["length"] == 42
@@ -1377,8 +1377,8 @@ class TestQueryApplicationStream:
         assert len(result_events) == 1
         payload = result_events[0]["result"]
         assert payload["answer"] == "The answer [doc_0_0]."
-        assert len(payload["chunks"]) == 1
-        assert payload["chunks"][0]["chunk_id"] == "doc_0_0"
+        assert len(payload["references"]["chunks"]) == 1
+        assert payload["references"]["chunks"][0]["chunk_id"] == "doc_0_0"
 
     @pytest.mark.asyncio
     async def test_ends_with_done_sentinel(self, client):
@@ -1407,7 +1407,7 @@ class TestQueryApplicationStream:
         events = _parse_sse(resp.text)
         result_events = [json.loads(e) for e in events if e != "[DONE]" and "result" in json.loads(e)]
         payload = result_events[0]["result"]
-        assert payload["structured_records"] == records
+        assert payload["references"]["structured_records"] == records
 
     @pytest.mark.asyncio
     async def test_result_includes_chunks(self, client):
@@ -1423,8 +1423,8 @@ class TestQueryApplicationStream:
         events = _parse_sse(resp.text)
         result_events = [json.loads(e) for e in events if e != "[DONE]" and "result" in json.loads(e)]
         payload = result_events[0]["result"]
-        assert len(payload["chunks"]) == 1
-        c = payload["chunks"][0]
+        assert len(payload["references"]["chunks"]) == 1
+        c = payload["references"]["chunks"][0]
         assert c["chunk_id"] == "doc_1_0"
         assert c["doc_id"] == "doc_1"
         assert c["text"] == "termination clause text"
