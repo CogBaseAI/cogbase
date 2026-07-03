@@ -78,6 +78,28 @@ export default function QueryTab({ active }) {
     } catch {}
   }
 
+  // Permanently delete a past session (drops its episodic log + index row). If it
+  // was the active chat, reset the view to a fresh, unopened state.
+  async function deleteSession(sid, e) {
+    e.stopPropagation()
+    if (querying || !currentApp) return
+    if (!window.confirm(t('query.confirmDeleteChat'))) return
+    try {
+      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}`, {
+        method: 'DELETE',
+      })
+      if (!resp.ok) return
+    } catch { return }
+    if (sid === sessionIdRef.current) {
+      sessionIdRef.current = null
+      setActiveSid(null)
+      setChunks([])
+      setStructuredRecords([])
+      setMsgs([{ role: 'sys', text: t('query.refreshed') + (currentApp ? ' ' + t('query.connected', { app: currentApp }) : '') }])
+    }
+    loadSessions()
+  }
+
   // Close the session bound to `appName`, fire-and-forget, and clear the local handle.
   function closeSession(appName) {
     const sid = sessionIdRef.current
@@ -211,6 +233,13 @@ export default function QueryTab({ active }) {
                   <span>{fmtRelTime(s.updated_at)}</span>
                   <span>{s.message_count !== 1 ? t('query.msgs', { n: s.message_count }) : t('query.msg', { n: s.message_count })}</span>
                 </div>
+                <button
+                  className="chat-history-del"
+                  title={t('query.deleteChat')}
+                  aria-label={t('query.deleteChat')}
+                  disabled={querying}
+                  onClick={e => deleteSession(s.session_id, e)}
+                >×</button>
               </div>
             ))}
           </div>

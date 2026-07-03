@@ -62,6 +62,10 @@ function mockFetch({
     if (u.includes('/sessions/') && u.endsWith('/close')) {
       return Promise.resolve({ ok: true, json: async () => ({ session_id: sessionId, distillation: 'enqueued' }) })
     }
+    if (u.includes('/sessions/') && method === 'DELETE') {
+      const sid = decodeURIComponent(u.split('/sessions/')[1])
+      return Promise.resolve({ ok: true, json: async () => ({ session_id: sid, deleted: true }) })
+    }
     if (u.endsWith('/sessions') && method === 'POST') {
       return Promise.resolve({ ok: true, json: async () => ({ session_id: sessionId }) })
     }
@@ -271,4 +275,88 @@ it('opens a past chat, loads its transcript, and resumes it on the next question
   const streamCall = fetchSpy.mock.calls.find(([u]) => String(u).endsWith('/query/stream'))
   expect(JSON.parse(streamCall[1].body).session_id).toBe('s-1')
   expect(startSessionCalls(fetchSpy)).toHaveLength(0)
+})
+
+// DELETE /sessions/{id} calls only.
+function deleteSessionCalls(fetchSpy) {
+  return fetchSpy.mock.calls.filter(
+    ([u, o]) => String(u).includes('/sessions/') && (o?.method || 'GET').toUpperCase() === 'DELETE'
+  )
+}
+
+it('deletes a past chat after confirmation and refreshes the sidebar', async () => {
+  const fetchSpy = mockFetch({ sessions: SESSIONS_FIXTURE })
+  const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.getByText('What is the term?')).toBeInTheDocument())
+
+  // Each history row exposes a delete button; click the first one.
+  const delButtons = screen.getAllByRole('button', { name: 'Delete chat' })
+  expect(delButtons).toHaveLength(2)
+  await user.click(delButtons[0])
+
+  // The user was asked to confirm, and a DELETE hit /sessions/s-1.
+  expect(confirmSpy).toHaveBeenCalled()
+  await waitFor(() =>
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\/sessions\/s-1$/),
+      expect.objectContaining({ method: 'DELETE' })
+    )
+  )
+
+  // The sidebar was re-fetched after the delete (an extra GET /sessions).
+  const listGets = fetchSpy.mock.calls.filter(
+    ([u, o]) => String(u).endsWith('/sessions') && (o?.method || 'GET').toUpperCase() === 'GET'
+  )
+  expect(listGets.length).toBeGreaterThanOrEqual(2)
+})
+
+it('does not delete a chat when the user cancels the confirm', async () => {
+  const fetchSpy = mockFetch({ sessions: SESSIONS_FIXTURE })
+  vi.spyOn(window, 'confirm').mockReturnValue(false)
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.getByText('What is the term?')).toBeInTheDocument())
+
+  await user.click(screen.getAllByRole('button', { name: 'Delete chat' })[0])
+
+  // No DELETE request was issued.
+  expect(deleteSessionCalls(fetchSpy)).toHaveLength(0)
+})
+
+it('resets the chat view and drops the handle when deleting the active session', async () => {
+  // The history sidebar lists the active session (sess-1, titled by its first
+  // message) so it can be deleted from the list. A follow-up POST returns a new id.
+  const fetchSpy = mockFetch({
+    sessions: [
+      { session_id: 'sess-1', title: 'hi', message_count: 1, status: 'open', created_at: '2026-07-03T00:00:00Z', updated_at: '2026-07-03T00:00:00Z' },
+    ],
+  })
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+
+  // Ask a question -> opens the active session (sess-1) and renders the answer.
+  await ask(user, 'hi')
+  await waitFor(() => expect(screen.getByText('Hello there')).toBeInTheDocument())
+  // The active session's row (with its delete button) shows in the sidebar.
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Delete chat' })).toBeInTheDocument())
+
+  // Delete the active session from the sidebar.
+  await user.click(screen.getByRole('button', { name: 'Delete chat' }))
+  await waitFor(() =>
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\/sessions\/sess-1$/),
+      expect.objectContaining({ method: 'DELETE' })
+    )
+  )
+
+  // The transcript view was cleared: the streamed answer is gone.
+  await waitFor(() => expect(screen.queryByText('Hello there')).not.toBeInTheDocument())
+
+  // With the active handle dropped, the next question starts a fresh session.
+  await ask(user, 'again')
+  expect(startSessionCalls(fetchSpy)).toHaveLength(2)
 })

@@ -320,6 +320,16 @@ class SystemStore:
         )
         await self._store.save("session_records", [record.model_dump()])
 
+    async def delete_session_record(self, session_id: str) -> None:
+        """Remove a session's index row.
+
+        No-op when the row was never created (a session opened but never asked a
+        question).  The durable episodic log is deleted separately by the app.
+        """
+        await self._store.delete_records(
+            "session_records", filters=[Col("session_id") == session_id]
+        )
+
     async def get_session(self, session_id: str) -> SessionRecord | None:
         rows = await self._store.query_as(
             "session_records",

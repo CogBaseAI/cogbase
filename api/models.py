@@ -172,6 +172,11 @@ class SessionCloseResponse(BaseModel):
     )
 
 
+class SessionDeleteResponse(BaseModel):
+    session_id: str
+    deleted: bool = Field(description="Always true once the session has been removed.")
+
+
 class SessionSummary(BaseModel):
     """One row of the conversation-history list (served from the session index)."""
 

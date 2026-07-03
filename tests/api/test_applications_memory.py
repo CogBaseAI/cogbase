@@ -222,3 +222,44 @@ async def test_session_history_list_and_transcript(client, tmp_path):
     assert r.status_code == 200
     r = await client.get("/applications/memory-e2e-app/sessions")
     assert r.json()["sessions"][0]["status"] == "closed"
+
+
+@pytest.mark.asyncio
+async def test_delete_session_removes_index_row_and_transcript(client, tmp_path):
+    """Deleting a session drops it from the history list and erases its log."""
+    episodic = EpisodicMemory(LocalFSLogStore(tmp_path))
+    mem = ShortTermMemory(episodic=episodic)
+    sid = await mem.start_session(app_id="memory-e2e-app")
+    captured: list[list] = []
+    llm = _streaming_llm(["Paris is the capital."], captured)
+    real_app = _real_app("memory-e2e-app", mem, episodic, llm)
+
+    with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=real_app):
+        resp = await client.post(
+            "/applications",
+            files={"bundle": ("bundle.zip", _make_bundle(), "application/zip")},
+        )
+    assert resp.status_code == 201
+
+    await client.post(
+        "/applications/memory-e2e-app/query",
+        json={"text": "What is the capital of France?", "session_id": sid},
+    )
+
+    # The session is listed and its transcript is readable.
+    r = await client.get("/applications/memory-e2e-app/sessions")
+    assert len(r.json()["sessions"]) == 1
+
+    # Delete it.
+    r = await client.delete(f"/applications/memory-e2e-app/sessions/{sid}")
+    assert r.status_code == 200
+    assert r.json() == {"session_id": sid, "deleted": True}
+
+    # Gone from the history list.
+    r = await client.get("/applications/memory-e2e-app/sessions")
+    assert r.json()["sessions"] == []
+
+    # The durable episodic log is gone: transcript replays empty.
+    r = await client.get(f"/applications/memory-e2e-app/sessions/{sid}")
+    assert r.status_code == 200
+    assert r.json()["messages"] == []

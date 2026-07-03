@@ -51,6 +51,7 @@ from api.models import (
     SessionStartRequest,
     SessionResponse,
     SessionCloseResponse,
+    SessionDeleteResponse,
     SessionSummary,
     SessionListResponse,
     SessionTranscriptResponse,
@@ -769,6 +770,26 @@ async def get_session_transcript(
             TranscriptMessage(role=m.role.value, content=m.content) for m in messages
         ],
     )
+
+
+@router.delete("/{app_name}/sessions/{session_id}", response_model=SessionDeleteResponse)
+async def delete_session(
+    app_name: str,
+    session_id: str,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+) -> SessionDeleteResponse:
+    """Permanently delete a session: drop its episodic log and history-index row.
+
+    Evicts the short-term cache, erases the durable episodic log, then removes the
+    session's row from the history index so it disappears from the sidebar.  Any
+    long-term memory already distilled from the session is left intact.
+    """
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    await app.delete_session(session_id)
+    await system_store.delete_session_record(session_id)
+    return SessionDeleteResponse(session_id=session_id, deleted=True)
 
 
 @router.post("/{app_name}/sessions/{session_id}/close", response_model=SessionCloseResponse)

@@ -594,6 +594,20 @@ class CogBaseApp:
         if self._short_term is not None:
             await self._short_term.end_session(session_id)
 
+    async def delete_session(self, session_id: str) -> None:
+        """Permanently delete a session: evict its cache and drop its episodic log.
+
+        Unlike :meth:`end_session` (which only evicts the in-memory short-term
+        cache), this erases the durable record — the whole episodic log for the
+        session is removed.  The system-store history-index row is deleted
+        separately by the caller.  Distilled long-term memory already extracted
+        from the session is left intact.
+        """
+        if self._short_term is not None:
+            await self._short_term.end_session(session_id)
+        if self._episodic is not None:
+            await self._episodic.delete(session_id=session_id)
+
     async def get_session_transcript(self, session_id: str) -> list["MemoryMessage"]:
         """Return a session's conversation as an ordered list of turns.
 
