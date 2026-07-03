@@ -553,6 +553,35 @@ def _cited_block_memories(
     return out
 
 
+def _serialize_references(
+    structured_records: list[dict],
+    chunks: list[Chunk],
+    document_slices: list[DocumentSlice],
+    memories: list[LongTermRecord],
+) -> dict:
+    """Serialize an answer's references to the plain-dict payload persisted on the
+    ``final_answer`` event (and re-hydrated by the transcript view).
+
+    Mirrors how the API builds the live ``QueryResponse`` — chunks drop their
+    embedding, memories keep only the query-facing projection — so a replayed
+    transcript surfaces the same evidence shape the live response returned.
+    """
+    return {
+        "structured_records": structured_records,
+        "chunks": [c.model_dump(exclude={"embedding"}) for c in chunks],
+        "document_slices": [s.model_dump() for s in document_slices],
+        "memories": [
+            {
+                "memory_id": m.memory_id,
+                "kind": m.kind.value,
+                "content": m.content,
+                "entities": list(m.entities),
+            }
+            for m in memories
+        ],
+    }
+
+
 # ---------------------------------------------------------------------------
 # QueryRunner
 # ---------------------------------------------------------------------------
@@ -882,14 +911,23 @@ class QueryRunner:
             if not tool_calls:
                 answer = "".join(tokens) + "\n"
                 cited_ids = _extract_cited_ids(answer)
+                cited_chunks = _filter_cited_chunks(all_chunks, cited_ids)
+                cited_slices = _filter_cited_slices(all_slices, cited_ids)
+                cited_memories = _cited_block_memories(memory_blocks, cited_ids)
                 if episodic_on:
-                    await self._episodic_final_answer(session_id, answer)
+                    await self._episodic_final_answer(
+                        session_id,
+                        answer,
+                        _serialize_references(
+                            all_records, cited_chunks, cited_slices, cited_memories
+                        ),
+                    )
                 yield QueryResult(
                     answer=answer,
                     structured_records=all_records,
-                    chunks=_filter_cited_chunks(all_chunks, cited_ids),
-                    document_slices=_filter_cited_slices(all_slices, cited_ids),
-                    memories=_cited_block_memories(memory_blocks, cited_ids),
+                    chunks=cited_chunks,
+                    document_slices=cited_slices,
+                    memories=cited_memories,
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                 )
@@ -935,7 +973,11 @@ class QueryRunner:
                     if passthrough:
                         if episodic_on:
                             await self._episodic_tool_result(session_id, tc["id"], tool_output, t0, call_ref)
-                            await self._episodic_final_answer(session_id, tool_output)
+                            await self._episodic_final_answer(
+                                session_id,
+                                tool_output,
+                                _serialize_references(all_records, all_chunks, all_slices, []),
+                            )
                         yield QueryResult(
                             answer=tool_output,
                             structured_records=all_records,
@@ -980,15 +1022,22 @@ class QueryRunner:
             "I was unable to complete your request within the allowed number of steps. "
             "Please try a simpler or more specific request."
         )
-        if episodic_on:
-            await self._episodic_final_answer(session_id, answer)
         # limit the number of references to avoid large context; the canned answer
         # cites nothing, so no memory was used and none is returned.
+        capped_records = all_records[:2]
+        capped_chunks = all_chunks[:2]
+        capped_slices = all_slices[:2]
+        if episodic_on:
+            await self._episodic_final_answer(
+                session_id,
+                answer,
+                _serialize_references(capped_records, capped_chunks, capped_slices, []),
+            )
         yield QueryResult(
             answer=answer,
-            structured_records=all_records[:2],
-            chunks=all_chunks[:2],
-            document_slices=all_slices[:2],
+            structured_records=capped_records,
+            chunks=capped_chunks,
+            document_slices=capped_slices,
             memories=[],
             input_tokens=total_input_tokens,
             output_tokens=total_output_tokens,
@@ -1345,7 +1394,9 @@ class QueryRunner:
         except Exception:
             logger.warning("[runner] episodic tool_result record failed", exc_info=True)
 
-    async def _episodic_final_answer(self, session_id: str, answer: str) -> None:
+    async def _episodic_final_answer(
+        self, session_id: str, answer: str, references: dict | None = None
+    ) -> None:
         """Record the canonical assistant turn and durably flush the turn's events.
 
         ``final_answer`` is continuity-critical: rehydrate reconstructs the thread
@@ -1358,7 +1409,9 @@ class QueryRunner:
         """
         if self._episodic is None:
             return
-        await self._episodic.record_final_answer(session_id=session_id, answer=answer)
+        await self._episodic.record_final_answer(
+            session_id=session_id, answer=answer, references=references
+        )
         last_exc: Exception | None = None
         for attempt in range(_CONTINUITY_FLUSH_RETRIES):
             try:

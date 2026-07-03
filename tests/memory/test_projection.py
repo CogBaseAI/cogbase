@@ -15,6 +15,7 @@ from cogbase.memory.projection import (
     latest_compaction,
     latest_distillation,
     project_thread,
+    project_transcript,
 )
 
 
@@ -178,3 +179,37 @@ def test_project_thread_missing_text_becomes_empty():
     event = _event(EventType.USER_MESSAGE, 0)  # no text in payload
     messages = project_thread([event])
     assert messages[0].content == ""
+
+
+# ---------------------------------------------------------------------------
+# project_transcript
+# ---------------------------------------------------------------------------
+
+
+def test_project_transcript_carries_final_answer_references():
+    refs = {
+        "structured_records": [{"id": "r1"}],
+        "chunks": [{"chunk_id": "c1", "doc_id": "d1", "text": "t"}],
+        "document_slices": [],
+        "memories": [{"memory_id": "m1", "kind": "fact", "content": "x", "entities": []}],
+    }
+    events = [
+        _user(0, "q"),
+        _event(EventType.FINAL_ANSWER, 1, text="a", references=refs),
+    ]
+    messages = project_transcript(events)
+    assert [m.role for m in messages] == [MemoryRole.USER, MemoryRole.ASSISTANT]
+    # User turn carries no references; the assistant turn re-hydrates them.
+    assert messages[0].references == {}
+    assert messages[1].references == refs
+
+
+def test_project_transcript_answer_without_references_is_empty():
+    messages = project_transcript([_user(0, "q"), _answer(1, "a")])
+    assert messages[1].references == {}
+
+
+def test_project_transcript_returns_whole_thread_ignoring_compaction():
+    # Unlike short-term rehydrate, the transcript is never truncated by a summary.
+    events = [_user(0, "q1"), _answer(1, "a1"), _compaction(2, "sum", 1), _user(3, "q2")]
+    assert [m.seq for m in project_transcript(events)] == [0, 1, 3]

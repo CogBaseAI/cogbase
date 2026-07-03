@@ -27,6 +27,7 @@ from api.models import (
     AddMemoryResponse,
     AddSkillRequest,
     AppSkillRef,
+    AnswerReferences,
     AppSkillsResponse,
     ApplicationListResponse,
     ApplicationResponse,
@@ -767,7 +768,14 @@ async def get_session_transcript(
     return SessionTranscriptResponse(
         session_id=session_id,
         messages=[
-            TranscriptMessage(role=m.role.value, content=m.content) for m in messages
+            TranscriptMessage(
+                role=m.role.value,
+                content=m.content,
+                references=(
+                    AnswerReferences.model_validate(m.references) if m.references else None
+                ),
+            )
+            for m in messages
         ],
     )
 

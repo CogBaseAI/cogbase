@@ -51,6 +51,11 @@ class MemoryMessage(BaseModel):
     # Rough token cost, filled in when projected so context assembly can budget
     # without re-estimating every message on every call.
     token_estimate: int = 0
+    # The answer's materialized references (from a ``final_answer`` event's
+    # payload), populated only by the transcript projection so a replayed
+    # assistant turn shows the evidence the live response returned.  Empty for
+    # user turns and for the short-term/distill projections, which never read it.
+    references: dict = Field(default_factory=dict)
 
 
 class SessionState(BaseModel):
@@ -202,6 +207,13 @@ class UserMessagePayload(BaseModel):
 class FinalAnswerPayload(BaseModel):
     text: str
     cited_ids: list[EventRef] = Field(default_factory=list)
+    # The materialized references the answer drew on (structured_records, chunks,
+    # document_slices, memories), serialized to plain dicts by the query runner.
+    # ``cited_ids`` is the provenance triplet for low-score mining; ``references``
+    # is the display payload the session-transcript view re-hydrates so a replayed
+    # answer shows the same evidence the live response returned.  Empty for
+    # replayed past dialogues that carry no retrieval.
+    references: dict = Field(default_factory=dict)
 
 
 class SessionCompactedPayload(BaseModel):

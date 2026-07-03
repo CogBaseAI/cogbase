@@ -260,6 +260,7 @@ class EpisodicMemory:
         session_id: str,
         answer: str,
         cited_ids: list[EventRef] | None = None,
+        references: dict | None = None,
         observation_date: datetime | None = None,
     ) -> EventRef:
         # See ``record_user_message`` re: ``observation_date`` — a replayed past
@@ -268,7 +269,7 @@ class EpisodicMemory:
             session_id=session_id,
             event_type=EventType.FINAL_ANSWER,
             payload=FinalAnswerPayload(
-                text=answer, cited_ids=cited_ids or []
+                text=answer, cited_ids=cited_ids or [], references=references or {}
             ).model_dump(),
         )
         if observation_date is not None:

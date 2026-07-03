@@ -216,6 +216,15 @@ async def test_session_history_list_and_transcript(client, tmp_path):
     assert [m["role"] for m in msgs] == ["user", "assistant", "user", "assistant"]
     assert msgs[0]["content"] == "What is the capital of France?"
     assert msgs[1]["content"].strip() == "Paris is the capital."
+    # User turns carry no references; assistant turns re-hydrate the answer's
+    # reference payload (empty here — the canned answer retrieved nothing).
+    assert msgs[0]["references"] is None
+    assert msgs[1]["references"] == {
+        "structured_records": [],
+        "chunks": [],
+        "document_slices": [],
+        "memories": [],
+    }
 
     # Closing flips the index row to 'closed'.
     r = await client.post(f"/applications/memory-e2e-app/sessions/{sid}/close")

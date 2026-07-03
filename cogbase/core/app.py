@@ -613,19 +613,22 @@ class CogBaseApp:
 
         Reads the durable episodic log and projects it into the same continuity
         thread short-term memory and the distiller use — only ``user_message`` /
-        ``final_answer`` events become turns (tool scratch is dropped), and the
-        whole history is returned regardless of any compaction (compaction manages
-        the working context, it does not erase the record).  Backs the
+        ``final_answer`` events become turns (tool scratch is dropped) — but via
+        :func:`project_transcript`, so each assistant turn also carries the
+        answer's materialized references (chunks, structured records, document
+        slices, memories) for display.  The whole history is returned regardless
+        of any compaction (compaction manages the working context, it does not
+        erase the record).  Backs the
         session-history view: the list is served from the system-store index, and
         this is the on-demand read for the one session a user opens.  Raises if no
         episodic memory is configured.
         """
-        from cogbase.memory.projection import project_thread
+        from cogbase.memory.projection import project_transcript
 
         if self._episodic is None:
             raise RuntimeError("session transcripts require episodic memory to be configured")
         events = await self._episodic.replay(session_id=session_id)
-        return project_thread(events)
+        return project_transcript(events)
 
     # ------------------------------------------------------------------
     # Workflow interface

@@ -196,9 +196,29 @@ class SessionListResponse(BaseModel):
     )
 
 
+class AnswerReferences(BaseModel):
+    """The evidence an assistant turn drew on, mirroring ``QueryResponse``.
+
+    Re-hydrated from the ``final_answer`` event so a replayed transcript shows the
+    same references the live query returned.
+    """
+
+    structured_records: list[dict] = []
+    chunks: list[ChunkResponse] = []
+    document_slices: list[DocumentSliceResponse] = []
+    memories: list[QueryMemoryResponse] = []
+
+
 class TranscriptMessage(BaseModel):
     role: str = Field(description="'user' or 'assistant'.")
     content: str
+    references: AnswerReferences | None = Field(
+        default=None,
+        description=(
+            "The evidence the answer drew on; set only on assistant turns that "
+            "recorded references, null for user turns and reference-less answers."
+        ),
+    )
 
 
 class SessionTranscriptResponse(BaseModel):

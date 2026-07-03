@@ -117,3 +117,26 @@ def project_thread(
         seen_seqs.add(event.seq)
         messages.append(message_from_event(event))
     return messages
+
+
+def project_transcript(events: list[MemoryEvent]) -> list[MemoryMessage]:
+    """Project the whole thread for the session-transcript view.
+
+    Like :func:`project_thread` (whole thread, no ``since_seq``) but carries each
+    ``final_answer`` event's materialized ``references`` onto its assistant turn,
+    so a replayed answer surfaces the same evidence — reference chunks, structured
+    records, document slices, recalled memories — the live query response returned.
+    Kept distinct from :func:`project_thread` because short-term rehydrate and
+    distillation never read references and pay nothing for them.
+    """
+    messages: list[MemoryMessage] = []
+    seen_seqs: set[int] = set()
+    for event in events:
+        if continuity_role(event.event_type) is None or event.seq in seen_seqs:
+            continue
+        seen_seqs.add(event.seq)
+        message = message_from_event(event)
+        if event.event_type is EventType.FINAL_ANSWER:
+            message.references = event.payload.get("references") or {}
+        messages.append(message)
+    return messages
