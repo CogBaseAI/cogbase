@@ -221,8 +221,6 @@ class CogBaseApp:
         failures = sum(1 for r in results if not r.success)
         logger.info("app.ingest_documents.done documents=%d failures=%d", len(results), failures)
 
-        import json as _json
-
         # For each successfully ingested document, determine which workflows apply
         # and mark them pending. Fire after_ingest workflows in two phases so a
         # cross-document workflow (e.g. contradiction detection in
@@ -289,20 +287,18 @@ class CogBaseApp:
         # Phase 2: every purge above has completed, so the batch's structured
         # state is final. Now create tasks and fire the background runs.
         for wf_runner, doc_id, workflow_params in pending:
-            # TODO create_workflow_task in batch
-            task_params: list[tuple[dict, str | None]] = []
-            for params in workflow_params:
-                task_id: str | None = None
-                try:
-                    task_id = await self._task_store.create_workflow_task(
-                        self.app_id, wf_runner.workflow.name, doc_id, _json.dumps(params)
-                    )
-                except Exception:
-                    logger.exception(
-                        "app.task_store.create_workflow_task.failed workflow=%s doc_id=%s",
-                        wf_runner.workflow.name, doc_id,
-                    )
-                task_params.append((params, task_id))
+            try:
+                records = await self._task_store.create_workflow_tasks(
+                    self.app_id, wf_runner.workflow.name, doc_id, workflow_params
+                )
+                task_ids: list[str | None] = [r.task_id for r in records]
+            except Exception:
+                logger.exception(
+                    "app.task_store.create_workflow_tasks.failed workflow=%s doc_id=%s",
+                    wf_runner.workflow.name, doc_id,
+                )
+                task_ids = [None] * len(workflow_params)
+            task_params = list(zip(workflow_params, task_ids))
             asyncio.create_task(
                 self._run_workflow_tasks_bg(wf_runner, doc_id, task_params)
             )

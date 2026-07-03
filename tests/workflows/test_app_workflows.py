@@ -24,7 +24,7 @@ from cogbase.workflows.runner import WorkflowRunner
 
 def _mock_task_store():
     m = MagicMock()
-    m.create_workflow_task = AsyncMock(return_value=None)
+    m.create_workflow_tasks = AsyncMock(return_value=[])
     m.complete_workflow_task = AsyncMock()
     m.upsert_doc_workflow_status = AsyncMock()
     return m
@@ -270,15 +270,13 @@ class TestAfterIngestTrigger:
             params_from_collection=_after_ingest_source(),
         )
         app = _minimal_app(workflow_runners={"check": runner})
-        app._task_store.create_workflow_task = AsyncMock(return_value="task-001")
         app._structured_store.query = AsyncMock(return_value=[{"doc_id": "d-001", "issue": "late_delivery"}])
 
         with patch(self._PATCH, side_effect=self._discard_task):
             await app.ingest_documents([Document(doc_id="d-001", text="some text")])
 
-        import json
-        app._task_store.create_workflow_task.assert_awaited_once_with(
-            "test-app", "check", "d-001", json.dumps({"issue": "late_delivery"})
+        app._task_store.create_workflow_tasks.assert_awaited_once_with(
+            "test-app", "check", "d-001", [{"issue": "late_delivery"}]
         )
 
     async def test_pending_not_marked_when_params_empty(self):
@@ -308,7 +306,7 @@ class TestAfterIngestTrigger:
         app._task_store.upsert_doc_workflow_status.assert_awaited_once_with(
             "test-app", "d-001", "check", "ready"
         )
-        app._task_store.create_workflow_task.assert_not_awaited()
+        app._task_store.create_workflow_tasks.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

@@ -314,37 +314,50 @@ class TestListTasks:
         assert len(results) == 1 and results[0].task_id == "t-1"
 
 
-class TestCreateWorkflowTask:
+class TestCreateWorkflowTasks:
     @pytest.mark.asyncio
-    async def test_returns_unique_task_id(self, store):
-        id1 = await store.create_workflow_task("app", "wf-a", "doc-1", None)
-        id2 = await store.create_workflow_task("app", "wf-a", "doc-1", None)
-        assert id1 != id2
+    async def test_creates_all_in_order_with_unique_ids(self, store):
+        params_list = [{"issue": "a"}, {"issue": "b"}, None]
+        records = await store.create_workflow_tasks("my-app", "analyze", "doc-1", params_list)
+        assert len(records) == 3
+        assert len({r.task_id for r in records}) == 3
+        assert [r.params_json for r in records] == ['{"issue": "a"}', '{"issue": "b"}', None]
+        for r in records:
+            assert r.app_id == "my-app"
+            assert r.task_type == "workflow"
+            assert r.task_name == "analyze"
+            assert r.doc_id == "doc-1"
+            assert r.status == "pending"
+            assert r.completed_at is None
 
     @pytest.mark.asyncio
-    async def test_persists_record(self, store):
-        task_id = await store.create_workflow_task("my-app", "analyze", "doc-42", '{"issue": "x"}')
-        task = await store.get_task(task_id)
-        assert task is not None
-        assert task.app_id == "my-app"
-        assert task.task_type == "workflow"
-        assert task.task_name == "analyze"
-        assert task.doc_id == "doc-42"
-        assert task.params_json == '{"issue": "x"}'
-        assert task.status == "pending"
-        assert task.completed_at is None
+    async def test_persists_every_record(self, store):
+        records = await store.create_workflow_tasks("my-app", "wf", "doc-1", [{"x": 1}, {"x": 2}])
+        for r in records:
+            fetched = await store.get_task(r.task_id)
+            assert fetched is not None
+            assert fetched.params_json == r.params_json
 
     @pytest.mark.asyncio
     async def test_doc_id_may_be_none(self, store):
-        task_id = await store.create_workflow_task("my-app", "wf", None, None)
-        task = await store.get_task(task_id)
-        assert task.doc_id is None
+        records = await store.create_workflow_tasks("my-app", "wf", None, [None])
+        assert records[0].doc_id is None
+
+    @pytest.mark.asyncio
+    async def test_empty_list_creates_nothing(self, store):
+        records = await store.create_workflow_tasks("my-app", "wf", "doc-1", [])
+        assert records == []
 
 
 class TestCompleteWorkflowTask:
+    @staticmethod
+    async def _make_task_id(store):
+        records = await store.create_workflow_tasks("my-app", "wf", "doc-1", [None])
+        return records[0].task_id
+
     @pytest.mark.asyncio
     async def test_marks_done_on_success(self, store):
-        task_id = await store.create_workflow_task("my-app", "wf", "doc-1", None)
+        task_id = await self._make_task_id(store)
         await store.complete_workflow_task(task_id, success=True)
         task = await store.get_task(task_id)
         assert task.status == "done"
@@ -353,7 +366,7 @@ class TestCompleteWorkflowTask:
 
     @pytest.mark.asyncio
     async def test_marks_failed_on_failure(self, store):
-        task_id = await store.create_workflow_task("my-app", "wf", "doc-1", None)
+        task_id = await self._make_task_id(store)
         await store.complete_workflow_task(task_id, success=False, error="LLM timeout")
         task = await store.get_task(task_id)
         assert task.status == "failed"
@@ -362,7 +375,7 @@ class TestCompleteWorkflowTask:
 
     @pytest.mark.asyncio
     async def test_completed_at_is_set(self, store):
-        task_id = await store.create_workflow_task("my-app", "wf", "doc-1", None)
+        task_id = await self._make_task_id(store)
         await store.complete_workflow_task(task_id, success=True)
         task = await store.get_task(task_id)
         # ISO-8601 UTC string

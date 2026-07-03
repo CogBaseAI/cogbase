@@ -24,7 +24,7 @@ from cogbase.stores.vector.faiss_store import FAISSVectorStore
 
 def _mock_task_store():
     m = MagicMock()
-    m.create_workflow_task = AsyncMock(return_value=None)
+    m.create_workflow_tasks = AsyncMock(return_value=[])
     m.complete_workflow_task = AsyncMock()
     return m
 

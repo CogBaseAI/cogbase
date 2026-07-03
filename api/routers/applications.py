@@ -1309,12 +1309,9 @@ async def stream_workflow(
     )
     if not pending:
         params_list = await app.resolve_workflow_params(wf_runner, body.doc_id)
-        pending = [
-            await system_store.get_task(
-                await system_store.create_workflow_task(app_id, workflow_name, body.doc_id, json.dumps(p))
-            )
-            for p in params_list
-        ]
+        pending = await system_store.create_workflow_tasks(
+            app_id, workflow_name, body.doc_id, params_list
+        )
 
     async def event_stream():
         all_ok = True

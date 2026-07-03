@@ -395,27 +395,36 @@ class SystemStore:
             filters.append(Col("status") == status)
         return await self._store.query_as("tasks", filters=filters, model=TaskRecord)
 
-    async def create_workflow_task(
+    async def create_workflow_tasks(
         self,
         app_id: str,
         workflow_name: str,
         doc_id: str | None,
-        params_json: str | None,
-    ) -> str:
-        """Create a workflow task record and return its task_id."""
-        task_id = str(uuid.uuid4())
+        params_list: list[dict | None],
+    ) -> list[TaskRecord]:
+        """Create workflow task records for a batch of param sets in one save.
+
+        Returns the created records (in input order) so callers can pair each
+        param set with its task_id. Persists all records in a single
+        structured-store write rather than one round-trip per param set.
+        """
         now = datetime.now(timezone.utc).isoformat()
-        await self.create_task(TaskRecord(
-            task_id=task_id,
-            app_id=app_id,
-            task_type="workflow",
-            task_name=workflow_name,
-            doc_id=doc_id,
-            params_json=params_json,
-            status=TaskStatus.PENDING,
-            created_at=now,
-        ))
-        return task_id
+        records = [
+            TaskRecord(
+                task_id=str(uuid.uuid4()),
+                app_id=app_id,
+                task_type="workflow",
+                task_name=workflow_name,
+                doc_id=doc_id,
+                params_json=json.dumps(params) if params is not None else None,
+                status=TaskStatus.PENDING,
+                created_at=now,
+            )
+            for params in params_list
+        ]
+        if records:
+            await self._store.save("tasks", [r.model_dump() for r in records])
+        return records
 
     async def complete_workflow_task(
         self,

@@ -52,7 +52,7 @@ def _make_llm(content: str) -> MagicMock:
 
 def _mock_task_store():
     m = MagicMock()
-    m.create_workflow_task = AsyncMock(return_value=None)
+    m.create_workflow_tasks = AsyncMock(return_value=[])
     m.complete_workflow_task = AsyncMock()
     return m
 
@@ -694,11 +694,11 @@ class TestIngestMany:
 
         app._task_store.upsert_doc_workflow_status = AsyncMock()
 
-        async def _create(app_id, wf_name, doc_id, params_json):
+        async def _create(app_id, wf_name, doc_id, params_list):
             events.append(f"create:{doc_id}")
-            return None
+            return []
 
-        app._task_store.create_workflow_task = AsyncMock(side_effect=_create)
+        app._task_store.create_workflow_tasks = AsyncMock(side_effect=_create)
 
         # Pre-seed the doc store so both docs are treated as re-ingests.
         await app._document_store.save(app.app_id, "c-001", "old")
