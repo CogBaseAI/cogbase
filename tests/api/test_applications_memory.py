@@ -92,6 +92,8 @@ def _real_app(name: str, mem: ShortTermMemory, episodic: EpisodicMemory, llm: Ma
         workflow_runners={},
         llm=llm,
         task_store=MagicMock(),
+        short_term=mem,
+        episodic=episodic,
     )
 
 
@@ -165,3 +167,58 @@ async def test_query_endpoint_threads_session_through_real_short_term_memory(cli
     assert "Paris" in transcript
     assert "How many people" in transcript
     assert "2 million" in transcript
+
+
+@pytest.mark.asyncio
+async def test_session_history_list_and_transcript(client, tmp_path):
+    """The session index lists a chat after its first turn; transcript reads the log."""
+    episodic = EpisodicMemory(LocalFSLogStore(tmp_path))
+    mem = ShortTermMemory(episodic=episodic)
+    sid = await mem.start_session(app_id="memory-e2e-app")
+    captured: list[list] = []
+    llm = _streaming_llm(["Paris is the capital.", "About 2 million."], captured)
+    real_app = _real_app("memory-e2e-app", mem, episodic, llm)
+
+    with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=real_app):
+        resp = await client.post(
+            "/applications",
+            files={"bundle": ("bundle.zip", _make_bundle(), "application/zip")},
+        )
+    assert resp.status_code == 201
+
+    # No turns yet -> the session is not in the history list.
+    r = await client.get("/applications/memory-e2e-app/sessions")
+    assert r.status_code == 200
+    assert r.json()["sessions"] == []
+
+    # Two turns on the same session.
+    await client.post(
+        "/applications/memory-e2e-app/query",
+        json={"text": "What is the capital of France?", "session_id": sid},
+    )
+    await client.post(
+        "/applications/memory-e2e-app/query",
+        json={"text": "How many people live there?", "session_id": sid},
+    )
+
+    # The session now shows once, titled by the first message, count == turns.
+    r = await client.get("/applications/memory-e2e-app/sessions")
+    sessions = r.json()["sessions"]
+    assert len(sessions) == 1
+    assert sessions[0]["session_id"] == sid
+    assert sessions[0]["title"] == "What is the capital of France?"
+    assert sessions[0]["message_count"] == 2
+    assert sessions[0]["status"] == "open"
+
+    # Transcript reads the durable log: user + assistant turns, in order.
+    r = await client.get(f"/applications/memory-e2e-app/sessions/{sid}")
+    msgs = r.json()["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user", "assistant"]
+    assert msgs[0]["content"] == "What is the capital of France?"
+    assert msgs[1]["content"].strip() == "Paris is the capital."
+
+    # Closing flips the index row to 'closed'.
+    r = await client.post(f"/applications/memory-e2e-app/sessions/{sid}/close")
+    assert r.status_code == 200
+    r = await client.get("/applications/memory-e2e-app/sessions")
+    assert r.json()["sessions"][0]["status"] == "closed"

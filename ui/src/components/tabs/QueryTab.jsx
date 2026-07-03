@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
-import { streamSSE, copyText } from '../../utils'
+import { streamSSE, copyText, fmtRelTime } from '../../utils'
 
 export default function QueryTab({ active }) {
   const { apiUrl, currentApp } = useApp()
@@ -13,6 +13,8 @@ export default function QueryTab({ active }) {
   const [querying, setQuerying] = useState(false)
   const [chunks, setChunks] = useState([])
   const [structuredRecords, setStructuredRecords] = useState([])
+  const [sessions, setSessions] = useState([])
+  const [activeSid, setActiveSid] = useState(null)
   const msgsRef = useRef(null)
   const sessionIdRef = useRef(null)
   const textareaRef = useRef(null)
@@ -24,14 +26,57 @@ export default function QueryTab({ active }) {
       const prevApp = prevAppRef.current
       prevAppRef.current = currentApp
       closeSession(prevApp)
-      // Drop the previous app's retrieved references so they don't linger.
+      // Drop the previous app's retrieved references + session pointer so they
+      // don't linger across the switch.
       setChunks([])
       setStructuredRecords([])
+      setActiveSid(null)
       if (currentApp) {
         setMsgs(prev => [...prev, { role: 'sys', text: t('query.connected', { app: currentApp }) }])
       }
     }
   }, [currentApp])
+
+  // Load the app's chat history whenever the selected app changes (including
+  // mount). Kept separate from the switch-cleanup effect so it also runs on the
+  // initial render, when prevAppRef already equals currentApp.
+  useEffect(() => {
+    if (currentApp) loadSessions()
+    else setSessions([])
+  }, [currentApp])
+
+  // Fetch the session list from the index. Best-effort: a failure just leaves
+  // the sidebar empty rather than interrupting the chat.
+  async function loadSessions() {
+    if (!currentApp) return
+    try {
+      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/sessions`)
+      if (!resp.ok) return
+      const data = await resp.json()
+      setSessions(data.sessions || [])
+    } catch {}
+  }
+
+  // Open a past session: load its transcript and make it the active session so
+  // the next message resumes it (the server resumes an existing session_id).
+  async function openSession(sid) {
+    if (querying || sid === sessionIdRef.current) return
+    try {
+      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}`)
+      if (!resp.ok) return
+      const data = await resp.json()
+      const loaded = (data.messages || []).map(m => ({
+        role: m.role === 'assistant' ? 'bot' : 'user',
+        text: m.content,
+      }))
+      sessionIdRef.current = sid
+      setActiveSid(sid)
+      setChunks([])
+      setStructuredRecords([])
+      setMsgs(loaded.length ? loaded : [{ role: 'sys', text: t('query.emptySession') }])
+      setTimeout(scrollMsgs, 0)
+    } catch {}
+  }
 
   // Close the session bound to `appName`, fire-and-forget, and clear the local handle.
   function closeSession(appName) {
@@ -81,6 +126,7 @@ export default function QueryTab({ active }) {
     let started = false
     try {
       const sessionId = await ensureSession()
+      setActiveSid(sessionId)
       const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/query/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -119,16 +165,21 @@ export default function QueryTab({ active }) {
       setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: t('common.networkError', { msg: e.message }), error: true }])
     } finally {
       setQuerying(false)
+      // The turn just updated the session index (title/activity); refresh the
+      // sidebar so the current chat appears and re-sorts to the top.
+      loadSessions()
     }
   }
 
-  // Refresh: close the current session (triggering distillation) and start fresh.
-  // A new session is opened lazily on the next question.
-  function refreshSession() {
+  // Start a new chat: close the current session (triggering distillation) and
+  // clear the view. A fresh session is opened lazily on the next question.
+  function newChat() {
     closeSession(currentApp)
+    setActiveSid(null)
     setChunks([])
     setStructuredRecords([])
     setMsgs([{ role: 'sys', text: t('query.refreshed') + (currentApp ? ' ' + t('query.connected', { app: currentApp }) : '') }])
+    loadSessions()
   }
 
   const totalRefs = chunks.length + structuredRecords.length
@@ -137,6 +188,33 @@ export default function QueryTab({ active }) {
     <>
       {!hasApp && <div className="warn-bar show">{t('common.noAppWarn')}</div>}
       <div className="chat-layout">
+        <div className="chat-history">
+          <div className="aside-hd">
+            <h3>{t('query.chats')}</h3>
+            <button className="btn btn-ghost btn-sm" disabled={!hasApp} onClick={newChat}>{t('query.newChat')}</button>
+          </div>
+          <div className="chat-history-body">
+            {!sessions.length && (
+              <div style={{ padding: '24px 12px', textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
+                {t('query.noChats')}
+              </div>
+            )}
+            {sessions.map(s => (
+              <div
+                key={s.session_id}
+                className={`chat-history-item${s.session_id === activeSid ? ' active' : ''}`}
+                onClick={() => openSession(s.session_id)}
+                title={s.title || t('query.untitledChat')}
+              >
+                <div className="chat-history-title">{s.title || t('query.untitledChat')}</div>
+                <div className="chat-history-meta">
+                  <span>{fmtRelTime(s.updated_at)}</span>
+                  <span>{s.message_count !== 1 ? t('query.msgs', { n: s.message_count }) : t('query.msg', { n: s.message_count })}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
         <div className="chat-col">
           <div className="msgs" ref={msgsRef}>
             {msgs.map((m, i) => (
@@ -170,7 +248,7 @@ export default function QueryTab({ active }) {
               onChange={e => { setInput(e.target.value); autoResize(e.target) }}
               disabled={querying || !hasApp}
             />
-            <button className="btn btn-ghost" title={t('query.refreshSession')} onClick={refreshSession}>↺</button>
+            <button className="btn btn-ghost" title={t('query.newChat')} onClick={newChat}>↺</button>
             <button className="btn btn-primary" disabled={querying || !hasApp} onClick={sendQuery}>{t('common.send')}</button>
           </div>
         </div>

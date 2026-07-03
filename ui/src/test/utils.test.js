@@ -1,10 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fmtBytes, previewText, metaText, schemaTypeStr, simplifyExtractionSchemas, streamSSE, waitForTasks } from '../utils'
+import { fmtBytes, fmtRelTime, previewText, metaText, schemaTypeStr, simplifyExtractionSchemas, streamSSE, waitForTasks } from '../utils'
 
 describe('fmtBytes', () => {
   it('formats bytes', () => expect(fmtBytes(512)).toBe('512 B'))
   it('formats kilobytes', () => expect(fmtBytes(2048)).toBe('2.0 KB'))
   it('formats megabytes', () => expect(fmtBytes(2 * 1024 * 1024)).toBe('2.0 MB'))
+})
+
+describe('fmtRelTime', () => {
+  const NOW = new Date('2026-07-03T12:00:00Z').getTime()
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW) })
+  const ago = (ms) => new Date(NOW - ms).toISOString()
+
+  it('returns empty for missing/invalid input', () => {
+    expect(fmtRelTime()).toBe('')
+    expect(fmtRelTime('not a date')).toBe('')
+  })
+  it('says "just now" under 45s', () => expect(fmtRelTime(ago(10 * 1000))).toBe('just now'))
+  it('formats minutes', () => expect(fmtRelTime(ago(5 * 60 * 1000))).toBe('5m'))
+  it('formats hours', () => expect(fmtRelTime(ago(3 * 60 * 60 * 1000))).toBe('3h'))
+  it('formats days', () => expect(fmtRelTime(ago(2 * 24 * 60 * 60 * 1000))).toBe('2d'))
+  it('falls back to a locale date beyond a week', () => {
+    const out = fmtRelTime(ago(30 * 24 * 60 * 60 * 1000))
+    expect(out).not.toMatch(/^(just now|\d+[mhd])$/)
+    expect(out).toBe(new Date(NOW - 30 * 24 * 60 * 60 * 1000).toLocaleDateString())
+  })
 })
 
 describe('previewText', () => {

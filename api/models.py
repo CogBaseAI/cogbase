@@ -172,6 +172,37 @@ class SessionCloseResponse(BaseModel):
     )
 
 
+class SessionSummary(BaseModel):
+    """One row of the conversation-history list (served from the session index)."""
+
+    session_id: str
+    title: str | None = Field(
+        default=None, description="First user message, truncated; null until the first turn."
+    )
+    message_count: int = Field(description="Number of user turns recorded in the session.")
+    status: str = Field(description="'open' while active, 'closed' after the session is settled.")
+    created_at: str = Field(description="ISO-8601 UTC timestamp of the session's first turn.")
+    updated_at: str = Field(description="ISO-8601 UTC timestamp of the session's most recent turn.")
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionSummary] = Field(
+        description="The app's chat sessions, most-recently-active first."
+    )
+
+
+class TranscriptMessage(BaseModel):
+    role: str = Field(description="'user' or 'assistant'.")
+    content: str
+
+
+class SessionTranscriptResponse(BaseModel):
+    session_id: str
+    messages: list[TranscriptMessage] = Field(
+        description="The session's conversation turns in order (user + assistant)."
+    )
+
+
 class MemoryRecordResponse(BaseModel):
     """A long-term memory record surfaced to a reviewer.
 

@@ -93,6 +93,27 @@ SKILL_RECORDS_SCHEMA = CollectionSchema(
 )
 
 
+SESSION_RECORDS_SCHEMA = CollectionSchema(
+    name="session_records",
+    description=(
+        "Conversation session index: one record per chat session per application, "
+        "holding the list-view metadata (title, activity) so the session history "
+        "can be listed without replaying every episodic log. Message content stays "
+        "in the episodic log — this is only the index."
+    ),
+    primary_fields=["session_id"],
+    fields={
+        "session_id":    FieldSchema(type=FieldType.STRING, nullable=False),
+        "app_id":        FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "title":         FieldSchema(type=FieldType.STRING, nullable=True),   # first user message, truncated
+        "message_count": FieldSchema(type=FieldType.INTEGER, nullable=False),
+        "status":        FieldSchema(type=FieldType.STRING, nullable=False, index=True),  # "open" | "closed"
+        "created_at":    FieldSchema(type=FieldType.STRING, nullable=False),
+        "updated_at":    FieldSchema(type=FieldType.STRING, nullable=False),  # ISO-8601 UTC; list ordering
+    },
+)
+
+
 DOC_WORKFLOW_REGISTRY_SCHEMA = CollectionSchema(
     name="doc_workflow_registry",
     description="Workflow processing status per document per workflow. One record per (app, doc, workflow).",
@@ -145,6 +166,22 @@ class SystemConfigOverride(BaseModel):
     updated_at: str  # ISO-8601 UTC
 
 
+_SESSION_TITLE_MAX = 80
+
+
+def _session_title(text: str) -> str:
+    """Derive a session's list title from its first user message.
+
+    Collapses whitespace and truncates to a single readable line so the history
+    sidebar shows a compact label; an empty first message yields an empty title
+    (the UI falls back to a placeholder).
+    """
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= _SESSION_TITLE_MAX:
+        return collapsed
+    return collapsed[: _SESSION_TITLE_MAX - 1].rstrip() + "…"
+
+
 def new_app_id() -> str:
     """Generate a stable app id that is a valid identifier prefix.
 
@@ -175,6 +212,16 @@ class SkillRecord(BaseModel):
     updated_at: str   # ISO-8601 UTC
 
 
+class SessionRecord(BaseModel):
+    session_id: str
+    app_id: str
+    title: str | None = None   # first user message, truncated
+    message_count: int = 0
+    status: str = "open"       # "open" | "closed"
+    created_at: str            # ISO-8601 UTC
+    updated_at: str            # ISO-8601 UTC
+
+
 class SystemStore:
     """Thin persistence layer for application metadata.
 
@@ -196,6 +243,7 @@ class SystemStore:
         await self._store.create_collection(TASKS_SCHEMA)
         await self._store.create_collection(DOC_WORKFLOW_REGISTRY_SCHEMA)
         await self._store.create_collection(SKILL_RECORDS_SCHEMA)
+        await self._store.create_collection(SESSION_RECORDS_SCHEMA)
 
     async def save_app(self, record: AppRecord) -> None:
         await self._store.save("app_records", [record.model_dump()])
@@ -216,6 +264,79 @@ class SystemStore:
         await self._store.delete_records("doc_registry", filters=[Col("app_id") == app_id])
         await self._store.delete_records("doc_workflow_registry", filters=[Col("app_id") == app_id])
         await self._store.delete_records("tasks", filters=[Col("app_id") == app_id])
+        await self._store.delete_records("session_records", filters=[Col("app_id") == app_id])
+
+    # ------------------------------------------------------------------
+    # Session index (conversation history list)
+    # ------------------------------------------------------------------
+
+    async def touch_session(
+        self, app_id: str, session_id: str, first_text: str
+    ) -> None:
+        """Record a conversation turn against the session index.
+
+        Lazily creates the index row on the session's *first* turn (title taken
+        from *first_text*, the first user message, truncated); on later turns it
+        just bumps the message count and activity timestamp, leaving the title
+        untouched.  The row is what the session-history list reads, so listing
+        never has to replay episodic logs — the log stays the source of truth for
+        message *content*, this index for the list view.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        existing = await self.get_session(session_id)
+        if existing is None:
+            record = SessionRecord(
+                session_id=session_id,
+                app_id=app_id,
+                title=_session_title(first_text),
+                message_count=1,
+                status="open",
+                created_at=now,
+                updated_at=now,
+            )
+        else:
+            record = existing.model_copy(
+                update={
+                    "message_count": existing.message_count + 1,
+                    "updated_at": now,
+                }
+            )
+        await self._store.save("session_records", [record.model_dump()])
+
+    async def close_session_record(self, session_id: str) -> None:
+        """Flip a session's index row to ``closed``.
+
+        No-op when the row was never created (a session opened but never asked a
+        question, so it has no turns and never entered the history list).
+        """
+        existing = await self.get_session(session_id)
+        if existing is None:
+            return
+        record = existing.model_copy(
+            update={
+                "status": "closed",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        await self._store.save("session_records", [record.model_dump()])
+
+    async def get_session(self, session_id: str) -> SessionRecord | None:
+        rows = await self._store.query_as(
+            "session_records",
+            filters=[Col("session_id") == session_id],
+            model=SessionRecord,
+        )
+        return rows[0] if rows else None
+
+    async def list_session_records(self, app_id: str) -> list[SessionRecord]:
+        """Return an app's sessions, most-recently-active first."""
+        rows = await self._store.query_as(
+            "session_records",
+            filters=[Col("app_id") == app_id],
+            model=SessionRecord,
+        )
+        # ISO-8601 UTC timestamps sort lexicographically, so no parse needed.
+        return sorted(rows, key=lambda r: r.updated_at, reverse=True)
 
     # ------------------------------------------------------------------
     # Skill registry

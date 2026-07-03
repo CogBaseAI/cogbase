@@ -51,6 +51,10 @@ from api.models import (
     SessionStartRequest,
     SessionResponse,
     SessionCloseResponse,
+    SessionSummary,
+    SessionListResponse,
+    SessionTranscriptResponse,
+    TranscriptMessage,
     CollectionQueryRequest,
     CollectionQueryResponse,
     TaskListResponse,
@@ -589,6 +593,21 @@ async def _drain_query(
     raise RuntimeError("query_stream did not yield a result")
 
 
+async def _record_session_turn(system_store, app, session_id: str | None, text: str) -> None:
+    """Index a completed turn so the session shows up in the history list.
+
+    Best-effort: a failed index write must not fail an otherwise-successful
+    query, so it is logged and swallowed.  Only tracked sessions (a caller that
+    passed ``session_id``) are indexed — stateless queries never enter the list.
+    """
+    if not session_id:
+        return
+    try:
+        await system_store.touch_session(app.app_id, session_id, text)
+    except Exception:
+        logger.exception("failed to index session turn for '%s'", session_id)
+
+
 @router.post("/{app_name}/query", response_model=QueryResponse)
 async def query_application(
     app_name: str,
@@ -613,6 +632,7 @@ async def query_application(
             app_name, app_cache, system_store, system_resources, force_refresh=True
         )
         result = await _drain_query(app, body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k, session_id=body.session_id)
+    await _record_session_turn(system_store, app, body.session_id, body.text)
     return QueryResponse(
         answer=result.answer,
         structured_records=result.structured_records,
@@ -659,6 +679,9 @@ async def query_application_stream(
                         }
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
+                    # The result is the last non-token item; index the turn once
+                    # it has been produced so the session enters the history list.
+                    await _record_session_turn(system_store, app, body.session_id, body.text)
         except Exception:
             logger.exception("query_stream failed for app '%s'", app_name)
             yield f"data: {json.dumps({'error': 'stream failed'})}\n\n"
@@ -696,6 +719,58 @@ async def start_session(
     return SessionResponse(session_id=session_id)
 
 
+@router.get("/{app_name}/sessions", response_model=SessionListResponse)
+async def list_sessions(
+    app_name: str,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+) -> SessionListResponse:
+    """List an app's conversation sessions, most-recently-active first.
+
+    Served entirely from the session index (one query), so the history sidebar
+    never replays episodic logs; a session's actual messages are loaded on demand
+    via ``GET /{app_name}/sessions/{session_id}``.
+    """
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    records = await system_store.list_session_records(app.app_id)
+    return SessionListResponse(
+        sessions=[
+            SessionSummary(
+                session_id=r.session_id,
+                title=r.title,
+                message_count=r.message_count,
+                status=r.status,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+            )
+            for r in records
+        ]
+    )
+
+
+@router.get("/{app_name}/sessions/{session_id}", response_model=SessionTranscriptResponse)
+async def get_session_transcript(
+    app_name: str,
+    session_id: str,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+) -> SessionTranscriptResponse:
+    """Return a session's full conversation transcript from the episodic log."""
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    try:
+        messages = await app.get_session_transcript(session_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return SessionTranscriptResponse(
+        session_id=session_id,
+        messages=[
+            TranscriptMessage(role=m.role.value, content=m.content) for m in messages
+        ],
+    )
+
+
 @router.post("/{app_name}/sessions/{session_id}/close", response_model=SessionCloseResponse)
 async def close_session(
     app_name: str,
@@ -712,6 +787,8 @@ async def close_session(
     """
     app = await _get_active_app(app_name, app_cache, system_store, system_resources)
     await app.end_session(session_id)
+    # Flip the session's history-index row to 'closed' (no-op if it never took a turn).
+    await system_store.close_session_record(session_id)
 
     distiller = app.distiller
     if distiller is None:

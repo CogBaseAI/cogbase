@@ -45,6 +45,23 @@ export function fmtBytes(b) {
   return (b / 1048576).toFixed(1) + ' MB'
 }
 
+// Compact relative time ("just now", "5m", "3h", "2d") from an ISO timestamp,
+// falling back to a locale date for anything older than a week.
+export function fmtRelTime(iso) {
+  if (!iso) return ''
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return ''
+  const sec = Math.max(0, Math.floor((Date.now() - then) / 1000))
+  if (sec < 45) return 'just now'
+  const min = Math.floor(sec / 60)
+  if (min < 60) return min + 'm'
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return hr + 'h'
+  const day = Math.floor(hr / 24)
+  if (day < 7) return day + 'd'
+  return new Date(then).toLocaleDateString()
+}
+
 export function previewText(text, maxLines = 6, maxChars = 320) {
   const lines = String(text || '').trim().split(/\r?\n/)
   let out = lines.slice(0, maxLines).join('\n')

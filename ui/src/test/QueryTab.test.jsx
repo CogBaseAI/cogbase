@@ -46,21 +46,45 @@ function sseResponse(events) {
   }
 }
 
-// Route fetch by URL: sessions create, session close, and query stream.
-function mockFetch({ sessionId = 'sess-1', streamEvents = [{ result: { answer: 'Hello there', chunks: [], structured_records: [] } }] } = {}) {
-  return vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
+// Route fetch by URL + method: list sessions (GET), create session (POST),
+// load a transcript (GET /sessions/{id}), close (POST .../close), and the query
+// stream. `sessions` is what the history sidebar loads; `transcript` is returned
+// when a past chat is opened.
+function mockFetch({
+  sessionId = 'sess-1',
+  streamEvents = [{ result: { answer: 'Hello there', chunks: [], structured_records: [] } }],
+  sessions = [],
+  transcript = { messages: [] },
+} = {}) {
+  return vi.spyOn(global, 'fetch').mockImplementation((url, opts = {}) => {
     const u = String(url)
+    const method = (opts.method || 'GET').toUpperCase()
     if (u.includes('/sessions/') && u.endsWith('/close')) {
       return Promise.resolve({ ok: true, json: async () => ({ session_id: sessionId, distillation: 'enqueued' }) })
     }
-    if (u.endsWith('/sessions')) {
+    if (u.endsWith('/sessions') && method === 'POST') {
       return Promise.resolve({ ok: true, json: async () => ({ session_id: sessionId }) })
+    }
+    if (u.endsWith('/sessions') && method === 'GET') {
+      return Promise.resolve({ ok: true, json: async () => ({ sessions }) })
+    }
+    if (u.includes('/sessions/') && method === 'GET') {
+      const sid = decodeURIComponent(u.split('/sessions/')[1])
+      return Promise.resolve({ ok: true, json: async () => ({ session_id: sid, ...transcript }) })
     }
     if (u.endsWith('/query/stream')) {
       return Promise.resolve(sseResponse(streamEvents))
     }
     return Promise.resolve({ ok: true, json: async () => ({}) })
   })
+}
+
+// Session-start (POST /sessions) calls only — filters out the GET list calls the
+// history sidebar makes against the same URL.
+function startSessionCalls(fetchSpy) {
+  return fetchSpy.mock.calls.filter(
+    ([u, o]) => String(u).endsWith('/sessions') && (o?.method || 'GET').toUpperCase() === 'POST'
+  )
 }
 
 async function ask(user, text) {
@@ -167,11 +191,10 @@ it('reuses the same session across multiple questions', async () => {
   await waitFor(() => expect(screen.getByText('Hello there')).toBeInTheDocument())
   await ask(user, 'second')
 
-  const startCalls = fetchSpy.mock.calls.filter(([u]) => String(u).endsWith('/sessions'))
-  expect(startCalls).toHaveLength(1)
+  expect(startSessionCalls(fetchSpy)).toHaveLength(1)
 })
 
-it('closes the session and opens a new one after refresh', async () => {
+it('closes the session and opens a new one after New chat', async () => {
   const fetchSpy = mockFetch()
   const user = userEvent.setup()
   renderQueryTab()
@@ -180,8 +203,8 @@ it('closes the session and opens a new one after refresh', async () => {
   await ask(user, 'first')
   await waitFor(() => expect(screen.getByText('Hello there')).toBeInTheDocument())
 
-  // Refresh closes the current session.
-  await user.click(screen.getByTitle('Refresh session'))
+  // "New chat" (the ↺ button) closes the current session.
+  await user.click(screen.getByTitle('+ New chat'))
   await waitFor(() =>
     expect(fetchSpy).toHaveBeenCalledWith(
       expect.stringMatching(/\/sessions\/sess-1\/close$/),
@@ -191,6 +214,61 @@ it('closes the session and opens a new one after refresh', async () => {
 
   // Next question opens a fresh session.
   await ask(user, 'second')
-  const startCalls = fetchSpy.mock.calls.filter(([u]) => String(u).endsWith('/sessions'))
-  expect(startCalls).toHaveLength(2)
+  expect(startSessionCalls(fetchSpy)).toHaveLength(2)
+})
+
+const SESSIONS_FIXTURE = [
+  { session_id: 's-1', title: 'What is the term?', message_count: 3, status: 'closed', created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-02T00:00:00Z' },
+  { session_id: 's-2', title: 'Renewal dates', message_count: 1, status: 'open', created_at: '2026-07-03T00:00:00Z', updated_at: '2026-07-03T00:00:00Z' },
+]
+
+it('loads the chat history sidebar on app select', async () => {
+  const fetchSpy = mockFetch({ sessions: SESSIONS_FIXTURE })
+  renderQueryTab()
+
+  // Both past chats are listed, titled by their first message.
+  await waitFor(() => expect(screen.getByText('What is the term?')).toBeInTheDocument())
+  expect(screen.getByText('Renewal dates')).toBeInTheDocument()
+
+  // The list was fetched with a GET against /sessions.
+  expect(
+    fetchSpy.mock.calls.some(
+      ([u, o]) => String(u).endsWith('/sessions') && (o?.method || 'GET').toUpperCase() === 'GET'
+    )
+  ).toBe(true)
+})
+
+it('shows an empty-state message when there are no past chats', async () => {
+  mockFetch({ sessions: [] })
+  renderQueryTab()
+  await waitFor(() => expect(screen.getByText(/No chats yet/)).toBeInTheDocument())
+})
+
+it('opens a past chat, loads its transcript, and resumes it on the next question', async () => {
+  const fetchSpy = mockFetch({
+    sessions: SESSIONS_FIXTURE,
+    transcript: { messages: [
+      { role: 'user', content: 'old question' },
+      { role: 'assistant', content: 'old answer' },
+    ] },
+  })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.getByText('What is the term?')).toBeInTheDocument())
+
+  // Click a past chat -> its transcript replaces the chat view.
+  await user.click(screen.getByText('What is the term?'))
+  await waitFor(() => expect(screen.getByText('old question')).toBeInTheDocument())
+  expect(screen.getByText('old answer')).toBeInTheDocument()
+
+  // The transcript was loaded from GET /sessions/{id}.
+  expect(
+    fetchSpy.mock.calls.some(([u, o]) => String(u).endsWith('/sessions/s-1') && (o?.method || 'GET').toUpperCase() === 'GET')
+  ).toBe(true)
+
+  // The next question resumes the opened session — no new session is started.
+  await ask(user, 'follow up')
+  const streamCall = fetchSpy.mock.calls.find(([u]) => String(u).endsWith('/query/stream'))
+  expect(JSON.parse(streamCall[1].body).session_id).toBe('s-1')
+  expect(startSessionCalls(fetchSpy)).toHaveLength(0)
 })

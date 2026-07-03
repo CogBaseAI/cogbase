@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         LongTermMemory,
         LongTermRecord,
         MemoryKind,
+        MemoryMessage,
         MemoryStatus,
         ReviewDecision,
         ReviewResult,
@@ -592,6 +593,25 @@ class CogBaseApp:
         """Evict a session's short-term cache without distilling."""
         if self._short_term is not None:
             await self._short_term.end_session(session_id)
+
+    async def get_session_transcript(self, session_id: str) -> list["MemoryMessage"]:
+        """Return a session's conversation as an ordered list of turns.
+
+        Reads the durable episodic log and projects it into the same continuity
+        thread short-term memory and the distiller use — only ``user_message`` /
+        ``final_answer`` events become turns (tool scratch is dropped), and the
+        whole history is returned regardless of any compaction (compaction manages
+        the working context, it does not erase the record).  Backs the
+        session-history view: the list is served from the system-store index, and
+        this is the on-demand read for the one session a user opens.  Raises if no
+        episodic memory is configured.
+        """
+        from cogbase.memory.projection import project_thread
+
+        if self._episodic is None:
+            raise RuntimeError("session transcripts require episodic memory to be configured")
+        events = await self._episodic.replay(session_id=session_id)
+        return project_thread(events)
 
     # ------------------------------------------------------------------
     # Workflow interface
