@@ -81,6 +81,7 @@ def _make_llm(response: str, *, call_count_ref: list | None = None) -> MagicMock
         return {"content": response}
 
     llm.complete = AsyncMock(side_effect=_complete)
+    llm.context_window = MagicMock(return_value=128_000)
     return llm
 
 
@@ -323,6 +324,7 @@ class TestForeachStep:
             return {"content": '{"finding_id": "f", "status": "ok"}'}
 
         llm.complete = AsyncMock(side_effect=_complete)
+        llm.context_window = MagicMock(return_value=128_000)
 
         steps = [
             _make_step(id="load", tool="structured-query", collection="clauses"),
@@ -375,6 +377,7 @@ class TestForeachStep:
             return {"content": '{"finding_id": "f", "status": "ok"}'}
 
         llm.complete = AsyncMock(side_effect=_complete)
+        llm.context_window = MagicMock(return_value=128_000)
 
         steps = [
             _make_step(id="load", tool="structured-query", collection="clauses"),
@@ -512,6 +515,7 @@ class TestStreaming:
             return {"content": json.dumps({"finding_id": f"f{call_n}", "status": "ok"})}
 
         llm.complete = AsyncMock(side_effect=_complete)
+        llm.context_window = MagicMock(return_value=128_000)
         embedder = _make_embedder()
 
         vs = FAISSVectorStore()

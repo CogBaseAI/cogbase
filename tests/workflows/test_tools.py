@@ -76,9 +76,10 @@ def _make_step(**kwargs) -> WorkflowStepConfig:
     return _STEP_ADAPTER.validate_python({"id": "test-step", **kwargs})
 
 
-def _make_llm(response: str) -> MagicMock:
+def _make_llm(response: str, context_window: int = 128_000) -> MagicMock:
     llm = MagicMock()
     llm.complete = AsyncMock(return_value={"content": response})
+    llm.context_window = MagicMock(return_value=context_window)
     return llm
 
 
@@ -279,6 +280,21 @@ class TestLLMStructuredTool:
         step = _make_step(tool="llm-structured", prompt="x", output_schema=_FINDING_JSON_SCHEMA)
         with pytest.raises(RuntimeError, match="LLM"):
             await ls_run(step, {}, None)
+
+    async def test_input_over_context_budget_raises_without_calling_llm(self):
+        """A rendered input over the context-window budget fails fast, before the LLM call."""
+        # Tiny window so a modest input overflows the 80% budget.
+        llm = _make_llm('{"finding_id": "f1", "status": "ok"}', context_window=100)
+        big = "word " * 500  # ~625 est. tokens, well over the 80-token budget
+        step = _make_step(
+            tool="llm-structured",
+            prompt="Judge these.",
+            input={"facts": big},
+            output_schema=_FINDING_JSON_SCHEMA,
+        )
+        with pytest.raises(ValueError, match="over the ~80-token budget"):
+            await ls_run(step, {}, llm)
+        llm.complete.assert_not_called()
 
     def test_missing_prompt_raises(self):
         with pytest.raises(ValidationError):
