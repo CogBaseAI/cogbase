@@ -1253,11 +1253,11 @@ async def delete_doc(
 # Generated artifact download
 # ---------------------------------------------------------------------------
 #
-# Artifacts (e.g. a merged contract) are produced by skills through the query
+# Artifacts (e.g. a merged document) are produced by skills through the query
 # runner's ``save_artifact`` tool, which stores them under ``generated/{id}`` in
 # the app's document store. This endpoint is the general download side — it is
 # agnostic to how the artifact was produced or what domain it belongs to; the
-# merge logic itself lives in the merge-contract skill, not here.
+# merge logic itself lives in the edit-docx skill, not here.
 
 
 @router.get("/{app_name}/documents/{doc_id}/download")

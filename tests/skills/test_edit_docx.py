@@ -1,4 +1,4 @@
-"""Unit tests for the merge-contract skill's apply_operations helper.
+"""Unit tests for the edit-docx skill's apply_operations helper.
 
 The helper is a standalone CLI shipped inside the skill bundle (not an importable
 package), so it is loaded by path. Tests cover the paragraph-level apply logic
@@ -23,7 +23,7 @@ pytest.importorskip("docx")
 
 from docx import Document  # noqa: E402  (import after importorskip)
 
-SKILL_DIR = pathlib.Path(__file__).resolve().parents[2] / "skills" / "merge-contract"
+SKILL_DIR = pathlib.Path(__file__).resolve().parents[2] / "skills" / "edit-docx"
 SCRIPT = SKILL_DIR / "apply_operations.py"
 
 

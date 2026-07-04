@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Apply a list of amendment operations to an original .docx, preserving formatting.
+"""Apply a list of edit operations to a base .docx, preserving formatting.
 
-The deterministic *apply* helper for the merge-contract skill. The agent does the
-*understand* step (reading the amendment and deriving the operation list); this
-script applies them, editing the original OOXML in place — matching each operation
+The deterministic *apply* helper for the edit-docx skill. The agent does
+the *understand* step (reading the change source and deriving the operation list);
+this script applies them, editing the base OOXML in place — matching each operation
 to a paragraph by an anchor snippet and doing run-level edits — so styles,
 numbering, and fonts survive.
 
@@ -22,7 +22,7 @@ Usage::
 
 Prints a JSON report to stdout: per-operation ``matched`` flag plus an
 ``unmatched`` count, so the caller can surface operations that found no anchor
-(a common sign the amendment referenced a section the original doesn't contain).
+(a common sign the change referenced text the base doesn't contain).
 """
 
 from __future__ import annotations
