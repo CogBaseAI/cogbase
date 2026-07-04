@@ -321,6 +321,8 @@ const translations = {
       removeFromApp: 'Remove from app',
       addToApp: 'Add to app',
       selectAppFirst: 'Select an app first',
+      builtin: 'Built-in',
+      builtinTitle: 'Built-in skill shipped with CogBase — read-only',
     },
     settings: {
       warnOne: '⚠ {provider} provider is not configured — fill in the fields below to enable queries and ingestion.',
@@ -687,6 +689,8 @@ const translations = {
       removeFromApp: '从应用移除',
       addToApp: '添加到应用',
       selectAppFirst: '请先选择一个应用',
+      builtin: '内置',
+      builtinTitle: 'CogBase 内置技能 — 只读',
     },
     settings: {
       warnOne: '⚠ 未配置{provider}提供商 — 请填写下方字段以启用查询和导入。',

@@ -208,6 +208,11 @@ export default function SkillsTab({ active }) {
                 render: s => (
                   <span style={{ fontWeight: 500 }}>
                     {s.name}
+                    {s.builtin && (
+                      <span className="badge b-init" title={t('skills.builtinTitle')} style={{ marginLeft: 8 }}>
+                        {t('skills.builtin')}
+                      </span>
+                    )}
                     <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace' }}>{s.id}</div>
                   </span>
                 ),
@@ -216,6 +221,8 @@ export default function SkillsTab({ active }) {
               {
                 key: 'actions', label: t('skills.colActions'), sortable: false, cellClassName: 'actions-cell',
                 render: s => {
+                  // Built-in skills are shipped with CogBase and read-only.
+                  if (s.builtin) return <span className="muted-cell">—</span>
                   const busy = busyId === s.name
                   return (
                     <div style={{ display: 'flex', gap: 6 }}>

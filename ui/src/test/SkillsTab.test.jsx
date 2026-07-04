@@ -96,3 +96,35 @@ describe('delete', () => {
     expect(global.fetch).not.toHaveBeenCalled()
   })
 })
+
+describe('built-in skills', () => {
+  const WITH_BUILTIN = [
+    ...SKILLS,
+    { id: 'ccc333', name: 'edit-docx', description: 'Edit docx', metadata: {}, builtin: true },
+  ]
+
+  function mockWithBuiltin() {
+    vi.spyOn(global, 'fetch').mockImplementation((url) => {
+      if (String(url).endsWith('/skills')) {
+        return Promise.resolve({ ok: true, json: async () => ({ skills: WITH_BUILTIN, total: WITH_BUILTIN.length }) })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
+  }
+
+  it('shows a Built-in badge on built-in skills', async () => {
+    mockWithBuiltin()
+    renderWithCtx(<SkillsTab active={true} />)
+    await waitFor(() => screen.getByText('edit-docx'))
+    expect(screen.getByText('Built-in')).toBeInTheDocument()
+  })
+
+  it('renders built-in skills read-only (no Replace/Delete actions)', async () => {
+    mockWithBuiltin()
+    renderWithCtx(<SkillsTab active={true} />)
+    await waitFor(() => screen.getByText('edit-docx'))
+    // Only the two non-builtin rows expose the mutating actions.
+    expect(screen.getAllByText('Replace')).toHaveLength(2)
+    expect(screen.getAllByText('Delete')).toHaveLength(2)
+  })
+})
