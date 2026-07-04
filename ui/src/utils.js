@@ -30,6 +30,48 @@ export async function copyText(value) {
   }
 }
 
+// A skill that produces a downloadable file reports its path through the query
+// runner's save_artifact tool as
+//   /applications/<app_name>/documents/<artifact_id>/download
+// The runner only knows the app's internal id, so it emits the literal
+// `<app_name>` placeholder and a path relative to the API — neither of which is
+// clickable in the chat as-is (a relative path targets the UI origin, and the
+// placeholder isn't a real name). Rewrite every such occurrence into an
+// absolute URL against the API origin with the real app name, so remark-gfm
+// autolinks it and the click hits the download endpoint. Leaves everything else
+// untouched; idempotent on already-absolute URLs.
+const ARTIFACT_PATH_RE =
+  /(?:https?:\/\/[^/\s)]+)?\/applications\/([^/\s)]+)\/documents\/([^/\s)]+)\/download/g
+
+// The LLM often reports that path inside a markdown code span (backticks). A
+// code span never renders as a link, so these are lifted into a real labeled
+// link instead. The character class excludes the backtick so the span boundary
+// is respected.
+const ARTIFACT_CODE_SPAN_RE =
+  /`\s*(?:https?:\/\/[^/\s`]+)?\/applications\/([^/\s`]+)\/documents\/([^/\s`]+)\/download\s*`/g
+
+export function resolveArtifactLinks(text, apiUrl, appName) {
+  if (!text) return text
+  const base = String(apiUrl || '').replace(/\/$/, '')
+  const toUrl = (name, id) => {
+    const app = name === '<app_name>' ? appName : decodeURIComponent(name)
+    return `${base}/applications/${encodeURIComponent(app || name)}/documents/${id}/download`
+  }
+  return String(text)
+    // Backtick-wrapped path -> a labeled markdown link (code spans don't click).
+    .replace(ARTIFACT_CODE_SPAN_RE, (_m, name, id) => `[${artifactLabel(id)}](${toUrl(name, id)})`)
+    // Bare or already-linked occurrences -> resolve the URL in place; a bare URL
+    // then autolinks, and the `a` override wires up the download click.
+    .replace(ARTIFACT_PATH_RE, (_m, name, id) => toUrl(name, id))
+}
+
+// Human-facing filename for a generated artifact id:
+// `saas-001-amended__06467960.docx` -> `saas-001-amended.docx` (drop the short
+// hex hash save_artifact appends to disambiguate).
+export function artifactLabel(id) {
+  return decodeURIComponent(String(id)).replace(/__[0-9a-f]{6,}(?=\.[^.]+$|$)/i, '')
+}
+
 export function esc(s) {
   return String(s)
     .replace(/&/g, '&amp;')

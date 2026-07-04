@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fmtBytes, fmtRelTime, previewText, metaText, schemaTypeStr, simplifyExtractionSchemas, streamSSE, waitForTasks } from '../utils'
+import { fmtBytes, fmtRelTime, previewText, metaText, schemaTypeStr, simplifyExtractionSchemas, streamSSE, waitForTasks, resolveArtifactLinks, artifactLabel } from '../utils'
 
 describe('fmtBytes', () => {
   it('formats bytes', () => expect(fmtBytes(512)).toBe('512 B'))
@@ -137,5 +137,81 @@ describe('waitForTasks', () => {
     await vi.runAllTimersAsync()
     await promise
     expect(onProgress).toHaveBeenCalledWith(1, 1)
+  })
+})
+
+describe('resolveArtifactLinks', () => {
+  const API = 'http://localhost:8000'
+
+  it('replaces the <app_name> placeholder and prefixes the API origin', () => {
+    const out = resolveArtifactLinks(
+      'Download: /applications/<app_name>/documents/lease-merged__27dd52c2.docx/download',
+      API, 'my-app',
+    )
+    expect(out).toBe(
+      'Download: http://localhost:8000/applications/my-app/documents/lease-merged__27dd52c2.docx/download',
+    )
+  })
+
+  it('rewrites a relative path with a real app name onto the API origin', () => {
+    const out = resolveArtifactLinks('/applications/lease-app/documents/x__ab12cd34.docx/download', API, 'cur')
+    expect(out).toBe('http://localhost:8000/applications/lease-app/documents/x__ab12cd34.docx/download')
+  })
+
+  it('resolves the path inside a markdown link destination', () => {
+    const out = resolveArtifactLinks('[merged](/applications/<app_name>/documents/f__aa.docx/download)', API, 'app')
+    expect(out).toBe('[merged](http://localhost:8000/applications/app/documents/f__aa.docx/download)')
+  })
+
+  it('re-points an already-absolute URL at the configured API origin (idempotent)', () => {
+    const abs = 'http://localhost:8000/applications/app/documents/f__aa.docx/download'
+    expect(resolveArtifactLinks(abs, API, 'app')).toBe(abs)
+  })
+
+  it('encodes app names with unsafe characters', () => {
+    const out = resolveArtifactLinks('/applications/<app_name>/documents/f__aa.docx/download', API, 'a b/c')
+    expect(out).toBe('http://localhost:8000/applications/a%20b%2Fc/documents/f__aa.docx/download')
+  })
+
+  it('promotes a backtick-wrapped path to a labeled markdown link', () => {
+    const out = resolveArtifactLinks(
+      'Download it here:\n`/applications/<app_name>/documents/saas-001-amended__06467960.docx/download`',
+      API, 'contract-analyst',
+    )
+    expect(out).toBe(
+      'Download it here:\n[saas-001-amended.docx]' +
+      '(http://localhost:8000/applications/contract-analyst/documents/saas-001-amended__06467960.docx/download)',
+    )
+  })
+
+  it('lifts a backtick path without touching unrelated code spans', () => {
+    const out = resolveArtifactLinks(
+      'Merged `saas-001-amendment` into `saas-001`: `/applications/<app_name>/documents/x__aa00bb11.docx/download`',
+      API, 'app',
+    )
+    expect(out).toContain('`saas-001-amendment`')
+    expect(out).toContain('`saas-001`')
+    expect(out).toContain('[x.docx](http://localhost:8000/applications/app/documents/x__aa00bb11.docx/download)')
+  })
+
+  it('leaves unrelated text and empty input untouched', () => {
+    expect(resolveArtifactLinks('no links here', API, 'app')).toBe('no links here')
+    expect(resolveArtifactLinks('', API, 'app')).toBe('')
+    expect(resolveArtifactLinks(null, API, 'app')).toBe(null)
+  })
+})
+
+describe('artifactLabel', () => {
+  it('drops the disambiguating hex hash before the extension', () => {
+    expect(artifactLabel('saas-001-amended__06467960.docx')).toBe('saas-001-amended.docx')
+  })
+  it('drops the hash when there is no extension', () => {
+    expect(artifactLabel('report__06467960')).toBe('report')
+  })
+  it('only strips the trailing hash, keeping intraword double underscores', () => {
+    expect(artifactLabel('my__file__06467960.docx')).toBe('my__file.docx')
+  })
+  it('leaves a plain filename untouched', () => {
+    expect(artifactLabel('plain-name.docx')).toBe('plain-name.docx')
   })
 })

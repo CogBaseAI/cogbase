@@ -146,6 +146,49 @@ it('renders a markdown table answer as an HTML table', async () => {
   expect(screen.queryByText(/\| --- \|/)).not.toBeInTheDocument()
 })
 
+it('renders a skill download path as an absolute, app-resolved clickable link', async () => {
+  const answer =
+    'Done — merged file produced.\n\nDownload it here:\n' +
+    '`/applications/<app_name>/documents/lease-merged__27dd52c2.docx/download`'
+  mockFetch({ streamEvents: [{ result: { answer, references: { chunks: [], structured_records: [] } } }] })
+  const user = userEvent.setup()
+  renderQueryTab('contract-analyst')
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+
+  await ask(user, 'apply the amendment')
+
+  // The <app_name> placeholder is resolved to the current app, the path is
+  // prefixed with the API origin (jsdom: http://localhost:3000), and it becomes
+  // a real anchor (not raw text).
+  const dlUrl = `${window.location.origin}/applications/contract-analyst/documents/lease-merged__27dd52c2.docx/download`
+  const link = await waitFor(() => document.querySelector('.md a[href*="/download"]'))
+  expect(link.getAttribute('href')).toBe(dlUrl)
+  // The unresolved placeholder must not leak through as visible text.
+  expect(screen.queryByText(/<app_name>/)).not.toBeInTheDocument()
+
+  // Clicking fetches the artifact and saves it via a throwaway object-URL
+  // anchor, using the server-provided filename — no bare navigation.
+  const blob = new Blob(['docx'], { type: 'application/octet-stream' })
+  const dlSpy = vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+    ok: true,
+    blob: async () => blob,
+    headers: { get: () => 'attachment; filename="lease-merged.docx"' },
+  })
+  // jsdom lacks the object-URL APIs; provide them so the download path runs.
+  const createObjSpy = vi.fn().mockReturnValue('blob:mock')
+  URL.createObjectURL = createObjSpy
+  URL.revokeObjectURL = vi.fn()
+  const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+  await user.click(link)
+
+  await waitFor(() => expect(dlSpy).toHaveBeenCalledWith(dlUrl))
+  expect(createObjSpy).toHaveBeenCalledWith(blob)
+  // A save anchor was clicked carrying the server-provided filename.
+  const saved = clickSpy.mock.instances.find(a => a.download)
+  expect(saved.download).toBe('lease-merged.docx')
+})
+
 it('copies the question and the answer via their copy buttons', async () => {
   const writeText = vi.fn().mockResolvedValue(undefined)
   mockFetch({ streamEvents: [{ result: { answer: 'The term is 12 months.', references: { chunks: [], structured_records: [] } } }] })

@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
-import { streamSSE, copyText, fmtRelTime } from '../../utils'
+import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks } from '../../utils'
 
 export default function QueryTab({ active }) {
   const { apiUrl, currentApp } = useApp()
@@ -282,7 +282,7 @@ export default function QueryTab({ active }) {
                   fontSize: m.mono ? 11 : undefined,
                 }}>
                   {m.role === 'bot' && !m.mono && !m.thinking
-                    ? <div className="md"><ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents(t)}>{m.text}</ReactMarkdown></div>
+                    ? <div className="md"><ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents(t)}>{resolveArtifactLinks(m.text, apiUrl, currentApp)}</ReactMarkdown></div>
                     : m.text}
                 </div>
                 {(m.role === 'user' || m.role === 'bot') && !m.thinking && !m.error && !m.muted && (
@@ -408,7 +408,58 @@ function CopyTableWrapper({ children, t }) {
 function mdComponents(t) {
   return {
     table: ({ children }) => <CopyTableWrapper t={t}>{children}</CopyTableWrapper>,
+    // Generated-artifact links get a dedicated downloader; everything else opens
+    // in a new tab.
+    a: ({ href, children }) => {
+      const isDownload = /\/documents\/[^/]+\/download(?:[?#]|$)/.test(href || '')
+      if (isDownload) return <DownloadLink href={href} t={t}>{children}</DownloadLink>
+      return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+    },
   }
+}
+
+// A download link for a generated artifact. Two problems make a plain anchor
+// unreliable here: the click bubbles to the enclosing message's ref-select
+// handler, and a bare navigation to the download endpoint is flaky across
+// origins/new-tab popup rules. So we stop propagation and fetch the file into a
+// blob, then save it via a throwaway object-URL anchor — which downloads with
+// the server's filename regardless of origin (the API allows all origins). If
+// the fetch fails, fall back to opening the URL directly (the endpoint's
+// Content-Disposition: attachment still triggers a download).
+function DownloadLink({ href, children, t }) {
+  const [busy, setBusy] = useState(false)
+  async function onClick(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    if (busy) return
+    setBusy(true)
+    try {
+      const resp = await fetch(href)
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      const blob = await resp.blob()
+      const cd = resp.headers.get('Content-Disposition') || ''
+      const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd)
+      // The artifact id (second-to-last path segment) is the filename fallback.
+      const name = m ? decodeURIComponent(m[1]) : decodeURIComponent(href.split('/').slice(-2, -1)[0] || 'download')
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      window.open(href, '_blank', 'noopener')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <a href={href} onClick={onClick} title={t('query.download')} aria-busy={busy || undefined}>
+      {children}
+    </a>
+  )
 }
 
 function RefChunk({ chunk, t }) {

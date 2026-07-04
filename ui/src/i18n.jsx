@@ -240,6 +240,7 @@ const translations = {
       copy: 'Copy',
       copyTable: 'Copy table',
       copied: 'Copied',
+      download: 'Download file',
     },
     memory: {
       title: 'Memory',
@@ -626,6 +627,7 @@ const translations = {
       copy: '复制',
       copyTable: '复制表格',
       copied: '已复制',
+      download: '下载文件',
     },
     memory: {
       title: '记忆',
