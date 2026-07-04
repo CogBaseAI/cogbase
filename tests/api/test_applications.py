@@ -1906,3 +1906,86 @@ class TestDeleteDoc:
         client = app_overrides["client"]
         resp = await client.delete("/applications/nonexistent/docs/doc-1")
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /applications/{app_name}/documents/{doc_id}/download
+# ---------------------------------------------------------------------------
+
+
+def _mock_download_app(artifacts: dict[str, bytes]) -> MagicMock:
+    """Mock CogBaseApp whose document_store.load_bytes serves seeded artifacts."""
+    inst = MagicMock()
+    store = MagicMock()
+
+    async def _load_bytes(collection, key):
+        if key not in artifacts:
+            raise KeyError(key)
+        return artifacts[key]
+
+    store.load_bytes = AsyncMock(side_effect=_load_bytes)
+    inst.document_store = store
+    return inst
+
+
+class TestDownloadGeneratedDocument:
+    @pytest.mark.asyncio
+    async def test_download_returns_bytes_and_attachment_headers(self, client):
+        import mimetypes
+
+        art = b"PK\x03\x04-merged-docx-bytes"
+        doc_id = "contract__ab12ef.docx"
+        mock_app = _mock_download_app({f"generated/{doc_id}": art})
+        await _create_app(client, mock_app)
+
+        resp = await client.get(
+            f"/applications/my-contract-analyzer/documents/{doc_id}/download"
+        )
+
+        assert resp.status_code == 200
+        assert resp.content == art
+        # Media type is inferred from the artifact id's extension.
+        assert resp.headers["content-type"].startswith(mimetypes.guess_type(doc_id)[0])
+        assert f'filename="{doc_id}"' in resp.headers["content-disposition"]
+
+    @pytest.mark.asyncio
+    async def test_download_reads_generated_key_verbatim(self, client):
+        """The artifact id is the full stored filename; no extra suffix is appended."""
+        mock_app = _mock_download_app({"generated/report.txt": b"data"})
+        await _create_app(client, mock_app)
+
+        resp = await client.get(
+            "/applications/my-contract-analyzer/documents/report.txt/download"
+        )
+
+        assert resp.status_code == 200
+        called_key = mock_app.document_store.load_bytes.call_args[0][1]
+        assert called_key == "generated/report.txt"
+        # Non-docx extensions resolve their own media type.
+        assert resp.headers["content-type"].startswith("text/plain")
+
+    @pytest.mark.asyncio
+    async def test_download_unknown_artifact_returns_404(self, client):
+        mock_app = _mock_download_app({})
+        await _create_app(client, mock_app)
+
+        resp = await client.get(
+            "/applications/my-contract-analyzer/documents/ghost.docx/download"
+        )
+
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_download_store_without_binary_support_returns_404(self, client):
+        """A document store that does not implement load_bytes surfaces as 404, not 500."""
+        inst = MagicMock()
+        store = MagicMock()
+        store.load_bytes = AsyncMock(side_effect=NotImplementedError)
+        inst.document_store = store
+        await _create_app(client, inst)
+
+        resp = await client.get(
+            "/applications/my-contract-analyzer/documents/x.docx/download"
+        )
+
+        assert resp.status_code == 404

@@ -56,6 +56,7 @@ import re
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 
@@ -200,6 +201,37 @@ _BASE_TOOLS: list[ToolDefinition] = [
             "type": "object",
             "properties": {"command": {"type": "string", "description": "A bash command to execute"}},
             "required": ["command"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "fetch_document",
+        "description": (
+            "Materialize a stored document's original uploaded file (e.g. its .docx) to a "
+            "local path so a skill script can process the raw file — unlike read_document, "
+            "which returns extracted text. Returns the local file path to operate on."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"doc_id": {"type": "string", "description": "Document ID whose original file to fetch."}},
+            "required": ["doc_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "save_artifact",
+        "description": (
+            "Persist a locally-produced file (e.g. a generated or edited .docx) so the user "
+            "can download it. Call this after a skill script writes its output file. Returns "
+            "an artifact id and the download path."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Local path of the file to persist."},
+                "filename": {"type": "string", "description": "Suggested download filename (default: the path's basename)."},
+            },
+            "required": ["path"],
             "additionalProperties": False,
         },
     },
@@ -1065,6 +1097,11 @@ class QueryRunner:
             except Exception as e:
                 return f"Tool error ({name}): {e}"
 
+        if name == "fetch_document":
+            return await self._run_fetch_document(inputs)
+        if name == "save_artifact":
+            return await self._run_save_artifact(inputs)
+
         env = self._tool_env(skill)
         if name == "python":
             return await self._run_python(inputs.get("code", ""), env)
@@ -1170,6 +1207,71 @@ class QueryRunner:
         doc_slice = DocumentSlice(doc_id=doc_id, offset=offset, length=len(slice_text), text=slice_text)
         location = f"doc: {doc_id}, chars {offset}–{offset + len(slice_text)} of {total}"
         return doc_slice, f"Passage:\n  [{doc_slice.slice_id}] ({location})\n  {slice_text.strip()}"
+
+    async def _run_fetch_document(self, inputs: dict) -> str:
+        """Materialize a stored original file to a local path for skill scripts.
+
+        General file-transport primitive (the inbound half; ``save_artifact`` is
+        the outbound half). Uploads are stored at ``originals/{doc_id}{suffix}``;
+        this assumes the ``.docx`` suffix (the docx-editing case) and falls back
+        to a suffix-free key, so a skill can unpack/edit the raw file rather than
+        only its extracted text.
+        """
+        if self._document_store is None or self._app_id is None:
+            return "fetch_document is unavailable (no document store configured)"
+
+        doc_id = str(inputs.get("doc_id", ""))
+        if not doc_id:
+            return "fetch_document error: doc_id is required"
+
+        data: bytes | None = None
+        suffix = ".docx"
+        for key in (f"originals/{doc_id}.docx", f"originals/{doc_id}"):
+            try:
+                data = await self._document_store.load_bytes(self._app_id, key)
+                suffix = os.path.splitext(key)[1]
+                break
+            except (KeyError, NotImplementedError):
+                continue
+        if data is None:
+            return f"fetch_document error: no original file for '{doc_id}'"
+
+        fd, path = tempfile.mkstemp(prefix=f"{doc_id}_", suffix=suffix)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        logger.info("[runner] fetch_document doc_id=%s bytes=%d path=%s", doc_id, len(data), path)
+        return f"Fetched document '{doc_id}' ({len(data)} bytes) to {path}"
+
+    async def _run_save_artifact(self, inputs: dict) -> str:
+        """Persist a skill-produced file to the document store for later download.
+
+        Stores under ``generated/{artifact_id}`` (``artifact_id`` keeps the
+        original extension), which the ``GET .../documents/{artifact_id}/download``
+        endpoint serves verbatim.
+        """
+        if self._document_store is None or self._app_id is None:
+            return "save_artifact is unavailable (no document store configured)"
+
+        path = str(inputs.get("path", ""))
+        if not path or not os.path.exists(path):
+            return f"save_artifact error: file not found at '{path}'"
+
+        filename = str(inputs.get("filename") or os.path.basename(path))
+        stem, ext = os.path.splitext(filename)
+        safe_stem = re.sub(r"[^\w\-]", "_", stem) or "artifact"
+        artifact_id = f"{safe_stem}__{uuid.uuid4().hex[:8]}{ext}"
+
+        data = await asyncio.to_thread(lambda: open(path, "rb").read())
+        try:
+            await self._document_store.save_bytes(self._app_id, f"generated/{artifact_id}", data)
+        except NotImplementedError:
+            return "save_artifact error: the document store does not support binary artifacts"
+
+        logger.info("[runner] save_artifact artifact_id=%s bytes=%d", artifact_id, len(data))
+        return (
+            f"Saved artifact '{artifact_id}' ({len(data)} bytes). "
+            f"Download it via GET /applications/<app_name>/documents/{artifact_id}/download"
+        )
 
     async def _run_python(self, code: str, env: dict) -> str:
         try:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import mimetypes
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -1246,6 +1247,40 @@ async def delete_doc(
 
     await system_store.delete_doc(record.app_id, doc_id)
     logger.info("Document '%s' deleted from app '%s'", doc_id, app_name)
+
+
+# ---------------------------------------------------------------------------
+# Generated artifact download
+# ---------------------------------------------------------------------------
+#
+# Artifacts (e.g. a merged contract) are produced by skills through the query
+# runner's ``save_artifact`` tool, which stores them under ``generated/{id}`` in
+# the app's document store. This endpoint is the general download side — it is
+# agnostic to how the artifact was produced or what domain it belongs to; the
+# merge logic itself lives in the merge-contract skill, not here.
+
+
+@router.get("/{app_name}/documents/{doc_id}/download")
+async def download_generated_document(
+    app_name: str,
+    doc_id: str,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+) -> StreamingResponse:
+    """Stream a generated artifact (identified by its full ``artifact_id``) as a download."""
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    record = await system_store.get_app(app_name)
+    try:
+        data = await app.document_store.load_bytes(record.app_id, f"generated/{doc_id}")
+    except (KeyError, NotImplementedError):
+        raise HTTPException(status_code=404, detail=f"Generated document '{doc_id}' not found")
+    media_type = mimetypes.guess_type(doc_id)[0] or "application/octet-stream"
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{doc_id}"'},
+    )
 
 
 # ---------------------------------------------------------------------------
