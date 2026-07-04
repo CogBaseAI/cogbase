@@ -18,6 +18,11 @@ log_store:
   type: local
   path: /data/logs
 
+# Built-in ("default") skills shipped with CogBase. Loaded on startup as
+# read-only skills and surfaced in the UI Skills tab. This is the in-image
+# path (the repo is copied to /app), so it needs no mounted volume.
+skills_dir: /app/skills
+
 # LLM and embedding are not pre-configured — set them via the UI Settings tab,
 # or add the blocks below (with a valid api_key):
 # llm:

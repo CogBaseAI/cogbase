@@ -6,7 +6,9 @@ FROM node:20-slim AS ui-builder
 
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json ./
-RUN npm ci
+# vite and the other build tools live in devDependencies, so install them
+# explicitly — this stays correct even if NODE_ENV=production leaks into the build.
+RUN npm ci --include=dev
 COPY ui/ ./
 RUN npm run build
 
@@ -20,6 +22,12 @@ RUN pip install --no-cache-dir ".[demo]"
 
 COPY . .
 COPY --from=ui-builder /ui/dist ./ui/dist
+
+# Pre-warm built-in skills: loading skills_dir installs each skill's declared
+# pip deps into a per-skill venv under ~/.cogbase/.skill_venvs. Doing it at
+# build time bakes those venvs into the image, so container startup is fast and
+# needs no network (the runtime load finds the venvs already present).
+RUN python -c "from cogbase.skills.registry import SkillRegistry; SkillRegistry().load_from_dir('/app/skills')"
 
 EXPOSE 8000
 
