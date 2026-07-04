@@ -243,11 +243,29 @@ def _validate_skills(skill_ids: list[str], skill_registry) -> None:
 
 
 def _app_skills_response(app_name: str, skill_ids: list[str], skill_registry) -> AppSkillsResponse:
-    """Build an AppSkillsResponse, resolving display names from the registry."""
-    refs = [
-        AppSkillRef(name=skill_registry.get(skill_id).name)
-        for skill_id in skill_ids
-    ]
+    """Build an AppSkillsResponse, resolving display names from the registry.
+
+    A referenced skill normally always exists — ``delete_skill`` refuses to remove
+    a skill still referenced by an application (the 409 guard). But that invariant
+    can be broken out of band: a skill dropped from ``skills_dir``, or a freshly
+    started node whose registry has not yet finished syncing from the system store.
+    Resolve each id defensively so one dangling reference can't 500 the whole
+    listing — a ref that no longer maps to a live skill is surfaced as ``missing``
+    (rather than dropped) so the UI can show it as broken and offer to unassign it.
+    """
+    refs: list[AppSkillRef] = []
+    for skill_id in skill_ids:
+        try:
+            skill = skill_registry.get(skill_id)
+        except KeyError:
+            logger.warning(
+                "Application '%s' references unknown skill id '%s'; marking as missing",
+                app_name,
+                skill_id,
+            )
+            refs.append(AppSkillRef(id=skill_id, name=skill_id, missing=True))
+            continue
+        refs.append(AppSkillRef(id=skill_id, name=skill.name))
     return AppSkillsResponse(app_name=app_name, skills=refs)
 
 
@@ -1086,29 +1104,34 @@ async def add_application_skill(
     return _app_skills_response(app_name, config.skills, skill_registry)
 
 
-@router.delete("/{app_name}/skills/{skill_name}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@router.delete("/{app_name}/skills/{skill_ref}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def remove_application_skill(
     app_name: str,
-    skill_name: str,
+    skill_ref: str,
     system_store: SystemStoreDep,
     skill_registry: SkillRegistryDep,
 ) -> None:
-    """Remove a skill from an application by name."""
+    """Remove a skill from an application by display name or by skill id.
+
+    Live skills are addressed by name (resolved to their id via the registry).
+    A dangling reference to a skill that no longer exists in the registry can't
+    be resolved by name, so the raw skill id is also accepted — this is what lets
+    the UI clean up a ``missing`` ref surfaced by ``_app_skills_response``.
+    """
     record = await system_store.get_app(app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
     try:
-        skill = skill_registry.get_by_name(skill_name)
+        skill_id = skill_registry.get_by_name(skill_ref).id
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+        skill_id = skill_ref  # fall back to treating the ref as a raw skill id (missing skill)
 
-    skill_id = skill.id
     config = AppConfig.from_yaml(record.config_yaml)
     if skill_id not in config.skills:
         raise HTTPException(
             status_code=404,
-            detail=f"Skill '{skill_name}' is not assigned to application '{app_name}'",
+            detail=f"Skill '{skill_ref}' is not assigned to application '{app_name}'",
         )
 
     updated_config = config.model_copy(update={"skills": [s for s in config.skills if s != skill_id]})
@@ -1116,7 +1139,7 @@ async def remove_application_skill(
         update={"config_yaml": updated_config.to_yaml(), "updated_at": _now()}
     )
     await system_store.save_app(updated_record)
-    logger.info("Removed skill '%s' (id=%s) from application '%s'", skill_name, skill_id, app_name)
+    logger.info("Removed skill '%s' (id=%s) from application '%s'", skill_ref, skill_id, app_name)
 
 
 @router.get("/{app_name}/collections", response_model=CollectionsResponse)

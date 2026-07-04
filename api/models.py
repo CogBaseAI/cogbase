@@ -414,7 +414,9 @@ class AddSkillRequest(BaseModel):
 
 
 class AppSkillRef(BaseModel):
-    name: str  # display name; a referenced skill always exists (it can't be deleted while referenced)
+    id: str  # skill id — the stable reference stored in the app config
+    name: str  # display name, or the id itself when the skill can no longer be resolved
+    missing: bool = False  # True when the referenced skill is no longer in the registry (dangling ref)
 
 
 class AppSkillsResponse(BaseModel):

@@ -3,12 +3,13 @@
   GET  /skills
   GET  /applications/{name}/skills
   POST /applications/{name}/skills
-  DELETE /applications/{name}/skills/{skill_name}
+  DELETE /applications/{name}/skills/{skill_ref}
 
 Also covers creating/updating applications with skills declared in config.yaml.
 
-Skills are referenced by name in the API. In these tests the skill id and display
-name are the same string (e.g. "skill-alpha") for readability.
+Skills are referenced by name in the API (or by raw id when unassigning a dangling
+ref). In these tests the skill id and display name are the same string (e.g.
+"skill-alpha") for readability.
 """
 
 from __future__ import annotations
@@ -179,12 +180,30 @@ class TestListApplicationSkills:
         await _create_app(client, config)
         resp = await client.get("/applications/my-app/skills")
         assert resp.status_code == 200
-        assert resp.json()["skills"] == [{"name": "skill-alpha"}]
+        assert resp.json()["skills"] == [{"id": "skill-alpha", "name": "skill-alpha", "missing": False}]
 
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown_app(self, client):
         resp = await client.get("/applications/ghost/skills")
         assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_dangling_skill_id_surfaced_as_missing_not_500(self, client, registry):
+        # Creation validates skill ids up-front, but a reference can go dangling
+        # out of band afterwards — a skill dropped from skills_dir, or a node
+        # whose registry has not finished syncing. The listing must degrade
+        # gracefully (surface the ghost as a broken ref the UI can clean up)
+        # rather than raise a 500 or silently drop it.
+        config = _BASE_CONFIG + "skills:\n  - skill-alpha\n  - skill-beta\n"
+        await _create_app(client, config)
+        registry.unregister("skill-beta")
+
+        resp = await client.get("/applications/my-app/skills")
+        assert resp.status_code == 200
+        assert resp.json()["skills"] == [
+            {"id": "skill-alpha", "name": "skill-alpha", "missing": False},
+            {"id": "skill-beta", "name": "skill-beta", "missing": True},
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +221,7 @@ class TestAddApplicationSkill:
         assert resp.status_code == 201
         assert resp.json() == {
             "app_name": "my-app",
-            "skills": [{"name": "skill-alpha"}],
+            "skills": [{"id": "skill-alpha", "name": "skill-alpha", "missing": False}],
         }
 
     @pytest.mark.asyncio
@@ -293,6 +312,20 @@ class TestRemoveApplicationSkill:
         resp = await client.delete("/applications/my-app/skills/skill-alpha")
         assert resp.status_code == 404
         assert "skill-alpha" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_missing_ref_can_be_unassigned_by_id(self, client, registry):
+        # A dangling ref can't be resolved by name (the skill is gone from the
+        # registry), so the UI unassigns it by raw skill id instead.
+        config = _BASE_CONFIG + "skills:\n  - skill-alpha\n  - skill-beta\n"
+        await _create_app(client, config)
+        registry.unregister("skill-beta")
+
+        resp = await client.delete("/applications/my-app/skills/skill-beta")
+        assert resp.status_code == 204
+
+        resp = await client.get("/applications/my-app/skills")
+        assert resp.json()["skills"] == [{"id": "skill-alpha", "name": "skill-alpha", "missing": False}]
 
 
 # ---------------------------------------------------------------------------

@@ -127,9 +127,9 @@ function AppSkillsSection({ appName }) {
   const { apiUrl } = useApp()
   const { t } = useT()
   const [all, setAll] = useState([])           // all system skills: [{ id, name, ... }]
-  const [assigned, setAssigned] = useState(null) // assigned skill names, null=loading
+  const [assigned, setAssigned] = useState(null) // assigned refs [{ id, name, missing }], null=loading
   const [error, setError] = useState(null)
-  const [busy, setBusy] = useState(null)        // skill name in-flight, or '__add__'
+  const [busy, setBusy] = useState(null)        // skill id in-flight, or '__add__'
   const [toAdd, setToAdd] = useState('')        // name selected in the add picker
 
   const load = useCallback(async () => {
@@ -142,7 +142,7 @@ function AppSkillsSection({ appName }) {
       if (skillsResp.ok) { const { skills = [] } = await skillsResp.json(); setAll(skills) }
       if (!assignedResp.ok) throw new Error(assignedResp.status + ' ' + assignedResp.statusText)
       const { skills: refs = [] } = await assignedResp.json()
-      setAssigned(refs.map(r => r.name))
+      setAssigned(refs)
     } catch (e) { setError(e.message); setAssigned([]) }
   }, [apiUrl, appName])
 
@@ -160,18 +160,20 @@ function AppSkillsSection({ appName }) {
         alert(t('skills.assignFailed', { msg: d.detail || resp.statusText })); return
       }
       const { skills: refs = [] } = await resp.json()
-      setAssigned(refs.map(r => r.name))
+      setAssigned(refs)
       setToAdd('')
     } catch (e) { alert(t('common.error', { msg: e.message })) }
     finally { setBusy(null) }
   }
 
-  async function unassign(name) {
-    setBusy(name)
+  // Unassign by skill id — works for live skills and for dangling (missing) refs
+  // whose display name can no longer be resolved server-side.
+  async function unassign(ref) {
+    setBusy(ref.id)
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(appName)}/skills/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(appName)}/skills/${encodeURIComponent(ref.id)}`, { method: 'DELETE' })
       if (resp.ok || resp.status === 204 || resp.status === 404) {
-        setAssigned(prev => (prev || []).filter(n => n !== name))
+        setAssigned(prev => (prev || []).filter(r => r.id !== ref.id))
       } else {
         const d = await resp.json().catch(() => ({}))
         alert(t('skills.unassignFailed', { msg: d.detail || resp.statusText }))
@@ -180,11 +182,20 @@ function AppSkillsSection({ appName }) {
     finally { setBusy(null) }
   }
 
-  const assignedSet = new Set(assigned || [])
+  const assignedSet = new Set((assigned || []).map(r => r.name))
   const addable = all.filter(s => !assignedSet.has(s.name))
+  const descByName = Object.fromEntries(all.map(s => [s.name, s.description || '']))
+  const count = assigned?.length || 0
+
+  const heading = (
+    <>
+      {t('appDetail.skills')}
+      {assigned !== null && count > 0 && <span className="ad-count-badge">{count}</span>}
+    </>
+  )
 
   return (
-    <Section title={t('appDetail.skills')} defaultOpen>
+    <Section title={heading} defaultOpen>
       {error && <div className="ad-desc" style={{ color: 'var(--red)' }}>{t('common.failed', { msg: error })}</div>}
       {assigned === null && !error && <div className="ad-desc"><span className="spinning">⟳</span> {t('common.loading')}</div>}
       {assigned !== null && (
@@ -193,30 +204,45 @@ function AppSkillsSection({ appName }) {
             ? <div className="ad-desc">{t('appDetail.noSkillsAssigned')}</div>
             : (
               <div className="ad-tags">
-                {assigned.map(name => (
-                  <span key={name} className="ad-tag ad-tag-removable">
-                    {name}
-                    <button
-                      className="ad-tag-x" disabled={busy === name}
-                      title={t('skills.removeFromApp')} onClick={() => unassign(name)}
-                    >✕</button>
-                  </span>
-                ))}
+                {assigned.map(ref => {
+                  const removing = busy === ref.id
+                  return (
+                    <span
+                      key={ref.id}
+                      className={`ad-tag ad-tag-removable${ref.missing ? ' ad-tag-broken' : ''}`}
+                      title={ref.missing ? t('skills.brokenRef', { id: ref.id }) : (descByName[ref.name] || undefined)}
+                    >
+                      {ref.missing ? t('skills.missingLabel', { name: ref.name }) : ref.name}
+                      <button
+                        className="ad-tag-x" disabled={removing}
+                        title={ref.missing ? t('skills.removeBroken') : t('skills.removeFromApp')}
+                        onClick={() => unassign(ref)}
+                      >{removing ? <span className="spinning">⟳</span> : '✕'}</button>
+                    </span>
+                  )
+                })}
               </div>
             )}
-          <div className="ad-skill-add">
-            <select
-              value={toAdd} onChange={e => setToAdd(e.target.value)}
-              disabled={busy === '__add__' || addable.length === 0}
-            >
-              <option value="">{addable.length === 0 ? t('appDetail.noSkillsToAdd') : t('appDetail.assignSkillPrompt')}</option>
-              {addable.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-            </select>
-            <button
-              className="btn btn-sm btn-primary"
-              disabled={!toAdd || busy === '__add__'} onClick={() => assign(toAdd)}
-            >{t('appDetail.addSkill')}</button>
-          </div>
+          {all.length === 0
+            ? <div className="ad-desc" style={{ marginTop: 10 }}>{t('appDetail.noSkillsInRegistry')}</div>
+            : (
+              <>
+                <div className="ad-skill-add">
+                  <select
+                    value={toAdd} onChange={e => setToAdd(e.target.value)}
+                    disabled={busy === '__add__' || addable.length === 0}
+                  >
+                    <option value="">{addable.length === 0 ? t('appDetail.noSkillsToAdd') : t('appDetail.assignSkillPrompt')}</option>
+                    {addable.map(s => <option key={s.id} value={s.name} title={s.description || undefined}>{s.name}</option>)}
+                  </select>
+                  <button
+                    className="btn btn-sm btn-primary"
+                    disabled={!toAdd || busy === '__add__'} onClick={() => assign(toAdd)}
+                  >{busy === '__add__' ? <span className="spinning">⟳</span> : t('appDetail.addSkill')}</button>
+                </div>
+                {toAdd && descByName[toAdd] && <div className="ad-desc" style={{ marginTop: 6 }}>{descByName[toAdd]}</div>}
+              </>
+            )}
         </>
       )}
     </Section>

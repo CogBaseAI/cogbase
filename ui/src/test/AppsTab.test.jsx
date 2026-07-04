@@ -1,6 +1,6 @@
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithCtx } from './renderWithCtx'
 import AppsTab from '../components/tabs/AppsTab'
@@ -68,7 +68,7 @@ describe('detail drawer', () => {
       .mockResolvedValueOnce({ ok: true, json: async () => APP_WITH_CONFIG })          // viewApp fetch
       // AppSkillsSection mounts and loads all skills + this app's assigned skills.
       .mockResolvedValueOnce({ ok: true, json: async () => ({ skills: [{ id: 's1', name: 'redline' }, { id: 's2', name: 'summarize' }] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ app_name: 'contract-analyst', skills: [{ name: 'redline' }] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ app_name: 'contract-analyst', skills: [{ id: 's1', name: 'redline', missing: false }] }) })
 
     const user = userEvent.setup()
     renderWithCtx(<AppsTab active={true} />)
@@ -91,7 +91,7 @@ describe('detail drawer', () => {
       .mockResolvedValueOnce({ ok: true, json: async () => ({ skills: [{ id: 's1', name: 'redline' }, { id: 's2', name: 'summarize' }] }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ app_name: 'contract-analyst', skills: [] }) })
       // POST assign response echoes the updated assigned set.
-      .mockResolvedValueOnce({ ok: true, status: 201, json: async () => ({ app_name: 'contract-analyst', skills: [{ name: 'summarize' }] }) })
+      .mockResolvedValueOnce({ ok: true, status: 201, json: async () => ({ app_name: 'contract-analyst', skills: [{ id: 's2', name: 'summarize', missing: false }] }) })
 
     const user = userEvent.setup()
     renderWithCtx(<AppsTab active={true} />)
@@ -107,6 +107,38 @@ describe('detail drawer', () => {
       expect.objectContaining({ method: 'POST' })
     ))
     await waitFor(() => expect(screen.getByText('summarize')).toBeInTheDocument())
+  })
+
+  it('renders a dangling skill ref as broken and unassigns it by id', async () => {
+    vi.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ applications: APPS }) }) // loadApps
+      .mockResolvedValueOnce({ ok: true, json: async () => APP_WITH_CONFIG })          // viewApp fetch
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ skills: [{ id: 's1', name: 'redline' }] }) }) // all skills
+      // Assigned set carries a live skill plus a dangling ref (skill gone from the
+      // registry) — the server marks it missing with name falling back to the id.
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ app_name: 'contract-analyst', skills: [
+        { id: 's1', name: 'redline', missing: false },
+        { id: 'ghost-42', name: 'ghost-42', missing: true },
+      ] }) })
+      .mockResolvedValueOnce({ ok: true, status: 204 }) // DELETE unassign of the broken ref
+
+    const user = userEvent.setup()
+    renderWithCtx(<AppsTab active={true} />)
+    await waitFor(() => screen.getByText('contract-analyst'))
+    await user.click(screen.getByText('contract-analyst'))
+
+    // Broken ref shows the (missing) label; the live one renders plainly.
+    await waitFor(() => expect(screen.getByText('redline')).toBeInTheDocument())
+    const brokenTag = await screen.findByText(/ghost-42 \(missing\)/)
+    expect(brokenTag).toHaveClass('ad-tag-broken')
+
+    // Its ✕ unassigns by raw id (name can't be resolved), then it disappears.
+    await user.click(within(brokenTag).getByRole('button'))
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/applications/contract-analyst/skills/ghost-42'),
+      expect.objectContaining({ method: 'DELETE' })
+    ))
+    await waitFor(() => expect(screen.queryByText(/ghost-42 \(missing\)/)).not.toBeInTheDocument())
   })
 })
 
