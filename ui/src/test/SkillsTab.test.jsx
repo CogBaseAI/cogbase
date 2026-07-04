@@ -97,6 +97,82 @@ describe('delete', () => {
   })
 })
 
+describe('detail modal', () => {
+  function mockWithContent() {
+    vi.spyOn(global, 'fetch').mockImplementation((url) => {
+      const u = String(url)
+      if (u.endsWith('/skills')) {
+        return Promise.resolve({ ok: true, json: async () => ({ skills: SKILLS, total: SKILLS.length }) })
+      }
+      if (u.endsWith('/skills/pdf-summarizer/content')) {
+        return Promise.resolve({ ok: true, json: async () => ({
+          id: 'aaa111', name: 'pdf-summarizer',
+          // Full SKILL.md, including YAML front-matter that must not render as a heading.
+          markdown: '---\nname: pdf-summarizer\ndescription: Summarize PDFs\n---\n# Heading\n\nBody text.',
+          files: [
+            { path: 'scripts/run.py', size: 42, is_text: true },
+            { path: 'logo.bin', size: 8, is_text: false },
+          ],
+        }) })
+      }
+      if (u.endsWith('/skills/pdf-summarizer/files/scripts/run.py')) {
+        return Promise.resolve({ ok: true, json: async () => ({
+          path: 'scripts/run.py', size: 42, truncated: false, content: 'print("hello from run")',
+        }) })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
+  }
+
+  it('opens the modal and renders SKILL.md and the file list', async () => {
+    mockWithContent()
+    const user = userEvent.setup()
+    renderWithCtx(<SkillsTab active={true} />)
+    await waitFor(() => screen.getByText('pdf-summarizer'))
+    await user.click(screen.getByText('pdf-summarizer'))
+
+    // Body heading renders; description from the skill row shows in the Details panel
+    // (also present in the table's description column, hence getAllByText).
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Heading' })).toBeInTheDocument())
+    expect(screen.getAllByText('Summarize PDFs').length).toBeGreaterThan(1)
+    expect(screen.getByText('scripts/run.py')).toBeInTheDocument()
+  })
+
+  it('loads and shows a bundle file when clicked', async () => {
+    mockWithContent()
+    const user = userEvent.setup()
+    renderWithCtx(<SkillsTab active={true} />)
+    await waitFor(() => screen.getByText('pdf-summarizer'))
+    await user.click(screen.getByText('pdf-summarizer'))
+    await waitFor(() => screen.getByText('scripts/run.py'))
+
+    await user.click(screen.getByText('scripts/run.py'))
+    await waitFor(() => expect(screen.getByText('print("hello from run")')).toBeInTheDocument())
+  })
+
+  it('disables viewing of binary files', async () => {
+    mockWithContent()
+    const user = userEvent.setup()
+    renderWithCtx(<SkillsTab active={true} />)
+    await waitFor(() => screen.getByText('pdf-summarizer'))
+    await user.click(screen.getByText('pdf-summarizer'))
+    await waitFor(() => screen.getByText('logo.bin'))
+    // The binary row's button is disabled (closest button to the file name).
+    expect(screen.getByText('logo.bin').closest('button')).toBeDisabled()
+  })
+
+  it('strips YAML front-matter from the rendered body', async () => {
+    mockWithContent()
+    const user = userEvent.setup()
+    renderWithCtx(<SkillsTab active={true} />)
+    await waitFor(() => screen.getByText('pdf-summarizer'))
+    await user.click(screen.getByText('pdf-summarizer'))
+    await waitFor(() => screen.getByRole('heading', { name: 'Heading' }))
+    // The front-matter lines must not leak into the markdown body as a heading.
+    expect(screen.queryByRole('heading', { name: /name: pdf-summarizer/ })).not.toBeInTheDocument()
+  })
+})
+
 describe('built-in skills', () => {
   const WITH_BUILTIN = [
     ...SKILLS,

@@ -387,6 +387,28 @@ class SkillListResponse(BaseModel):
     total: int
 
 
+class SkillFile(BaseModel):
+    path: str        # relative to the bundle root, POSIX separators
+    size: int        # bytes
+    is_text: bool    # whether the file can be fetched as text via the file endpoint
+
+
+class SkillContentResponse(BaseModel):
+    """Full SKILL.md plus a listing of the bundle's files for the detail view."""
+
+    id: str
+    name: str
+    markdown: str            # raw SKILL.md content (the text the LLM sees)
+    files: list[SkillFile]   # scripts/assets shipped with the skill
+
+
+class SkillFileResponse(BaseModel):
+    path: str
+    size: int
+    truncated: bool          # true when the file exceeded the read cap
+    content: str             # decoded text content
+
+
 class AddSkillRequest(BaseModel):
     skill_name: str
 

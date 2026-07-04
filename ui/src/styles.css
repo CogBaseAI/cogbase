@@ -417,6 +417,43 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 .doc-modal-kv { display: grid; grid-template-columns: 90px 1fr; gap: 8px 10px; font-size: 12px; }
 .doc-modal-kv div:nth-child(odd) { color: var(--muted); }
 .doc-modal-kv div:nth-child(even) { color: var(--text); word-break: break-word; }
+
+/* Name-as-link trigger for the skill detail modal */
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.link-btn:hover { color: var(--accent, #6ea8fe); text-decoration: underline; }
+
+/* Skill bundle file list (modal side panel) */
+.skill-file-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.skill-file {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  font-family: 'SF Mono', 'Cascadia Code', monospace;
+  cursor: pointer;
+  text-align: left;
+}
+.skill-file:hover:not(:disabled) { background: var(--border); }
+.skill-file.active { background: var(--bg3); color: var(--accent, #6ea8fe); }
+.skill-file:disabled { color: var(--muted); cursor: default; }
+.skill-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-file-size { flex-shrink: 0; color: var(--muted); font-size: 10px; }
+
 .config-modal {
   position: fixed;
   inset: 0;

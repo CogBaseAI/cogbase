@@ -176,6 +176,91 @@ async def _seed_app(system_store, name: str, skill_id: str) -> None:
     )
 
 
+class TestSkillContentAndFiles:
+    """GET /skills/{name}/content and /skills/{name}/files/{path} let the UI show
+    a skill's full SKILL.md and browse its scripts/assets for auditing."""
+
+    @pytest.mark.asyncio
+    async def test_content_returns_markdown_and_file_listing(self, ctx):
+        client, *_ = ctx
+        await _upload(client, {"SKILL.md": VALID_MD, "scripts/hello.py": "print('hi')\n"})
+
+        resp = await client.get("/skills/greeter/content")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["name"] == "greeter"
+        assert body["markdown"] == VALID_MD
+        # SKILL.md is returned as markdown, not duplicated in the file listing.
+        paths = {f["path"]: f for f in body["files"]}
+        assert "SKILL.md" not in paths
+        assert paths["scripts/hello.py"]["is_text"] is True
+
+    @pytest.mark.asyncio
+    async def test_content_flags_binary_files(self, ctx):
+        client, _, _, bundle_store = ctx
+        skill_id = (await _upload(client, {"SKILL.md": VALID_MD})).json()["id"]
+        (bundle_store.skill_dir(skill_id) / "logo.bin").write_bytes(b"\x00\x01\x02\x00")
+
+        files = {f["path"]: f for f in (await client.get("/skills/greeter/content")).json()["files"]}
+        assert files["logo.bin"]["is_text"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_text_file(self, ctx):
+        client, *_ = ctx
+        await _upload(client, {"SKILL.md": VALID_MD, "scripts/hello.py": "print('hi')\n"})
+
+        resp = await client.get("/skills/greeter/files/scripts/hello.py")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["content"] == "print('hi')\n"
+        assert body["truncated"] is False
+
+    @pytest.mark.asyncio
+    async def test_large_text_file_is_capped_and_flagged_truncated(self, ctx):
+        client, _, _, bundle_store = ctx
+        skill_id = (await _upload(client, {"SKILL.md": VALID_MD})).json()["id"]
+        (bundle_store.skill_dir(skill_id) / "big.txt").write_text("a" * (600 * 1024))
+
+        body = (await client.get("/skills/greeter/files/big.txt")).json()
+        assert body["size"] == 600 * 1024          # full size reported
+        assert body["truncated"] is True
+        assert len(body["content"]) == 512 * 1024   # content capped at the read limit
+
+    @pytest.mark.asyncio
+    async def test_listing_excludes_tooling_dirs(self, ctx):
+        client, _, _, bundle_store = ctx
+        skill_id = (await _upload(client, {"SKILL.md": VALID_MD, "run.py": "x = 1\n"})).json()["id"]
+        cache_dir = bundle_store.skill_dir(skill_id) / "__pycache__"
+        cache_dir.mkdir()
+        (cache_dir / "run.cpython-311.pyc").write_bytes(b"\x00compiled")
+
+        paths = {f["path"] for f in (await client.get("/skills/greeter/content")).json()["files"]}
+        assert "run.py" in paths
+        assert not any(p.startswith("__pycache__") for p in paths)
+
+    @pytest.mark.asyncio
+    async def test_get_binary_file_returns_415(self, ctx):
+        client, _, _, bundle_store = ctx
+        skill_id = (await _upload(client, {"SKILL.md": VALID_MD})).json()["id"]
+        (bundle_store.skill_dir(skill_id) / "logo.bin").write_bytes(b"\x00\x01\x02\x00")
+
+        assert (await client.get("/skills/greeter/files/logo.bin")).status_code == 415
+
+    @pytest.mark.asyncio
+    async def test_path_traversal_is_rejected(self, ctx):
+        client, *_ = ctx
+        await _upload(client, {"SKILL.md": VALID_MD})
+        # httpx keeps the dot-segments in the request target rather than resolving them.
+        resp = await client.get("/skills/greeter/files/..%2f..%2fetc%2fpasswd")
+        assert resp.status_code in (400, 404)
+
+    @pytest.mark.asyncio
+    async def test_missing_file_returns_404(self, ctx):
+        client, *_ = ctx
+        await _upload(client, {"SKILL.md": VALID_MD})
+        assert (await client.get("/skills/greeter/files/nope.py")).status_code == 404
+
+
 class TestDeleteRejectsReferencedSkill:
     """A skill assigned to an application cannot be deleted: the reference would
     dangle, so deletion is blocked with 409 until the app unassigns it."""

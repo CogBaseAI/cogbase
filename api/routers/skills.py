@@ -13,11 +13,18 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from api.dependencies import SkillBundleStoreDep, SkillRegistryDep, SystemStoreDep
-from api.models import SkillListResponse, SkillResponse
+from api.models import (
+    SkillContentResponse,
+    SkillFile,
+    SkillFileResponse,
+    SkillListResponse,
+    SkillResponse,
+)
 from api.system_store import SkillRecord
 from cogbase.config.config import AppConfig
 from cogbase.skills.skill import load_skill_dir
@@ -25,6 +32,63 @@ from cogbase.skills.skill import load_skill_dir
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/skills", tags=["skills"])
+
+# Cap on how much of a bundle file is returned as text, and the set of
+# directories that never carry user-relevant source.
+_MAX_FILE_BYTES = 512 * 1024
+_SKIP_DIRS = {"__pycache__", ".git", ".venv", "node_modules"}
+
+
+def _bundle_root(skill) -> Path:
+    """Directory holding SKILL.md and any scripts/assets for *skill*."""
+    if not skill.source_path:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill.name}' has no bundle on disk.")
+    return Path(skill.source_path).parent
+
+
+def _is_text_bytes(raw: bytes) -> bool:
+    """Heuristic: treat a file as text if the head has no NUL and decodes as UTF-8."""
+    head = raw[:8192]
+    if b"\x00" in head:
+        return False
+    try:
+        head.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
+def _list_bundle_files(root: Path) -> list[SkillFile]:
+    """Enumerate the bundle's scripts/assets under *root*, sorted by path.
+
+    The root SKILL.md is omitted — it is returned separately as rendered markdown,
+    so listing it here would duplicate it in the UI.
+    """
+    files: list[SkillFile] = []
+    for p in root.rglob("*"):
+        rel_parts = p.relative_to(root).parts
+        if p.is_dir() or any(part in _SKIP_DIRS for part in rel_parts):
+            continue
+        if len(rel_parts) == 1 and rel_parts[0] == "SKILL.md":
+            continue
+        try:
+            raw = p.read_bytes()
+        except OSError:
+            continue
+        rel = p.relative_to(root).as_posix()
+        files.append(SkillFile(path=rel, size=len(raw), is_text=_is_text_bytes(raw)))
+    return sorted(files, key=lambda f: f.path)
+
+
+def _resolve_bundle_file(root: Path, rel_path: str) -> Path:
+    """Resolve *rel_path* under *root*, rejecting traversal outside the bundle."""
+    root = root.resolve()
+    target = (root / rel_path).resolve()
+    if root != target and root not in target.parents:
+        raise HTTPException(status_code=400, detail="Invalid file path.")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"No file '{rel_path}' in skill bundle.")
+    return target
 
 
 def _to_response(skill) -> SkillResponse:
@@ -142,6 +206,43 @@ async def list_skills(skill_registry: SkillRegistryDep) -> SkillListResponse:
 async def get_skill(skill_name: str, skill_registry: SkillRegistryDep) -> SkillResponse:
     """Return a single skill by name."""
     return _to_response(_get_skill_by_name(skill_registry, skill_name))
+
+
+@router.get("/{skill_name}/content", response_model=SkillContentResponse)
+async def get_skill_content(skill_name: str, skill_registry: SkillRegistryDep) -> SkillContentResponse:
+    """Return the full SKILL.md plus a listing of the bundle's scripts/assets.
+
+    Lets the UI show exactly what a skill contains — the LLM-facing markdown and
+    the files that ship (and execute) with it.
+    """
+    skill = _get_skill_by_name(skill_registry, skill_name)
+    return SkillContentResponse(
+        id=skill.id,
+        name=skill.name,
+        markdown=skill.raw_markdown,
+        files=_list_bundle_files(_bundle_root(skill)),
+    )
+
+
+@router.get("/{skill_name}/files/{file_path:path}", response_model=SkillFileResponse)
+async def get_skill_file(
+    skill_name: str, file_path: str, skill_registry: SkillRegistryDep
+) -> SkillFileResponse:
+    """Return the text content of a single file inside the skill bundle.
+
+    Path-traversal guarded, text-only, and capped at 512 KiB so the UI can let
+    users read a skill's scripts without exposing the whole filesystem.
+    """
+    skill = _get_skill_by_name(skill_registry, skill_name)
+    target = _resolve_bundle_file(_bundle_root(skill), file_path)
+    raw = target.read_bytes()
+    if not _is_text_bytes(raw):
+        raise HTTPException(status_code=415, detail=f"'{file_path}' is not a text file.")
+    truncated = len(raw) > _MAX_FILE_BYTES
+    content = raw[:_MAX_FILE_BYTES].decode("utf-8", errors="replace")
+    return SkillFileResponse(
+        path=file_path, size=len(raw), truncated=truncated, content=content
+    )
 
 
 @router.delete("/{skill_name}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)

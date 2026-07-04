@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
 import DataTable from '../DataTable'
+import SkillModal from '../modals/SkillModal'
 
 export default function SkillsTab({ active }) {
   const { apiUrl, currentApp } = useApp()
@@ -13,6 +14,7 @@ export default function SkillsTab({ active }) {
   const [uploading, setUploading] = useState(false)
   const [uploadMsg, setUploadMsg] = useState({ text: '', cls: '' })
   const [busyId, setBusyId] = useState(null)   // skill id with an in-flight action
+  const [viewing, setViewing] = useState(null) // skill being shown in the detail modal
   const uploadInputRef = useRef(null)
   const replaceInputRef = useRef(null)
   const replaceTargetRef = useRef(null)        // skill id awaiting a replacement file
@@ -207,7 +209,7 @@ export default function SkillsTab({ active }) {
                 key: 'name', label: t('skills.colName'), text: s => `${s.name} ${s.id}`,
                 render: s => (
                   <span style={{ fontWeight: 500 }}>
-                    {s.name}
+                    <button className="link-btn" onClick={() => setViewing(s)} title={t('skillModal.viewTitle')}>{s.name}</button>
                     {s.builtin && (
                       <span className="badge b-init" title={t('skills.builtinTitle')} style={{ marginLeft: 8 }}>
                         {t('skills.builtin')}
@@ -221,13 +223,13 @@ export default function SkillsTab({ active }) {
               {
                 key: 'actions', label: t('skills.colActions'), sortable: false, cellClassName: 'actions-cell',
                 render: s => {
-                  // Built-in skills are shipped with CogBase and read-only.
-                  if (s.builtin) return <span className="muted-cell">—</span>
                   const busy = busyId === s.name
                   return (
                     <div style={{ display: 'flex', gap: 6 }}>
-                      <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => startReplace(s.name)}>{t('common.replace')}</button>
-                      <button className="btn btn-red btn-sm" disabled={busy} onClick={() => deleteSkill(s)}>{t('common.delete')}</button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setViewing(s)}>{t('common.view')}</button>
+                      {/* Built-in skills are shipped with CogBase and read-only. */}
+                      {!s.builtin && <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => startReplace(s.name)}>{t('common.replace')}</button>}
+                      {!s.builtin && <button className="btn btn-red btn-sm" disabled={busy} onClick={() => deleteSkill(s)}>{t('common.delete')}</button>}
                     </div>
                   )
                 },
@@ -236,6 +238,8 @@ export default function SkillsTab({ active }) {
           />
         )}
       </div>
+
+      {viewing && <SkillModal skill={viewing} onClose={() => setViewing(null)} />}
     </div>
   )
 }
