@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
+import { useApp } from '../../context'
 import { useT } from '../../i18n'
 
 // Slide-over drawer that renders an application's resolved config —
@@ -21,7 +22,6 @@ export default function AppDetailModal({ app, onClose }) {
   const structs = cfg.structured_collections || []
   const pipelines = cfg.pipelines || []
   const workflows = cfg.workflows || []
-  const skills = cfg.skills || []
   const sc = app.status === 'active' ? 'b-active' : app.status === 'error' ? 'b-error' : 'b-init'
 
   return (
@@ -100,13 +100,7 @@ export default function AppDetailModal({ app, onClose }) {
             </Section>
           )}
 
-          {skills.length > 0 && (
-            <Section title={t('appDetail.skills')}>
-              <div className="ad-tags">
-                {skills.map(s => <span key={s} className="ad-tag">{s}</span>)}
-              </div>
-            </Section>
-          )}
+          <AppSkillsSection appName={app.name} />
         </div>
       </div>
     </div>
@@ -122,6 +116,110 @@ function Section({ title, children, defaultOpen = false }) {
       </button>
       {open && <div className="ad-section-body">{children}</div>}
     </div>
+  )
+}
+
+// Manageable skills section: lists the skills assigned to this application and
+// lets the user assign more (from the system skill registry) or unassign them,
+// hitting the /applications/{name}/skills endpoints. Assigned skills are shown
+// by display name (resolved server-side) rather than raw skill ids.
+function AppSkillsSection({ appName }) {
+  const { apiUrl } = useApp()
+  const { t } = useT()
+  const [all, setAll] = useState([])           // all system skills: [{ id, name, ... }]
+  const [assigned, setAssigned] = useState(null) // assigned skill names, null=loading
+  const [error, setError] = useState(null)
+  const [busy, setBusy] = useState(null)        // skill name in-flight, or '__add__'
+  const [toAdd, setToAdd] = useState('')        // name selected in the add picker
+
+  const load = useCallback(async () => {
+    setError(null)
+    try {
+      const [skillsResp, assignedResp] = await Promise.all([
+        fetch(`${apiUrl}/skills`),
+        fetch(`${apiUrl}/applications/${encodeURIComponent(appName)}/skills`),
+      ])
+      if (skillsResp.ok) { const { skills = [] } = await skillsResp.json(); setAll(skills) }
+      if (!assignedResp.ok) throw new Error(assignedResp.status + ' ' + assignedResp.statusText)
+      const { skills: refs = [] } = await assignedResp.json()
+      setAssigned(refs.map(r => r.name))
+    } catch (e) { setError(e.message); setAssigned([]) }
+  }, [apiUrl, appName])
+
+  useEffect(() => { load() }, [load])
+
+  async function assign(name) {
+    if (!name) return
+    setBusy('__add__')
+    try {
+      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(appName)}/skills`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ skill_name: name }),
+      })
+      if (!resp.ok && resp.status !== 201) {
+        const d = await resp.json().catch(() => ({}))
+        alert(t('skills.assignFailed', { msg: d.detail || resp.statusText })); return
+      }
+      const { skills: refs = [] } = await resp.json()
+      setAssigned(refs.map(r => r.name))
+      setToAdd('')
+    } catch (e) { alert(t('common.error', { msg: e.message })) }
+    finally { setBusy(null) }
+  }
+
+  async function unassign(name) {
+    setBusy(name)
+    try {
+      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(appName)}/skills/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      if (resp.ok || resp.status === 204 || resp.status === 404) {
+        setAssigned(prev => (prev || []).filter(n => n !== name))
+      } else {
+        const d = await resp.json().catch(() => ({}))
+        alert(t('skills.unassignFailed', { msg: d.detail || resp.statusText }))
+      }
+    } catch (e) { alert(t('common.error', { msg: e.message })) }
+    finally { setBusy(null) }
+  }
+
+  const assignedSet = new Set(assigned || [])
+  const addable = all.filter(s => !assignedSet.has(s.name))
+
+  return (
+    <Section title={t('appDetail.skills')} defaultOpen>
+      {error && <div className="ad-desc" style={{ color: 'var(--red)' }}>{t('common.failed', { msg: error })}</div>}
+      {assigned === null && !error && <div className="ad-desc"><span className="spinning">⟳</span> {t('common.loading')}</div>}
+      {assigned !== null && (
+        <>
+          {assigned.length === 0
+            ? <div className="ad-desc">{t('appDetail.noSkillsAssigned')}</div>
+            : (
+              <div className="ad-tags">
+                {assigned.map(name => (
+                  <span key={name} className="ad-tag ad-tag-removable">
+                    {name}
+                    <button
+                      className="ad-tag-x" disabled={busy === name}
+                      title={t('skills.removeFromApp')} onClick={() => unassign(name)}
+                    >✕</button>
+                  </span>
+                ))}
+              </div>
+            )}
+          <div className="ad-skill-add">
+            <select
+              value={toAdd} onChange={e => setToAdd(e.target.value)}
+              disabled={busy === '__add__' || addable.length === 0}
+            >
+              <option value="">{addable.length === 0 ? t('appDetail.noSkillsToAdd') : t('appDetail.assignSkillPrompt')}</option>
+              {addable.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+            </select>
+            <button
+              className="btn btn-sm btn-primary"
+              disabled={!toAdd || busy === '__add__'} onClick={() => assign(toAdd)}
+            >{t('appDetail.addSkill')}</button>
+          </div>
+        </>
+      )}
+    </Section>
   )
 }
 

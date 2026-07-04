@@ -66,6 +66,9 @@ describe('detail drawer', () => {
     vi.spyOn(global, 'fetch')
       .mockResolvedValueOnce({ ok: true, json: async () => ({ applications: APPS }) }) // loadApps
       .mockResolvedValueOnce({ ok: true, json: async () => APP_WITH_CONFIG })          // viewApp fetch
+      // AppSkillsSection mounts and loads all skills + this app's assigned skills.
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ skills: [{ id: 's1', name: 'redline' }, { id: 's2', name: 'summarize' }] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ app_name: 'contract-analyst', skills: [{ name: 'redline' }] }) })
 
     const user = userEvent.setup()
     renderWithCtx(<AppsTab active={true} />)
@@ -77,6 +80,33 @@ describe('detail drawer', () => {
     expect(screen.getByText('Structured collections')).toBeInTheDocument()
     expect(screen.getByText('Pipelines')).toBeInTheDocument()
     expect(screen.getByText('Workflows')).toBeInTheDocument()
+    // Assigned skill renders by name in the Skills section.
+    await waitFor(() => expect(screen.getByText('redline')).toBeInTheDocument())
+  })
+
+  it('assigns a skill from the drawer picker', async () => {
+    vi.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ applications: APPS }) }) // loadApps
+      .mockResolvedValueOnce({ ok: true, json: async () => APP_WITH_CONFIG })          // viewApp fetch
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ skills: [{ id: 's1', name: 'redline' }, { id: 's2', name: 'summarize' }] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ app_name: 'contract-analyst', skills: [] }) })
+      // POST assign response echoes the updated assigned set.
+      .mockResolvedValueOnce({ ok: true, status: 201, json: async () => ({ app_name: 'contract-analyst', skills: [{ name: 'summarize' }] }) })
+
+    const user = userEvent.setup()
+    renderWithCtx(<AppsTab active={true} />)
+    await waitFor(() => screen.getByText('contract-analyst'))
+    await user.click(screen.getByText('contract-analyst'))
+    await waitFor(() => expect(screen.getByText('No skills assigned.')).toBeInTheDocument())
+
+    await user.selectOptions(screen.getByRole('combobox'), 'summarize')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/applications/contract-analyst/skills'),
+      expect.objectContaining({ method: 'POST' })
+    ))
+    await waitFor(() => expect(screen.getByText('summarize')).toBeInTheDocument())
   })
 })
 

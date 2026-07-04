@@ -1022,6 +1022,15 @@ body.col-resizing { cursor: col-resize; user-select: none; }
   background: var(--bg); border: 1px solid var(--border);
   padding: 1px 6px; border-radius: 4px; font-family: 'SF Mono', monospace;
 }
+.ad-tag-removable { display: inline-flex; align-items: center; gap: 4px; }
+.ad-tag-x {
+  border: none; background: none; cursor: pointer; padding: 0 1px;
+  color: var(--muted); font-size: 10px; line-height: 1;
+}
+.ad-tag-x:hover:not(:disabled) { color: var(--red); }
+.ad-tag-x:disabled { opacity: 0.4; cursor: default; }
+.ad-skill-add { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.ad-skill-add select { flex: 1; min-width: 0; }
 .ad-step {
   border-left: 2px solid var(--border); padding: 4px 0 4px 10px;
   display: flex; flex-direction: column; gap: 5px;
