@@ -683,7 +683,10 @@ class QueryRunner:
         system_tools:                Custom store-backed or service tools injected by the
                                      caller. Available on every turn alongside retrieval
                                      tools and (when skills are present) execution tools.
-        max_calls:                   Maximum LLM completion rounds per run. Default 10.
+        max_calls:                   Maximum LLM completion rounds per run. Default 20.
+                                     Skill-routing runs are agentic (fetch → read →
+                                     apply → verify → save, with retries), so they need
+                                     more rounds than a plain retrieval query.
         passthrough_token_threshold: Estimated token count of ``structured_lookup`` results
                                      above which records are returned directly without LLM
                                      synthesis. None means disabled. Defaults None.
@@ -702,7 +705,7 @@ class QueryRunner:
         *,
         skills: list | None = None,
         system_tools: list[SystemTool] | None = None,
-        max_calls: int = 10,
+        max_calls: int = 20,
         passthrough_token_threshold: int | None = None,
         context_token_budget: int | None = None,
         enable_memory_lookup: bool = False,

@@ -37,9 +37,24 @@ from docx.oxml import OxmlElement
 from docx.text.paragraph import Paragraph
 
 
+# Inline markdown emphasis/code markers, and leading block markers (heading,
+# ordered/unordered list, blockquote). The text the agent reads is markdown
+# (the base is extracted to markdown at ingest), but python-docx paragraph text
+# is raw — no `**`, no `3. ` list prefix. Stripping both lets an anchor copied
+# verbatim from the markdown match the raw paragraph on the first try.
+_MD_INLINE = re.compile(r"[*_`~]")
+_MD_LEADING = re.compile(r"^\s*(?:#{1,6}\s+|\d+[.)]\s+|[-*+]\s+|>\s+)")
+
+
 def _norm(text: str) -> str:
-    """Collapse whitespace and lowercase so anchor matching tolerates reflow."""
-    return re.sub(r"\s+", " ", text or "").strip().lower()
+    """Normalize for anchor matching: strip markdown, collapse whitespace, lowercase.
+
+    Tolerates reflow (whitespace), case, and the markdown-vs-raw gap between the
+    text the agent reads and the raw paragraph text this script matches against.
+    """
+    text = _MD_LEADING.sub("", text or "")
+    text = _MD_INLINE.sub("", text)
+    return re.sub(r"\s+", " ", text).strip().lower()
 
 
 def _find_paragraph(doc, anchor_text: str):

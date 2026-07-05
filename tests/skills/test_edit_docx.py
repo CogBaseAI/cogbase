@@ -117,6 +117,60 @@ def test_anchor_matching_is_whitespace_and_case_insensitive():
 
 
 # ---------------------------------------------------------------------------
+# markdown-tolerant anchor matching
+#
+# The agent reads the base as markdown (docx is extracted to markdown at ingest),
+# so it copies anchors containing `**bold**`, `3.` list prefixes, and `#` headings.
+# The docx paragraph text is raw — no markdown. Matching must bridge that gap so a
+# verbatim-from-markdown anchor still locates the raw paragraph on the first pass.
+# ---------------------------------------------------------------------------
+
+
+def test_norm_strips_inline_emphasis_and_leading_markers():
+    # leading list number + inline bold in the anchor; neither in the raw paragraph
+    assert helper._norm("3. **Security Deposit:** pay **$4500** now") == \
+        helper._norm("Security Deposit: pay $4500 now")
+
+
+def test_replace_matches_markdown_anchor_against_raw_paragraph():
+    # Reproduces the log.1 failure: the agent's anchor carried markdown, the docx
+    # paragraph did not, so the anchor never matched and the agent burned its budget.
+    doc = _doc(["Security Deposit: Tenant shall pay a security deposit of $4500 to Landlord."])
+    report = helper.apply_operations(
+        doc,
+        [{"op": "replace",
+          "anchor_text": "3. **Security Deposit:** Tenant shall pay a security deposit of **$4500** to Landlord.",
+          "new_text": "Security Deposit: Tenant shall pay a security deposit of $5000 to Landlord."}],
+    )
+    assert report[0]["matched"] is True
+    assert _texts(doc)[0] == "Security Deposit: Tenant shall pay a security deposit of $5000 to Landlord."
+
+
+def test_delete_matches_markdown_heading_anchor():
+    doc = _doc(["Confidentiality", "Keep this."])
+    report = helper.apply_operations(
+        doc, [{"op": "delete", "anchor_text": "## Confidentiality"}]
+    )
+    assert report[0]["matched"] is True
+    assert _texts(doc) == ["Keep this."]
+
+
+def test_insert_after_matches_bulleted_markdown_anchor():
+    doc = _doc(["Provider shall notify Customer within 48 hours.", "Section 6."])
+    helper.apply_operations(
+        doc,
+        [{"op": "insert_after",
+          "anchor_text": "- Provider shall notify Customer within **48 hours**.",
+          "new_text": "5.5 Subprocessors clause."}],
+    )
+    assert _texts(doc) == [
+        "Provider shall notify Customer within 48 hours.",
+        "5.5 Subprocessors clause.",
+        "Section 6.",
+    ]
+
+
+# ---------------------------------------------------------------------------
 # unmatched / unknown operations
 # ---------------------------------------------------------------------------
 

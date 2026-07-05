@@ -64,8 +64,11 @@ to an uploaded document or is meant inline, ask before proceeding.
      the predecessor; `new_text` is the added text.
    - `append` — add a paragraph at the end. `new_text` only.
 
-   `anchor_text` must be copied verbatim from the base so it can be matched. Preserve
-   the intent of the changes exactly; never invent content.
+   Copy `anchor_text` verbatim from the base. The text you read is markdown (`**bold**`,
+   `3.` list numbering, `#` headings), but matching is tolerant — the helper strips
+   markdown, whitespace, and case before comparing anchor to paragraph — so you don't
+   need to hand-strip formatting. Prefer a short, distinctive mid-sentence snippet over
+   a whole paragraph. Preserve the intent of the changes exactly; never invent content.
 
 2. **Fetch the base file.** Call `fetch_document` with the `base_doc_id` to materialize
    the raw `.docx` to a local path (`read_document` only returns text — you need the
