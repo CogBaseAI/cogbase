@@ -256,6 +256,14 @@ class SystemStore:
         )
         return rows[0] if rows else None
 
+    async def get_app_by_id(self, app_id: str) -> AppRecord | None:
+        rows = await self._store.query_as(
+            "app_records",
+            filters=[Col("app_id") == app_id],
+            model=AppRecord,
+        )
+        return rows[0] if rows else None
+
     async def list_apps(self) -> list[AppRecord]:
         return await self._store.query_as("app_records", filters=None, model=AppRecord)
 

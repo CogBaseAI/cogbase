@@ -1949,6 +1949,25 @@ class TestDownloadGeneratedDocument:
         assert f'filename="{doc_id}"' in resp.headers["content-disposition"]
 
     @pytest.mark.asyncio
+    async def test_download_resolves_by_app_id(self, app_overrides):
+        """The runner emits an app_id-keyed link; the endpoint resolves it, so the
+        link keeps working independently of the mutable app name."""
+        client = app_overrides["client"]
+        system_store = app_overrides["system_store"]
+        art = b"by-id-bytes"
+        doc_id = "contract__ab12ef.docx"
+        mock_app = _mock_download_app({f"generated/{doc_id}": art})
+        await _create_app(client, mock_app)
+        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+
+        resp = await client.get(
+            f"/applications/{app_id}/documents/{doc_id}/download"
+        )
+
+        assert resp.status_code == 200
+        assert resp.content == art
+
+    @pytest.mark.asyncio
     async def test_download_reads_generated_key_verbatim(self, client):
         """The artifact id is the full stored filename; no extra suffix is appended."""
         mock_app = _mock_download_app({"generated/report.txt": b"data"})

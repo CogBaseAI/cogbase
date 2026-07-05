@@ -1281,19 +1281,30 @@ async def delete_doc(
 # the app's document store. This endpoint is the general download side — it is
 # agnostic to how the artifact was produced or what domain it belongs to; the
 # merge logic itself lives in the edit-docx skill, not here.
+#
+# The link the runner emits is keyed by the stable ``app_id`` (not the mutable
+# client-facing name), so it keeps resolving after a rename.  ``app_ref`` is
+# therefore resolved as an app_id first, with a name lookup kept as a fallback
+# for links that were persisted before the switch to app_id keying.
 
 
-@router.get("/{app_name}/documents/{doc_id}/download")
+@router.get("/{app_ref}/documents/{doc_id}/download")
 async def download_generated_document(
-    app_name: str,
+    app_ref: str,
     doc_id: str,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
     system_resources: SystemResourcesDep,
 ) -> StreamingResponse:
-    """Stream a generated artifact (identified by its full ``artifact_id``) as a download."""
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
-    record = await system_store.get_app(app_name)
+    """Stream a generated artifact (identified by its full ``artifact_id``) as a download.
+
+    ``app_ref`` is the application's stable ``app_id`` (falling back to its name for
+    legacy links); the artifact is scoped to that app's document store.
+    """
+    record = await system_store.get_app_by_id(app_ref) or await system_store.get_app(app_ref)
+    if record is None or record.status != "active":
+        raise HTTPException(status_code=404, detail=f"Application '{app_ref}' not found or not active")
+    app = await _get_active_app(record.name, app_cache, system_store, system_resources)
     try:
         data = await app.document_store.load_bytes(record.app_id, f"generated/{doc_id}")
     except (KeyError, NotImplementedError):

@@ -113,16 +113,16 @@ async def test_save_artifact_persists_under_generated_and_returns_id(tmp_path):
 
 @pytest.mark.asyncio
 async def test_save_artifact_returns_ready_markdown_download_link(tmp_path):
-    """The tool output and ArtifactRef carry an app-scoped markdown download link."""
+    """The tool output and ArtifactRef carry an app_id-scoped markdown download link."""
     store = LocalFSDocumentStore(str(tmp_path))
-    runner = _runner(store)
-    runner._app_name = "contracts"
+    runner = _runner(store, app_id="app-123")
     src = tmp_path / "merged.docx"
     src.write_bytes(b"x")
 
     artifact, out = await runner._run_save_artifact({"path": str(src), "filename": "final.docx"})
 
-    expected_path = f"/applications/contracts/documents/{artifact.artifact_id}/download"
+    # Keyed by the stable app_id so the link survives a rename.
+    expected_path = f"/applications/app-123/documents/{artifact.artifact_id}/download"
     assert artifact.download_path == expected_path
     assert artifact.markdown_link == f"[final.docx]({expected_path})"
     # The model is handed the exact link to reproduce.

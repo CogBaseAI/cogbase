@@ -32,14 +32,15 @@ export async function copyText(value) {
 
 // A skill that produces a downloadable file reports its path through the query
 // runner's save_artifact tool as
-//   /applications/<app_name>/documents/<artifact_id>/download
-// The runner only knows the app's internal id, so it emits the literal
-// `<app_name>` placeholder and a path relative to the API — neither of which is
-// clickable in the chat as-is (a relative path targets the UI origin, and the
-// placeholder isn't a real name). Rewrite every such occurrence into an
-// absolute URL against the API origin with the real app name, so remark-gfm
-// autolinks it and the click hits the download endpoint. Leaves everything else
-// untouched; idempotent on already-absolute URLs.
+//   /applications/<app_id>/documents/<artifact_id>/download
+// keyed by the app's stable id so the link survives a rename. The path is
+// relative to the API, so it isn't clickable in the chat as-is (a relative path
+// targets the UI origin). Rewrite every such occurrence into an absolute URL
+// against the API origin, so remark-gfm autolinks it and the click hits the
+// download endpoint. Older transcripts may still carry the pre-app_id
+// `<app_name>` placeholder; that is substituted with the current app name, which
+// the endpoint resolves via its name fallback. Leaves everything else untouched;
+// idempotent on already-absolute URLs.
 const ARTIFACT_PATH_RE =
   /(?:https?:\/\/[^/\s)]+)?\/applications\/([^/\s)]+)\/documents\/([^/\s)]+)\/download/g
 

@@ -659,10 +659,9 @@ class QueryRunner:
     """Unified LLM agent loop with skill routing and retrieval tools.
 
     Args:
-        app_id:                      Stable internal application id; used to scope document store reads.
-        app_name:                    Client-facing application name used to build the download URL for
-                                     artifacts persisted by ``save_artifact``. Optional; when omitted a
-                                     ``<app_name>`` placeholder is used in the path.
+        app_id:                      Stable internal application id; used to scope document store reads
+                                     and to build the download URL for artifacts persisted by
+                                     ``save_artifact`` (keyed by app_id so the link survives a rename).
         llm:                         LLM backend.
         resources:                   ``RetrievalResources`` bundle: document store (required),
                                      optional structured/vector stores, embedder, and the
@@ -701,7 +700,6 @@ class QueryRunner:
         resources: RetrievalResources,
         memory: MemoryTiers | None = None,
         *,
-        app_name: str | None = None,
         skills: list | None = None,
         system_tools: list[SystemTool] | None = None,
         max_calls: int = 10,
@@ -710,10 +708,6 @@ class QueryRunner:
         enable_memory_lookup: bool = False,
     ) -> None:
         self._app_id = app_id
-        # Client-facing name used to build the artifact download URL served by
-        # GET /applications/{app_name}/documents/{id}/download.  Falls back to a
-        # placeholder when unknown so the path shape is still emitted.
-        self._app_name = app_name
         self._llm = llm
 
         # Unpack the bundles into flat attrs so the rest of the class reads
@@ -1299,11 +1293,11 @@ class QueryRunner:
     def _artifact_download_path(self, artifact_id: str) -> str:
         """App-scoped download path served by the generated-artifact endpoint.
 
-        Mirrors ``GET /applications/{app_name}/documents/{artifact_id}/download``.
-        Uses ``<app_name>`` as a placeholder when the name is unknown so the path
-        shape is still emitted (the runner is usually built with a real name).
+        Mirrors ``GET /applications/{app_id}/documents/{artifact_id}/download``.
+        Keyed by the stable ``app_id`` (not the mutable client-facing name), so a
+        link handed to the user keeps resolving after the application is renamed.
         """
-        return f"/applications/{self._app_name or '<app_name>'}/documents/{artifact_id}/download"
+        return f"/applications/{self._app_id}/documents/{artifact_id}/download"
 
     async def _run_save_artifact(self, inputs: dict) -> tuple[ArtifactRef | None, str]:
         """Persist a skill-produced file to the document store for later download.
