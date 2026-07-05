@@ -3,8 +3,8 @@
 Assumes:
   - The API server is running (default: http://localhost:8000).
     Override with the COGBASE_API_URL environment variable.
-  - The 'contract-analyst' application was created and the 5 SaaS contracts
-    were ingested via demo.py ('create' then 'ingest saas').
+  - The 'contract-analyst' application was created and the SaaS contract
+    fixtures were ingested via demo.py ('create' then 'ingest saas').
 
 Run with::
 
@@ -16,7 +16,7 @@ Setup
   - The application exists and is active
 
 Ingestion (structured collection)
-  - All 5 SaaS contracts produced exactly one record each
+  - Every ingested SaaS contract produced exactly one record
   - Core fields (doc_id, contract_type, parties, dates, contract_value,
     liability_cap, notice_period_days) are present and correct per contract
 
@@ -97,8 +97,9 @@ def test_application_exists():
 # ---------------------------------------------------------------------------
 
 class TestIngestion:
-    def test_all_five_contracts_ingested(self, records):
-        assert len(records) == 5, f"Expected 5 records, got {len(records)}"
+    def test_all_contracts_ingested(self, records):
+        expected = len(CONTRACTS)
+        assert len(records) == expected, f"Expected {expected} records, got {len(records)}"
 
     def test_each_doc_id_present(self, records):
         found_ids = {r["doc_id"] for r in records}

@@ -15,7 +15,7 @@ and embedding provider (including API key) via the UI Settings tab.
 
 Commands (interactive loop)
 ---------------------------
-    /ingest_demo_contracts                Ingest the built-in 5 SaaS contract fixtures
+    /ingest_demo_contracts                Ingest the built-in SaaS contract fixtures
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import io
 import json
 import pathlib
 import sys
+import tempfile
 import zipfile
 
 _DEMO_DIR = pathlib.Path(__file__).parent.resolve()
@@ -45,6 +46,7 @@ from examples.contract_analyst_demo.schema import (  # noqa: E402
     ContractExtractionRecord,
 )
 from examples.contract_analyst_demo.saas_contracts import CONTRACTS  # noqa: E402
+from examples.contract_analyst_demo.docx_render import write_docx  # noqa: E402
 
 configure_logging()
 
@@ -79,10 +81,18 @@ async def main() -> None:
 
         async def handler(raw: str, lower: str) -> bool:
             if lower == "/ingest_demo_contracts":
-                print(f"Ingesting {len(CONTRACTS)} built-in SaaS contracts...")
-                documents = [{"doc_id": doc_id, "text": text} for doc_id, text in CONTRACTS.items()]
+                print(f"Ingesting {len(CONTRACTS)} built-in SaaS contracts as .docx...")
+                # The fixtures live as plain text in saas_contracts.py; convert each
+                # to a Word document on the fly and upload it (parsed to markdown
+                # server-side) so nothing needs to be committed to git.
                 try:
-                    results = await client.upload_text_documents(documents)
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        paths = []
+                        for doc_id, text in CONTRACTS.items():
+                            path = pathlib.Path(tmpdir) / f"{doc_id}.docx"
+                            write_docx(text, path)
+                            paths.append(path)
+                        results = await client.upload_documents(paths)
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     return True

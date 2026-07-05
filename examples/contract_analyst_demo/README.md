@@ -2,7 +2,7 @@
 
 Ask natural-language questions across a portfolio of legal contracts: find which agreements expire before a given date, compare termination rights across vendors, surface contracts with unusual liability caps, or retrieve the verbatim clause text for any obligation. Structured lookups (e.g. "list all contracts governed by New York law") return exact records; open-ended questions stream a synthesized answer with citations.
 
-The demo ships with five SaaS contract fixtures and accepts any plain-text contract you provide. Each ingested document produces one structured record (parties, dates, clause text, payment terms) plus a searchable vector index of its full text.
+The demo ships with a set of SaaS contract fixtures — five agreements plus one amendment (`saas-001-amendment`) to `saas-001` — as plain text in `saas_contracts.py`, and accepts any plain-text contract you provide. On ingest, each fixture is rendered to a `.docx` on the fly and uploaded (parsed to markdown server-side) — no Word files are committed to the repo. Each ingested document produces one structured record (parties, dates, clause text, payment terms) plus a searchable vector index of its full text.
 
 ## Quick start
 
@@ -24,7 +24,7 @@ The API server runs at `http://localhost:8000`. After the container starts, conf
 | `list` | List all applications |
 | `create` | Create the contract-analyst application |
 | `delete <name>` | Delete an application by name (with confirmation) |
-| `ingest saas` | Ingest the 5 built-in SaaS contract fixtures |
+| `ingest saas` | Ingest the built-in SaaS contract fixtures (5 agreements + 1 amendment) |
 | `ingest <path>` | Ingest a plain-text contract file from disk |
 | `list collections` | List all structured collections for the application |
 | `query structured` | Query the default `contracts` collection (all records) |
@@ -131,7 +131,7 @@ contract_analyst_demo/
 ├── README.md
 ├── demo.py               # interactive demo script
 ├── schema.py             # ContractExtraction, ContractExtractionRecord, Party, PaymentTerms
-└── saas_contracts.py     # built-in SaaS contract fixtures
+└── saas_contracts.py     # built-in SaaS contract fixtures (rendered to .docx at ingest)
 ```
 
 ## Known limitations

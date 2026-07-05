@@ -15,7 +15,7 @@ postgres = ["asyncpg>=0.29"]
 pgvector = ["asyncpg>=0.29", "pgvector>=0.3", "numpy>=1.24"]
 api = ["fastapi>=0.111", "uvicorn[standard]>=0.29", "pyyaml>=6.0", "openai>=1.0", "python-multipart>=0.0.9", "cachetools>=5.0", "jinja2>=3.1", "markitdown[all]>=0.1.5", "jsonschema>=4.0"]
 all = ["cogbase[api,faiss,s3,postgres,pgvector]"]
-demo = ["cogbase[api,faiss]"]
+demo = ["cogbase[api,faiss]", "python-docx>=1.1"]
 dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "faiss-cpu>=1.7", "asyncpg>=0.29", "pgvector>=0.3", "numpy>=1.24", "jinja2>=3.1"]
 
 [tool.ruff]

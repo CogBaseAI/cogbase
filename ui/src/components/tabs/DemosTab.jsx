@@ -97,7 +97,14 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
       for (const [metaJson, batchDocs] of Object.entries(metaGroups)) {
         const formData = new FormData()
         for (const doc of batchDocs) {
-          formData.append('files', new Blob([doc.text || ''], { type: 'text/plain' }), doc.doc_id + '.txt')
+          if (doc.upload) {
+            // Pre-rendered file (e.g. .docx); parsed to markdown server-side.
+            const bin = atob(doc.upload.content_b64)
+            const bytes = Uint8Array.from(bin, c => c.charCodeAt(0))
+            formData.append('files', new Blob([bytes], { type: doc.upload.content_type }), doc.upload.filename)
+          } else {
+            formData.append('files', new Blob([doc.text || ''], { type: 'text/plain' }), doc.doc_id + '.txt')
+          }
         }
         formData.append('metadata', metaJson)
         const ingestResp = await fetch(`${apiUrl}/applications/${encodeURIComponent(demo.name)}/upload_documents`, { method: 'POST', body: formData })

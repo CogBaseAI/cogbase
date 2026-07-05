@@ -6,6 +6,7 @@ Run from the repo root:
 
 from __future__ import annotations
 
+import base64
 import json
 import pathlib
 import sys
@@ -20,6 +21,7 @@ from cogbase.config.config import AppConfig, _iter_save_steps  # noqa: E402
 from api.routers.applications import _resolve_file_refs  # noqa: E402
 from examples.contract_analyst_demo.saas_contracts import CONTRACTS as CONTRACT_ANALYST_DOCS  # noqa: E402
 from examples.contract_analyst_demo.schema import ContractExtraction, ContractExtractionRecord  # noqa: E402
+from examples.contract_analyst_demo.docx_render import DOCX_CONTENT_TYPE, to_docx_bytes  # noqa: E402
 from examples.contract_compliance_demo.contracts_data import CONTRACTS_DOCUMENTS as COMPLIANCE_CONTRACT_DOCS  # noqa: E402
 from examples.contract_compliance_demo.rules_data import RULES_DOCUMENTS as COMPLIANCE_RULE_DOCS  # noqa: E402
 from examples.contract_compliance_demo.schema import (  # noqa: E402
@@ -149,6 +151,28 @@ def _docs_from_pairs(items: dict[str, str], metadata: dict) -> list[dict]:
     return [{"doc_id": doc_id, "text": text, "metadata": dict(metadata)} for doc_id, text in items.items()]
 
 
+def _docs_as_docx(items: dict[str, str], metadata: dict) -> list[dict]:
+    """Like ``_docs_from_pairs``, but attaches a rendered .docx for each doc.
+
+    ``text`` is kept for the UI preview; ``upload`` carries the base64-encoded
+    Word file the Demos tab uploads (parsed to markdown server-side) so the
+    fixtures are ingested as .docx rather than plain text.
+    """
+    docs = []
+    for doc_id, text in items.items():
+        docs.append({
+            "doc_id": doc_id,
+            "text": text,
+            "metadata": dict(metadata),
+            "upload": {
+                "filename": f"{doc_id}.docx",
+                "content_type": DOCX_CONTENT_TYPE,
+                "content_b64": base64.b64encode(to_docx_bytes(text)).decode("ascii"),
+            },
+        })
+    return docs
+
+
 def _docs_from_documents(items) -> list[dict]:
     return [{"doc_id": doc.doc_id, "text": doc.text, "metadata": dict(doc.metadata)} for doc in items]
 
@@ -174,13 +198,13 @@ def build_catalog() -> dict:
                     "for dates, liability caps, payment terms, and clause text."
                 ),
                 "config_yaml": config_yaml_ca,
-                "docs": _docs_from_pairs(CONTRACT_ANALYST_DOCS, {"doc_type": "contract"}),
+                "docs": _docs_as_docx(CONTRACT_ANALYST_DOCS, {"doc_type": "contract"}),
                 "query_examples": [
                     "Which contracts expire before 2026-01-01?",
                     "Which contracts mention New York law?",
                     "Show the payment terms for the Acme contracts.",
                 ],
-                "notes": "Deploys the contract-analyst app and ingests five built-in SaaS agreements.",
+                "notes": "Deploys the contract-analyst app and ingests the built-in SaaS agreements as Word .docx files.",
             },
             {
                 "key": "vc-portfolio",

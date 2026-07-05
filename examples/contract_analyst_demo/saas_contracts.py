@@ -1,7 +1,11 @@
 """Realistic SaaS vendor agreement fixtures for end-to-end testing.
 
 Five SaaS contracts are included, each deliberately crafted to exercise a
-specific query pattern or cross-contract comparison:
+specific query pattern or cross-contract comparison. A sixth fixture
+(saas-001-amendment) is Amendment No. 1 to saas-001, exercising queries that
+must reconcile an original agreement with a later amendment (extended term to
+2027-06-30, liability cap raised to $500 K, net-45 payment, new subprocessor
+notice, fee increased to $540 K):
 
   saas-001  CloudStore Pro / Acme Corp — NY law, expires 2025-06-30, very low
             liability cap ($50 K) relative to contract value ($500 K), GDPR +
@@ -594,9 +598,87 @@ Name: Sarah Chen                       Name: Robert Kimball
 Title: Chief Procurement Officer       Title: President & CEO
 """
 
+SAAS_001_AMENDMENT = """\
+AMENDMENT NO. 1 TO SOFTWARE AS A SERVICE AGREEMENT
+
+Amendment No.: MSA-2024-0391-A1
+Effective Date of Amendment: July 1, 2025
+
+PARTIES
+
+This Amendment No. 1 (this "Amendment") is entered into as of July 1, 2025, between
+Meridian Analytics Inc., a Delaware corporation with its principal place of business at
+350 Fifth Avenue, New York, NY 10118 ("Customer"), and Acme Corp, a New York corporation
+with its principal place of business at 100 Technology Drive, New York, NY 10001
+("Provider").
+
+RECITALS
+
+WHEREAS, the parties entered into that certain Software as a Service Agreement No.
+MSA-2024-0391, effective April 1, 2024 (the "Agreement"), pursuant to which Provider
+furnishes Customer the cloud-hosted platform known as CloudStore Pro; and
+
+WHEREAS, the parties wish to extend the term, increase the limitation of liability cap,
+and revise the payment terms of the Agreement;
+
+NOW, THEREFORE, in consideration of the mutual covenants set forth herein, the parties
+agree as follows:
+
+1. TERM EXTENSION
+
+Section 2 (Term) of the Agreement is deleted in its entirety and replaced with the
+following: "This Agreement commences on April 1, 2024 and expires on June 30, 2027 unless
+earlier terminated pursuant to Section 8."
+
+2. LIMITATION OF LIABILITY
+
+Section 7.2 of the Agreement is deleted in its entirety and replaced with the following:
+"EACH PARTY'S AGGREGATE LIABILITY ARISING OUT OF OR RELATED TO THIS AGREEMENT SHALL NOT
+EXCEED USD 500,000, REPRESENTING THE LIABILITY CAP. THE PARTIES ACKNOWLEDGE THAT THIS
+LIMITATION REFLECTS A REASONABLE ALLOCATION OF RISK."
+
+3. PAYMENT TERMS
+
+The second sentence of Section 4 (Payment Terms) of the Agreement is deleted and replaced
+with the following: "Customer shall remit payment within forty-five (45) days of the
+invoice date (net-45)." All other provisions of Section 4 remain unchanged.
+
+4. NEW SECTION 5.5 – SUBPROCESSOR NOTICE
+
+A new Section 5.5 is added to the Agreement immediately following Section 5.4, reading in
+its entirety: "5.5 Subprocessors. Provider shall maintain an up-to-date list of
+subprocessors engaged in the processing of Customer personal data and shall provide
+Customer no less than thirty (30) days' prior written notice before adding or replacing
+any subprocessor, during which period Customer may object on reasonable data-protection
+grounds."
+
+5. ANNUAL SUBSCRIPTION FEE
+
+The annual subscription fee set forth in Section 1 is increased from USD 500,000 to
+USD 540,000, effective for each contract year beginning on or after July 1, 2025,
+reflecting the extended term and expanded data-protection commitments.
+
+6. NO OTHER CHANGES
+
+Except as expressly amended herein, all terms and conditions of the Agreement remain in
+full force and effect. In the event of any conflict between this Amendment and the
+Agreement, this Amendment shall control. Capitalized terms not defined herein have the
+meanings given to them in the Agreement.
+
+IN WITNESS WHEREOF, the parties have executed this Amendment as of the date first written
+above.
+
+Meridian Analytics Inc.                Acme Corp
+By: ____________________________       By: ____________________________
+Name: Sarah Chen                       Name: Michael Torres
+Title: Chief Procurement Officer       Title: Vice President, Enterprise Sales
+"""
+
+
 # Mapping from doc_id to contract text — use this in tests
 CONTRACTS: dict[str, str] = {
     "saas-001": SAAS_001,
+    "saas-001-amendment": SAAS_001_AMENDMENT,
     "saas-002": SAAS_002,
     "saas-003": SAAS_003,
     "saas-004": SAAS_004,
