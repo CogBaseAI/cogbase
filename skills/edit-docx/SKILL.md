@@ -88,8 +88,10 @@ to an uploaded document or is meant inline, ask before proceeding.
    these; call them out to the user.
 
 5. **Save and return.** Call `save_artifact` with the path to `merged.docx` and a
-   descriptive `filename` (e.g. `<document-name>-revised.docx`). Report the download
-   path it returns, plus a short summary of what changed and any unmatched operations.
+   descriptive `filename` (e.g. `<document-name>-revised.docx`). It returns a
+   ready-made markdown download link — include that exact link in your answer, along
+   with a short summary of what changed and any unmatched operations. (The link is
+   also appended to your answer automatically, so the user always gets a download.)
 
 ## `apply_operations.py`
 

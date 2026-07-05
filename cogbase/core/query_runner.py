@@ -104,6 +104,24 @@ class DocumentSlice(BaseModel):
         return f"{self.doc_id}:{self.offset}:{self.length}"
 
 
+class ArtifactRef(BaseModel):
+    """A file persisted by a save_artifact call, with its download link.
+
+    ``download_path`` is the ready-to-use, app-scoped path served by the
+    generated-artifact download endpoint; the runner both hands it back in the
+    tool output and appends it — as a markdown link — to the final answer, so a
+    downloadable file always surfaces an explicit link the caller can render.
+    """
+
+    artifact_id: str
+    filename: str
+    download_path: str
+
+    @property
+    def markdown_link(self) -> str:
+        return f"[{self.filename}]({self.download_path})"
+
+
 class QueryResult(BaseModel):
     """Final result of a QueryRunner invocation.
 
@@ -223,7 +241,8 @@ _BASE_TOOLS: list[ToolDefinition] = [
         "description": (
             "Persist a locally-produced file (e.g. a generated or edited .docx) so the user "
             "can download it. Call this after a skill script writes its output file. Returns "
-            "an artifact id and the download path."
+            "an artifact id and a ready-to-use markdown download link — include that exact link "
+            "in your answer so the user can download the file."
         ),
         "parameters": {
             "type": "object",
@@ -512,6 +531,23 @@ def _format_chunks(chunks: list[Chunk]) -> str:
     return "\n".join(lines)
 
 
+def _append_download_links(answer: str, artifacts: list[ArtifactRef]) -> str:
+    """Guarantee every saved artifact surfaces an explicit download link.
+
+    The model is told the ready-made link in the ``save_artifact`` tool output,
+    but whether it reproduces it verbatim in its prose is not reliable — so the
+    runner appends a stable markdown link for any artifact whose download path
+    isn't already in the answer.  An artifact the model already linked is skipped
+    to avoid a duplicate; only genuinely missing ones get the appended block.
+    """
+    missing = [a for a in artifacts if a.download_path not in answer]
+    if not missing:
+        return answer
+    lines = "\n".join(f"- {a.markdown_link}" for a in missing)
+    sep = "" if answer.endswith("\n") else "\n"
+    return f"{answer}{sep}\n**Download:**\n{lines}\n"
+
+
 def _extract_cited_ids(answer: str) -> set[str]:
     """Return all bracket-cited IDs from *answer*, e.g. [contract_001_0]."""
     return set(re.findall(r"\[([^\]]+)\]", answer))
@@ -624,6 +660,9 @@ class QueryRunner:
 
     Args:
         app_id:                      Stable internal application id; used to scope document store reads.
+        app_name:                    Client-facing application name used to build the download URL for
+                                     artifacts persisted by ``save_artifact``. Optional; when omitted a
+                                     ``<app_name>`` placeholder is used in the path.
         llm:                         LLM backend.
         resources:                   ``RetrievalResources`` bundle: document store (required),
                                      optional structured/vector stores, embedder, and the
@@ -662,6 +701,7 @@ class QueryRunner:
         resources: RetrievalResources,
         memory: MemoryTiers | None = None,
         *,
+        app_name: str | None = None,
         skills: list | None = None,
         system_tools: list[SystemTool] | None = None,
         max_calls: int = 10,
@@ -670,6 +710,10 @@ class QueryRunner:
         enable_memory_lookup: bool = False,
     ) -> None:
         self._app_id = app_id
+        # Client-facing name used to build the artifact download URL served by
+        # GET /applications/{app_name}/documents/{id}/download.  Falls back to a
+        # placeholder when unknown so the path shape is still emitted.
+        self._app_name = app_name
         self._llm = llm
 
         # Unpack the bundles into flat attrs so the rest of the class reads
@@ -871,6 +915,9 @@ class QueryRunner:
         all_records: list[dict] = []
         all_chunks: list[Chunk] = []
         all_slices: list[DocumentSlice] = []
+        # Files persisted via save_artifact this turn; their download links are
+        # appended to the final answer so a downloadable file always surfaces one.
+        saved_artifacts: list[ArtifactRef] = []
         # Each injected memory block (the recall block below, plus any memory_lookup
         # results during the loop) is one citable passage keyed by its block id.
         # Only the blocks the answer cites are surfaced on the final QueryResult, so
@@ -942,7 +989,12 @@ class QueryRunner:
             tool_calls = final_result.get("tool_calls") if final_result else None
             if not tool_calls:
                 answer = "".join(tokens) + "\n"
+                # Cited ids come from the model's own prose; extract them before
+                # appending download links so a link's [filename] can't be mistaken
+                # for an evidence citation.
                 cited_ids = _extract_cited_ids(answer)
+                if saved_artifacts:
+                    answer = _append_download_links(answer, saved_artifacts)
                 cited_chunks = _filter_cited_chunks(all_chunks, cited_ids)
                 cited_slices = _filter_cited_slices(all_slices, cited_ids)
                 cited_memories = _cited_block_memories(memory_blocks, cited_ids)
@@ -1036,6 +1088,10 @@ class QueryRunner:
                     tool_output, looked_up = await self._run_memory_lookup(inputs, block_id)
                     if looked_up:
                         memory_blocks[block_id] = looked_up
+                elif name == "save_artifact":
+                    artifact, tool_output = await self._run_save_artifact(inputs)
+                    if artifact is not None:
+                        saved_artifacts.append(artifact)
                 else:
                     tool_output = await self._execute_tool(name, inputs, current_skill)
                     logger.info("[runner] execute_tool done: %s", tool_output[:300])
@@ -1099,8 +1155,6 @@ class QueryRunner:
 
         if name == "fetch_document":
             return await self._run_fetch_document(inputs)
-        if name == "save_artifact":
-            return await self._run_save_artifact(inputs)
 
         env = self._tool_env(skill)
         if name == "python":
@@ -1242,19 +1296,31 @@ class QueryRunner:
         logger.info("[runner] fetch_document doc_id=%s bytes=%d path=%s", doc_id, len(data), path)
         return f"Fetched document '{doc_id}' ({len(data)} bytes) to {path}"
 
-    async def _run_save_artifact(self, inputs: dict) -> str:
+    def _artifact_download_path(self, artifact_id: str) -> str:
+        """App-scoped download path served by the generated-artifact endpoint.
+
+        Mirrors ``GET /applications/{app_name}/documents/{artifact_id}/download``.
+        Uses ``<app_name>`` as a placeholder when the name is unknown so the path
+        shape is still emitted (the runner is usually built with a real name).
+        """
+        return f"/applications/{self._app_name or '<app_name>'}/documents/{artifact_id}/download"
+
+    async def _run_save_artifact(self, inputs: dict) -> tuple[ArtifactRef | None, str]:
         """Persist a skill-produced file to the document store for later download.
 
         Stores under ``generated/{artifact_id}`` (``artifact_id`` keeps the
         original extension), which the ``GET .../documents/{artifact_id}/download``
-        endpoint serves verbatim.
+        endpoint serves verbatim.  Returns the ``ArtifactRef`` (so the runner can
+        append its markdown link to the final answer) and the tool output, which
+        carries that same ready-to-use link for the model to reproduce.  Returns
+        ``(None, <error>)`` on any failure.
         """
         if self._document_store is None or self._app_id is None:
-            return "save_artifact is unavailable (no document store configured)"
+            return None, "save_artifact is unavailable (no document store configured)"
 
         path = str(inputs.get("path", ""))
         if not path or not os.path.exists(path):
-            return f"save_artifact error: file not found at '{path}'"
+            return None, f"save_artifact error: file not found at '{path}'"
 
         filename = str(inputs.get("filename") or os.path.basename(path))
         stem, ext = os.path.splitext(filename)
@@ -1265,12 +1331,17 @@ class QueryRunner:
         try:
             await self._document_store.save_bytes(self._app_id, f"generated/{artifact_id}", data)
         except NotImplementedError:
-            return "save_artifact error: the document store does not support binary artifacts"
+            return None, "save_artifact error: the document store does not support binary artifacts"
 
+        artifact = ArtifactRef(
+            artifact_id=artifact_id,
+            filename=filename,
+            download_path=self._artifact_download_path(artifact_id),
+        )
         logger.info("[runner] save_artifact artifact_id=%s bytes=%d", artifact_id, len(data))
-        return (
+        return artifact, (
             f"Saved artifact '{artifact_id}' ({len(data)} bytes). "
-            f"Download it via GET /applications/<app_name>/documents/{artifact_id}/download"
+            f"Include this download link in your answer: {artifact.markdown_link}"
         )
 
     async def _run_python(self, code: str, env: dict) -> str:

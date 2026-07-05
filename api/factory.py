@@ -326,6 +326,7 @@ async def build_app(
 
     qrunner = QueryRunner(
         app_id=app_id,
+        app_name=config.name,
         llm=llm,
         resources=RetrievalResources(
             document_store=document_store,

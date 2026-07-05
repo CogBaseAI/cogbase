@@ -18,7 +18,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cogbase.core.query_runner import MemoryTiers, QueryRunner, RetrievalResources
+from cogbase.core.query_runner import (
+    ArtifactRef,
+    MemoryTiers,
+    QueryRunner,
+    RetrievalResources,
+    _append_download_links,
+)
 from cogbase.stores.document.local_fs import LocalFSDocumentStore
 
 
@@ -93,15 +99,34 @@ async def test_save_artifact_persists_under_generated_and_returns_id(tmp_path):
     src = tmp_path / "merged.docx"
     src.write_bytes(b"merged-content")
 
-    out = await runner._run_save_artifact({"path": str(src), "filename": "My Contract.docx"})
+    artifact, out = await runner._run_save_artifact({"path": str(src), "filename": "My Contract.docx"})
 
     assert "Saved artifact" in out
-    artifact_id = out.split("'")[1]
+    assert artifact is not None
+    artifact_id = artifact.artifact_id
     # Filename is sanitized, keeps its extension, and carries a uuid suffix.
     assert artifact_id.startswith("My_Contract__")
     assert artifact_id.endswith(".docx")
     stored = await store.load_bytes("app1", f"generated/{artifact_id}")
     assert stored == b"merged-content"
+
+
+@pytest.mark.asyncio
+async def test_save_artifact_returns_ready_markdown_download_link(tmp_path):
+    """The tool output and ArtifactRef carry an app-scoped markdown download link."""
+    store = LocalFSDocumentStore(str(tmp_path))
+    runner = _runner(store)
+    runner._app_name = "contracts"
+    src = tmp_path / "merged.docx"
+    src.write_bytes(b"x")
+
+    artifact, out = await runner._run_save_artifact({"path": str(src), "filename": "final.docx"})
+
+    expected_path = f"/applications/contracts/documents/{artifact.artifact_id}/download"
+    assert artifact.download_path == expected_path
+    assert artifact.markdown_link == f"[final.docx]({expected_path})"
+    # The model is handed the exact link to reproduce.
+    assert artifact.markdown_link in out
 
 
 @pytest.mark.asyncio
@@ -111,11 +136,11 @@ async def test_save_artifact_defaults_filename_to_basename(tmp_path):
     src = tmp_path / "out.docx"
     src.write_bytes(b"x")
 
-    out = await runner._run_save_artifact({"path": str(src)})
+    artifact, _ = await runner._run_save_artifact({"path": str(src)})
 
-    artifact_id = out.split("'")[1]
-    assert artifact_id.startswith("out__")
-    assert artifact_id.endswith(".docx")
+    assert artifact.artifact_id.startswith("out__")
+    assert artifact.artifact_id.endswith(".docx")
+    assert artifact.filename == "out.docx"
 
 
 @pytest.mark.asyncio
@@ -125,15 +150,16 @@ async def test_save_artifact_ids_are_unique_per_call(tmp_path):
     src = tmp_path / "out.docx"
     src.write_bytes(b"x")
 
-    first = (await runner._run_save_artifact({"path": str(src)})).split("'")[1]
-    second = (await runner._run_save_artifact({"path": str(src)})).split("'")[1]
-    assert first != second
+    first, _ = await runner._run_save_artifact({"path": str(src)})
+    second, _ = await runner._run_save_artifact({"path": str(src)})
+    assert first.artifact_id != second.artifact_id
 
 
 @pytest.mark.asyncio
 async def test_save_artifact_missing_file_returns_error(tmp_path):
     runner = _runner(LocalFSDocumentStore(str(tmp_path)))
-    out = await runner._run_save_artifact({"path": "/no/such/file.docx"})
+    artifact, out = await runner._run_save_artifact({"path": "/no/such/file.docx"})
+    assert artifact is None
     assert out.startswith("save_artifact error: file not found")
 
 
@@ -146,7 +172,8 @@ async def test_save_artifact_store_without_binary_support(tmp_path):
     src = tmp_path / "out.docx"
     src.write_bytes(b"x")
 
-    out = await runner._run_save_artifact({"path": str(src)})
+    artifact, out = await runner._run_save_artifact({"path": str(src)})
+    assert artifact is None
     assert "does not support binary artifacts" in out
 
 
@@ -167,9 +194,39 @@ async def test_fetch_then_save_round_trip(tmp_path):
     produced = tmp_path / "produced.docx"
     produced.write_bytes(open(fetched_path, "rb").read() + b"+edits")
 
-    out = await runner._run_save_artifact({"path": str(produced), "filename": "c-merged.docx"})
-    artifact_id = out.split("'")[1]
-    assert await store.load_bytes("app1", f"generated/{artifact_id}") == b"orig+edits"
+    artifact, _ = await runner._run_save_artifact({"path": str(produced), "filename": "c-merged.docx"})
+    assert await store.load_bytes("app1", f"generated/{artifact.artifact_id}") == b"orig+edits"
+
+
+# ---------------------------------------------------------------------------
+# download-link appending
+# ---------------------------------------------------------------------------
+
+
+def _ref(filename="out.docx", artifact_id="out__abc123.docx") -> ArtifactRef:
+    return ArtifactRef(
+        artifact_id=artifact_id,
+        filename=filename,
+        download_path=f"/applications/app/documents/{artifact_id}/download",
+    )
+
+
+def test_append_download_links_adds_markdown_block_for_missing_artifact():
+    ref = _ref()
+    out = _append_download_links("Here is your revised document.\n", [ref])
+    assert ref.markdown_link in out
+    assert "**Download:**" in out
+
+
+def test_append_download_links_skips_artifact_already_linked():
+    ref = _ref()
+    # Model already wrote the exact link; no duplicate block is appended.
+    answer = f"Done — {ref.markdown_link}\n"
+    assert _append_download_links(answer, [ref]) == answer
+
+
+def test_append_download_links_noop_without_artifacts():
+    assert _append_download_links("answer\n", []) == "answer\n"
 
 
 def test_artifact_tools_only_exposed_when_skill_active(tmp_path):
