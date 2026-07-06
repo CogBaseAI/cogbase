@@ -20,14 +20,21 @@ COPY pyproject.toml ./
 RUN mkdir -p cogbase && touch cogbase/__init__.py
 RUN pip install --no-cache-dir ".[demo]"
 
-COPY . .
-COPY --from=ui-builder /ui/dist ./ui/dist
-
 # Pre-warm built-in skills: loading skills_dir installs each skill's declared
 # pip deps into a per-skill venv under ~/.cogbase/.skill_venvs. Doing it at
 # build time bakes those venvs into the image, so container startup is fast and
 # needs no network (the runtime load finds the venvs already present).
+#
+# Feed this off a narrow copy of just the code it needs (cogbase for the
+# registry import, skills for the bundles) BEFORE the broad `COPY . .`. That
+# way edits to api/, server/, examples/, docs/, or ui/ don't bust this layer
+# and the (slow, network-bound) venv install is reused from cache.
+COPY cogbase ./cogbase
+COPY skills ./skills
 RUN python -c "from cogbase.skills.registry import SkillRegistry; SkillRegistry().load_from_dir('/app/skills')"
+
+COPY . .
+COPY --from=ui-builder /ui/dist ./ui/dist
 
 EXPOSE 8000
 
