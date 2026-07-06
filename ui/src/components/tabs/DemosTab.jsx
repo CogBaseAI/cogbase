@@ -13,6 +13,25 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
   const [steps, setSteps] = useState({})
   // deploying: Set of demo keys currently being deployed
   const [deploying, setDeploying] = useState(new Set())
+  // scope: { [demoKey]: 'starter' | 'full' } — which corpus depth to ingest
+  const [scope, setScope] = useState({})
+
+  // A demo supports a starter subset when some (but not all) of its docs are
+  // flagged starter. Mirrors the CLI's `/ingest_demo_contracts` vs `… all`.
+  function starterInfo(demo) {
+    const all = demo.docs || []
+    const starter = all.filter(d => d.starter)
+    return { all, starter, hasSubset: starter.length > 0 && starter.length < all.length }
+  }
+
+  function scopeFor(demo) {
+    return scope[demo.key] || (starterInfo(demo).hasSubset ? 'starter' : 'full')
+  }
+
+  function docsForScope(demo) {
+    const { all, starter, hasSubset } = starterInfo(demo)
+    return hasSubset && scopeFor(demo) === 'starter' ? starter : all
+  }
 
   async function loadDemos() {
     setLoading(true); setError(null)
@@ -84,8 +103,8 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
         updateStep(key, appStepId, t('demos.stepCreated', { name: demo.name }), 'done')
       }
 
-      // Step 2: upload docs grouped by metadata
-      const docs = demo.docs || []
+      // Step 2: upload docs grouped by metadata (starter subset or full corpus)
+      const docs = docsForScope(demo)
       const uploadStepId = addStep(key, t('demos.stepUploading', { n: docs.length }))
       const metaGroups = {}
       for (const doc of docs) {
@@ -223,9 +242,32 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
               {demo.notes && <div className="demo-desc" style={{ color: 'var(--muted)' }}>{demo.notes}</div>}
               <div className="demo-badges">
                 <span className="demo-badge">{t('demos.appLabel', { name: demo.name })}</span>
-                <span className="demo-badge">{t('demos.docsCount', { n: (demo.docs || []).length })}</span>
+                <span className="demo-badge">
+                  {starterInfo(demo).hasSubset
+                    ? t('demos.docsCountScoped', { n: docsForScope(demo).length, total: (demo.docs || []).length })
+                    : t('demos.docsCount', { n: (demo.docs || []).length })}
+                </span>
               </div>
               <div className="demo-actions" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+                {starterInfo(demo).hasSubset && (
+                  <div className="demo-scope" role="group" aria-label={t('demos.scopeLabel')}>
+                    <span className="demo-scope-label">{t('demos.scopeLabel')}</span>
+                    <button
+                      className={`btn btn-sm ${scopeFor(demo) === 'starter' ? 'btn-green' : 'btn-ghost'}`}
+                      disabled={deploying.has(demo.key)}
+                      onClick={() => setScope(p => ({ ...p, [demo.key]: 'starter' }))}
+                    >
+                      {t('demos.scopeStarter', { n: starterInfo(demo).starter.length })}
+                    </button>
+                    <button
+                      className={`btn btn-sm ${scopeFor(demo) === 'full' ? 'btn-green' : 'btn-ghost'}`}
+                      disabled={deploying.has(demo.key)}
+                      onClick={() => setScope(p => ({ ...p, [demo.key]: 'full' }))}
+                    >
+                      {t('demos.scopeFull', { n: starterInfo(demo).all.length })}
+                    </button>
+                  </div>
+                )}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                   <button className="btn btn-green" disabled={deploying.has(demo.key)} onClick={() => deployDemo(demo.key)}>
                     {deploying.has(demo.key) ? t('demos.working') : t('demos.deployIngest')}
@@ -258,7 +300,12 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
                     {demo.docs.map(doc => (
                       <div className="demo-doc" key={doc.doc_id}>
                         <div className="demo-doc-hd">
-                          <div className="demo-doc-id">{doc.doc_id}</div>
+                          <div className="demo-doc-id">
+                            {doc.doc_id}
+                            {starterInfo(demo).hasSubset && doc.starter && (
+                              <span className="demo-badge demo-badge-starter">{t('demos.starterTag')}</span>
+                            )}
+                          </div>
                           <div className="demo-doc-meta">{metaText(doc.metadata)}</div>
                         </div>
                         <div className="demo-doc-preview">{previewText(doc.text)}</div>

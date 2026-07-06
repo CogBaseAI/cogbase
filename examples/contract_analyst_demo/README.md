@@ -28,7 +28,8 @@ The API server runs at `http://localhost:8000`. After the container starts, conf
 | `list` | List all applications |
 | `create` | Create the contract-analyst application |
 | `delete <name>` | Delete an application by name (with confirmation) |
-| `/ingest_demo_contracts` | Ingest the built-in contract fixtures (30 agreements across types, incl. 3 amendments) |
+| `/ingest_demo_contracts` | Ingest the 6-contract starter set — a fast first impression that still lands a cross-document hero query |
+| `/ingest_demo_contracts all` | Ingest all 30 built-in fixtures (across types, incl. 3 amendments) — the full showcase |
 | `ingest <path>` | Ingest a plain-text contract file from disk |
 | `list collections` | List all structured collections for the application |
 | `query structured` | Query the default `contracts` collection (all records) |

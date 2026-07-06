@@ -272,6 +272,15 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
   background: var(--bg3); border: 1px solid var(--border); color: var(--text);
 }
 .demo-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.demo-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.demo-scope-label {
+  font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px;
+}
+.demo-badge-starter {
+  margin-left: 6px; padding: 1px 6px; font-size: 10px;
+  background: transparent; border-color: var(--green); color: var(--green);
+}
 .demo-block {
   border-top: 1px solid var(--border);
   padding-top: 12px;

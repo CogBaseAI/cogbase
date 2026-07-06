@@ -15,7 +15,8 @@ and embedding provider (including API key) via the UI Settings tab.
 
 Commands (interactive loop)
 ---------------------------
-    /ingest_demo_contracts                Ingest all built-in contract fixtures
+    /ingest_demo_contracts                Ingest the 6-contract starter set (fast first impression)
+    /ingest_demo_contracts all            Ingest all 30 built-in contract fixtures (full showcase)
     /ingest_demo_contract <doc_id>        Ingest a single built-in contract (e.g. saas-001)
 """
 
@@ -45,7 +46,10 @@ from examples.contract_analyst_demo.schema import (  # noqa: E402
     ContractExtraction,
     ContractExtractionRecord,
 )
-from examples.contract_analyst_demo.contracts import CONTRACTS  # noqa: E402
+from examples.contract_analyst_demo.contracts import (  # noqa: E402
+    CONTRACTS,
+    STARTER_CONTRACTS,
+)
 
 configure_logging()
 
@@ -94,9 +98,15 @@ async def main() -> None:
                     print(f"  {r['doc_id']:<20}  FAILED: {r['error']}")
 
         async def handler(raw: str, lower: str) -> bool:
-            if lower == "/ingest_demo_contracts":
-                print(f"Ingesting {len(CONTRACTS)} built-in contracts as .docx...")
-                documents = [{"doc_id": doc_id, "text": text} for doc_id, text in CONTRACTS.items()]
+            if lower == "/ingest_demo_contracts" or lower.startswith("/ingest_demo_contracts "):
+                arg = raw[len("/ingest_demo_contracts"):].strip().lower()
+                full = arg in ("all", "full")
+                corpus = CONTRACTS if full else STARTER_CONTRACTS
+                label = "all" if full else "starter-set"
+                print(f"Ingesting {len(corpus)} built-in contracts ({label}) as .docx...")
+                if not full:
+                    print("  (run '/ingest_demo_contracts all' for the full 30-contract showcase)")
+                documents = [{"doc_id": doc_id, "text": text} for doc_id, text in corpus.items()]
                 await ingest(documents)
                 return True
 

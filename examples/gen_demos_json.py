@@ -19,7 +19,10 @@ if str(_REPO_ROOT) not in sys.path:
 
 from cogbase.config.config import AppConfig, _iter_save_steps  # noqa: E402
 from api.routers.applications import _resolve_file_refs  # noqa: E402
-from examples.contract_analyst_demo.contracts import CONTRACTS as CONTRACT_ANALYST_DOCS  # noqa: E402
+from examples.contract_analyst_demo.contracts import (  # noqa: E402
+    CONTRACTS as CONTRACT_ANALYST_DOCS,
+    STARTER_CONTRACT_IDS as CONTRACT_ANALYST_STARTER_IDS,
+)
 from examples.contract_analyst_demo.schema import ContractExtraction, ContractExtractionRecord  # noqa: E402
 from examples.docx_render import DOCX_CONTENT_TYPE, to_docx_bytes  # noqa: E402
 from examples.contract_compliance_demo.contracts_data import CONTRACTS_DOCUMENTS as COMPLIANCE_CONTRACT_DOCS  # noqa: E402
@@ -151,6 +154,18 @@ def _docs_from_pairs(items: dict[str, str], metadata: dict) -> list[dict]:
     return [{"doc_id": doc_id, "text": text, "metadata": dict(metadata)} for doc_id, text in items.items()]
 
 
+def _mark_starter(docs: list[dict], starter_ids) -> list[dict]:
+    """Flag which docs belong to the fast-first-impression starter subset.
+
+    The Demos tab reads ``doc["starter"]`` to offer a starter-set vs full-corpus
+    toggle (mirroring the CLI's ``/ingest_demo_contracts`` vs ``… all``).
+    """
+    ids = set(starter_ids)
+    for doc in docs:
+        doc["starter"] = doc["doc_id"] in ids
+    return docs
+
+
 def _with_docx(docs: list[dict]) -> list[dict]:
     """Attach a rendered .docx upload to each ``{doc_id, text, metadata}`` doc.
 
@@ -192,13 +207,22 @@ def build_catalog() -> dict:
                     "for dates, liability caps, payment terms, and clause text."
                 ),
                 "config_yaml": config_yaml_ca,
-                "docs": _with_docx(_docs_from_pairs(CONTRACT_ANALYST_DOCS, {"doc_type": "contract"})),
+                "docs": _with_docx(
+                    _mark_starter(
+                        _docs_from_pairs(CONTRACT_ANALYST_DOCS, {"doc_type": "contract"}),
+                        CONTRACT_ANALYST_STARTER_IDS,
+                    )
+                ),
                 "query_examples": [
                     "Which contracts expire before 2026-01-01?",
                     "Which contracts mention New York law?",
                     "Show the payment terms for the Acme contracts.",
                 ],
-                "notes": "Deploys the contract-analyst app and ingests the built-in SaaS agreements as Word .docx files.",
+                "notes": (
+                    "Deploys the contract-analyst app and ingests the built-in SaaS agreements as Word .docx files. "
+                    "Loads a 6-contract starter set by default (a fast first impression that still lands a "
+                    "cross-document hero query); switch to the full 30-contract corpus for the complete showcase."
+                ),
             },
             {
                 "key": "vc-portfolio",
