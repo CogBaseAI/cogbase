@@ -473,3 +473,60 @@ it('resets the chat view and drops the handle when deleting the active session',
   await ask(user, 'again')
   expect(startSessionCalls(fetchSpy)).toHaveLength(2)
 })
+
+it('hides the references pane on a fresh chat and shows it after the first exchange', async () => {
+  mockFetch()
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+
+  // No turns yet: the pane (and its collapse toggle) is not rendered.
+  expect(screen.queryByText('References')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Hide references panel' })).not.toBeInTheDocument()
+
+  await ask(user, 'What is the term?')
+  await waitFor(() => expect(screen.getByText('Hello there')).toBeInTheDocument())
+
+  // After the exchange the pane appears with its collapse toggle.
+  expect(screen.getByText('References')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Hide references panel' })).toBeInTheDocument()
+})
+
+it('collapses the references pane to a rail and restores it', async () => {
+  mockFetch()
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+  await ask(user, 'What is the term?')
+  await waitFor(() => expect(screen.getByText('References')).toBeInTheDocument())
+
+  // Collapse: the pane header is gone, but the reopen toggle remains (minimized,
+  // not fully hidden).
+  await user.click(screen.getByRole('button', { name: 'Hide references panel' }))
+  expect(screen.queryByText('References')).not.toBeInTheDocument()
+  const reopen = screen.getByRole('button', { name: 'Show references panel' })
+  expect(reopen).toBeInTheDocument()
+
+  // Restore from the rail.
+  await user.click(reopen)
+  expect(screen.getByText('References')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Show references panel' })).not.toBeInTheDocument()
+})
+
+it('collapses the chats sidebar to a rail and restores it', async () => {
+  mockFetch({ sessions: SESSIONS_FIXTURE })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.getByText('Chats')).toBeInTheDocument())
+
+  // Collapse: the "Chats" header and history rows are gone, reopen toggle remains.
+  await user.click(screen.getByRole('button', { name: 'Hide chats panel' }))
+  expect(screen.queryByText('Chats')).not.toBeInTheDocument()
+  const reopen = screen.getByRole('button', { name: 'Show chats panel' })
+  expect(reopen).toBeInTheDocument()
+
+  // Restore from the rail.
+  await user.click(reopen)
+  expect(screen.getByText('Chats')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Show chats panel' })).not.toBeInTheDocument()
+})

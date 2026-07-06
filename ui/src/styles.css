@@ -129,10 +129,29 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 }
 #buildAside { border-left: none; }
 .aside-hd {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 12px 14px; border-bottom: 1px solid var(--border);
 }
 .aside-hd h3 { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.aside-toggle {
+  width: 24px; height: 24px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 6px; background: transparent;
+  color: var(--muted); cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.aside-toggle:hover { background: var(--bg3); color: var(--fg, inherit); }
+/* Collapsed references pane: a thin rail on the right edge holding just the
+   reopen toggle, so the pane is minimized rather than fully hidden. */
+.chat-aside-min {
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg2);
+  display: flex; justify-content: center;
+  padding: 12px 8px;
+}
+/* Collapsed chats sidebar sits on the left edge, so its divider is on the right. */
+.chat-aside-min-left { border-left: none; border-right: 1px solid var(--border); }
 .aside-body { flex: 1; overflow-y: auto; padding: 10px; }
 .aside-ft { padding: 10px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 

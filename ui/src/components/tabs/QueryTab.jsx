@@ -15,6 +15,11 @@ export default function QueryTab({ active }) {
   // answer carries its own `refs`, so clicking a past answer re-points the pane
   // at that turn's evidence; -1 shows the empty state.
   const [selectedRefIdx, setSelectedRefIdx] = useState(-1)
+  // User's manual hide of the references pane. Independent of `hasChat` below,
+  // which hides the pane for a fresh chat that has no turns to cite yet.
+  const [refsHidden, setRefsHidden] = useState(false)
+  // User's manual collapse of the chats sidebar.
+  const [chatsHidden, setChatsHidden] = useState(false)
   const [sessions, setSessions] = useState([])
   const [activeSid, setActiveSid] = useState(null)
   const msgsRef = useRef(null)
@@ -224,15 +229,27 @@ export default function QueryTab({ active }) {
   const chunks = selectedRefs.chunks || []
   const structuredRecords = selectedRefs.structured_records || []
   const totalRefs = chunks.length + structuredRecords.length
+  // A fresh chat (only system notices, no user/bot turns) has nothing to cite,
+  // so the references pane stays hidden until the first exchange. Once there is
+  // a chat, the user can still hide the pane manually.
+  const hasChat = msgs.some(m => m.role === 'user' || m.role === 'bot')
+  const showRefsPane = hasChat && !refsHidden
 
   return (
     <>
       {!hasApp && <div className="warn-bar show">{t('common.noAppWarn')}</div>}
       <div className="chat-layout">
+        {chatsHidden && (
+          <div className="chat-aside-min chat-aside-min-left">
+            <button className="aside-toggle" title={t('query.showChats')} aria-label={t('query.showChats')} onClick={() => setChatsHidden(false)}><PanelIcon /></button>
+          </div>
+        )}
+        {!chatsHidden && (
         <div className="chat-history">
           <div className="aside-hd">
-            <h3>{t('query.chats')}</h3>
+            <h3 style={{ flex: 1 }}>{t('query.chats')}</h3>
             <button className="btn btn-ghost btn-sm" disabled={!hasApp} onClick={newChat}>{t('query.newChat')}</button>
+            <button className="aside-toggle" title={t('query.hideChats')} aria-label={t('query.hideChats')} onClick={() => setChatsHidden(true)}><PanelIcon /></button>
           </div>
           <div className="chat-history-body">
             {!sessions.length && (
@@ -263,6 +280,7 @@ export default function QueryTab({ active }) {
             ))}
           </div>
         </div>
+        )}
         <div className="chat-col">
           <div className="msgs" ref={msgsRef}>
             {msgs.map((m, i) => {
@@ -308,9 +326,16 @@ export default function QueryTab({ active }) {
             <button className="btn btn-primary" disabled={querying || !hasApp} onClick={sendQuery}>{t('common.send')}</button>
           </div>
         </div>
+        {hasChat && refsHidden && (
+          <div className="chat-aside-min">
+            <button className="aside-toggle" title={t('query.showRefsPanel')} aria-label={t('query.showRefsPanel')} onClick={() => setRefsHidden(false)}><PanelIcon /></button>
+          </div>
+        )}
+        {showRefsPane && (
         <div className="chat-aside">
           <div className="aside-hd">
-            <h3>{t('query.references')}</h3>
+            <button className="aside-toggle" title={t('query.hideRefsPanel')} aria-label={t('query.hideRefsPanel')} onClick={() => setRefsHidden(true)}><PanelIcon /></button>
+            <h3 style={{ flex: 1 }}>{t('query.references')}</h3>
             <span style={{ fontSize: 11, color: 'var(--muted)' }}>{totalRefs ? (totalRefs !== 1 ? t('query.refs', { n: totalRefs }) : t('query.ref', { n: totalRefs })) : '—'}</span>
           </div>
           <div className="aside-body">
@@ -331,8 +356,20 @@ export default function QueryTab({ active }) {
             )}
           </div>
         </div>
+        )}
       </div>
     </>
+  )
+}
+
+// Right-side panel toggle, matching the sidebar-collapse glyph ChatGPT/Claude
+// use: a framed rectangle with a divided right column standing in for the pane.
+function PanelIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+      <line x1="15" y1="3" x2="15" y2="21" />
+    </svg>
   )
 }
 
