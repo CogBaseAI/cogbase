@@ -104,9 +104,9 @@ async def main() -> None:
                     {"doc_id": doc.doc_id, "text": doc.text, "metadata": dict(doc.metadata)}
                     for doc in RULES_DOCUMENTS
                 ]
-                print(f"Ingesting {len(documents)} built-in rule documents...")
+                print(f"Ingesting {len(documents)} built-in rule documents as .docx...")
                 try:
-                    results = await client.upload_text_documents(documents, timeout=180)
+                    results = await client.upload_docx_documents(documents, timeout=180)
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     return True
@@ -141,13 +141,13 @@ async def main() -> None:
                 return True
 
             if lower == "/ingest_demo_contracts":
-                print(f"Ingesting {len(CONTRACTS_DOCUMENTS)} built-in demo contracts...")
+                print(f"Ingesting {len(CONTRACTS_DOCUMENTS)} built-in demo contracts as .docx...")
                 documents = [
                     {"doc_id": doc.doc_id, "text": doc.text, "metadata": dict(doc.metadata)}
                     for doc in CONTRACTS_DOCUMENTS
                 ]
                 try:
-                    results = await client.upload_text_documents(documents, timeout=180)
+                    results = await client.upload_docx_documents(documents, timeout=180)
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     return True

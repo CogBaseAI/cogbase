@@ -276,6 +276,36 @@ class CogBaseClient:
                 all_results.extend(results)
         return all_results
 
+    async def upload_docx_documents(
+        self, documents: list[dict], timeout: float = 120
+    ) -> list[dict]:
+        """Ingest in-memory text documents by rendering them to Word .docx files.
+
+        Like ``upload_text_documents``, but each document's ``text`` is rendered
+        to a .docx (parsed to markdown server-side) rather than uploaded as .txt.
+        Groups documents with identical metadata into a single upload call.
+        Returns one result dict per document with ``doc_id``, ``success``, and ``error``.
+        """
+        import tempfile
+
+        from examples.docx_render import write_docx
+
+        groups: dict[str, list[dict]] = {}
+        for doc in documents:
+            key = json.dumps(doc.get("metadata") or {}, sort_keys=True)
+            groups.setdefault(key, []).append(doc)
+
+        all_results: list[dict] = []
+        for meta_json, group in groups.items():
+            meta = json.loads(meta_json)
+            with tempfile.TemporaryDirectory() as tmpdir:
+                paths = [pathlib.Path(tmpdir) / f"{doc['doc_id']}.docx" for doc in group]
+                for path, doc in zip(paths, group):
+                    write_docx(doc.get("text") or "", path)
+                results = await self.upload_documents(paths, metadata=meta, timeout=timeout)
+                all_results.extend(results)
+        return all_results
+
     async def start_session(self) -> str:
         """Open a conversation session for the current app and return its id."""
         resp = await self._http.post(

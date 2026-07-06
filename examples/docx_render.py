@@ -1,11 +1,12 @@
-"""Render a plain-text contract fixture as a Word .docx.
+"""Render a plain-text demo fixture as a Word .docx.
 
-The contract fixtures live as plain text in ``saas_contracts.py``. This module
-renders them to .docx on demand so the demo can ingest them as Word files
+The demo fixtures live as plain text in each demo's data module. This module
+renders them to .docx on demand so the demos can ingest them as Word files
 (parsed to markdown server-side) without committing any binaries to the repo.
 
 Shared by:
-  - ``demo.py`` — writes temp .docx files to upload via the REST client
+  - each demo's ``demo.py`` — via ``CogBaseClient.upload_docx_documents``, which
+    writes temp .docx files and uploads them through the REST client
   - ``gen_demos_json.py`` — embeds .docx bytes in the demo catalog so the UI
     Demos tab can ingest the fixtures as Word files
 """

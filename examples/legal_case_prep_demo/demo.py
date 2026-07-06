@@ -138,13 +138,13 @@ def _build_bundle() -> bytes:
 
 
 async def _ingest_built_in(client: CogBaseClient) -> None:
-    print(f"Ingesting {len(CASE_DOCUMENTS)} built-in case documents...")
+    print(f"Ingesting {len(CASE_DOCUMENTS)} built-in case documents as .docx...")
     documents = [
         {"doc_id": doc.doc_id, "text": doc.text, "metadata": dict(doc.metadata)}
         for doc in CASE_DOCUMENTS
     ]
     try:
-        results = await client.upload_text_documents(documents, timeout=600)
+        results = await client.upload_docx_documents(documents, timeout=600)
     except httpx.HTTPStatusError as exc:
         print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
         return

@@ -25,7 +25,6 @@ import io
 import json
 import pathlib
 import sys
-import tempfile
 import zipfile
 
 _DEMO_DIR = pathlib.Path(__file__).parent.resolve()
@@ -46,7 +45,6 @@ from examples.contract_analyst_demo.schema import (  # noqa: E402
     ContractExtractionRecord,
 )
 from examples.contract_analyst_demo.saas_contracts import CONTRACTS  # noqa: E402
-from examples.contract_analyst_demo.docx_render import write_docx  # noqa: E402
 
 configure_logging()
 
@@ -82,17 +80,12 @@ async def main() -> None:
         async def handler(raw: str, lower: str) -> bool:
             if lower == "/ingest_demo_contracts":
                 print(f"Ingesting {len(CONTRACTS)} built-in SaaS contracts as .docx...")
-                # The fixtures live as plain text in saas_contracts.py; convert each
-                # to a Word document on the fly and upload it (parsed to markdown
-                # server-side) so nothing needs to be committed to git.
+                # The fixtures live as plain text in saas_contracts.py; each is
+                # rendered to a Word document on the fly and uploaded (parsed to
+                # markdown server-side) so nothing needs to be committed to git.
+                documents = [{"doc_id": doc_id, "text": text} for doc_id, text in CONTRACTS.items()]
                 try:
-                    with tempfile.TemporaryDirectory() as tmpdir:
-                        paths = []
-                        for doc_id, text in CONTRACTS.items():
-                            path = pathlib.Path(tmpdir) / f"{doc_id}.docx"
-                            write_docx(text, path)
-                            paths.append(path)
-                        results = await client.upload_documents(paths)
+                    results = await client.upload_docx_documents(documents)
                 except httpx.HTTPStatusError as exc:
                     print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
                     return True

@@ -21,7 +21,7 @@ from cogbase.config.config import AppConfig, _iter_save_steps  # noqa: E402
 from api.routers.applications import _resolve_file_refs  # noqa: E402
 from examples.contract_analyst_demo.saas_contracts import CONTRACTS as CONTRACT_ANALYST_DOCS  # noqa: E402
 from examples.contract_analyst_demo.schema import ContractExtraction, ContractExtractionRecord  # noqa: E402
-from examples.contract_analyst_demo.docx_render import DOCX_CONTENT_TYPE, to_docx_bytes  # noqa: E402
+from examples.docx_render import DOCX_CONTENT_TYPE, to_docx_bytes  # noqa: E402
 from examples.contract_compliance_demo.contracts_data import CONTRACTS_DOCUMENTS as COMPLIANCE_CONTRACT_DOCS  # noqa: E402
 from examples.contract_compliance_demo.rules_data import RULES_DOCUMENTS as COMPLIANCE_RULE_DOCS  # noqa: E402
 from examples.contract_compliance_demo.schema import (  # noqa: E402
@@ -151,25 +151,19 @@ def _docs_from_pairs(items: dict[str, str], metadata: dict) -> list[dict]:
     return [{"doc_id": doc_id, "text": text, "metadata": dict(metadata)} for doc_id, text in items.items()]
 
 
-def _docs_as_docx(items: dict[str, str], metadata: dict) -> list[dict]:
-    """Like ``_docs_from_pairs``, but attaches a rendered .docx for each doc.
+def _with_docx(docs: list[dict]) -> list[dict]:
+    """Attach a rendered .docx upload to each ``{doc_id, text, metadata}`` doc.
 
     ``text`` is kept for the UI preview; ``upload`` carries the base64-encoded
     Word file the Demos tab uploads (parsed to markdown server-side) so the
     fixtures are ingested as .docx rather than plain text.
     """
-    docs = []
-    for doc_id, text in items.items():
-        docs.append({
-            "doc_id": doc_id,
-            "text": text,
-            "metadata": dict(metadata),
-            "upload": {
-                "filename": f"{doc_id}.docx",
-                "content_type": DOCX_CONTENT_TYPE,
-                "content_b64": base64.b64encode(to_docx_bytes(text)).decode("ascii"),
-            },
-        })
+    for doc in docs:
+        doc["upload"] = {
+            "filename": f"{doc['doc_id']}.docx",
+            "content_type": DOCX_CONTENT_TYPE,
+            "content_b64": base64.b64encode(to_docx_bytes(doc["text"])).decode("ascii"),
+        }
     return docs
 
 
@@ -198,7 +192,7 @@ def build_catalog() -> dict:
                     "for dates, liability caps, payment terms, and clause text."
                 ),
                 "config_yaml": config_yaml_ca,
-                "docs": _docs_as_docx(CONTRACT_ANALYST_DOCS, {"doc_type": "contract"}),
+                "docs": _with_docx(_docs_from_pairs(CONTRACT_ANALYST_DOCS, {"doc_type": "contract"})),
                 "query_examples": [
                     "Which contracts expire before 2026-01-01?",
                     "Which contracts mention New York law?",
@@ -215,13 +209,13 @@ def build_catalog() -> dict:
                     "updates across the portfolio."
                 ),
                 "config_yaml": config_yaml_vc,
-                "docs": [*_docs_from_mapping(VC_BOARD_UPDATES), *_docs_from_mapping(VC_DEAL_MEMOS)],
+                "docs": _with_docx([*_docs_from_mapping(VC_BOARD_UPDATES), *_docs_from_mapping(VC_DEAL_MEMOS)]),
                 "query_examples": [
                     "Which companies are burning more than $500K per month?",
                     "What was Nova Analytics' ARR in Q3 2024?",
                     "What are the key risks across the portfolio?",
                 ],
-                "notes": "Ingests board updates, LP updates, and investment memos for the portfolio demo.",
+                "notes": "Ingests board updates, LP updates, and investment memos as Word .docx files for the portfolio demo.",
             },
             {
                 "key": "contract-compliance",
@@ -232,14 +226,14 @@ def build_catalog() -> dict:
                     "clause-level compliance findings."
                 ),
                 "config_yaml": config_yaml_cc,
-                "docs": _docs_from_documents(COMPLIANCE_RULE_DOCS + COMPLIANCE_CONTRACT_DOCS),
+                "docs": _with_docx(_docs_from_documents(COMPLIANCE_RULE_DOCS + COMPLIANCE_CONTRACT_DOCS)),
                 "query_examples": [
                     "Which clauses are non-compliant on liability?",
                     "Show all findings for contract-002.",
                     "What rules govern breach notification?",
                 ],
                 "notes": (
-                    "Ingests five policy documents and three example vendor contracts. "
+                    "Ingests five policy documents and three example vendor contracts as Word .docx files. "
                     "Check compliance for every clause in each contract against policies."
                 ),
                 "workflow_actions": [
@@ -271,7 +265,7 @@ def build_catalog() -> dict:
                     "detection, and evidence-gap identification."
                 ),
                 "config_yaml": config_yaml_lcp,
-                "docs": _docs_from_documents(LEGAL_CASE_DOCUMENTS),
+                "docs": _with_docx(_docs_from_documents(LEGAL_CASE_DOCUMENTS)),
                 "query_examples": [
                     "Which documents discuss the delivery on 14 March 2025?",
                     "Who is Sarah Patel and which documents mention her?",
@@ -279,7 +273,7 @@ def build_catalog() -> dict:
                     "Summarise the case against Acme based on the witness statement.",
                 ],
                 "notes": (
-                    "Ingests a nine-document fictional commercial dispute (Acme v Beacon). "
+                    "Ingests a nine-document fictional commercial dispute (Acme v Beacon) as Word .docx files. "
                     "After ingestion, run the workflows to detect contradictions and "
                     "identify evidence gaps per issue."
                 ),
