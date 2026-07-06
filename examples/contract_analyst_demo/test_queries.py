@@ -3,12 +3,12 @@
 Assumes:
   - The API server is running (default: http://localhost:8000).
     Override with the COGBASE_API_URL environment variable.
-  - The 'contract-analyst' application was created and the SaaS contract
-    fixtures were ingested via demo.py ('create' then 'ingest saas').
+  - The 'contract-analyst' application was created and the contract fixtures
+    were ingested via demo.py ('create' then '/ingest_demo_contracts').
 
 Run with::
 
-    pytest examples/contract_analyst_demo/test_saas_integration.py -v -s
+    pytest examples/contract_analyst_demo/test_queries.py -v -s
 
 What is verified
 ----------------
@@ -16,11 +16,14 @@ Setup
   - The application exists and is active
 
 Ingestion (structured collection)
-  - Every ingested SaaS contract produced exactly one record
+  - Every ingested contract produced exactly one record
   - Core fields (doc_id, contract_type, parties, dates, contract_value,
-    liability_cap, notice_period_days) are present and correct per contract
+    liability_cap, notice_period_days) are present and correct for the core
+    SaaS fixtures
 
-Query: questions over both document text and extracted structured data
+Query: questions over both document text and extracted structured data,
+including cross-document hero queries that exploit the planted tensions in
+the extended portfolio (see contracts.py).
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ import os
 import httpx
 import pytest
 
-from examples.contract_analyst_demo.saas_contracts import CONTRACTS
+from examples.contract_analyst_demo.contracts import CONTRACTS
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -113,38 +116,38 @@ class TestIngestion:
 
     def test_saas_001_key_fields(self, records):
         row = next(r for r in records if r["doc_id"] == "saas-001")
-        assert row["expiry_date"] == "2025-06-30"
-        assert row["contract_value"] == pytest.approx(500_000, rel=0.01)
-        assert row["liability_cap"] == pytest.approx(50_000, rel=0.01)
-        assert row["notice_period_days"] == 30
+        assert row["expiry_date"] == "2025-06-30", f"row={row}"
+        assert row["contract_value"] == pytest.approx(500_000, rel=0.01), f"row={row}"
+        assert row["liability_cap"] == pytest.approx(50_000, rel=0.01), f"row={row}"
+        assert row["notice_period_days"] == 30, f"row={row}"
         party_names = {p["name"] for p in row["parties"]}
-        assert any("Acme" in n for n in party_names)
+        assert any("Acme" in n for n in party_names), f"row={row}"
 
     def test_saas_002_key_fields(self, records):
         row = next(r for r in records if r["doc_id"] == "saas-002")
-        assert row["expiry_date"] == "2026-06-30"
-        assert row["notice_period_days"] == 60
-        assert row["contract_value"] == pytest.approx(240_000, rel=0.01)
+        assert row["expiry_date"] == "2026-06-30", f"row={row}"
+        assert row["notice_period_days"] == 60, f"row={row}"
+        assert row["contract_value"] == pytest.approx(240_000, rel=0.01), f"row={row}"
 
     def test_saas_003_key_fields(self, records):
         row = next(r for r in records if r["doc_id"] == "saas-003")
-        assert row["expiry_date"] == "2025-12-31"
-        assert row["liability_cap"] == pytest.approx(2_000_000, rel=0.01)
-        assert row["notice_period_days"] == 90
+        assert row["expiry_date"] == "2025-12-31", f"row={row}"
+        assert row["liability_cap"] == pytest.approx(2_000_000, rel=0.01), f"row={row}"
+        assert row["notice_period_days"] == 90, f"row={row}"
 
     def test_saas_004_key_fields(self, records):
         row = next(r for r in records if r["doc_id"] == "saas-004")
-        assert row["expiry_date"] == "2027-03-31"
-        assert row["contract_value"] == pytest.approx(1_200_000, rel=0.01)
-        assert row["liability_cap"] == pytest.approx(250_000, rel=0.01)
+        assert row["expiry_date"] == "2027-03-31", f"row={row}"
+        assert row["contract_value"] == pytest.approx(1_200_000, rel=0.01), f"row={row}"
+        assert row["liability_cap"] == pytest.approx(250_000, rel=0.01), f"row={row}"
         party_names = {p["name"] for p in row["parties"]}
-        assert any("Acme" in n for n in party_names)
+        assert any("Acme" in n for n in party_names), f"row={row}"
 
     def test_saas_005_key_fields(self, records):
         row = next(r for r in records if r["doc_id"] == "saas-005")
-        assert row["expiry_date"] == "2025-09-30"
-        assert row["notice_period_days"] == 180
-        assert row["contract_value"] == pytest.approx(360_000, rel=0.01)
+        assert row["expiry_date"] == "2025-09-30", f"row={row}"
+        assert row["notice_period_days"] == 180, f"row={row}"
+        assert row["contract_value"] == pytest.approx(360_000, rel=0.01), f"row={row}"
 
 
 # ---------------------------------------------------------------------------
@@ -310,3 +313,73 @@ class TestQuery:
             "liability cap", "liability", "termination", "notice", "upfront",
             "50,000", "50000", "250,000", "250000",
         ]), f"Expected risk factor discussion. Got:\n{result['answer']}"
+
+    # -----------------------------------------------------------------------
+    # Extended-portfolio hero queries (planted cross-document tensions)
+    # -----------------------------------------------------------------------
+
+    async def test_techvault_payment_conflict(self):
+        """TechVault: saas-002 is net-15 / monthly; svc-001 is net-60 — same vendor."""
+        result = await _query(
+            "we have multiple agreements with TechVault Solutions — do their "
+            "payment terms conflict?"
+        )
+        answer = result["answer"].lower()
+        assert "techvault" in answer, (
+            f"Expected 'TechVault' in answer. Got:\n{result['answer']}"
+        )
+        assert (
+            "net-60" in answer or "net 60" in answer or "60 days" in answer
+            or "net-15" in answer or "net 15" in answer or "15 days" in answer
+            or "monthly" in answer or "differ" in answer or "conflict" in answer
+            or "inconsistent" in answer
+        ), f"Expected the payment-term conflict surfaced. Got:\n{result['answer']}"
+
+    async def test_noncompete_covenants(self):
+        """emp-001 (12mo), emp-002 (24mo), and sep-001 carry restrictive covenants."""
+        result = await _query(
+            "which agreements contain non-compete or non-solicitation covenants "
+            "and how long do the restrictions last?"
+        )
+        answer = result["answer"].lower()
+        assert "non-compete" in answer or "non-solicit" in answer or "solicit" in answer, (
+            f"Expected restrictive-covenant language. Got:\n{result['answer']}"
+        )
+        assert (
+            "12" in answer or "twelve" in answer
+            or "24" in answer or "twenty-four" in answer
+            or "jordan" in answer or "dana" in answer
+            or "emp-001" in answer or "emp-002" in answer
+        ), f"Expected covenant durations / employees named. Got:\n{result['answer']}"
+
+    async def test_uncapped_or_missing_liability_cap(self):
+        """msa-001 is uncapped; vnd-002 states no cap — both are risk outliers."""
+        result = await _query(
+            "which agreements have unlimited liability or no stated liability cap?"
+        )
+        answer = result["answer"].lower()
+        assert (
+            "orion" in answer or "msa-001" in answer or "unlimited" in answer
+            or "uncapped" in answer or "no cap" in answer or "vivid" in answer
+            or "vnd-002" in answer or "marketing" in answer
+        ), f"Expected the uncapped / missing-cap agreements. Got:\n{result['answer']}"
+
+    async def test_expiring_before_march_2026(self):
+        """Several agreements across types expire before 2026-03-01."""
+        result = await _query(
+            "list every agreement that expires before March 1, 2026, regardless "
+            "of contract type"
+        )
+        answer = result["answer"].lower()
+        # lease-002 (2026-02-28), vnd-001 (2025-10-31), grn-001 (2025-08-31),
+        # nda-002 (2025-11-30) join the expiring SaaS contracts.
+        hits = sum([
+            "lease-002" in answer or "datacore" in answer or "equipment" in answer,
+            "vnd-001" in answer or "pinnacle" in answer,
+            "grn-001" in answer or "beacon" in answer or "evaluation" in answer,
+            "nda-002" in answer or "brightpath" in answer,
+            "saas-001" in answer or "saas-003" in answer or "saas-005" in answer,
+        ])
+        assert hits >= 2, (
+            f"Expected ≥2 distinct expiring agreements across types. Got:\n{result['answer']}"
+        )

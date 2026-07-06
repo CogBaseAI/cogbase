@@ -19,7 +19,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from cogbase.config.config import AppConfig, _iter_save_steps  # noqa: E402
 from api.routers.applications import _resolve_file_refs  # noqa: E402
-from examples.contract_analyst_demo.saas_contracts import CONTRACTS as CONTRACT_ANALYST_DOCS  # noqa: E402
+from examples.contract_analyst_demo.contracts import CONTRACTS as CONTRACT_ANALYST_DOCS  # noqa: E402
 from examples.contract_analyst_demo.schema import ContractExtraction, ContractExtractionRecord  # noqa: E402
 from examples.docx_render import DOCX_CONTENT_TYPE, to_docx_bytes  # noqa: E402
 from examples.contract_compliance_demo.contracts_data import CONTRACTS_DOCUMENTS as COMPLIANCE_CONTRACT_DOCS  # noqa: E402

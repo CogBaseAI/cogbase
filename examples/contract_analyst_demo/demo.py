@@ -15,7 +15,8 @@ and embedding provider (including API key) via the UI Settings tab.
 
 Commands (interactive loop)
 ---------------------------
-    /ingest_demo_contracts                Ingest the built-in SaaS contract fixtures
+    /ingest_demo_contracts                Ingest all built-in contract fixtures
+    /ingest_demo_contract <doc_id>        Ingest a single built-in contract (e.g. saas-001)
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ from examples.contract_analyst_demo.schema import (  # noqa: E402
     ContractExtraction,
     ContractExtractionRecord,
 )
-from examples.contract_analyst_demo.saas_contracts import CONTRACTS  # noqa: E402
+from examples.contract_analyst_demo.contracts import CONTRACTS  # noqa: E402
 
 configure_logging()
 
@@ -77,23 +78,41 @@ async def main() -> None:
             return
         print()
 
+        async def ingest(documents: list[dict]) -> None:
+            # The fixtures live as plain text in contracts.py; each is rendered
+            # to a Word document on the fly and uploaded (parsed to markdown
+            # server-side) so nothing needs to be committed to git.
+            try:
+                results = await client.upload_docx_documents(documents)
+            except httpx.HTTPStatusError as exc:
+                print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+                return
+            for r in results:
+                if r["success"]:
+                    print(f"  {r['doc_id']:<20}  OK")
+                else:
+                    print(f"  {r['doc_id']:<20}  FAILED: {r['error']}")
+
         async def handler(raw: str, lower: str) -> bool:
             if lower == "/ingest_demo_contracts":
-                print(f"Ingesting {len(CONTRACTS)} built-in SaaS contracts as .docx...")
-                # The fixtures live as plain text in saas_contracts.py; each is
-                # rendered to a Word document on the fly and uploaded (parsed to
-                # markdown server-side) so nothing needs to be committed to git.
+                print(f"Ingesting {len(CONTRACTS)} built-in contracts as .docx...")
                 documents = [{"doc_id": doc_id, "text": text} for doc_id, text in CONTRACTS.items()]
-                try:
-                    results = await client.upload_docx_documents(documents)
-                except httpx.HTTPStatusError as exc:
-                    print(f"  ERROR: {exc.response.status_code} {exc.response.text}")
+                await ingest(documents)
+                return True
+
+            if lower == "/ingest_demo_contract" or lower.startswith("/ingest_demo_contract "):
+                doc_id = raw[len("/ingest_demo_contract"):].strip()
+                if not doc_id:
+                    print("  Usage: /ingest_demo_contract <doc_id>  (e.g. saas-001)")
+                    print(f"  Available: {', '.join(CONTRACTS)}")
                     return True
-                for r in results:
-                    if r["success"]:
-                        print(f"  {r['doc_id']:<12}  OK")
-                    else:
-                        print(f"  {r['doc_id']:<12}  FAILED: {r['error']}")
+                text = CONTRACTS.get(doc_id)
+                if text is None:
+                    print(f"  Unknown contract: {doc_id}")
+                    print(f"  Available: {', '.join(CONTRACTS)}")
+                    return True
+                print(f"Ingesting built-in contract {doc_id} as .docx...")
+                await ingest([{"doc_id": doc_id, "text": text}])
                 return True
 
             return False
@@ -102,7 +121,7 @@ async def main() -> None:
             client, _build_bundle,
             default_collection=_CONTRACTS_COLLECTION,
             handler=handler,
-            extra_commands=["/ingest_demo_contracts"],
+            extra_commands=["/ingest_demo_contracts", "/ingest_demo_contract"],
         )
 
 
