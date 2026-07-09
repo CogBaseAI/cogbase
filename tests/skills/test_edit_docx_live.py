@@ -10,9 +10,10 @@ the amendment, fetching the original ``.docx``, shelling out to the bundled
 The test builds a small contract and a matching amendment as real ``.docx`` files,
 seeds them the way an upload would (extracted text + original bytes), runs the
 merge through the runner, then re-opens the produced ``.docx`` and asserts the
-amendment's three edits landed — a ``replace`` (payment term), a ``delete`` (the
-termination clause), and an ``insert`` (a new governing-law section) — while an
-untouched clause survives.
+amendment's three edits landed as a **redline** (Word tracked changes) — a ``replace``
+(payment term: old struck, new inserted), a ``delete`` (the termination clause struck),
+and an ``insert`` (a new governing-law section inserted) — while an untouched clause
+survives as plain, non-tracked text.
 
 Run with::
 
@@ -32,6 +33,7 @@ import pytest
 pytest.importorskip("docx")  # needed to build fixtures and read the merged output
 
 from docx import Document  # noqa: E402  (import after importorskip)
+from docx.oxml.ns import qn  # noqa: E402
 
 from cogbase.core.query_runner import (  # noqa: E402
     MemoryTiers,
@@ -81,8 +83,21 @@ def _docx_bytes(paragraphs: list[str]) -> bytes:
     return buf.getvalue()
 
 
-def _para_texts(data: bytes) -> list[str]:
-    return [p.text for p in Document(BytesIO(data)).paragraphs]
+def _plain_text(data: bytes) -> str:
+    """Visible, non-tracked paragraph text (what survived untouched)."""
+    return "\n".join(p.text for p in Document(BytesIO(data)).paragraphs)
+
+
+def _inserted_text(data: bytes) -> str:
+    """Text recorded as tracked insertions (``<w:ins>//<w:t>``)."""
+    body = Document(BytesIO(data)).element.body
+    return "".join(t.text or "" for ins in body.iter(qn("w:ins")) for t in ins.iter(qn("w:t")))
+
+
+def _deleted_text(data: bytes) -> str:
+    """Text recorded as tracked deletions (``<w:del>//<w:delText>``)."""
+    body = Document(BytesIO(data)).element.body
+    return "".join(t.text or "" for d in body.iter(qn("w:del")) for t in d.iter(qn("w:delText")))
 
 
 async def _seed_document(store: LocalFSDocumentStore, doc_id: str, paragraphs: list[str]) -> None:
@@ -142,18 +157,18 @@ async def test_merge_amendment_into_contract(tmp_path):
                 result = item
     assert result is not None
 
-    # save_artifact writes merged output under generated/ in the app's document store.
+    # save_artifact writes the redlined output under generated/ in the app's document store.
     artifacts = sorted(glob.glob(str(docstore_root / APP_ID / "generated" / "*.docx")))
-    assert artifacts, "no merged .docx artifact was produced"
-    merged_text = "\n".join(_para_texts(Path(artifacts[-1]).read_bytes()))
+    assert artifacts, "no redlined .docx artifact was produced"
+    data = Path(artifacts[-1]).read_bytes()
+    inserted, deleted, plain = _inserted_text(data), _deleted_text(data), _plain_text(data)
 
-    # replace — payment term updated from 30 to 45 days
-    assert "45 days" in merged_text
-    assert "30 days" not in merged_text
-    # delete — the termination clause is gone
-    assert "60 days" not in merged_text
-    assert "Either party may terminate" not in merged_text
-    # insert — governing-law clause added
-    assert "Delaware" in merged_text
-    # an untouched clause survives the merge
-    assert "Confidentiality" in merged_text
+    # replace — payment term redlined: new inserted, old struck
+    assert "45 days" in inserted
+    assert "30 days" in deleted
+    # delete — the termination clause is struck as a tracked deletion
+    assert "Either party may terminate" in deleted
+    # insert — governing-law clause added as a tracked insertion
+    assert "Delaware" in inserted
+    # an untouched clause survives as plain, non-tracked text
+    assert "Confidentiality" in plain

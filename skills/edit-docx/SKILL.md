@@ -2,12 +2,13 @@
 name: edit-docx
 description: >-
   Apply a set of edits to a Microsoft Word .docx file and produce a new downloadable
-  .docx that preserves the original's formatting. Use when a user wants to revise, update,
-  or amend an existing Word document and get back a single merged .docx. Works on .docx
-  only — not PDFs, plain text, or other formats. The edits can come from a separate change
-  document (an amendment, revision memo, redline, or change request) or from instructions
-  given directly in the request. Needs the base .docx to already be uploaded; a change
-  document, if used, must be uploaded too.
+  redlined .docx — the changes recorded as Word tracked changes (insertions and
+  deletions a reviewer can accept or reject) while preserving the original's formatting.
+  Use when a user wants to revise, update, or amend an existing Word document and get
+  back a marked-up redline. Works on .docx only — not PDFs, plain text, or other formats.
+  The edits can come from a separate change document (an amendment, revision memo,
+  redline, or change request) or from instructions given directly in the request. Needs
+  the base .docx to already be uploaded; a change document, if used, must be uploaded too.
 metadata:
   requires:
     bins: []
@@ -19,11 +20,13 @@ metadata:
 
 # edit-docx
 
-Apply a set of changes to a base `.docx` and produce a merged `.docx`. You (the agent)
-drive the merge — deriving the edits, applying them with the bundled helper, and
-returning a download link. The logic lives here in the skill, not in the platform.
+Apply a set of changes to a base `.docx` and produce a **redlined `.docx`** — the edits
+recorded as Word tracked changes (`<w:ins>`/`<w:del>`), so a reviewer opens the result
+and sees each insertion and deletion and can accept or reject them. You (the agent) drive
+the redline — deriving the edits, applying them with the bundled helper, and returning a
+download link. The logic lives here in the skill, not in the platform.
 
-Scope: **Microsoft Word `.docx` files only.** Both the base and the merged output are
+Scope: **Microsoft Word `.docx` files only.** Both the base and the redlined output are
 `.docx`; other formats (PDF, plain text, Markdown) are not supported. The *domain* is
 open, though — contract-and-amendment is the canonical case, but the same mechanism
 handles a policy plus a revision memo, a spec plus a change request, a report plus
@@ -80,21 +83,27 @@ to an uploaded document or is meant inline, ask before proceeding.
 
    ```
    python <skill base directory>/apply_operations.py \
-     --original <fetched path> --ops ops.json --output merged.docx
+     --original <fetched path> --ops ops.json --output redlined.docx
    ```
 
-   It edits the base at the run level (preserving fonts/styles/numbering) and prints a
-   JSON report: a `matched` flag per operation and an `unmatched` count.
+   Optionally pass `--author "Name"` to set the reviewer name recorded on each tracked
+   change (defaults to `edit-docx`). It records the edits at the run level as Word
+   tracked changes — a `replace` strikes the old text and inserts the new; a `delete`
+   strikes the paragraph; `insert_after`/`append` add a tracked-insertion paragraph —
+   preserving fonts/styles/numbering, and prints a JSON report: a `matched` flag per
+   operation and an `unmatched` count.
 
 4. **Check the report.** If any operation is `unmatched`, its anchor wasn't found —
    usually the change referenced text the base doesn't contain. Do not silently drop
    these; call them out to the user.
 
-5. **Save and return.** Call `save_artifact` with the path to `merged.docx` and a
-   descriptive `filename` (e.g. `<document-name>-revised.docx`). It returns a
+5. **Save and return.** Call `save_artifact` with the path to `redlined.docx` and a
+   descriptive `filename` (e.g. `<document-name>-redline.docx`). It returns a
    ready-made markdown download link — include that exact link in your answer, along
-   with a short summary of what changed and any unmatched operations. (The link is
-   also appended to your answer automatically, so the user always gets a download.)
+   with a short summary of what changed and any unmatched operations. Mention that the
+   result is a tracked-changes redline the user can review and accept/reject in Word.
+   (The link is also appended to your answer automatically, so the user always gets a
+   download.)
 
 ## `apply_operations.py`
 
@@ -113,11 +122,14 @@ python apply_operations.py --original in.docx --ops ops.json --output out.docx
 ]}
 ```
 
-## Limitations / upgrade path
+## Limitations
 
-The helper walks paragraphs and does clean (non-tracked) edits — it does not touch
-tables, headers, or footers, and produces a finished document rather than a redline.
-For a lawyer-reviewable **redline** (Word tracked changes), edit the unpacked OOXML
-directly (`<w:ins>`/`<w:del>`) instead of using this helper — the operation set you
-derive in step 1 is the same; only the apply step changes.
+The helper walks paragraphs and records each edit as Word tracked changes
+(`<w:ins>`/`<w:del>`) at the run level, so the output is a lawyer-reviewable redline:
+opening it in Word shows every insertion and deletion, each attributable to an author
+and individually acceptable or rejectable. It does not touch tables, headers, or
+footers — edits to text inside those aren't redlined. A `replace` strikes the whole
+matched paragraph's text and inserts the replacement as one block rather than computing
+a minimal intra-sentence word diff, so the redline is change-accurate but coarser-grained
+than a character-level diff tool.
 </content>

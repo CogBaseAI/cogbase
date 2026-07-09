@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Apply a list of edit operations to a base .docx, preserving formatting.
+"""Apply a list of edit operations to a base .docx as Word tracked changes.
 
 The deterministic *apply* helper for the edit-docx skill. The agent does
 the *understand* step (reading the change source and deriving the operation list);
-this script applies them, editing the base OOXML in place — matching each operation
-to a paragraph by an anchor snippet and doing run-level edits — so styles,
-numbering, and fonts survive.
+this script applies them as a **redline** — editing the base OOXML in place,
+matching each operation to a paragraph by an anchor snippet and recording the
+change as Word tracked changes (``<w:ins>`` / ``<w:del>``) rather than a clean
+overwrite. Styles, numbering, and fonts survive, and a reviewer opening the
+result in Word sees every insertion and deletion and can accept or reject each.
 
 Usage::
 
-    python apply_operations.py --original in.docx --ops ops.json --output out.docx
+    python apply_operations.py --original in.docx --ops ops.json --output out.docx \
+        [--author "Name"]
 
 ``ops.json`` shape::
 
@@ -28,12 +31,16 @@ Prints a JSON report to stdout: per-operation ``matched`` flag plus an
 from __future__ import annotations
 
 import argparse
+import copy
+import datetime
+import itertools
 import json
 import re
 import sys
 
 from docx import Document
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
 
@@ -44,6 +51,10 @@ from docx.text.paragraph import Paragraph
 # verbatim from the markdown match the raw paragraph on the first try.
 _MD_INLINE = re.compile(r"[*_`~]")
 _MD_LEADING = re.compile(r"^\s*(?:#{1,6}\s+|\d+[.)]\s+|[-*+]\s+|>\s+)")
+
+# Monotonic revision ids. Word requires every <w:ins>/<w:del> to carry a unique
+# w:id within the document.
+_rev_ids = itertools.count(1)
 
 
 def _norm(text: str) -> str:
@@ -68,39 +79,110 @@ def _find_paragraph(doc, anchor_text: str):
     return None
 
 
-def _set_text_preserving_format(para: Paragraph, new_text: str) -> None:
-    """Replace a paragraph's text while keeping its first run's formatting.
+def _revision(tag: str, author: str, date: str):
+    """Build an empty ``<w:ins>`` or ``<w:del>`` wrapper with a unique id/author/date."""
+    el = OxmlElement(tag)
+    el.set(qn("w:id"), str(next(_rev_ids)))
+    el.set(qn("w:author"), author)
+    el.set(qn("w:date"), date)
+    return el
 
-    Word stores formatting on runs; we keep the first run (its font/style) and
-    retarget its text, then drop the remaining runs so no stale text lingers.
-    """
+
+def _make_text_run(new_text: str, rpr=None):
+    """Build a ``<w:r>`` carrying *new_text*, optionally cloning run properties."""
+    run = OxmlElement("w:r")
+    if rpr is not None:
+        run.append(copy.deepcopy(rpr))
+    t = OxmlElement("w:t")
+    t.set(qn("xml:space"), "preserve")
+    t.text = new_text
+    run.append(t)
+    return run
+
+
+def _first_run_rpr(para: Paragraph):
+    """Return a copy target of the first run's ``<w:rPr>`` (or None), for format reuse."""
     if para.runs:
-        para.runs[0].text = new_text
-        for run in para.runs[1:]:
-            run._element.getparent().remove(run._element)
-    else:
-        para.add_run(new_text)
+        return para.runs[0]._element.find(qn("w:rPr"))
+    return None
 
 
-def _insert_paragraph_after(para: Paragraph, new_text: str) -> Paragraph:
-    """Insert a new paragraph immediately after *para*, inheriting its style."""
+def _mark_run_deleted(run, wrapper) -> None:
+    """Move *run* into a ``<w:del>`` wrapper and convert its text to ``<w:delText>``.
+
+    Deleted text lives in ``<w:delText>`` rather than ``<w:t>`` so Word renders it
+    as struck-through tracked deletion instead of live text.
+    """
+    r = run._element
+    for t in r.findall(qn("w:t")):
+        t.tag = qn("w:delText")
+    parent = r.getparent()
+    parent.insert(parent.index(r), wrapper)
+    wrapper.append(r)
+
+
+def _mark_para_mark(para: Paragraph, tag: str, author: str, date: str) -> None:
+    """Mark the paragraph mark itself as inserted/deleted (``<w:pPr><w:rPr><tag/>``).
+
+    Needed so a whole-paragraph insert or delete tracks cleanly — accepting the
+    revision also adds/removes the paragraph break, not just the visible text.
+    """
+    p = para._p
+    pPr = p.find(qn("w:pPr"))
+    if pPr is None:
+        pPr = OxmlElement("w:pPr")
+        p.insert(0, pPr)
+    rPr = pPr.find(qn("w:rPr"))
+    if rPr is None:
+        rPr = OxmlElement("w:rPr")
+        pPr.append(rPr)
+    mark = OxmlElement(tag)
+    mark.set(qn("w:id"), str(next(_rev_ids)))
+    mark.set(qn("w:author"), author)
+    mark.set(qn("w:date"), date)
+    rPr.insert(0, mark)
+
+
+def _replace_tracked(para: Paragraph, new_text: str, author: str, date: str) -> None:
+    """Redline a paragraph: strike its runs as deleted, insert *new_text* after them."""
+    rpr = _first_run_rpr(para)
+    for run in list(para.runs):
+        _mark_run_deleted(run, _revision("w:del", author, date))
+    ins = _revision("w:ins", author, date)
+    ins.append(_make_text_run(new_text, rpr))
+    para._p.append(ins)
+
+
+def _delete_tracked(para: Paragraph, author: str, date: str) -> None:
+    """Redline a whole-paragraph deletion: strike every run and the paragraph mark."""
+    for run in list(para.runs):
+        _mark_run_deleted(run, _revision("w:del", author, date))
+    _mark_para_mark(para, "w:del", author, date)
+
+
+def _fill_inserted_paragraph(para: Paragraph, new_text: str, author: str, date: str) -> None:
+    """Populate an empty new paragraph as a tracked insertion (runs + paragraph mark)."""
+    ins = _revision("w:ins", author, date)
+    ins.append(_make_text_run(new_text))
+    para._p.append(ins)
+    _mark_para_mark(para, "w:ins", author, date)
+
+
+def _insert_after_tracked(para: Paragraph, new_text: str, author: str, date: str) -> Paragraph:
+    """Insert a new tracked-insertion paragraph immediately after *para*."""
     new_p = OxmlElement("w:p")
     para._p.addnext(new_p)
     new_para = Paragraph(new_p, para._parent)
-    new_para.add_run(new_text)
     try:
         new_para.style = para.style
     except Exception:
         pass  # style may not be assignable on some documents; leave default
+    _fill_inserted_paragraph(new_para, new_text, author, date)
     return new_para
 
 
-def _delete_paragraph(para: Paragraph) -> None:
-    para._element.getparent().remove(para._element)
-
-
-def apply_operations(doc, operations: list[dict]) -> list[dict]:
-    """Apply operations in order; return a per-operation report with match flags."""
+def apply_operations(doc, operations: list[dict], author: str, date: str) -> list[dict]:
+    """Apply operations in order as tracked changes; return a per-op match report."""
     report: list[dict] = []
     for op in operations:
         kind = op.get("op")
@@ -109,17 +191,17 @@ def apply_operations(doc, operations: list[dict]) -> list[dict]:
         matched = True
 
         if kind == "append":
-            doc.add_paragraph(new_text)
+            _fill_inserted_paragraph(doc.add_paragraph(), new_text, author, date)
         else:
             para = _find_paragraph(doc, anchor)
             if para is None:
                 matched = False
             elif kind == "replace":
-                _set_text_preserving_format(para, new_text)
+                _replace_tracked(para, new_text, author, date)
             elif kind == "insert_after":
-                _insert_paragraph_after(para, new_text)
+                _insert_after_tracked(para, new_text, author, date)
             elif kind == "delete":
-                _delete_paragraph(para)
+                _delete_tracked(para, author, date)
             else:
                 matched = False  # unknown op type
 
@@ -131,14 +213,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--original", required=True, help="path to the original .docx")
     parser.add_argument("--ops", required=True, help="path to the operations JSON file")
-    parser.add_argument("--output", required=True, help="path to write the merged .docx")
+    parser.add_argument("--output", required=True, help="path to write the redlined .docx")
+    parser.add_argument(
+        "--author",
+        default="edit-docx",
+        help="author name recorded on each tracked change (default: edit-docx)",
+    )
     args = parser.parse_args()
 
     with open(args.ops, encoding="utf-8") as f:
         operations = json.load(f).get("operations", [])
 
+    date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     doc = Document(args.original)
-    report = apply_operations(doc, operations)
+    report = apply_operations(doc, operations, args.author, date)
     doc.save(args.output)
 
     unmatched = sum(1 for r in report if not r["matched"])
