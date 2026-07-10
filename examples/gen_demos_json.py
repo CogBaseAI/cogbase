@@ -220,7 +220,7 @@ def build_catalog() -> dict:
                 ],
                 "notes": (
                     "Deploys the contract-analyst app and ingests the built-in SaaS agreements as Word .docx files. "
-                    "Loads a 6-contract starter set by default (a fast first impression that still lands a "
+                    "Loads a 7-contract starter set by default (a fast first impression that still lands a "
                     "cross-document hero query); switch to the full 30-contract corpus for the complete showcase."
                 ),
             },

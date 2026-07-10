@@ -2176,21 +2176,23 @@ CONTRACTS: dict[str, str] = {
     "pur-001": PUR_001,
 }
 
-# A curated six-contract subset for a fast first impression (quick mode). These
-# six are enough to land the demo's hero queries — cross-document reasoning that
+# A curated seven-contract subset for a fast first impression (quick mode). These
+# seven are enough to land the demo's hero queries — cross-document reasoning that
 # plain chunk-and-retrieve RAG cannot do — without waiting on all thirty:
 #   saas-001 / saas-004        same vendor (Acme Corp), conflicting payment
 #                              terms (net-30 vs upfront) — a cross-document tension
 #   saas-001-amendment         amends saas-001 (term, cap, payment, fee flip)
 #   saas-005                   180-day termination-notice outlier
 #   saas-001                   liability-cap outlier ($50 K cap vs $500 K value)
+#   saas-003                   $2 M cap (high) + DE law / data-residency
 #   saas-002, saas-006         baselines so the outliers stand out
-# All six are in the core SaaS set asserted field-by-field in test_queries.py,
+# All seven are in the core SaaS set asserted field-by-field in test_queries.py,
 # so the subset stays stable as the extended portfolio evolves.
 STARTER_CONTRACT_IDS: list[str] = [
     "saas-001",
     "saas-001-amendment",
     "saas-002",
+    "saas-003",
     "saas-004",
     "saas-005",
     "saas-006",

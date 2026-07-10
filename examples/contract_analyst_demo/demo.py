@@ -15,7 +15,7 @@ and embedding provider (including API key) via the UI Settings tab.
 
 Commands (interactive loop)
 ---------------------------
-    /ingest_demo_contracts                Ingest the 6-contract starter set (fast first impression)
+    /ingest_demo_contracts                Ingest the 7-contract starter set (fast first impression)
     /ingest_demo_contracts all            Ingest all 30 built-in contract fixtures (full showcase)
     /ingest_demo_contract <doc_id>        Ingest a single built-in contract (e.g. saas-001)
 """
