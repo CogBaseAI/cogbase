@@ -72,7 +72,7 @@ class ContractExtraction(BaseModel):
     )
     contract_value: float | None = Field(
         default=None,
-        description="total monetary value as a number (no currency symbol)",
+        description="total annual monetary value as a number (no currency symbol)",
     )
     currency: str | None = Field(
         default=None,
