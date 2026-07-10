@@ -835,3 +835,51 @@ class TestReingestIdempotent:
 
         purged = {c.args[0] for c in pipeline.purge_document.await_args_list}
         assert purged == {"a", "b"}
+
+
+# ---------------------------------------------------------------------------
+# LLM-time / end-to-end-time logging
+# ---------------------------------------------------------------------------
+
+class TestIngestTiming:
+    _SUMMARIES_SCHEMA = VectorCollectionSchema(name="summaries", dimensions=4, description="Test document summaries")
+
+    @staticmethod
+    def _real_llm(summary: str) -> LLMBase:
+        """A real OpenAILLM over a mock client, so its completion is timed.
+
+        The pipeline attributes LLM wall time only for backends that record into
+        the active tracker; a bare MagicMock LLM would report zero calls.
+        """
+        from types import SimpleNamespace
+
+        from cogbase.llms.openai import OpenAILLM
+
+        message = SimpleNamespace(content=summary, tool_calls=None)
+        choice = SimpleNamespace(message=message, finish_reason="stop")
+        response = SimpleNamespace(choices=[choice])
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(return_value=response)
+        return OpenAILLM(client, model="test-model")
+
+    @pytest.mark.asyncio
+    async def test_ingest_done_log_reports_llm_and_total_time(self, make_vector_store, caplog):
+        import logging
+
+        vector_store = make_vector_store()
+        await vector_store.create_collection(self._SUMMARIES_SCHEMA)
+        vc = VectorCollection(schema=self._SUMMARIES_SCHEMA, store=vector_store, embedder=StubEmbedding(dim=4))
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[PipelineStep(tool="document-embed-upsert", collection="summaries", llm=self._real_llm("Summary."))],
+            vector_collections=[vc],
+        )
+
+        with caplog.at_level(logging.INFO, logger="cogbase.pipeline.ingestion_pipeline"):
+            await pipeline._ingest(Document(doc_id="d-001", text="Long contract text."))
+
+        done = next(r for r in caplog.records if r.message.startswith("ingestion_pipeline.ingest.done"))
+        # The summary step made exactly one completion; both timings are logged.
+        assert "llm_calls=1" in done.message
+        assert "llm_seconds=" in done.message
+        assert "total_seconds=" in done.message

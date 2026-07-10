@@ -19,6 +19,7 @@ from cogbase.llms.base import (
     ToolCall,
     ToolDefinition,
 )
+from cogbase.llms.timing import measure_llm_call
 
 
 def _coerce_message_content(content: Any) -> str:
@@ -96,7 +97,8 @@ class OpenAILLM(LLMBase):
             model=model,
             stream=False,
         )
-        response = await self._client.chat.completions.create(**kwargs)
+        with measure_llm_call():
+            response = await self._client.chat.completions.create(**kwargs)
         choice = response.choices[0]
 
         tool_calls: list[ToolCall] | None = None
@@ -140,31 +142,34 @@ class OpenAILLM(LLMBase):
             model=model,
             stream=True,
         )
-        stream = await self._client.chat.completions.create(**kwargs)
         tool_call_accum: dict[int, dict] = {}
         usage: TokenUsage | None = None
-        async for chunk in stream:
-            if not chunk.choices:
-                raw_usage = getattr(chunk, "usage", None)
-                if raw_usage is not None:
-                    usage = TokenUsage(
-                        input_tokens=getattr(raw_usage, "prompt_tokens", 0) or 0,
-                        output_tokens=getattr(raw_usage, "completion_tokens", 0) or 0,
-                    )
-                continue
-            delta = chunk.choices[0].delta
-            if delta.content:
-                yield delta.content
-            for tc_delta in delta.tool_calls or []:
-                idx = tc_delta.index
-                if idx not in tool_call_accum:
-                    tool_call_accum[idx] = {"id": "", "name": "", "arguments": ""}
-                if tc_delta.id:
-                    tool_call_accum[idx]["id"] = tc_delta.id
-                if tc_delta.function and tc_delta.function.name:
-                    tool_call_accum[idx]["name"] = tc_delta.function.name
-                if tc_delta.function and tc_delta.function.arguments:
-                    tool_call_accum[idx]["arguments"] += tc_delta.function.arguments
+        # Records the full streaming wall time (setup through last chunk, or
+        # through early consumer close) into the active track_llm_time() block.
+        with measure_llm_call():
+            stream = await self._client.chat.completions.create(**kwargs)
+            async for chunk in stream:
+                if not chunk.choices:
+                    raw_usage = getattr(chunk, "usage", None)
+                    if raw_usage is not None:
+                        usage = TokenUsage(
+                            input_tokens=getattr(raw_usage, "prompt_tokens", 0) or 0,
+                            output_tokens=getattr(raw_usage, "completion_tokens", 0) or 0,
+                        )
+                    continue
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    yield delta.content
+                for tc_delta in delta.tool_calls or []:
+                    idx = tc_delta.index
+                    if idx not in tool_call_accum:
+                        tool_call_accum[idx] = {"id": "", "name": "", "arguments": ""}
+                    if tc_delta.id:
+                        tool_call_accum[idx]["id"] = tc_delta.id
+                    if tc_delta.function and tc_delta.function.name:
+                        tool_call_accum[idx]["name"] = tc_delta.function.name
+                    if tc_delta.function and tc_delta.function.arguments:
+                        tool_call_accum[idx]["arguments"] += tc_delta.function.arguments
         tool_calls = (
             [ToolCall(id=v["id"], name=v["name"], arguments=v["arguments"])
              for _, v in sorted(tool_call_accum.items())]

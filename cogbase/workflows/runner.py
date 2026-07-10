@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncGenerator
 from typing import Any, TYPE_CHECKING
 
 from cogbase.embeddings.base import EmbeddingBase
 from cogbase.llms.base import LLMBase
+from cogbase.llms.timing import track_llm_time
 from cogbase.stores import Col, StructuredStoreBase, VectorStoreBase
 from cogbase.workflows.context import render_value
 from cogbase.workflows.tools import run_tool
@@ -88,12 +90,20 @@ class WorkflowRunner:
         )
         ctx: dict[str, Any] = {"input": params, "steps": {}}
         saved = 0
-        async for record in self._run_steps(self.workflow.steps, ctx):
-            saved += 1
-            yield record
+        # track_llm_time() sums the wall time of every LLM completion made by the
+        # workflow's steps (llm-structured); start marks the end-to-end wall clock
+        # for the whole run over this document's params.
+        start = time.perf_counter()
+        with track_llm_time() as llm_timing:
+            async for record in self._run_steps(self.workflow.steps, ctx):
+                saved += 1
+                yield record
+        total_seconds = time.perf_counter() - start
         logger.info(
-            "workflow.run.done app=%s workflow=%s saved_records=%d",
+            "workflow.run.done app=%s workflow=%s saved_records=%d llm_calls=%d "
+            "llm_seconds=%.3f total_seconds=%.3f",
             self.app_id, self.workflow.name, saved,
+            llm_timing.calls, llm_timing.seconds, total_seconds,
         )
 
     async def _run_steps(

@@ -430,3 +430,46 @@ async def test_complete_stream_falls_back_to_default_when_mini_not_configured() 
     _ = [part async for part in llm.complete_stream([{"role": "user", "content": "hi"}], model="mini")]
 
     assert client.chat.completions.create.call_args.kwargs["model"] == "gpt-4o"
+
+
+# ---------------------------------------------------------------------------
+# LLM completion timing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_complete_records_into_active_tracker() -> None:
+    from cogbase.llms.timing import track_llm_time
+
+    client = _make_non_stream_client("ok")
+    llm = OpenAILLM(client, model="test-model")
+
+    with track_llm_time() as timing:
+        await llm.complete([{"role": "user", "content": "hi"}])
+
+    assert timing.calls == 1
+    assert timing.seconds >= 0.0
+
+
+@pytest.mark.asyncio
+async def test_complete_stream_records_into_active_tracker() -> None:
+    from cogbase.llms.timing import track_llm_time
+
+    client = _make_streaming_client("a", "b")
+    llm = OpenAILLM(client, model="test-model")
+
+    with track_llm_time() as timing:
+        _ = [p async for p in llm.complete_stream([{"role": "user", "content": "hi"}])]
+
+    assert timing.calls == 1
+    assert timing.seconds >= 0.0
+
+
+@pytest.mark.asyncio
+async def test_complete_without_tracker_does_not_error() -> None:
+    client = _make_non_stream_client("ok")
+    llm = OpenAILLM(client, model="test-model")
+
+    result = await llm.complete([{"role": "user", "content": "hi"}])
+
+    assert result["content"] == "ok"

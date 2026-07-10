@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Sequence
 
 from cogbase.core.models import Chunk, Document
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import LLMBase
+from cogbase.llms.timing import track_llm_time
 from cogbase.llms.summarization import estimate_tokens, summarise_chunk_tokens, summarize_text
 from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.chunking.base import ChunkerBase
@@ -269,24 +271,33 @@ class IngestionPipeline:
         if purge:
             await self.purge_document(doc.doc_id)
 
-        if self.parallel:
-            results = await asyncio.gather(*[self._run_step(doc, step) for step in self._steps])
-            records_extracted = sum(r[0] for r in results)
-            chunks_written = sum(r[1] for r in results)
-            extraction_failed = any(r[2] for r in results)
-        else:
-            records_extracted = 0
-            chunks_written = 0
-            extraction_failed = False
-            for step in self._steps:
-                records, chunks, failed = await self._run_step(doc, step)
-                records_extracted += records
-                chunks_written += chunks
-                extraction_failed = extraction_failed or failed
+        # track_llm_time() sums the wall time of every LLM completion (extraction,
+        # document summarization) made while ingesting this document, even across
+        # the concurrent windows/chunks those steps fan out; start marks the
+        # end-to-end wall clock for the same span.
+        start = time.perf_counter()
+        with track_llm_time() as llm_timing:
+            if self.parallel:
+                results = await asyncio.gather(*[self._run_step(doc, step) for step in self._steps])
+                records_extracted = sum(r[0] for r in results)
+                chunks_written = sum(r[1] for r in results)
+                extraction_failed = any(r[2] for r in results)
+            else:
+                records_extracted = 0
+                chunks_written = 0
+                extraction_failed = False
+                for step in self._steps:
+                    records, chunks, failed = await self._run_step(doc, step)
+                    records_extracted += records
+                    chunks_written += chunks
+                    extraction_failed = extraction_failed or failed
+        total_seconds = time.perf_counter() - start
 
         logger.info(
-            "ingestion_pipeline.ingest.done app_id=%s name=%s doc_id=%s records_extracted=%d chunks_written=%d extraction_failed=%s",
+            "ingestion_pipeline.ingest.done app_id=%s name=%s doc_id=%s records_extracted=%d "
+            "chunks_written=%d extraction_failed=%s llm_calls=%d llm_seconds=%.3f total_seconds=%.3f",
             self.app_id, self.name, doc.doc_id, records_extracted, chunks_written, extraction_failed,
+            llm_timing.calls, llm_timing.seconds, total_seconds,
         )
         return records_extracted, chunks_written, extraction_failed
 

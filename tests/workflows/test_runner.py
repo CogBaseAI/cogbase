@@ -685,3 +685,55 @@ class TestPurgeDocument:
     async def test_purge_without_store_is_noop(self):
         runner = WorkflowRunner(_make_workflow([]), structured_store=None)
         await runner.purge_document("A")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# LLM-time / end-to-end-time logging
+# ---------------------------------------------------------------------------
+
+class TestRunTiming:
+    @staticmethod
+    def _real_llm(content: str):
+        """A real OpenAILLM over a mock client, so its completion is timed.
+
+        The runner attributes LLM wall time only for backends that record into
+        the active tracker; a bare MagicMock LLM would report zero calls.
+        """
+        from types import SimpleNamespace
+
+        from cogbase.llms.openai import OpenAILLM
+
+        message = SimpleNamespace(content=content, tool_calls=None)
+        choice = SimpleNamespace(message=message, finish_reason="stop")
+        response = SimpleNamespace(choices=[choice])
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(return_value=response)
+        return OpenAILLM(client, model="test-model")
+
+    async def test_run_done_log_reports_llm_and_total_time(self, caplog):
+        import logging
+
+        structured, vs = await _make_full_stores({"clause_id": "c1", "text": "x"})
+        steps = [
+            _make_step(id="q", tool="structured-query", collection="clauses"),
+            _make_step(id="j", tool="llm-structured", prompt="Judge.",
+                       input={"data": "{{ steps.q.records }}"}, output_schema=_FINDING_SCHEMA),
+            _make_step(id="save", tool="structured-save", collection="findings",
+                       records=["{{ steps.j.output }}"]),
+        ]
+        runner = WorkflowRunner(
+            _make_workflow(steps),
+            structured_store=structured,
+            vector_store=vs,
+            embedder=_make_embedder(),
+            llm=self._real_llm('{"finding_id": "f1", "status": "ok"}'),
+        )
+
+        with caplog.at_level(logging.INFO, logger="cogbase.workflows.runner"):
+            await _drain(runner, {})
+
+        done = next(r for r in caplog.records if r.message.startswith("workflow.run.done"))
+        # The llm-structured step made exactly one completion; both timings logged.
+        assert "llm_calls=1" in done.message
+        assert "llm_seconds=" in done.message
+        assert "total_seconds=" in done.message
