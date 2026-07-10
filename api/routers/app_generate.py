@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/generate", tags=["generate"])
 
-_MAX_AGENT_CALLS = 10
+_MAX_AGENT_CALLS = 20
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -58,7 +58,7 @@ async def _chat_turn_events(
 
     from cogbase.llms.base import ChatMessage as LLMChatMessage
 
-    logger.info("%s start text=%s ..., history=%d", log_prefix, body.text[:50], len(body.history))
+    logger.info("%s start text=%s, history=%d", log_prefix, body.text, len(body.history))
 
     messages: list[LLMChatMessage] = (
         [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -85,6 +85,7 @@ async def _chat_turn_events(
 
             if not tool_calls:
                 final_content = "".join(streamed_chunks).strip()
+                logger.info("%s discussion final_content=%s", log_prefix, final_content)
                 break
 
             tc = tool_calls[0]

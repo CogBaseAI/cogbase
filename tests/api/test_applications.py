@@ -1990,7 +1990,7 @@ class TestDownloadGeneratedDocument:
         import urllib.parse
 
         art = b"PK\x03\x04-merged-docx-bytes"
-        doc_id = "上海亲和谷养老社区多彩之家入住服务协议_修订版__c49bd3c5.docx"
+        doc_id = "入住服务协议_修订版__c49bd3c5.docx"
         mock_app = _mock_download_app({f"generated/{doc_id}": art})
         await _create_app(client, mock_app)
 
@@ -2031,4 +2031,149 @@ class TestDownloadGeneratedDocument:
             "/applications/my-contract-analyzer/documents/x.docx/download"
         )
 
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /applications/{app_name}/docs/{doc_id}/original
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadOriginalDocument:
+    @pytest.mark.asyncio
+    async def test_download_returns_bytes_and_source_filename_header(self, app_overrides):
+        import mimetypes
+
+        client = app_overrides["client"]
+        system_store: SystemStore = app_overrides["system_store"]
+        raw = b"%PDF-1.7 original bytes"
+        mock_app = _mock_download_app({"originals/doc-1.pdf": raw})
+        await _create_app(client, mock_app)
+        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        await system_store.save_doc(DocRecord(
+            app_id=app_id, doc_id="doc-1", status="active",
+            ingested_at="2024-01-01T00:00:00+00:00",
+            metadata='{"source_filename": "Contract A.pdf", "source_format": "pdf"}',
+        ))
+
+        resp = await client.get("/applications/my-contract-analyzer/docs/doc-1/original")
+
+        assert resp.status_code == 200
+        assert resp.content == raw
+        # Original path is reconstructed as originals/{doc_id}{suffix} from source_format.
+        assert mock_app.document_store.load_bytes.call_args[0][1] == "originals/doc-1.pdf"
+        # Media type and download name come from the original source_filename.
+        assert resp.headers["content-type"].startswith(mimetypes.guess_type("Contract A.pdf")[0])
+        assert 'filename="Contract A.pdf"' in resp.headers["content-disposition"]
+
+    @pytest.mark.asyncio
+    async def test_download_falls_back_to_doc_id_when_no_source_filename(self, app_overrides):
+        client = app_overrides["client"]
+        system_store: SystemStore = app_overrides["system_store"]
+        mock_app = _mock_download_app({"originals/doc-1.txt": b"hi"})
+        await _create_app(client, mock_app)
+        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        await system_store.save_doc(DocRecord(
+            app_id=app_id, doc_id="doc-1", status="active",
+            ingested_at="2024-01-01T00:00:00+00:00",
+            metadata='{"source_format": "txt"}',
+        ))
+
+        resp = await client.get("/applications/my-contract-analyzer/docs/doc-1/original")
+
+        assert resp.status_code == 200
+        assert 'filename="doc-1.txt"' in resp.headers["content-disposition"]
+
+    @pytest.mark.asyncio
+    async def test_download_no_source_format_uses_suffixless_path(self, app_overrides):
+        client = app_overrides["client"]
+        system_store: SystemStore = app_overrides["system_store"]
+        mock_app = _mock_download_app({"originals/doc-1": b"bytes"})
+        await _create_app(client, mock_app)
+        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        await system_store.save_doc(DocRecord(
+            app_id=app_id, doc_id="doc-1", status="active",
+            ingested_at="2024-01-01T00:00:00+00:00", metadata="{}",
+        ))
+
+        resp = await client.get("/applications/my-contract-analyzer/docs/doc-1/original")
+
+        assert resp.status_code == 200
+        assert mock_app.document_store.load_bytes.call_args[0][1] == "originals/doc-1"
+
+    @pytest.mark.asyncio
+    async def test_download_non_ascii_filename_uses_rfc5987(self, app_overrides):
+        import urllib.parse
+
+        client = app_overrides["client"]
+        system_store: SystemStore = app_overrides["system_store"]
+        filename = "入住服务协议.pdf"
+        mock_app = _mock_download_app({"originals/doc-1.pdf": b"data"})
+        await _create_app(client, mock_app)
+        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        await system_store.save_doc(DocRecord(
+            app_id=app_id, doc_id="doc-1", status="active",
+            ingested_at="2024-01-01T00:00:00+00:00",
+            metadata=json.dumps({"source_filename": filename, "source_format": "pdf"}),
+        ))
+
+        resp = await client.get("/applications/my-contract-analyzer/docs/doc-1/original")
+
+        assert resp.status_code == 200
+        cd = resp.headers["content-disposition"]
+        assert f"filename*=UTF-8''{urllib.parse.quote(filename, safe='')}" in cd
+        assert 'filename="' in cd
+        cd.encode("latin-1")  # header must stay latin-1 encodable
+
+    @pytest.mark.asyncio
+    async def test_download_missing_original_bytes_returns_404(self, app_overrides):
+        client = app_overrides["client"]
+        system_store: SystemStore = app_overrides["system_store"]
+        mock_app = _mock_download_app({})  # nothing stored → load_bytes raises KeyError
+        await _create_app(client, mock_app)
+        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        await system_store.save_doc(DocRecord(
+            app_id=app_id, doc_id="doc-1", status="active",
+            ingested_at="2024-01-01T00:00:00+00:00",
+            metadata='{"source_format": "pdf"}',
+        ))
+
+        resp = await client.get("/applications/my-contract-analyzer/docs/doc-1/original")
+
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_download_store_without_binary_support_returns_404(self, app_overrides):
+        client = app_overrides["client"]
+        system_store: SystemStore = app_overrides["system_store"]
+        inst = MagicMock()
+        store = MagicMock()
+        store.load_bytes = AsyncMock(side_effect=NotImplementedError)
+        inst.document_store = store
+        await _create_app(client, inst)
+        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        await system_store.save_doc(DocRecord(
+            app_id=app_id, doc_id="doc-1", status="active",
+            ingested_at="2024-01-01T00:00:00+00:00",
+            metadata='{"source_format": "pdf"}',
+        ))
+
+        resp = await client.get("/applications/my-contract-analyzer/docs/doc-1/original")
+
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_download_unknown_doc_returns_404(self, app_overrides):
+        client = app_overrides["client"]
+        mock_app = _mock_download_app({})
+        await _create_app(client, mock_app)
+
+        resp = await client.get("/applications/my-contract-analyzer/docs/ghost/original")
+
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_download_unknown_app_returns_404(self, app_overrides):
+        client = app_overrides["client"]
+        resp = await client.get("/applications/nonexistent/docs/doc-1/original")
         assert resp.status_code == 404

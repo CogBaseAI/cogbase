@@ -1233,6 +1233,53 @@ async def get_doc(
     return _doc_to_response(doc, app_name)
 
 
+@router.get("/{app_name}/docs/{doc_id}/original")
+async def download_original_document(
+    app_name: str,
+    doc_id: str,
+    app_cache: AppCacheDep,
+    system_store: SystemStoreDep,
+    system_resources: SystemResourcesDep,
+) -> StreamingResponse:
+    """Stream the raw uploaded file for an ingested document as a download.
+
+    The original bytes are saved at upload time under ``originals/{doc_id}{suffix}``;
+    the suffix and download filename are reconstructed from the document's upload
+    metadata (``source_format`` / ``source_filename``).
+    """
+    record = await system_store.get_app(app_name)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
+    doc = await system_store.get_doc(record.app_id, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"Document '{doc_id}' not found")
+
+    meta = json.loads(doc.metadata) if doc.metadata else {}
+    source_format = meta.get("source_format")
+    suffix = f".{source_format}" if source_format else ""
+    filename = meta.get("source_filename") or f"{doc_id}{suffix}"
+
+    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    try:
+        data = await app.document_store.load_bytes(record.app_id, f"originals/{doc_id}{suffix}")
+    except (KeyError, NotImplementedError):
+        raise HTTPException(status_code=404, detail=f"Original file for document '{doc_id}' not found")
+    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    # HTTP headers are latin-1 encoded, so a non-ASCII filename (e.g. CJK) must be
+    # sent via RFC 5987's ``filename*`` with a percent-encoded UTF-8 value. Keep an
+    # ASCII-only ``filename`` fallback for clients that ignore the extended form.
+    ascii_fallback = filename.encode("ascii", "ignore").decode("ascii") or "download"
+    utf8_quoted = urllib.parse.quote(filename, safe="")
+    content_disposition = (
+        f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{utf8_quoted}'
+    )
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=media_type,
+        headers={"Content-Disposition": content_disposition},
+    )
+
+
 @router.delete("/{app_name}/docs/{doc_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_doc(
     app_name: str,

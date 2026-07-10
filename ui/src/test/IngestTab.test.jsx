@@ -169,3 +169,63 @@ it('alerts and keeps the doc when the delete fails', async () => {
   expect(deleteCalls).toHaveLength(1)
   expect(screen.getByText('doc-alpha')).toBeInTheDocument()
 })
+
+// Routes /docs off a fixed list and captures every original-download request.
+// `downloadResponse` controls what the /original call resolves to (or rejects
+// with, when it's an Error).
+function mockFetchDownloadable(docs, downloadResponse = { ok: true, blob: async () => new Blob(['pdf-bytes']) }) {
+  const downloadCalls = []
+  vi.spyOn(global, 'fetch').mockImplementation((url) => {
+    const u = String(url)
+    if (u.endsWith('/original')) {
+      downloadCalls.push(u)
+      if (downloadResponse instanceof Error) return Promise.reject(downloadResponse)
+      return Promise.resolve(downloadResponse)
+    }
+    if (u.endsWith('/docs')) {
+      return Promise.resolve({ ok: true, json: async () => ({ docs }) })
+    }
+    if (u.endsWith('/workflows')) {
+      return Promise.resolve({ ok: true, json: async () => ({ workflows: [] }) })
+    }
+    return Promise.resolve({ ok: true, json: async () => ({}) })
+  })
+  return { downloadCalls }
+}
+
+it('downloads the original file using the source filename', async () => {
+  const { downloadCalls } = mockFetchDownloadable([
+    { doc_id: 'doc-alpha', metadata: { source_filename: 'Contract A.pdf' }, status: 'done' },
+  ])
+  URL.createObjectURL = vi.fn(() => 'blob:fake')
+  URL.revokeObjectURL = vi.fn()
+  const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+  render(<Harness appName="app1" />)
+  await waitFor(() => expect(screen.getByText('doc-alpha')).toBeInTheDocument())
+
+  await userEvent.click(screen.getByText('⤓ Download'))
+
+  await waitFor(() => expect(downloadCalls).toHaveLength(1))
+  expect(downloadCalls[0]).toMatch(/\/applications\/app1\/docs\/doc-alpha\/original$/)
+  expect(clickSpy).toHaveBeenCalledTimes(1)
+  expect(URL.createObjectURL).toHaveBeenCalledTimes(1)
+  expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fake')
+})
+
+it('alerts when the original download fails', async () => {
+  const { downloadCalls } = mockFetchDownloadable(
+    [{ doc_id: 'doc-alpha', metadata: {}, status: 'done' }],
+    { ok: false, status: 404, statusText: 'Not Found' },
+  )
+  const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+
+  render(<Harness appName="app1" />)
+  await waitFor(() => expect(screen.getByText('doc-alpha')).toBeInTheDocument())
+
+  await userEvent.click(screen.getByText('⤓ Download'))
+
+  await waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1))
+  expect(alertSpy.mock.calls[0][0]).toContain('Download failed')
+  expect(downloadCalls).toHaveLength(1)
+})

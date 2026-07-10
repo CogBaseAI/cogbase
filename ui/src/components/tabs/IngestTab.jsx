@@ -23,6 +23,7 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
   const [wfNames, setWfNames] = useState([])
   const [anyPendingWf, setAnyPendingWf] = useState(false)
   const [deleting, setDeleting] = useState(null) // docId currently being deleted
+  const [downloading, setDownloading] = useState(null) // docId currently being downloaded
   const fileInputRef = useRef(null)
   const hasApp = !!currentApp
 
@@ -127,6 +128,30 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
       alert(t('ingest.deleteFailed', { msg: e.message }))
     } finally {
       setDeleting(null)
+    }
+  }
+
+  async function downloadDoc(doc) {
+    if (!currentApp || downloading) return
+    const docId = doc.doc_id
+    setDownloading(docId)
+    try {
+      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/docs/${encodeURIComponent(docId)}/original`)
+      if (!resp.ok) { alert(t('ingest.downloadFailed', { msg: resp.status === 404 ? t('ingest.unknownError') : resp.statusText })); return }
+      const blob = await resp.blob()
+      const filename = (doc.metadata && doc.metadata.source_filename) || docId
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      alert(t('ingest.downloadFailed', { msg: e.message }))
+    } finally {
+      setDownloading(null)
     }
   }
 
@@ -245,13 +270,22 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
                 {
                   key: 'actions', label: t('ingest.colActions'), sortable: false, cellClassName: 'actions-cell',
                   render: doc => (
-                    <button
-                      className="btn btn-red btn-sm"
-                      disabled={deleting === doc.doc_id}
-                      onClick={e => { e.stopPropagation(); deleteDoc(doc.doc_id) }}
-                    >
-                      {deleting === doc.doc_id ? <span className="spinning">⟳</span> : t('common.delete')}
-                    </button>
+                    <>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        disabled={downloading === doc.doc_id}
+                        onClick={e => { e.stopPropagation(); downloadDoc(doc) }}
+                      >
+                        {downloading === doc.doc_id ? <span className="spinning">⟳</span> : t('ingest.download')}
+                      </button>
+                      <button
+                        className="btn btn-red btn-sm"
+                        disabled={deleting === doc.doc_id}
+                        onClick={e => { e.stopPropagation(); deleteDoc(doc.doc_id) }}
+                      >
+                        {deleting === doc.doc_id ? <span className="spinning">⟳</span> : t('common.delete')}
+                      </button>
+                    </>
                   ),
                 },
               ]}

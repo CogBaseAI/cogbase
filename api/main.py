@@ -88,7 +88,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             system_resources.llm = build_llm(system_cfg.llm)
             system_resources.llm_config = system_cfg.llm
-            logger.info("system llm provider=%s model=%s", system_cfg.llm.provider, system_cfg.llm.model)
+            logger.info("system llm provider=%s model=%s mini_model=%s",
+                        system_cfg.llm.provider, system_cfg.llm.model, system_cfg.llm.mini_model)
         except Exception as exc:
             logger.warning("system llm not initialized (configure via Settings): %s", exc)
 
