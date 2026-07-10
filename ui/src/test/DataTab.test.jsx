@@ -13,12 +13,12 @@ function SetApp({ name }) {
   return null
 }
 
-function Harness({ appName, active = true }) {
+function Harness({ appName, active = true, refreshKey = 0 }) {
   return (
     <I18nProvider>
       <AppProvider>
         <SetApp name={appName} />
-        <DataTab active={active} onOpenWfModal={() => {}} wfCompleteCollection={null} onWfCompleteHandled={() => {}} />
+        <DataTab active={active} refreshKey={refreshKey} onOpenWfModal={() => {}} wfCompleteCollection={null} onWfCompleteHandled={() => {}} />
       </AppProvider>
     </I18nProvider>
   )
@@ -69,6 +69,22 @@ it('does not show a previous app records after switching apps', async () => {
 
   await waitFor(() => expect(screen.getByText('SecretValueB')).toBeInTheDocument())
   expect(screen.queryByText('SecretValueA')).not.toBeInTheDocument()
+})
+
+it('re-queries the active collection when refreshKey changes (doc ingested/deleted)', async () => {
+  // Same app, mutable records: the store changes out-of-band (a doc was ingested
+  // or deleted in the Ingest tab) and a refreshKey bump must pull the new rows.
+  const byApp = { app1: { collections: ['contracts'], records: [{ id: 1, party: 'BeforeChange' }] } }
+  mockFetch(byApp)
+
+  const { rerender } = render(<Harness appName="app1" refreshKey={0} />)
+  await waitFor(() => expect(screen.getByText('BeforeChange')).toBeInTheDocument())
+
+  byApp.app1.records = [{ id: 2, party: 'AfterChange' }]
+  rerender(<Harness appName="app1" refreshKey={1} />)
+
+  await waitFor(() => expect(screen.getByText('AfterChange')).toBeInTheDocument())
+  expect(screen.queryByText('BeforeChange')).not.toBeInTheDocument()
 })
 
 // Returns the party-cell text of each body row, in display order.

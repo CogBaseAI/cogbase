@@ -13,12 +13,12 @@ function SetApp({ name }) {
   return null
 }
 
-function Harness({ appName, active = true }) {
+function Harness({ appName, active = true, onDocsChanged = () => {} }) {
   return (
     <I18nProvider>
       <AppProvider>
         <SetApp name={appName} />
-        <IngestTab active={active} refreshKey={0} onOpenTaskProgress={() => {}} onOpenWfModal={() => {}} />
+        <IngestTab active={active} refreshKey={0} onOpenTaskProgress={() => {}} onOpenWfModal={() => {}} onDocsChanged={onDocsChanged} />
       </AppProvider>
     </I18nProvider>
   )
@@ -115,6 +115,40 @@ it('deletes a document after confirmation and reloads the list', async () => {
   expect(screen.getByText('doc-beta')).toBeInTheDocument()
   expect(deleteCalls).toHaveLength(1)
   expect(deleteCalls[0]).toMatch(/\/applications\/app1\/docs\/doc-alpha$/)
+})
+
+it('notifies onDocsChanged after a delete so the Data tab can refresh', async () => {
+  const { store } = mockFetchDeletable([
+    { doc_id: 'doc-alpha', metadata: {}, status: 'done' },
+  ])
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  const onDocsChanged = vi.fn()
+
+  render(<Harness appName="app1" onDocsChanged={onDocsChanged} />)
+  await waitFor(() => expect(screen.getByText('doc-alpha')).toBeInTheDocument())
+
+  store.docs = []
+  await userEvent.click(screen.getByText('Delete'))
+
+  await waitFor(() => expect(onDocsChanged).toHaveBeenCalledTimes(1))
+})
+
+it('does not notify onDocsChanged when the delete fails', async () => {
+  mockFetchDeletable(
+    [{ doc_id: 'doc-alpha', metadata: {}, status: 'done' }],
+    { ok: false, status: 500, statusText: 'Server Error' },
+  )
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  vi.spyOn(window, 'alert').mockImplementation(() => {})
+  const onDocsChanged = vi.fn()
+
+  render(<Harness appName="app1" onDocsChanged={onDocsChanged} />)
+  await waitFor(() => expect(screen.getByText('doc-alpha')).toBeInTheDocument())
+
+  await userEvent.click(screen.getByText('Delete'))
+
+  await waitFor(() => expect(window.alert).toHaveBeenCalledTimes(1))
+  expect(onDocsChanged).not.toHaveBeenCalled()
 })
 
 it('does not delete when the confirmation is cancelled', async () => {

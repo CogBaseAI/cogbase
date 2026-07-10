@@ -10,7 +10,7 @@ function metaString(doc) {
   return Object.keys(meta).length ? Object.entries(meta).map(([k, v]) => `${k}: ${v}`).join(', ') : ''
 }
 
-export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOpenWfModal }) {
+export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOpenWfModal, onDocsChanged }) {
   const { apiUrl, currentApp } = useApp()
   const { t } = useT()
   const [pickedFiles, setPickedFiles] = useState([])
@@ -104,6 +104,7 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
       setPickedFiles([])
       if (fileInputRef.current) fileInputRef.current.value = ''
       loadIngestDocs()
+      onDocsChanged?.() // new records may have landed in structured collections
     } catch (e) {
       setUploadErr(t('common.networkError', { msg: e.message }))
     } finally {
@@ -121,6 +122,7 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
       const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/docs/${encodeURIComponent(docId)}`, { method: 'DELETE' })
       if (resp.ok || resp.status === 204 || resp.status === 404) {
         loadIngestDocs()
+        onDocsChanged?.() // the doc's records were removed from structured collections
       } else {
         alert(t('ingest.deleteFailed', { msg: resp.statusText }))
       }

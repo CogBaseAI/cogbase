@@ -24,6 +24,7 @@ function Layout() {
   const [wfModal, setWfModal] = useState(null)          // null | { appName, workflowName, paramKey, label, values, desc, allDone, fromIngest }
   const [taskProgress, setTaskProgress] = useState(null) // null | { appName, workflowName, docId }
   const [ingestRefreshKey, setIngestRefreshKey] = useState(0)
+  const [dataRefreshKey, setDataRefreshKey] = useState(0)
   const [wfCompleteCollection, setWfCompleteCollection] = useState(null)
 
   function switchTab(name) {
@@ -83,11 +84,13 @@ function Layout() {
             refreshKey={ingestRefreshKey}
             onOpenTaskProgress={setTaskProgress}
             onOpenWfModal={setWfModal}
+            onDocsChanged={() => setDataRefreshKey(k => k + 1)}
           />
         </div>
         <div className={`panel ${activeTab === 'data' ? 'active' : ''}`}>
           <DataTab
             active={activeTab === 'data'}
+            refreshKey={dataRefreshKey}
             onOpenWfModal={setWfModal}
             wfCompleteCollection={wfCompleteCollection}
             onWfCompleteHandled={() => setWfCompleteCollection(null)}

@@ -3,7 +3,7 @@ import { useApp } from '../../context'
 import { useT } from '../../i18n'
 import { copyText } from '../../utils'
 
-export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, onWfCompleteHandled }) {
+export default function DataTab({ active, refreshKey, onOpenWfModal, wfCompleteCollection, onWfCompleteHandled }) {
   const { apiUrl, currentApp, demoCatalog } = useApp()
   const { t } = useT()
   const [collections, setCollections] = useState([])
@@ -65,6 +65,16 @@ export default function DataTab({ active, onOpenWfModal, wfCompleteCollection, o
       onWfCompleteHandled()
     }
   }, [wfCompleteCollection])
+
+  // A document was ingested or deleted in the Ingest tab — refresh the collection
+  // list and re-query the active collection so its records reflect the change.
+  // loadCollections alone only re-selects when nothing is active, so re-query the
+  // active collection explicitly to avoid showing stale records.
+  useEffect(() => {
+    if (!refreshKey || !currentApp) return
+    loadCollections()
+    if (activeCollection) selectCollection(activeCollection)
+  }, [refreshKey])
 
   async function selectCollection(name) {
     setActiveCollectionState(name)
