@@ -6,6 +6,7 @@ import asyncio
 import io
 import logging
 import mimetypes
+import urllib.parse
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -1310,10 +1311,18 @@ async def download_generated_document(
     except (KeyError, NotImplementedError):
         raise HTTPException(status_code=404, detail=f"Generated document '{doc_id}' not found")
     media_type = mimetypes.guess_type(doc_id)[0] or "application/octet-stream"
+    # HTTP headers are latin-1 encoded, so a non-ASCII filename (e.g. CJK) must be
+    # sent via RFC 5987's ``filename*`` with a percent-encoded UTF-8 value. Keep an
+    # ASCII-only ``filename`` fallback for clients that ignore the extended form.
+    ascii_fallback = doc_id.encode("ascii", "ignore").decode("ascii") or "download"
+    utf8_quoted = urllib.parse.quote(doc_id, safe="")
+    content_disposition = (
+        f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{utf8_quoted}'
+    )
     return StreamingResponse(
         io.BytesIO(data),
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{doc_id}"'},
+        headers={"Content-Disposition": content_disposition},
     )
 
 

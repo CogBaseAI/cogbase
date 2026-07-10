@@ -1984,6 +1984,30 @@ class TestDownloadGeneratedDocument:
         assert resp.headers["content-type"].startswith("text/plain")
 
     @pytest.mark.asyncio
+    async def test_download_non_ascii_filename_uses_rfc5987(self, client):
+        """A CJK (non-latin-1) filename must not blow up header encoding; it is
+        sent via RFC 5987's ``filename*`` with an ASCII ``filename`` fallback."""
+        import urllib.parse
+
+        art = b"PK\x03\x04-merged-docx-bytes"
+        doc_id = "上海亲和谷养老社区多彩之家入住服务协议_修订版__c49bd3c5.docx"
+        mock_app = _mock_download_app({f"generated/{doc_id}": art})
+        await _create_app(client, mock_app)
+
+        resp = await client.get(
+            f"/applications/my-contract-analyzer/documents/{urllib.parse.quote(doc_id)}/download"
+        )
+
+        assert resp.status_code == 200
+        assert resp.content == art
+        cd = resp.headers["content-disposition"]
+        # Extended form carries the real UTF-8 name, percent-encoded.
+        assert f"filename*=UTF-8''{urllib.parse.quote(doc_id, safe='')}" in cd
+        # Fallback is ASCII-only so the raw header stays latin-1 encodable.
+        assert 'filename="' in cd
+        cd.encode("latin-1")  # must not raise
+
+    @pytest.mark.asyncio
     async def test_download_unknown_artifact_returns_404(self, client):
         mock_app = _mock_download_app({})
         await _create_app(client, mock_app)
