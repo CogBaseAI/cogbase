@@ -148,11 +148,39 @@ download link in your answer, noting it is a tracked-changes redline reviewable 
 
 ## Refining across turns
 
-The review file is the single source of truth. To change a verdict or reword a
-suggestion: `fetch_artifact` the review file, edit the relevant clause(s) (set `verdict`
-to `accepted` / `rejected`, or adjust `suggestion.new_text`), `save_artifact` the updated
-file, and regenerate the redline. When the review is complete, `delete_artifact` the
-review file to clean up the working state.
+The review file is the single source of truth for the review. When the user accepts,
+rejects, or asks to reword suggestions ("accept clause 1, reject clause 3, soften clause
+5"), don't hand-edit the JSON — apply the changes deterministically with `build_ops.py
+patch` so a mistyped `clause_id` or verdict fails loudly instead of corrupting the file:
+
+1. `fetch_artifact` the current review file to a local path.
+2. Apply the changes:
+
+   ```
+   # Verdicts go on the command line; rewording/dropping a suggestion goes in a patch file.
+   python <skill base directory>/build_ops.py patch \
+     --review review.json --accept c1 --reject c3 \
+     --patch changes.json --output review.json
+   ```
+
+   `changes.json` is optional and only needed to reword or drop a suggestion:
+
+   ```json
+   {"suggestions": {
+     "c5": {"new_text": "Payment shall be due within 30 days of invoice receipt."},
+     "c8": null
+   }}
+   ```
+
+   A `null` drops the clause's suggestion so it's never applied; a fields dict is merged
+   into the existing suggestion (keeping the baked `anchor_text`, so a reworded change
+   still matches the base). Verdicts may also be given in the patch file under `"verdicts"`
+   instead of the flags.
+
+3. `save_artifact` the updated review file and regenerate the redline (see above).
+
+When the review is complete, `delete_artifact` the review file (and any stale redline
+previews) to clean up the working state.
 
 ## Helper reference
 
@@ -160,6 +188,9 @@ review file to clean up the working state.
   per-paragraph verbatim anchors.
 - `build_ops.py finalize --analysis a.json --clauses c.json [--output review.json]` —
   resolve `para_id`s to anchors, default verdicts to `pending`, validate.
+- `build_ops.py patch --review review.json [--accept ID...] [--reject ID...]
+  [--pending ID...] [--patch changes.json] [--output review.json]` — apply
+  accept/reject/refine decisions; validates every `clause_id`, verdict, and resulting op.
 - `build_ops.py to-edit-ops --review review.json [--all] [--output edit_ops.json]` —
   project to `edit-docx` operations (accepted-only unless `--all`).
 

@@ -163,6 +163,65 @@ def test_finalize_append_needs_no_anchor():
 
 
 # ---------------------------------------------------------------------------
+# build_ops.patch  (accept / reject / refine across turns)
+# ---------------------------------------------------------------------------
+
+
+def _pending_review() -> dict:
+    return {"base_doc_id": "d1", "meta": {}, "clauses": [
+        {"clause_id": "c1", "verdict": "pending",
+         "suggestion": {"op": "replace", "anchor_text": "A", "new_text": "A2"}},
+        {"clause_id": "c2", "verdict": "pending",
+         "suggestion": {"op": "delete", "anchor_text": "B"}},
+        {"clause_id": "c3", "verdict": "pending", "suggestion": None},
+    ]}
+
+
+def test_patch_sets_verdicts_by_clause_id():
+    review = build_mod.patch(_pending_review(), verdicts={"c1": "accepted", "c2": "rejected"})
+    by_id = {c["clause_id"]: c for c in review["clauses"]}
+    assert by_id["c1"]["verdict"] == "accepted"
+    assert by_id["c2"]["verdict"] == "rejected"
+    assert by_id["c3"]["verdict"] == "pending"  # untouched
+
+
+def test_patch_rewords_suggestion_keeping_anchor():
+    review = build_mod.patch(
+        _pending_review(), suggestions={"c1": {"new_text": "A softened"}}
+    )
+    sug = review["clauses"][0]["suggestion"]
+    assert sug["new_text"] == "A softened"
+    assert sug["anchor_text"] == "A"  # baked anchor preserved through a reword
+
+
+def test_patch_drops_suggestion_with_null():
+    review = build_mod.patch(_pending_review(), suggestions={"c1": None})
+    assert review["clauses"][0]["suggestion"] is None
+
+
+def test_patch_rejects_unknown_clause_id():
+    with pytest.raises(ValueError, match="unknown clause_id"):
+        build_mod.patch(_pending_review(), verdicts={"c9": "accepted"})
+
+
+def test_patch_rejects_bad_verdict():
+    with pytest.raises(ValueError, match="verdict"):
+        build_mod.patch(_pending_review(), verdicts={"c1": "maybe"})
+
+
+def test_patch_rejects_reword_that_breaks_the_op():
+    # Blanking new_text on a replace op leaves it invalid — caught before it ships.
+    with pytest.raises(ValueError, match="requires new_text"):
+        build_mod.patch(_pending_review(), suggestions={"c1": {"new_text": ""}})
+
+
+def test_patch_then_to_edit_ops_reflects_accepted_verdicts():
+    review = build_mod.patch(_pending_review(), verdicts={"c1": "accepted"})
+    ops = build_mod.to_edit_ops(review)["operations"]
+    assert ops == [{"op": "replace", "anchor_text": "A", "new_text": "A2"}]
+
+
+# ---------------------------------------------------------------------------
 # build_ops.to_edit_ops
 # ---------------------------------------------------------------------------
 

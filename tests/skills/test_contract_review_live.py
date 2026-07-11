@@ -8,16 +8,22 @@ the contract, fetching the original ``.docx``, shelling out to the bundled
 ``segment_clauses.py`` and ``build_ops.py``, and saving the review file.
 
 The test builds a small multi-clause contract as a real ``.docx``, seeds it the
-way an upload would (extracted text + original bytes), and asks the agent to
-review it **for the Client from a disadvantaged position** — supplying both up
-front so the skill's confirmation step is satisfied without an interactive turn.
-It then re-opens the produced review ``ops.json`` and asserts:
+way an upload would (extracted text + original bytes), and drives the two phases
+of the skill in two conversation turns:
 
-  * the review lens (represented party + position) is recorded as requested,
-  * clauses carry well-formed risk levels and at least one suggested change, and
-  * **every anchor the LLM produced round-trips through edit-docx with zero
-    unmatched** — the end-to-end proof that para_id→anchor baking holds on real
-    model output, so the suggestions are actually applicable as a redline.
+  1. **Analyze** — ask the agent to review the contract **for the Client from a
+     disadvantaged position** (both supplied up front so the skill's confirmation
+     step is satisfied without an interactive turn). Re-open the produced review
+     ``ops.json`` and assert the lens is recorded, clauses carry well-formed risk
+     levels and at least one suggested change, and **every anchor the LLM produced
+     round-trips through edit-docx with zero unmatched**.
+
+  2. **Apply + refine (Phase 2)** — continue the conversation and tell the agent to
+     accept one clause's suggestion, reject the rest, and produce the redline. Then
+     assert the agent drove ``build_ops.py patch`` + ``to-edit-ops`` +
+     ``edit-docx`` through the loop to produce a real tracked-changes ``.docx`` that
+     reflects **only the accepted verdict** — the end-to-end proof that the
+     verdict-gated apply path works on real model output.
 
 Run with::
 
@@ -33,6 +39,7 @@ import json
 import os
 from io import BytesIO
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 import pytest
 
@@ -42,6 +49,7 @@ from docx import Document  # noqa: E402  (import after importorskip)
 
 from cogbase.core.query_runner import (  # noqa: E402
     MemoryTiers,
+    QueryResult,
     QueryRunner,
     RetrievalResources,
 )
@@ -121,6 +129,37 @@ def _chdir(path: Path):
         os.chdir(prev)
 
 
+async def _run_turn(runner: QueryRunner, query: str, history: list[dict]) -> QueryResult:
+    """Drive one agent turn to completion, returning its final QueryResult.
+
+    The runner streams ``str`` tokens then yields a final ``QueryResult``; memory
+    is off in this test, so we thread continuity by passing prior turns as
+    ``history``.
+    """
+    result: QueryResult | None = None
+    async for item in runner.run(query, history=history):
+        if not isinstance(item, str):
+            result = item
+    assert result is not None, "runner produced no final QueryResult"
+    return result
+
+
+def _generated(docstore_root: Path, pattern: str) -> list[str]:
+    return sorted(glob.glob(str(docstore_root / APP_ID / "generated" / pattern)))
+
+
+def _document_xml(path: str) -> str:
+    """Return the raw word/document.xml of a .docx (so tracked-change runs are visible).
+
+    python-docx's ``paragraph.runs`` skips runs nested inside ``<w:ins>``/``<w:del>``,
+    so inspecting the redline's insertions/deletions means reading the part directly.
+    """
+    import zipfile
+
+    with zipfile.ZipFile(path) as z:
+        return z.read("word/document.xml").decode("utf-8")
+
+
 @pytest.mark.asyncio
 async def test_review_contract_produces_applicable_review(tmp_path):
     docstore_root = tmp_path / "docstore"
@@ -142,7 +181,8 @@ async def test_review_contract_produces_applicable_review(tmp_path):
         max_calls=30,
     )
 
-    query = (
+    # --- Turn 1: analyze ----------------------------------------------------
+    review_query = (
         f"Review the contract with doc_id '{DOC_ID}'. It represents the Client "
         "(Beta Client LLC), and the review position is disadvantaged. Both the "
         "represented party and the position are confirmed — proceed with the full "
@@ -150,16 +190,13 @@ async def test_review_contract_produces_applicable_review(tmp_path):
         "confirm again."
     )
 
-    result = None
     with _chdir(tmp_path):
-        async for item in runner.run(query):
-            if not isinstance(item, str):
-                result = item
-    assert result is not None
+        review_result = await _run_turn(runner, review_query, history=[])
 
     # The skill persists the review as a JSON artifact under generated/.
-    review_files = sorted(glob.glob(str(docstore_root / APP_ID / "generated" / "*.json")))
+    review_files = _generated(docstore_root, "*.json")
     assert review_files, "no review ops.json artifact was produced"
+    review_id = os.path.basename(review_files[-1])  # the artifact id is the filename
     review = json.loads(Path(review_files[-1]).read_text())
 
     # Review lens recorded as requested.
@@ -173,8 +210,8 @@ async def test_review_contract_produces_applicable_review(tmp_path):
     assert all(c["risk"]["level"] in {"high", "medium", "low", "none"} for c in clauses)
 
     # The disadvantaged Client has plenty to push back on — expect suggested changes.
-    suggestions = [c["suggestion"] for c in clauses if c.get("suggestion")]
-    assert suggestions, "expected at least one suggested change for a disadvantaged party"
+    suggested = [c for c in clauses if c.get("suggestion")]
+    assert suggested, "expected at least one suggested change for a disadvantaged party"
 
     # End-to-end anchoring proof: every anchor the LLM produced must locate its
     # paragraph in the base, so the whole review is applicable as a redline.
@@ -184,3 +221,64 @@ async def test_review_contract_produces_applicable_review(tmp_path):
     report = edit_helper.apply_operations(doc, ops, "test", "2026-01-01T00:00:00Z")
     unmatched = [r for r in report if not r["matched"]]
     assert not unmatched, f"LLM produced anchors that don't match the base: {unmatched}"
+
+    # --- Turn 2: apply + refine (Phase 2) -----------------------------------
+    # Accept exactly one suggestion and reject the rest, so the redline must be
+    # verdict-gated: the accepted change appears, the rejected ones do not.
+    accept_clause = suggested[0]
+    reject_clauses = suggested[1:]
+    accept_id = accept_clause["clause_id"]
+    reject_ids = [c["clause_id"] for c in reject_clauses]
+    accept_new_text = accept_clause["suggestion"]["new_text"]
+
+    reject_instruction = (
+        f"reject the suggestions for clauses {', '.join(reject_ids)}"
+        if reject_ids
+        else "leave the other clauses as they are"
+    )
+    apply_query = (
+        f"Finalize the review (its artifact id is '{review_id}'). Accept the suggestion "
+        f"for clause {accept_id} and {reject_instruction}. Then apply only the accepted "
+        "changes and give me the tracked-changes redline .docx — accepted verdicts only, "
+        "not a preview of everything."
+    )
+    history = [
+        {"role": "user", "content": review_query},
+        {"role": "assistant", "content": review_result.answer},
+    ]
+
+    with _chdir(tmp_path):
+        await _run_turn(runner, apply_query, history=history)
+
+    # A redline .docx artifact was produced.
+    redlines = _generated(docstore_root, "*.docx")
+    assert redlines, "no redline .docx artifact was produced by the apply turn"
+    redline_path = redlines[-1]
+    Document(redline_path)  # opens cleanly — a valid .docx
+    xml = _document_xml(redline_path)
+
+    # It is a tracked-changes redline carrying the accepted change...
+    assert "<w:ins" in xml, "redline has no tracked insertions"
+    assert escape(accept_new_text) in xml, "accepted clause's new text is not in the redline"
+
+    # ...and the verdict gate held: rejected suggestions were not applied.
+    for clause in reject_clauses:
+        rejected_text = clause["suggestion"].get("new_text")
+        if rejected_text:
+            assert escape(rejected_text) not in xml, (
+                f"rejected clause {clause['clause_id']} leaked into the redline"
+            )
+
+    # The patched review persisted the verdicts deterministically. Artifact ids
+    # carry a random suffix, so file order isn't chronological — take each clause's
+    # *decided* verdict across all review artifacts (a later patch only ever moves a
+    # clause off ``pending``, never back onto it).
+    verdict_by_id: dict[str, str] = {}
+    for path in _generated(docstore_root, "*.json"):
+        for clause in json.loads(Path(path).read_text()).get("clauses", []):
+            verdict = clause.get("verdict")
+            if verdict and verdict != "pending":
+                verdict_by_id[clause["clause_id"]] = verdict
+    assert verdict_by_id.get(accept_id) == "accepted"
+    for reject_id in reject_ids:
+        assert verdict_by_id.get(reject_id) == "rejected"
