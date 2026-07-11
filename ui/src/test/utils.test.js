@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fmtBytes, fmtRelTime, previewText, metaText, schemaTypeStr, simplifyExtractionSchemas, streamSSE, waitForTasks, resolveArtifactLinks, artifactLabel } from '../utils'
+import { fmtBytes, fmtRelTime, previewText, metaText, schemaTypeStr, simplifyExtractionSchemas, streamSSE, waitForTasks, resolveArtifactLinks, artifactLabel, latestDocxArtifact } from '../utils'
 
 describe('fmtBytes', () => {
   it('formats bytes', () => expect(fmtBytes(512)).toBe('512 B'))
@@ -213,5 +213,39 @@ describe('artifactLabel', () => {
   })
   it('leaves a plain filename untouched', () => {
     expect(artifactLabel('plain-name.docx')).toBe('plain-name.docx')
+  })
+})
+
+describe('latestDocxArtifact', () => {
+  const api = 'http://localhost:8000'
+
+  it('returns the newest .docx artifact from the last bot answer', () => {
+    const msgs = [
+      { role: 'user', text: 'redline it' },
+      { role: 'bot', text: 'v1 [a.docx](/applications/app1/documents/a__111.docx/download)' },
+      { role: 'user', text: 'soften clause 5' },
+      { role: 'bot', text: 'v2 [b.docx](/applications/app1/documents/b__222.docx/download)' },
+    ]
+    const doc = latestDocxArtifact(msgs, api, 'app1')
+    expect(doc.id).toBe('b__222.docx')
+    expect(doc.url).toBe(`${api}/applications/app1/documents/b__222.docx/download`)
+  })
+
+  it('resolves the <app_name> placeholder to the current app', () => {
+    const msgs = [{ role: 'bot', text: 'see `/applications/<app_name>/documents/x__9.docx/download`' }]
+    expect(latestDocxArtifact(msgs, api, 'contract-analyst').url)
+      .toBe(`${api}/applications/contract-analyst/documents/x__9.docx/download`)
+  })
+
+  it('ignores non-.docx artifacts (e.g. ops.json) and user messages', () => {
+    const msgs = [
+      { role: 'user', text: 'here is /applications/app1/documents/ignore__1.docx/download' },
+      { role: 'bot', text: 'review saved: /applications/app1/documents/review__1.json/download' },
+    ]
+    expect(latestDocxArtifact(msgs, api, 'app1')).toBeNull()
+  })
+
+  it('returns null when there are no messages', () => {
+    expect(latestDocxArtifact([], api, 'app1')).toBeNull()
   })
 })

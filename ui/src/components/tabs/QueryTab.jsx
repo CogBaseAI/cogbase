@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
-import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks } from '../../utils'
+import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks, latestDocxArtifact, artifactLabel } from '../../utils'
 
 export default function QueryTab({ active }) {
   const { apiUrl, currentApp } = useApp()
@@ -20,6 +20,10 @@ export default function QueryTab({ active }) {
   const [refsHidden, setRefsHidden] = useState(false)
   // User's manual collapse of the chats sidebar.
   const [chatsHidden, setChatsHidden] = useState(false)
+  // Document panel: renders the latest .docx artifact a bot answer produced
+  // (redline etc.). Opens automatically when a new document appears; the user can
+  // hide it. `docHidden` is the manual hide; the panel only exists when a doc does.
+  const [docHidden, setDocHidden] = useState(false)
   const [sessions, setSessions] = useState([])
   const [activeSid, setActiveSid] = useState(null)
   const msgsRef = useRef(null)
@@ -27,6 +31,16 @@ export default function QueryTab({ active }) {
   const textareaRef = useRef(null)
   const hasApp = !!currentApp
   const prevAppRef = useRef(currentApp)
+
+  // The most recent .docx artifact produced anywhere in this conversation.
+  const currentDoc = latestDocxArtifact(msgs, apiUrl, currentApp)
+  const prevDocIdRef = useRef(null)
+  // Auto-reveal the panel when a new document appears (e.g. a refined redline).
+  useEffect(() => {
+    const id = currentDoc?.id || null
+    if (id && id !== prevDocIdRef.current) setDocHidden(false)
+    prevDocIdRef.current = id
+  }, [currentDoc?.id])
 
   useEffect(() => {
     if (currentApp !== prevAppRef.current) {
@@ -357,8 +371,88 @@ export default function QueryTab({ active }) {
           </div>
         </div>
         )}
+        {currentDoc && docHidden && (
+          <div className="chat-aside-min">
+            <button className="aside-toggle" title={t('query.showDoc')} aria-label={t('query.showDoc')} onClick={() => setDocHidden(false)}><DocIcon /></button>
+          </div>
+        )}
+        {currentDoc && !docHidden && (
+          <DocPanel doc={currentDoc} t={t} onHide={() => setDocHidden(true)} />
+        )}
       </div>
     </>
+  )
+}
+
+// A right-hand panel that renders the latest generated .docx (redline etc.) with
+// tracked changes visible, via the docx-preview library — lazily imported so the
+// dependency is code-split and only loaded once a document actually appears.
+function DocPanel({ doc, t, onHide }) {
+  const bodyRef = useRef(null)
+  const [status, setStatus] = useState('loading')  // 'loading' | 'ready' | 'error'
+
+  useEffect(() => {
+    let cancelled = false
+    const container = bodyRef.current
+    if (!container) return
+    setStatus('loading')
+    container.innerHTML = ''
+    async function render() {
+      try {
+        const [{ renderAsync }, resp] = await Promise.all([
+          import('docx-preview'),
+          fetch(doc.url),
+        ])
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const blob = await resp.blob()
+        if (cancelled || !bodyRef.current) return
+        bodyRef.current.innerHTML = ''
+        await renderAsync(blob, bodyRef.current, undefined, {
+          inWrapper: true,
+          renderChanges: true,          // show w:ins / w:del tracked changes
+          ignoreLastRenderedPageBreak: true,
+        })
+        if (!cancelled) setStatus('ready')
+      } catch {
+        if (!cancelled) setStatus('error')
+      }
+    }
+    render()
+    return () => { cancelled = true }
+  }, [doc.url])
+
+  return (
+    <div className="chat-doc-panel">
+      <div className="aside-hd">
+        <button className="aside-toggle" title={t('query.hideDoc')} aria-label={t('query.hideDoc')} onClick={onHide}><PanelIcon /></button>
+        <h3 className="chat-doc-title" title={artifactLabel(doc.id)}>{artifactLabel(doc.id)}</h3>
+        <DownloadLink href={doc.url} t={t}><DownloadIcon /></DownloadLink>
+      </div>
+      {status === 'loading' && <div className="chat-doc-note">{t('query.docLoading')}</div>}
+      {status === 'error' && <div className="chat-doc-note chat-doc-err">{t('query.docError')}</div>}
+      <div className="chat-doc-body" ref={bodyRef} style={{ display: status === 'ready' ? 'block' : 'none' }} />
+    </div>
+  )
+}
+
+// Document glyph for the doc-panel reopen rail.
+function DocIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6" />
+    </svg>
+  )
+}
+
+// Small download glyph for the doc-panel header.
+function DownloadIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="M7 10l5 5 5-5" />
+      <path d="M12 15V3" />
+    </svg>
   )
 }
 

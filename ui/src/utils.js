@@ -66,6 +66,35 @@ export function resolveArtifactLinks(text, apiUrl, appName) {
     .replace(ARTIFACT_PATH_RE, (_m, name, id) => toUrl(name, id))
 }
 
+// Matches a generated .docx artifact's download path (optionally already
+// absolute), capturing the app name/id and the artifact id. Mirrors
+// ARTIFACT_PATH_RE but only for .docx, since those are what the document panel
+// renders. Backtick boundaries are excluded so a code-spanned path still matches.
+const DOCX_ARTIFACT_RE =
+  /(?:https?:\/\/[^/\s)`]+)?\/applications\/([^/\s)`]+)\/documents\/([^/\s)`]+\.docx)\/download/gi
+
+// Scan a chat transcript (newest turn first) for the most recent .docx artifact a
+// bot answer produced, returning { id, url } (absolute against apiUrl) or null.
+// Used to drive the Query tab's document panel: each refine turn emits a fresh
+// redline link, so the newest match is the one to render.
+export function latestDocxArtifact(msgs, apiUrl, appName) {
+  const base = String(apiUrl || '').replace(/\/$/, '')
+  for (let i = (msgs || []).length - 1; i >= 0; i--) {
+    const m = msgs[i]
+    if (m.role !== 'bot' || !m.text) continue
+    let match, last = null
+    DOCX_ARTIFACT_RE.lastIndex = 0
+    while ((match = DOCX_ARTIFACT_RE.exec(m.text)) !== null) last = match
+    if (last) {
+      const rawName = last[1]
+      const name = rawName === '<app_name>' ? appName : decodeURIComponent(rawName)
+      const id = last[2]
+      return { id, url: `${base}/applications/${encodeURIComponent(name || rawName)}/documents/${id}/download` }
+    }
+  }
+  return null
+}
+
 // Human-facing filename for a generated artifact id:
 // `saas-001-amended__06467960.docx` -> `saas-001-amended.docx` (drop the short
 // hex hash save_artifact appends to disambiguate).

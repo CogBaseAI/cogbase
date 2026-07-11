@@ -7,6 +7,11 @@ import { AppProvider, useApp } from '../context'
 import { I18nProvider } from '../i18n'
 import QueryTab from '../components/tabs/QueryTab'
 
+// docx-preview is dynamically imported by the document panel; stub its renderer
+// so the panel's render path runs without a real layout engine under jsdom.
+const renderAsyncMock = vi.fn().mockResolvedValue(undefined)
+vi.mock('docx-preview', () => ({ renderAsync: (...args) => renderAsyncMock(...args) }))
+
 // Render QueryTab inside a provider with `currentApp` pre-selected.
 function SetApp({ name }) {
   const { setCurrentApp } = useApp()
@@ -78,6 +83,9 @@ function mockFetch({
     }
     if (u.endsWith('/query/stream')) {
       return Promise.resolve(sseResponse(streamEvents))
+    }
+    if (u.endsWith('/download')) {
+      return Promise.resolve({ ok: true, blob: async () => new Blob(['docx-bytes']) })
     }
     return Promise.resolve({ ok: true, json: async () => ({}) })
   })
@@ -529,4 +537,53 @@ it('collapses the chats sidebar to a rail and restores it', async () => {
   await user.click(reopen)
   expect(screen.getByText('Chats')).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Show chats panel' })).not.toBeInTheDocument()
+})
+
+// ---------------------------------------------------------------------------
+// Document panel (renders the latest .docx artifact an answer produces)
+// ---------------------------------------------------------------------------
+
+const DOCX_ANSWER = {
+  result: {
+    answer: 'Here is your redline: [msa-redline__abc123.docx](/applications/contract-analyst/documents/msa-redline__abc123.docx/download)',
+    references: { chunks: [], structured_records: [] },
+  },
+}
+
+it('opens the document panel when an answer produces a .docx artifact', async () => {
+  mockFetch({ streamEvents: [DOCX_ANSWER] })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await ask(user, 'redline the accepted changes')
+
+  // The panel header shows the human-facing filename (hash stripped), and the
+  // docx renderer is invoked with the fetched blob.
+  await waitFor(() => expect(screen.getByText('msa-redline.docx')).toBeInTheDocument())
+  await waitFor(() => expect(renderAsyncMock).toHaveBeenCalled())
+})
+
+it('hides and reopens the document panel from its rail', async () => {
+  mockFetch({ streamEvents: [DOCX_ANSWER] })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await ask(user, 'redline it')
+  await waitFor(() => expect(screen.getByText('msa-redline.docx')).toBeInTheDocument())
+
+  await user.click(screen.getByRole('button', { name: 'Hide document panel' }))
+  expect(screen.queryByText('msa-redline.docx')).not.toBeInTheDocument()
+
+  const reopen = screen.getByRole('button', { name: 'Show document panel' })
+  await user.click(reopen)
+  expect(screen.getByText('msa-redline.docx')).toBeInTheDocument()
+})
+
+it('shows no document panel when the answer has no .docx artifact', async () => {
+  mockFetch({ streamEvents: [{ result: { answer: 'Just a text answer.', references: { chunks: [], structured_records: [] } } }] })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await ask(user, 'what is the notice period?')
+
+  await waitFor(() => expect(screen.getByText('Just a text answer.')).toBeInTheDocument())
+  expect(screen.queryByRole('button', { name: 'Hide document panel' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Show document panel' })).not.toBeInTheDocument()
 })
