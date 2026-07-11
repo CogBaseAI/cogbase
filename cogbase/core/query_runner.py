@@ -254,6 +254,35 @@ _BASE_TOOLS: list[ToolDefinition] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "fetch_artifact",
+        "description": (
+            "Materialize a previously save_artifact'd file (by its artifact id) back to a "
+            "local path so a skill script can reload and patch it across turns — the inbound "
+            "half of save_artifact. Use this to reopen working state (e.g. an ops.json) that a "
+            "prior turn produced. Returns the local file path to operate on."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"artifact_id": {"type": "string", "description": "Artifact id returned by a prior save_artifact call."}},
+            "required": ["artifact_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "delete_artifact",
+        "description": (
+            "Delete a previously save_artifact'd file (by its artifact id) from the document "
+            "store. Use to clean up working state (e.g. an ops.json) once a task is complete. "
+            "Idempotent: deleting a missing artifact is treated as success."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"artifact_id": {"type": "string", "description": "Artifact id returned by a prior save_artifact call."}},
+            "required": ["artifact_id"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -1152,6 +1181,10 @@ class QueryRunner:
 
         if name == "fetch_document":
             return await self._run_fetch_document(inputs)
+        if name == "fetch_artifact":
+            return await self._run_fetch_artifact(inputs)
+        if name == "delete_artifact":
+            return await self._run_delete_artifact(inputs)
 
         env = self._tool_env(skill)
         if name == "python":
@@ -1340,6 +1373,51 @@ class QueryRunner:
             f"Saved artifact '{artifact_id}' ({len(data)} bytes). "
             f"Include this download link in your answer: {artifact.markdown_link}"
         )
+
+    async def _run_fetch_artifact(self, inputs: dict) -> str:
+        """Materialize a previously saved artifact back to a local path.
+
+        The inbound counterpart of ``save_artifact``: artifacts live at
+        ``generated/{artifact_id}`` (the ``artifact_id`` keeps its extension), so a
+        skill can reload working state produced in an earlier turn — patch it and
+        ``save_artifact`` a fresh copy.
+        """
+        if self._document_store is None or self._app_id is None:
+            return "fetch_artifact is unavailable (no document store configured)"
+
+        artifact_id = str(inputs.get("artifact_id", ""))
+        if not artifact_id:
+            return "fetch_artifact error: artifact_id is required"
+
+        try:
+            data = await self._document_store.load_bytes(self._app_id, f"generated/{artifact_id}")
+        except (KeyError, NotImplementedError):
+            return f"fetch_artifact error: no artifact '{artifact_id}'"
+
+        suffix = os.path.splitext(artifact_id)[1]
+        fd, path = tempfile.mkstemp(prefix="artifact_", suffix=suffix)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        logger.info("[runner] fetch_artifact artifact_id=%s bytes=%d path=%s", artifact_id, len(data), path)
+        return f"Fetched artifact '{artifact_id}' ({len(data)} bytes) to {path}"
+
+    async def _run_delete_artifact(self, inputs: dict) -> str:
+        """Delete a previously saved artifact. Idempotent (missing == success)."""
+        if self._document_store is None or self._app_id is None:
+            return "delete_artifact is unavailable (no document store configured)"
+
+        artifact_id = str(inputs.get("artifact_id", ""))
+        if not artifact_id:
+            return "delete_artifact error: artifact_id is required"
+
+        try:
+            await self._document_store.delete(self._app_id, f"generated/{artifact_id}")
+        except KeyError:
+            pass  # already gone — deletion is idempotent
+        except NotImplementedError:
+            return "delete_artifact error: the document store does not support deletion"
+        logger.info("[runner] delete_artifact artifact_id=%s", artifact_id)
+        return f"Deleted artifact '{artifact_id}'."
 
     async def _run_python(self, code: str, env: dict) -> str:
         try:

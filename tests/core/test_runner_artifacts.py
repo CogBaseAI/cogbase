@@ -178,6 +178,73 @@ async def test_save_artifact_store_without_binary_support(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# fetch_artifact
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_artifact_materializes_saved_artifact_to_local_path(tmp_path):
+    store = LocalFSDocumentStore(str(tmp_path))
+    await store.save_bytes("app1", "generated/ops__abc123.json", b'{"clauses": []}')
+    runner = _runner(store)
+
+    out = await runner._run_fetch_artifact({"artifact_id": "ops__abc123.json"})
+
+    assert "Fetched artifact 'ops__abc123.json'" in out
+    path = out.rsplit(" to ", 1)[1]
+    assert os.path.exists(path)
+    assert path.endswith(".json")
+    with open(path, "rb") as f:
+        assert f.read() == b'{"clauses": []}'
+
+
+@pytest.mark.asyncio
+async def test_fetch_artifact_missing_returns_error(tmp_path):
+    runner = _runner(LocalFSDocumentStore(str(tmp_path)))
+    out = await runner._run_fetch_artifact({"artifact_id": "ghost.json"})
+    assert out == "fetch_artifact error: no artifact 'ghost.json'"
+
+
+@pytest.mark.asyncio
+async def test_fetch_artifact_requires_artifact_id(tmp_path):
+    runner = _runner(LocalFSDocumentStore(str(tmp_path)))
+    out = await runner._run_fetch_artifact({})
+    assert out == "fetch_artifact error: artifact_id is required"
+
+
+# ---------------------------------------------------------------------------
+# delete_artifact
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_artifact_removes_stored_file(tmp_path):
+    store = LocalFSDocumentStore(str(tmp_path))
+    await store.save_bytes("app1", "generated/ops__abc123.json", b"{}")
+    runner = _runner(store)
+
+    out = await runner._run_delete_artifact({"artifact_id": "ops__abc123.json"})
+
+    assert out == "Deleted artifact 'ops__abc123.json'."
+    with pytest.raises(KeyError):
+        await store.load_bytes("app1", "generated/ops__abc123.json")
+
+
+@pytest.mark.asyncio
+async def test_delete_artifact_is_idempotent(tmp_path):
+    runner = _runner(LocalFSDocumentStore(str(tmp_path)))
+    out = await runner._run_delete_artifact({"artifact_id": "ghost.json"})
+    assert out == "Deleted artifact 'ghost.json'."
+
+
+@pytest.mark.asyncio
+async def test_delete_artifact_requires_artifact_id(tmp_path):
+    runner = _runner(LocalFSDocumentStore(str(tmp_path)))
+    out = await runner._run_delete_artifact({})
+    assert out == "delete_artifact error: artifact_id is required"
+
+
+# ---------------------------------------------------------------------------
 # round-trip + tool gating
 # ---------------------------------------------------------------------------
 
@@ -196,6 +263,29 @@ async def test_fetch_then_save_round_trip(tmp_path):
 
     artifact, _ = await runner._run_save_artifact({"path": str(produced), "filename": "c-merged.docx"})
     assert await store.load_bytes("app1", f"generated/{artifact.artifact_id}") == b"orig+edits"
+
+
+@pytest.mark.asyncio
+async def test_save_fetch_patch_resave_round_trip(tmp_path):
+    """The working-state loop: save ops.json, reload it, patch, save again."""
+    store = LocalFSDocumentStore(str(tmp_path))
+    runner = _runner(store)
+    ops = tmp_path / "ops.json"
+    ops.write_bytes(b'{"verdict": "pending"}')
+
+    saved, _ = await runner._run_save_artifact({"path": str(ops), "filename": "ops.json"})
+
+    fetched_path = (
+        await runner._run_fetch_artifact({"artifact_id": saved.artifact_id})
+    ).rsplit(" to ", 1)[1]
+    with open(fetched_path, "rb") as f:
+        assert f.read() == b'{"verdict": "pending"}'
+
+    # Patch the reloaded working state and persist a fresh copy.
+    patched = tmp_path / "ops2.json"
+    patched.write_bytes(b'{"verdict": "accepted"}')
+    resaved, _ = await runner._run_save_artifact({"path": str(patched), "filename": "ops.json"})
+    assert await store.load_bytes("app1", f"generated/{resaved.artifact_id}") == b'{"verdict": "accepted"}'
 
 
 # ---------------------------------------------------------------------------
@@ -235,5 +325,6 @@ def test_artifact_tools_only_exposed_when_skill_active(tmp_path):
     active = {t["name"] for t in runner._all_tools(skill_active=True)}
     inactive = {t["name"] for t in runner._all_tools(skill_active=False)}
 
-    assert {"fetch_document", "save_artifact"} <= active
-    assert not ({"fetch_document", "save_artifact"} & inactive)
+    artifact_tools = {"fetch_document", "save_artifact", "fetch_artifact", "delete_artifact"}
+    assert artifact_tools <= active
+    assert not (artifact_tools & inactive)
