@@ -1440,14 +1440,13 @@ class QueryRunner:
         """Write *data* to a deterministic path under *workdir* and return it.
 
         Files land at ``<workdir>[/<subdir>]/<name>`` (``name`` sanitized to a
-        single path segment) so the location is predictable across turns. Falls
-        back to a random tempfile only when no session workdir is available.
+        single path segment) so the location is predictable across turns. A
+        ``workdir`` is guaranteed here: the fetch transports that reach this
+        method are ``_BASE_TOOLS``, exposed only when a skill is active — the
+        same condition under which the turn's workdir is created — so a missing
+        one is a wiring bug, not a state to paper over with a scattered tempfile.
         """
-        if not workdir:
-            fd, path = tempfile.mkstemp(prefix="artifact_", suffix=suffix)
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
-            return path
+        assert workdir, "_materialize requires a session workdir (fetch tools run only with a skill active)"
         safe_name = re.sub(r"[^\w.-]", "_", name) or f"file{suffix}"
         dest_dir = os.path.join(workdir, subdir) if subdir else workdir
         os.makedirs(dest_dir, exist_ok=True)

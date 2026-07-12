@@ -76,7 +76,10 @@ def _parse_skill(path: Path, skill_id: str | None = None) -> Skill | None:
         raw_markdown=raw,
         id=skill_id or path.parent.name,
         metadata=metadata,
-        source_path=path,
+        # Absolute so COGBASE_SKILL_DIR resolves correctly: skill scripts run with
+        # cwd set to the session workdir, where a relative skills_dir path would
+        # (wrongly) resolve against the workdir instead of the skill bundle.
+        source_path=path.resolve(),
     )
 
 

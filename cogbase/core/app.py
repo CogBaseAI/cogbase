@@ -420,7 +420,7 @@ class CogBaseApp:
                            the turn is recorded into that session and its
                            assembled context replaces ``history``.
         """
-        logger.info("app.query_stream.start query=%s session=%s", text[:200], session_id)
+        logger.info("app.query_stream.start query=%s session=%s", text[:2000], session_id)
         effective_prompt = system_prompt or self._query_prompt
         kwargs = {"history": history, "top_k": top_k, "session_id": session_id}
         if effective_prompt:
