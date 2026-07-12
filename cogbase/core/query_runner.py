@@ -80,6 +80,23 @@ logger = logging.getLogger(__name__)
 
 _TOOL_TIMEOUT = 30  # seconds
 
+# Root of the per-(app, session) local scratch dirs that skill subprocesses use
+# for their working files (fetched documents, intermediate JSON, redline drafts).
+# Deterministic and reusable so retries/follow-up turns reuse materialized files
+# and the model can predict paths (no filesystem-wide `find`). Durable outputs
+# still round-trip through the document store via save_artifact; this tree is a
+# rebuildable local projection, so a fresh node re-materializes here from the
+# store rather than requiring shared storage.
+_DEFAULT_WORK_ROOT = os.environ.get("COGBASE_WORK_ROOT") or os.path.join(
+    tempfile.gettempdir(), "cogbase-work"
+)
+
+# A traversal command (find/grep/fd/rg) rooted at the filesystem root ("/") — a
+# whole-disk scan the model only reaches for when it has lost a path. Matches
+# `find / -name x`, `grep -r foo /`, etc. but not a scoped `find /some/dir` or a
+# relative/`$COGBASE_*`-anchored path. Used to refuse the scan before it runs.
+_ROOT_FS_SCAN = re.compile(r"\b(?:find|grep|fd|rg)\b[^|;&]*?\s/(?:\s|$)")
+
 # Attempts to land a turn's continuity events (user_message / final_answer) in the
 # log before the turn is acknowledged.  The buffer is retained between attempts
 # (it is the retry buffer), so each retry simply re-appends the same batch.
@@ -738,9 +755,11 @@ class QueryRunner:
         passthrough_token_threshold: int | None = None,
         context_token_budget: int | None = None,
         enable_memory_lookup: bool = False,
+        work_root: str | None = None,
     ) -> None:
         self._app_id = app_id
         self._llm = llm
+        self._work_root = work_root or _DEFAULT_WORK_ROOT
 
         # Unpack the bundles into flat attrs so the rest of the class reads
         # them directly; the bundles are only an assembly-boundary convenience.
@@ -852,7 +871,7 @@ class QueryRunner:
         logger.error("[runner] router returned unknown skill '%s', ignoring", chosen)
         return None
 
-    def build_system_prompt(self, base_prompt: str, skill=None) -> str:
+    def build_system_prompt(self, base_prompt: str, skill=None, workdir: str | None = None) -> str:
         """Merge base_prompt, retrieval schema info, and (optionally) skill instructions."""
         parts = [base_prompt]
 
@@ -867,9 +886,25 @@ class QueryRunner:
                     "Skill metadata:\n"
                     f"```json\n{json.dumps(skill.metadata, ensure_ascii=False, indent=2)}\n```\n\n"
                 )
+            # Both dirs are also exported as env vars to shell/python (see _tool_env),
+            # so scripts and outputs resolve deterministically without the model
+            # hand-building paths — hence the terse pointers rather than prose rules.
+            path_lines: list[str] = []
+            if base_dir:
+                path_lines.append(
+                    f"- Skill directory `$COGBASE_SKILL_DIR` (`{base_dir}`): run bundled "
+                    "scripts as `$COGBASE_SKILL_DIR/<script>`."
+                )
+            if workdir:
+                path_lines.append(
+                    f"- Working directory `$COGBASE_WORKDIR` (`{workdir}`): the cwd of every "
+                    "shell/python command and where fetched files land. Write outputs here "
+                    "(relative paths work); it persists across turns, so reuse files already present."
+                )
+            paths_block = ("Paths:\n" + "\n".join(path_lines) + "\n\n") if path_lines else ""
             skill_section = (
                 f"## Active Skill: {skill.name}\n\n"
-                + (f"Skill base directory: `{base_dir}`\n\n" if base_dir else "")
+                + paths_block
                 + metadata_block
                 + "Follow the skill's instructions below to complete the user's request. "
                 "Use the `shell` tool to run any commands it suggests.\n\n"
@@ -981,7 +1016,14 @@ class QueryRunner:
                 logger.info("[runner] active skill → '%s'", current_skill.name)
                 yield f"Using skill: {current_skill.name}..."
 
-        messages[0] = {"role": "system", "content": self.build_system_prompt(base_prompt, current_skill)}
+        # Skills are the only tools that touch the filesystem (shell/python and the
+        # fetch/save transports), so a scratch dir is only worth creating when one is
+        # active — a pure-retrieval turn leaves no litter.
+        workdir = self._session_workdir(session_id) if current_skill is not None else None
+        if workdir:
+            logger.info("[runner] session workdir=%s", workdir)
+
+        messages[0] = {"role": "system", "content": self.build_system_prompt(base_prompt, current_skill, workdir)}
 
         for _ in range(self._max_calls):
             # --- Budget guard: compact the working list if it has outgrown the
@@ -1119,7 +1161,7 @@ class QueryRunner:
                     if artifact is not None:
                         saved_artifacts.append(artifact)
                 else:
-                    tool_output = await self._execute_tool(name, inputs, current_skill)
+                    tool_output = await self._execute_tool(name, inputs, current_skill, workdir)
                     logger.info("[runner] execute_tool done: %s", tool_output[:300])
 
                 if episodic_on:
@@ -1169,7 +1211,7 @@ class QueryRunner:
         tools.extend(self._tool_defs)
         return tools
 
-    async def _execute_tool(self, name: str, inputs: dict, skill=None) -> str:
+    async def _execute_tool(self, name: str, inputs: dict, skill=None, workdir: str | None = None) -> str:
         if name in self._system_tools:
             try:
                 result = self._system_tools[name].handler(inputs)
@@ -1180,17 +1222,17 @@ class QueryRunner:
                 return f"Tool error ({name}): {e}"
 
         if name == "fetch_document":
-            return await self._run_fetch_document(inputs)
+            return await self._run_fetch_document(inputs, workdir)
         if name == "fetch_artifact":
-            return await self._run_fetch_artifact(inputs)
+            return await self._run_fetch_artifact(inputs, workdir)
         if name == "delete_artifact":
             return await self._run_delete_artifact(inputs)
 
-        env = self._tool_env(skill)
+        env = self._tool_env(skill, workdir)
         if name == "python":
-            return await self._run_python(inputs.get("code", ""), env)
+            return await self._run_python(inputs.get("code", ""), env, cwd=workdir)
         if name == "shell":
-            return await self._run_shell(inputs.get("command", ""), env)
+            return await self._run_shell(inputs.get("command", ""), env, cwd=workdir)
         return f"Unknown tool: {name}"
 
     async def _run_structured_lookup(
@@ -1292,7 +1334,27 @@ class QueryRunner:
         location = f"doc: {doc_id}, chars {offset}–{offset + len(slice_text)} of {total}"
         return doc_slice, f"Passage:\n  [{doc_slice.slice_id}] ({location})\n  {slice_text.strip()}"
 
-    async def _run_fetch_document(self, inputs: dict) -> str:
+    def _session_workdir(self, session_id: str | None) -> str:
+        """Return (creating if needed) this session's local scratch directory.
+
+        Layout: ``<work_root>/<app_id>/<session_id>/``.  Deterministic per
+        (app, session) so a retry or a follow-up turn lands in the same place —
+        the model can reference known paths and never has to search the
+        filesystem.  With no ``session_id`` (stateless query) a random bucket is
+        used: it still keeps a turn's files together, it just isn't resumable.
+        See ``_DEFAULT_WORK_ROOT`` for the cross-node contract.
+        """
+        app = re.sub(r"[^\w.-]", "_", self._app_id or "app")
+        sess = (
+            re.sub(r"[^\w.-]", "_", session_id)
+            if session_id
+            else f"nosession_{uuid.uuid4().hex[:8]}"
+        )
+        path = os.path.join(self._work_root, app, sess)
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    async def _run_fetch_document(self, inputs: dict, workdir: str | None = None) -> str:
         """Materialize a stored original file to a local path for skill scripts.
 
         General file-transport primitive (the inbound half; ``save_artifact`` is
@@ -1320,9 +1382,7 @@ class QueryRunner:
         if data is None:
             return f"fetch_document error: no original file for '{doc_id}'"
 
-        fd, path = tempfile.mkstemp(prefix=f"{doc_id}_", suffix=suffix)
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
+        path = self._materialize(data, workdir, subdir="originals", name=f"{doc_id}{suffix}", suffix=suffix)
         logger.info("[runner] fetch_document doc_id=%s bytes=%d path=%s", doc_id, len(data), path)
         return f"Fetched document '{doc_id}' ({len(data)} bytes) to {path}"
 
@@ -1374,7 +1434,29 @@ class QueryRunner:
             f"Include this download link in your answer: {artifact.markdown_link}"
         )
 
-    async def _run_fetch_artifact(self, inputs: dict) -> str:
+    def _materialize(
+        self, data: bytes, workdir: str | None, *, subdir: str | None, name: str, suffix: str
+    ) -> str:
+        """Write *data* to a deterministic path under *workdir* and return it.
+
+        Files land at ``<workdir>[/<subdir>]/<name>`` (``name`` sanitized to a
+        single path segment) so the location is predictable across turns. Falls
+        back to a random tempfile only when no session workdir is available.
+        """
+        if not workdir:
+            fd, path = tempfile.mkstemp(prefix="artifact_", suffix=suffix)
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            return path
+        safe_name = re.sub(r"[^\w.-]", "_", name) or f"file{suffix}"
+        dest_dir = os.path.join(workdir, subdir) if subdir else workdir
+        os.makedirs(dest_dir, exist_ok=True)
+        path = os.path.join(dest_dir, safe_name)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    async def _run_fetch_artifact(self, inputs: dict, workdir: str | None = None) -> str:
         """Materialize a previously saved artifact back to a local path.
 
         The inbound counterpart of ``save_artifact``: artifacts live at
@@ -1395,9 +1477,7 @@ class QueryRunner:
             return f"fetch_artifact error: no artifact '{artifact_id}'"
 
         suffix = os.path.splitext(artifact_id)[1]
-        fd, path = tempfile.mkstemp(prefix="artifact_", suffix=suffix)
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
+        path = self._materialize(data, workdir, subdir=None, name=artifact_id, suffix=suffix)
         logger.info("[runner] fetch_artifact artifact_id=%s bytes=%d path=%s", artifact_id, len(data), path)
         return f"Fetched artifact '{artifact_id}' ({len(data)} bytes) to {path}"
 
@@ -1419,7 +1499,7 @@ class QueryRunner:
         logger.info("[runner] delete_artifact artifact_id=%s", artifact_id)
         return f"Deleted artifact '{artifact_id}'."
 
-    async def _run_python(self, code: str, env: dict) -> str:
+    async def _run_python(self, code: str, env: dict, cwd: str | None = None) -> str:
         try:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
                 f.write(code)
@@ -1428,6 +1508,7 @@ class QueryRunner:
                 proc = await asyncio.create_subprocess_exec(
                     sys.executable, tmp,
                     env=env,
+                    cwd=cwd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
@@ -1437,11 +1518,21 @@ class QueryRunner:
         except Exception as e:
             return f"Python error: {e}"
 
-    async def _run_shell(self, command: str, env: dict) -> str:
+    async def _run_shell(self, command: str, env: dict, cwd: str | None = None) -> str:
+        # A whole-filesystem scan only happens when the model has lost a path; it
+        # has no legitimate use here and would burn the entire tool-timeout budget
+        # before being killed. Refuse fast and point at the deterministic dirs.
+        if _ROOT_FS_SCAN.search(command):
+            return (
+                "Refusing to scan the whole filesystem. The skill's bundled scripts are in "
+                "$COGBASE_SKILL_DIR and your working files are in $COGBASE_WORKDIR — reference "
+                "those (or a path already returned by a tool) instead of searching."
+            )
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,
                 env=env,
+                cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -1460,12 +1551,20 @@ class QueryRunner:
         return stdout.decode().strip() or stderr.decode().strip() or "(no output)"
 
     @staticmethod
-    def _tool_env(skill) -> dict:
+    def _tool_env(skill, workdir: str | None = None) -> dict:
         env = os.environ.copy()
         if skill and skill.site_packages:
             existing = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = f"{skill.site_packages}:{existing}" if existing else skill.site_packages
+        # The skill's own directory, so the model can invoke bundled scripts as
+        # `$COGBASE_SKILL_DIR/<script>` instead of hand-splicing an absolute path
+        # from the prompt (which can drift or be hallucinated).
+        if skill and skill.source_path:
+            env["COGBASE_SKILL_DIR"] = str(skill.source_path.parent)
+        if workdir:
+            env["COGBASE_WORKDIR"] = workdir
         return env
+
 
     # ------------------------------------------------------------------
     # Long-term memory recall

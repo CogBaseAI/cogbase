@@ -1,15 +1,18 @@
 ---
 name: contract-review
 description: >-
-  Review a Microsoft Word .docx contract from one party's perspective and produce a
-  structured, clause-by-clause analysis a reviewer can act on: for each clause, a risk
-  level with rationale, a suggested change, and any cross-clause contradictions. First
-  confirms which party the review represents and the review posture (dominant, neutral,
-  or disadvantaged), then analyzes every clause through that lens and writes a review
-  file (ops.json) of suggestions the user can accept, reject, or refine — and, on request,
-  a tracked-changes redline .docx of the accepted changes. Use when a user uploads a
-  contract and wants it reviewed, risk-assessed, or marked up. Works on .docx only.
-  Needs the contract already uploaded.
+  Review, risk-assess, or mark up an uploaded Microsoft Word .docx contract, clause by
+  clause. Use this whenever the user asks to review a contract — e.g. "review the saas-002
+  contract", "review this agreement", "mark up the MSA" — even when they do NOT name a
+  party or a position: the skill itself asks which party the review represents and the
+  posture (dominant, neutral, or disadvantaged) before analyzing, so a bare "review X
+  contract" request is the normal entry point, not a reason to skip this skill. It then
+  analyzes every clause through that lens (per clause: a risk level with rationale, a
+  suggested change, and any cross-clause contradictions), writes a review file (ops.json)
+  of suggestions the user can accept, reject, or refine, and on request produces a
+  tracked-changes redline .docx of the accepted changes. This is the contract-review
+  workflow, not general Q&A about the contract. Works on .docx only; the contract must
+  already be uploaded.
 metadata:
   requires:
     bins: []

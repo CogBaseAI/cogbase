@@ -289,6 +289,126 @@ async def test_save_fetch_patch_resave_round_trip(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# session working directory
+# ---------------------------------------------------------------------------
+
+
+def test_session_workdir_is_deterministic_per_session(tmp_path):
+    runner = _runner(MagicMock(), app_id="app1")
+    runner._work_root = str(tmp_path)
+
+    first = runner._session_workdir("sess-A")
+    again = runner._session_workdir("sess-A")
+    other = runner._session_workdir("sess-B")
+
+    assert first == again  # same (app, session) → same dir, so paths are predictable
+    assert first != other
+    assert os.path.isdir(first)
+    assert first.startswith(os.path.join(str(tmp_path), "app1"))
+
+
+def test_session_workdir_without_session_is_isolated(tmp_path):
+    runner = _runner(MagicMock(), app_id="app1")
+    runner._work_root = str(tmp_path)
+
+    a = runner._session_workdir(None)
+    b = runner._session_workdir(None)
+    assert a != b  # no session → random bucket, keeps a turn's files together only
+
+
+@pytest.mark.asyncio
+async def test_fetch_document_writes_into_workdir_deterministically(tmp_path):
+    store = LocalFSDocumentStore(str(tmp_path / "store"))
+    await store.save_bytes("app1", "originals/contract1.docx", b"PK-docx-bytes")
+    runner = _runner(store)
+    workdir = str(tmp_path / "work")
+
+    out = await runner._run_fetch_document({"doc_id": "contract1"}, workdir)
+    path = out.rsplit(" to ", 1)[1]
+
+    assert path == os.path.join(workdir, "originals", "contract1.docx")
+    with open(path, "rb") as f:
+        assert f.read() == b"PK-docx-bytes"
+    # A second fetch lands at the same path (no random suffix to lose track of).
+    out2 = await runner._run_fetch_document({"doc_id": "contract1"}, workdir)
+    assert out2.rsplit(" to ", 1)[1] == path
+
+
+@pytest.mark.asyncio
+async def test_fetch_artifact_writes_into_workdir(tmp_path):
+    store = LocalFSDocumentStore(str(tmp_path / "store"))
+    await store.save_bytes("app1", "generated/ops__abc123.json", b'{"clauses": []}')
+    runner = _runner(store)
+    workdir = str(tmp_path / "work")
+
+    out = await runner._run_fetch_artifact({"artifact_id": "ops__abc123.json"}, workdir)
+    path = out.rsplit(" to ", 1)[1]
+
+    assert path == os.path.join(workdir, "ops__abc123.json")
+    with open(path, "rb") as f:
+        assert f.read() == b'{"clauses": []}'
+
+
+def test_tool_env_exposes_workdir_and_skill_dir(tmp_path):
+    from pathlib import Path
+
+    runner = _runner(MagicMock())
+    skill = MagicMock()
+    skill.site_packages = None
+    skill.source_path = Path("/skills/abc123/SKILL.md")
+
+    env = runner._tool_env(skill, "/some/workdir")
+    assert env["COGBASE_WORKDIR"] == "/some/workdir"
+    # The skill dir is the SKILL.md's parent, so bundled scripts resolve reliably.
+    assert env["COGBASE_SKILL_DIR"] == os.path.join(os.sep, "skills", "abc123")
+
+    # Both omitted when their source is absent.
+    bare = runner._tool_env(None, None)
+    assert "COGBASE_WORKDIR" not in bare
+    assert "COGBASE_SKILL_DIR" not in bare
+
+
+def test_system_prompt_advertises_paths(tmp_path):
+    from pathlib import Path
+
+    runner = _runner(MagicMock())
+    skill = MagicMock()
+    skill.name = "contract-review"
+    skill.source_path = Path("/skills/abc123/SKILL.md")
+    skill.metadata = {}
+    skill.raw_markdown = "body"
+
+    prompt = runner.build_system_prompt("base", skill, "/work/app1/sess")
+    assert "/work/app1/sess" in prompt and "COGBASE_WORKDIR" in prompt
+    assert "/skills/abc123" in prompt and "COGBASE_SKILL_DIR" in prompt
+
+    # No workdir → no workdir pointer, but the skill dir still shows.
+    no_wd = runner.build_system_prompt("base", skill, None)
+    assert "COGBASE_WORKDIR" not in no_wd and "COGBASE_SKILL_DIR" in no_wd
+
+
+@pytest.mark.asyncio
+async def test_shell_refuses_whole_filesystem_scan(tmp_path):
+    runner = _runner(MagicMock())
+    out = await runner._run_shell('find / -name "segment_clauses.py"', env={})
+    assert "Refusing to scan the whole filesystem" in out
+    assert "$COGBASE_SKILL_DIR" in out
+
+
+@pytest.mark.asyncio
+async def test_shell_allows_scoped_commands(tmp_path):
+    runner = _runner(MagicMock())
+    # A scoped path and an ordinary command are not filesystem-root scans.
+    assert (await runner._run_shell("echo ok", env=dict(os.environ))) == "ok"
+    from cogbase.core.query_runner import _ROOT_FS_SCAN
+    assert _ROOT_FS_SCAN.search("find / -name x")          # root scan → blocked
+    assert _ROOT_FS_SCAN.search("grep -r foo /")           # root scan → blocked
+    assert not _ROOT_FS_SCAN.search("find /skills/abc -name x")  # scoped → allowed
+    assert not _ROOT_FS_SCAN.search('find "$COGBASE_WORKDIR" -type f')  # anchored → allowed
+    assert not _ROOT_FS_SCAN.search("find . -name x")      # relative → allowed
+
+
+# ---------------------------------------------------------------------------
 # download-link appending
 # ---------------------------------------------------------------------------
 
