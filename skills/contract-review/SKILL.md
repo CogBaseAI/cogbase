@@ -8,9 +8,10 @@ description: >-
   posture (dominant, neutral, or disadvantaged) before analyzing, so a bare "review X
   contract" request is the normal entry point, not a reason to skip this skill. It then
   analyzes every clause through that lens (per clause: a risk level with rationale, a
-  suggested change, and any cross-clause contradictions), writes a review file (ops.json)
-  of suggestions the user can accept, reject, or refine, and on request produces a
-  tracked-changes redline .docx of the accepted changes. This is the contract-review
+  suggested change, and any cross-clause contradictions), writes a review file
+  (review.json) of suggestions, and produces a tracked-changes redline .docx of those
+  suggestions that the user reviews in Word and then accepts, rejects, or refines — each
+  decision regenerates the redline. This is the contract-review
   workflow, not general Q&A about the contract. Works on .docx only; the contract must
   already be uploaded.
 metadata:
@@ -27,9 +28,11 @@ metadata:
 Review an uploaded `.docx` contract **from one party's side** and produce a structured,
 clause-by-clause assessment: per clause a **risk** (level + rationale), an optional
 **suggested change**, and any **contradictions** with other clauses. The suggestions are
-written to a **review file** (`ops.json`) the user can accept / reject / refine over the
-conversation; accepted changes become a **tracked-changes redline `.docx`** via the
-`edit-docx` skill.
+written to a **review file** (`review.json`) — the durable source of truth — and, in the
+same turn, projected into a **tracked-changes redline `.docx`** (all suggestions as
+tracked changes) that you hand back as the primary deliverable. The user reviews the
+redline in Word / the UI's document panel, then accepts / rejects / refines suggestions
+over the conversation; each decision patches `review.json` and regenerates the redline.
 
 You (the agent) do the judgment — deciding risk and drafting suggested language for the
 represented party. Two bundled helpers do the mechanical, error-prone parts so your
@@ -125,17 +128,25 @@ If the base id is unclear, ask before proceeding.
    **artifact id** — it is the handle for the rest of the conversation. Reopen it later
    with `fetch_artifact`, patch verdicts or suggestions, and `save_artifact` a fresh copy.
 
-7. **Summarize for the user.** Report the clauses by risk (highest first), the suggested
-   changes, and any contradictions, and tell the user they can accept, reject, or refine
-   each suggestion — and ask for a redline when ready.
+7. **Produce and return the redline.** Don't stop at the review file — the redline is the
+   primary deliverable. Project every suggestion to a tracked-changes `.docx` and hand it
+   back in the same turn (see *Producing the redline* below). The UI's document panel
+   auto-reveals the latest `.docx` artifact, so the user reviews the marked-up contract in
+   Word rather than reading JSON.
+
+8. **Summarize for the user.** With the redline link in hand, report the clauses by risk
+   (highest first), the suggested changes, and any contradictions, and tell the user the
+   redline shows every suggestion as a tracked change — they can accept, reject, or refine
+   any of them ("accept c6 and c8, reject c10, soften c11") and you'll regenerate the
+   redline.
 
 ## Producing the redline
 
-When the user wants to see or apply changes, project the review file to `edit-docx`
-operations and run the `edit-docx` apply helper:
+Project the review file to `edit-docx` operations and run the `edit-docx` apply helper:
 
 ```
-# Preview (all suggestions) — use --all; drop it to redline only accepted verdicts.
+# First pass / preview: --all redlines every suggestion (verdicts are still pending).
+# After the user decides, drop --all to redline only accepted verdicts.
 python <skill base directory>/build_ops.py to-edit-ops \
   --review review.json --all --output edit_ops.json
 
@@ -143,11 +154,14 @@ python <edit-docx base directory>/apply_operations.py \
   --original <fetched path> --ops edit_ops.json --output redline.docx --author "contract-review"
 ```
 
-`to-edit-ops` without `--all` includes only clauses whose `verdict` is `accepted`, so the
-final apply reflects exactly what the user approved. The anchors were taken verbatim from
-the base during segmentation, so they match; still check `apply_operations`' `unmatched`
-count and surface any misses. `save_artifact` the `redline.docx` and include the returned
-download link in your answer, noting it is a tracked-changes redline reviewable in Word.
+On the **first review**, use `--all` so every suggestion appears in the redline for the
+user to weigh in Word. **After the user accepts/rejects**, drop `--all` so `to-edit-ops`
+includes only clauses whose `verdict` is `accepted` and the redline reflects exactly what
+they approved. The anchors were taken verbatim from the base during segmentation, so they
+match; still check `apply_operations`' `unmatched` count and surface any misses.
+`save_artifact` the `redline.docx` (a descriptive `filename`, e.g. `<contract-name>-redline.docx`)
+and include the returned download link in your answer, noting it is a tracked-changes
+redline reviewable in Word.
 
 ## Refining across turns
 
