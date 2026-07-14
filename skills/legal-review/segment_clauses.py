@@ -51,9 +51,27 @@ _SECTION_LEAD = re.compile(
     re.IGNORECASE,
 )
 
+# CJK contracts mark sections with enumerators rather than the English
+# ARTICLE/SECTION keywords or ALL-CAPS titles, and often omit the space the
+# ASCII outline regex above requires. Examples:
+#   一、  十二．  （三）  第一条  第4章  1.评估目的  2.1、范围
+_CJK_SECTION_LEAD = re.compile(
+    r"^\s*[一二三四五六七八九十百千]+\s*[、.．)）]"            # 一、  十二．  三)
+    r"|^\s*[（(]\s*[一二三四五六七八九十\d]+\s*[)）]"          # （一）  (3)
+    r"|^\s*第\s*[一二三四五六七八九十百千\d]+\s*[条章节部编款项]"  # 第一条  第4章
+    r"|^\s*\d+(?:[.．]\d+)*[.．)、]\s*[一-鿿]",         # 1.评估目的  2.1、范围
+)
+
+# Han ideographs (incl. extension A and compatibility blocks).
+_CJK_CHAR = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
+
+# Sentence-final / list punctuation that disqualifies a CJK line from being a
+# bare section title (prose or an inline enumeration, not a heading).
+_CJK_NONTITLE_END = ("。", "！", "？", "；", "，", "、", ".", ",", ";")
+
 
 def _is_heading(para: Paragraph) -> bool:
-    """True when *para* starts a new clause (heading style, section number, or ALL-CAPS title)."""
+    """True when *para* starts a new clause (heading style, section number, or bare title)."""
     text = (para.text or "").strip()
     if not text:
         return False
@@ -63,10 +81,28 @@ def _is_heading(para: Paragraph) -> bool:
         style = ""
     if style.startswith("heading") or style == "title":
         return True
-    if _SECTION_LEAD.match(text):
+    if _SECTION_LEAD.match(text) or _CJK_SECTION_LEAD.match(text):
         return True
     # Short ALL-CAPS line with no sentence punctuation — a bare section title.
-    if text.isupper() and len(text) <= 60 and not text.endswith((".", ";", ",")):
+    # Exclude "label：value" fields, whose CJK label leaves an incidental
+    # uppercase code (e.g. "文档编号：AZ-1") passing isupper().
+    if (
+        text.isupper()
+        and len(text) <= 60
+        and "：" not in text
+        and not text.endswith((".", ";", ","))
+    ):
+        return True
+    # CJK bare title (no case to test): a short Han line that is neither a
+    # "label：value" field nor sentence-like prose. Full-width colon U+FF1A
+    # marks field labels ("姓名：陈福根") and lead-ins, so it disqualifies.
+    if (
+        _CJK_CHAR.search(text)
+        and len(text) <= 30
+        and "：" not in text
+        and ":" not in text
+        and not text.endswith(_CJK_NONTITLE_END)
+    ):
         return True
     return False
 

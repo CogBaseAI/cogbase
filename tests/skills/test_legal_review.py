@@ -97,6 +97,101 @@ def test_segment_preamble_before_first_heading_is_clause_c0():
 
 
 # ---------------------------------------------------------------------------
+# segment_clauses — CJK (Chinese) heading detection
+#
+# Chinese contracts mark sections with enumerators (一、 （三） 第一条) rather
+# than the ARTICLE/SECTION keywords or ALL-CAPS titles the ASCII heuristics key
+# on, and Han characters have no letter case so isupper() never fires. These
+# assert the CJK branches of _is_heading and their effect on segmentation.
+# ---------------------------------------------------------------------------
+
+
+def _para(text: str, style: str = "Normal"):
+    """A real python-docx paragraph (so _is_heading reads a genuine .style.name)."""
+    return Document().add_paragraph(text, style=style)
+
+
+def _zh_doc() -> Document:
+    """Mirrors the shape of a real Chinese assessment doc: a bare title, a
+    field-label metadata line, then two enumerated sections with label：value
+    fields underneath."""
+    doc = Document()
+    doc.add_paragraph("健康及监护能力评估证明")          # bare title (no colon)
+    doc.add_paragraph("文档编号：AZ-JKPG-20260714")      # field label + uppercase code
+    doc.add_paragraph("一、被评估人基本信息")             # enumerated heading
+    doc.add_paragraph("姓名：陈福根")                    # field
+    doc.add_paragraph("联系电话：13859174629")           # field
+    doc.add_paragraph("二、监护人基本信息")               # enumerated heading
+    doc.add_paragraph("姓名：陈建军")                    # field
+    return doc
+
+
+def test_segment_cjk_enumerated_headings_open_clauses():
+    clauses = segment_mod.segment(_zh_doc())
+    headings = [c["heading"] for c in clauses]
+    assert "一、被评估人基本信息" in headings
+    assert "二、监护人基本信息" in headings
+    # The first section keeps its own label：value fields, not the next section's.
+    sec1 = next(c for c in clauses if c["heading"] == "一、被评估人基本信息")
+    texts = [p["text"] for p in sec1["paragraphs"]]
+    assert "姓名：陈福根" in texts
+    assert "姓名：陈建军" not in texts
+
+
+def test_segment_cjk_field_labels_do_not_open_clauses():
+    # Seven paragraphs, but only the title + two 一、/二、 headings start clauses,
+    # so the label：value lines stay grouped — not one clause per field.
+    clauses = segment_mod.segment(_zh_doc())
+    assert len(clauses) == 3
+
+
+def test_is_heading_cjk_bare_title():
+    # Short Han line, no field-label colon, no sentence-final punctuation.
+    assert segment_mod._is_heading(_para("健康及监护能力评估证明")) is True
+
+
+def test_is_heading_cjk_field_label_with_uppercase_code_is_not_heading():
+    # The CJK label leaves an incidental all-caps code that passes str.isupper();
+    # the full-width-colon guard keeps it from being mistaken for a title.
+    assert "文档编号：AZ-JKPG-20260714".isupper() is True  # documents the trap
+    assert segment_mod._is_heading(_para("文档编号：AZ-JKPG-20260714")) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "一、被评估人基本信息",   # 一、
+        "十二．附则",             # multi-digit numeral + full-width dot
+        "（三）违约责任",         # parenthesized enumerator
+        "(3) Liability",          # half-width parenthesized enumerator
+        "第一条 定义",            # 第…条
+        "第4章 履行",             # 第…章 with Arabic numeral
+        "1.评估目的",             # space-less numbered title
+        "2.1、范围",              # dotted outline + full-width comma
+    ],
+)
+def test_is_heading_cjk_section_forms(text):
+    assert segment_mod._is_heading(_para(text)) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "姓名：陈福根",                                  # field: label：value
+        "身体状况：患有高血压，无卧床、失能情况。",        # prose ending in 。
+        "备注：本证明为模拟文档，数据均为虚构。",          # prose with colon + 。
+    ],
+)
+def test_is_heading_cjk_non_headings(text):
+    assert segment_mod._is_heading(_para(text)) is False
+
+
+def test_is_heading_cjk_style_still_wins():
+    # A styled heading is detected regardless of language / punctuation.
+    assert segment_mod._is_heading(_para("附则：其他约定事项", style="Heading 1")) is True
+
+
+# ---------------------------------------------------------------------------
 # build_ops.finalize
 # ---------------------------------------------------------------------------
 
