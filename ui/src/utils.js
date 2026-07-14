@@ -102,6 +102,20 @@ export function artifactLabel(id) {
   return decodeURIComponent(String(id)).replace(/__[0-9a-f]{6,}(?=\.[^.]+$|$)/i, '')
 }
 
+// Resolve the download filename from a Content-Disposition header, falling back
+// to the artifact id in the download URL (the second-to-last path segment).
+// Prefer RFC 5987's extended `filename*=UTF-8''<pct-encoded>`: for a non-ASCII
+// name (e.g. CJK) the plain `filename=` is only an ASCII fallback with those
+// characters stripped, so it must not win the match.
+export function filenameFromContentDisposition(cd, fallbackUrl = '') {
+  const header = cd || ''
+  const ext = /filename\*=(?:UTF-8'')?([^";]+)/i.exec(header)
+  const plain = /filename="?([^";]+?)"?(?:;|$)/i.exec(header)
+  const raw = (ext && ext[1]) || (plain && plain[1]) ||
+    fallbackUrl.split('/').slice(-2, -1)[0] || 'download'
+  try { return decodeURIComponent(raw) } catch { return raw }
+}
+
 export function esc(s) {
   return String(s)
     .replace(/&/g, '&amp;')

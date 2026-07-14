@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
-import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks, latestDocxArtifact, artifactLabel } from '../../utils'
+import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks, latestDocxArtifact, artifactLabel, filenameFromContentDisposition } from '../../utils'
 
 export default function QueryTab({ active }) {
   const { apiUrl, currentApp } = useApp()
@@ -623,9 +623,7 @@ function DownloadLink({ href, children, t }) {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const blob = await resp.blob()
       const cd = resp.headers.get('Content-Disposition') || ''
-      const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd)
-      // The artifact id (second-to-last path segment) is the filename fallback.
-      const name = m ? decodeURIComponent(m[1]) : decodeURIComponent(href.split('/').slice(-2, -1)[0] || 'download')
+      const name = filenameFromContentDisposition(cd, href)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url

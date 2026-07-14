@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fmtBytes, fmtRelTime, previewText, metaText, schemaTypeStr, simplifyExtractionSchemas, streamSSE, waitForTasks, resolveArtifactLinks, artifactLabel, latestDocxArtifact } from '../utils'
+import { fmtBytes, fmtRelTime, previewText, metaText, schemaTypeStr, simplifyExtractionSchemas, streamSSE, waitForTasks, resolveArtifactLinks, artifactLabel, latestDocxArtifact, filenameFromContentDisposition } from '../utils'
 
 describe('fmtBytes', () => {
   it('formats bytes', () => expect(fmtBytes(512)).toBe('512 B'))
@@ -247,5 +247,43 @@ describe('latestDocxArtifact', () => {
 
   it('returns null when there are no messages', () => {
     expect(latestDocxArtifact([], api, 'app1')).toBeNull()
+  })
+})
+
+describe('filenameFromContentDisposition', () => {
+  const url = 'http://localhost:8000/applications/app1/documents/-__e3d6c672.docx/download'
+
+  it('prefers the RFC 5987 filename* over the stripped ASCII fallback (CJK)', () => {
+    const enc = encodeURIComponent('陈福根健康及监护能力评估-最终版__e3d6c672.docx')
+    const cd = `attachment; filename="-__e3d6c672.docx"; filename*=UTF-8''${enc}`
+    expect(filenameFromContentDisposition(cd, url)).toBe('陈福根健康及监护能力评估-最终版__e3d6c672.docx')
+  })
+
+  it('uses the plain filename when there is no filename* (ASCII only)', () => {
+    const cd = 'attachment; filename="lease-merged__27dd52c2.docx"'
+    expect(filenameFromContentDisposition(cd, url)).toBe('lease-merged__27dd52c2.docx')
+  })
+
+  it('handles an unquoted plain filename', () => {
+    const cd = 'attachment; filename=report__1.json'
+    expect(filenameFromContentDisposition(cd)).toBe('report__1.json')
+  })
+
+  it('decodes percent-encoded filename* even without the UTF-8 prefix', () => {
+    const cd = `attachment; filename*=${encodeURIComponent('café__ab12.docx')}`
+    expect(filenameFromContentDisposition(cd)).toBe('café__ab12.docx')
+  })
+
+  it('falls back to the artifact id (second-to-last URL segment) when no header', () => {
+    expect(filenameFromContentDisposition('', url)).toBe('-__e3d6c672.docx')
+  })
+
+  it('falls back to "download" with neither header nor url', () => {
+    expect(filenameFromContentDisposition('', '')).toBe('download')
+  })
+
+  it('returns the raw value when it is not valid percent-encoding', () => {
+    const cd = 'attachment; filename="100%_done.docx"'
+    expect(filenameFromContentDisposition(cd)).toBe('100%_done.docx')
   })
 })
