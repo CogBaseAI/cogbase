@@ -373,7 +373,7 @@ def test_system_prompt_advertises_paths(tmp_path):
 
     runner = _runner(MagicMock())
     skill = MagicMock()
-    skill.name = "contract-review"
+    skill.name = "legal-review"
     skill.source_path = Path("/skills/abc123/SKILL.md")
     skill.metadata = {}
     skill.raw_markdown = "body"

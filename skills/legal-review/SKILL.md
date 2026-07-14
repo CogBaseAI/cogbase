@@ -1,20 +1,24 @@
 ---
-name: contract-review
+name: legal-review
 description: >-
-  Review, risk-assess, or mark up an uploaded Microsoft Word .docx contract, clause by
-  clause. Use this whenever the user asks to review a contract — e.g. "review the saas-002
-  contract", "review this agreement", "mark up the MSA" — even when they do NOT name a
-  party or a position: the skill itself asks which party the review represents and the
-  posture (dominant, neutral, or disadvantaged) before analyzing, so a bare "review X
-  contract" request is the normal entry point, not a reason to skip this skill. It then
-  analyzes every clause through that lens (per clause: a risk level with rationale, a
-  suggested change, and any cross-clause contradictions), writes a review file
-  (review.json) of suggestions, and produces a tracked-changes redline .docx of those
-  suggestions that the user reviews in Word and then accepts, rejects, or refines. Once the
-  user has decided, it produces the final clean .docx with the accepted changes baked in
-  (no tracked-change markup). This is the contract-review
-  workflow, not general Q&A about the contract. Works on .docx only; the contract must
-  already be uploaded.
+  Review, risk-assess, or mark up a Microsoft Word .docx legal document already — a
+  contract or agreement, but equally any other legal document (an assessment report, memo,
+  filing, notice, or the like), clause by clause. Use this whenever the user asks to
+  review, examine, audit, or mark up a legal document — e.g. "review the saas-002
+  contract", "review this agreement", "mark up the MSA", or "审查 X 文档" / "依据 <法律> 审查 X
+  文档" (review the X document against the cited law) — even when they do NOT name a party or
+  a position, and even when the file is NOT literally called a "contract": a bare "review X
+  document" request is the normal entry point, not a reason to skip this skill. The skill
+  itself asks which party or side the review represents and the posture (dominant, neutral,
+  or disadvantaged) before analyzing — skip that step when the document has no opposing
+  side. It then analyzes every clause or section through that lens (per clause: a risk
+  level with rationale, a suggested change, and any cross-clause contradictions), writes a
+  review file (review.json) of suggestions, and produces a tracked-changes redline .docx of
+  those suggestions that the user reviews in Word and then accepts, rejects, or refines.
+  Once the user has decided, it produces the final clean .docx with the accepted changes
+  baked in (no tracked-change markup). This is the document-review workflow, not general
+  Q&A about the document. Works on .docx only; the document must already be in the app —
+  uploaded to the session or ingested into the app.
 metadata:
   requires:
     bins: []
@@ -24,9 +28,9 @@ metadata:
         - python-docx
 ---
 
-# contract-review
+# legal-review
 
-Review an uploaded `.docx` contract **from one party's side** and produce a structured,
+Review a `.docx` legal document already in the app **through one lens** and produce a structured,
 clause-by-clause assessment: per clause a **risk** (level + rationale), an optional
 **suggested change**, and any **contradictions** with other clauses. The suggestions are
 written to a **review file** (`review.json`) — the durable source of truth — and, in the
@@ -52,25 +56,38 @@ answer general questions about the contract (use ordinary retrieval for that).
 
 ## Inputs
 
-- **base** — the contract to review (`base_doc_id`), an already-uploaded `.docx`.
-- **represented party** — which party the review speaks for. Derive the candidate parties
-  from the contract and **confirm with the user** before analyzing.
-- **review position** — one of `dominant`, `neutral`, `disadvantaged`. This sets how
-  aggressive the suggested changes are (a `dominant` party pushes harder terms; a
-  `disadvantaged` one seeks protections). **Confirm with the user.**
+- **base** — the legal document to review (`base_doc_id`), a `.docx` already in the app
+  (uploaded to the session or ingested into the app). A contract or agreement, or any
+  other legal document (assessment, memo, filing, notice).
+- **review lens** — what the analysis is written *through*. There are two shapes:
+  - **party lens** (contracts/agreements with two or more sides) — the **represented
+    party** the review speaks for, plus a **review position** (`dominant`, `neutral`,
+    `disadvantaged`) that sets how aggressive suggestions are. Derive the candidate parties
+    from the document and **confirm both with the user** before analyzing.
+  - **compliance lens** (documents with no opposing side, e.g. an assessment reviewed
+    "依据 民法典、民事诉讼法") — the **governing law / standard** to check against. Infer the
+    applicable law automatically from the document's type and content; if the user named
+    specific laws, use those. No party/position question, and no need to confirm the law
+    with the user first.
 
-If the base id is unclear, ask before proceeding.
+If the base id, or which lens fits, is unclear, ask before proceeding.
 
 ## Workflow
 
 1. **Fetch the contract.** Call `fetch_document` with `base_doc_id` to materialize the raw
    `.docx` to a local path (you need the binary, not just extracted text).
 
-2. **Identify parties and confirm the lens.** Use `read_document` on the base to find the
-   contracting parties, the contract type, and the governing law. Then **ask the user**
-   which party the review represents and the review position (`dominant` / `neutral` /
-   `disadvantaged`). Wait for the answer — do not analyze until both are confirmed. This
-   confirmation is the point of the skill; the whole analysis is written through that lens.
+2. **Confirm the lens.** Use `read_document` on the base to find the document type, any
+   parties, and the governing law. Then pick the lens (see **Inputs**):
+   - If the document has two or more opposing sides (a contract/agreement), **ask the user**
+     which party the review represents and the review position (`dominant` / `neutral` /
+     `disadvantaged`), and wait for the answer — do not analyze until both are confirmed.
+   - If the document has no opposing side (e.g. an assessment reviewed against cited law),
+     use the **compliance lens**: determine the applicable law/standard automatically from
+     the document's type and content — and honor any laws the user named (e.g. "依据
+     民法典、民事诉讼法"). No party/position question, and no need to confirm the law first;
+     proceed straight to analysis.
+   The whole analysis is written through the chosen lens.
 
 3. **Segment the clauses.** Run the segmenter with the `shell` tool (substitute the skill
    base directory printed above):
@@ -83,8 +100,9 @@ If the base id is unclear, ask before proceeding.
    `clauses.json` is `{"clauses": [{"clause_id", "heading", "paragraphs": [{"para_id",
    "text"}]}]}`. Read it back.
 
-4. **Analyze each clause.** For every clause, judge it *for the represented party at the
-   chosen position* and write a raw analysis file `analysis.json`:
+4. **Analyze each clause.** For every clause, judge it through the confirmed lens — *for
+   the represented party at the chosen position* (party lens), or *against the governing
+   law/standard* (compliance lens) — and write a raw analysis file `analysis.json`:
 
    ```json
    {
@@ -112,8 +130,12 @@ If the base id is unclear, ask before proceeding.
    - `contradicts` lists other `clause_id`s this clause conflicts with (e.g. a payment
      term that disagrees with a fees schedule). Include clauses you'd flag even when you
      don't suggest a change.
-   - Draft `new_text` in the represented party's favor, proportionate to the position.
-     Never invent obligations the parties didn't discuss; keep clause intent intact.
+   - Draft `new_text` in the represented party's favor, proportionate to the position
+     (party lens); or to bring the clause into compliance with the cited law/standard
+     (compliance lens). Never invent obligations the parties didn't discuss; keep clause
+     intent intact.
+   - For the compliance lens, `meta` carries `governing_law` (the cited law/standard) and
+     omits `representative_party`/`review_position` — both are optional downstream.
 
 5. **Build the review file.** Resolve ids to anchors and default every verdict to
    `pending`:
@@ -158,7 +180,7 @@ python <skill base directory>/build_ops.py to-edit-ops \
   --review review.json --all --output edit_ops.json
 
 python <edit-docx base directory>/apply_operations.py \
-  --original <fetched path> --ops edit_ops.json --output redline.docx --author "contract-review"
+  --original <fetched path> --ops edit_ops.json --output redline.docx --author "legal-review"
 ```
 
 `save_artifact` the `redline.docx` (e.g. `<contract-name>-redline.docx`) and include the

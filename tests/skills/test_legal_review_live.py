@@ -1,4 +1,4 @@
-"""Live end-to-end test for the contract-review skill.
+"""Live end-to-end test for the legal-review skill.
 
 Nothing below the LLM boundary is faked. A real ``LocalFSDocumentStore`` backs the
 document tools, the skill is loaded from disk with ``load_skill_dir`` — which
@@ -27,7 +27,7 @@ of the skill in two conversation turns:
 
 Run with::
 
-    pytest tests/skills/test_contract_review_live.py -m live
+    pytest tests/skills/test_legal_review_live.py -m live
 """
 
 from __future__ import annotations
@@ -65,9 +65,9 @@ pytestmark = [
 ]
 
 _SKILLS = Path(__file__).resolve().parents[2] / "skills"
-_SKILL_DIR = _SKILLS / "contract-review"
+_SKILL_DIR = _SKILLS / "legal-review"
 
-APP_ID = "contract-review-test-app"
+APP_ID = "legal-review-test-app"
 DOC_ID = "msa"
 
 
@@ -168,8 +168,8 @@ async def test_review_contract_produces_applicable_review(tmp_path):
 
     # Loading from disk installs python-docx into the skill's private venv and wires
     # source_path, so the runner tells the LLM where the helper scripts live.
-    skill = load_skill_dir(_SKILL_DIR, skill_id="contract-review")
-    assert skill is not None and skill.name == "contract-review"
+    skill = load_skill_dir(_SKILL_DIR, skill_id="legal-review")
+    assert skill is not None and skill.name == "legal-review"
     assert skill.site_packages, "python-docx venv was not provisioned for the skill"
 
     runner = QueryRunner(

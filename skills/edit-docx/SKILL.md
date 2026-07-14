@@ -4,11 +4,16 @@ description: >-
   Apply a set of edits to a Microsoft Word .docx file and produce a new downloadable
   redlined .docx — the changes recorded as Word tracked changes (insertions and
   deletions a reviewer can accept or reject) while preserving the original's formatting.
-  Use when a user wants to revise, update, or amend an existing Word document and get
-  back a marked-up redline. Works on .docx only — not PDFs, plain text, or other formats.
-  The edits can come from a separate change document (an amendment, revision memo,
-  redline, or change request) or from instructions given directly in the request. Needs
-  the base .docx to already be uploaded; a change document, if used, must be uploaded too.
+  Use when a user wants to revise, update, amend, or apply changes to an existing Word
+  document and get back a marked-up redline — e.g. "revise this doc", "apply these edits",
+  "给出具体的修订文档" / "出一版修订稿" (produce the revised document). Works on .docx only — not
+  PDFs, plain text, or other formats. The edits can come from a separate change document
+  (an amendment, revision memo, redline, or change request) or from instructions given
+  directly in the request. Needs the base .docx to already be in the app (uploaded to the
+  session or ingested into the app); a change document, if used, must be in the app too.
+  Note: if the revisions come out of a clause-by-clause
+  legal/contract review already in progress, that is the legal-review skill's job — use
+  this skill for standalone edits, not to continue an active review.
 metadata:
   requires:
     bins: []
@@ -36,16 +41,17 @@ reviewer comments, or any `.docx` plus a set of changes.
 
 Every request has a **base document** and a **change source**.
 
-- **base** — the document to edit (`base_doc_id`), an already-uploaded `.docx`.
+- **base** — the document to edit (`base_doc_id`), a `.docx` already in the app (uploaded
+  to the session or ingested into the app).
 - **change source** — where the edits come from, one of:
-  - a **change document** — a second uploaded document that describes the changes
+  - a **change document** — a second document already in the app that describes the changes
     (`change_doc_id`): an amendment, revision memo, addendum, or change request.
   - **inline instructions** — the changes stated directly in the user's request
     ("in the base contract, change the payment term to 45 days and add a Delaware
     governing-law clause").
 
 If the base id is unclear, or a change is described but you can't tell whether it points
-to an uploaded document or is meant inline, ask before proceeding.
+to a document in the app or is meant inline, ask before proceeding.
 
 ## Workflow
 

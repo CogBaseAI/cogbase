@@ -1,4 +1,4 @@
-"""Unit tests for the contract-review skill's deterministic helpers.
+"""Unit tests for the legal-review skill's deterministic helpers.
 
 Two standalone CLIs shipped inside the skill bundle (loaded by path, like the
 edit-docx tests):
@@ -26,7 +26,7 @@ pytest.importorskip("docx")
 from docx import Document  # noqa: E402
 
 SKILLS = pathlib.Path(__file__).resolve().parents[2] / "skills"
-CR_DIR = SKILLS / "contract-review"
+CR_DIR = SKILLS / "legal-review"
 
 
 def _load(name: str, path: pathlib.Path):

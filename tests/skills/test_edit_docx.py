@@ -326,7 +326,7 @@ def test_cli_applies_ops_and_reports(tmp_path):
 # ---------------------------------------------------------------------------
 # clean mode (tracked=False / --clean) — edits baked in as a final document
 #
-# The contract-review skill hands back a clean final docx once the user has
+# The legal-review skill hands back a clean final docx once the user has
 # accepted/rejected the redline's suggestions: accepted changes applied directly,
 # with no <w:ins>/<w:del> markup. Here the edits land in the *visible* text, so
 # these assertions read paragraph.text/.runs and confirm no tracked changes exist.
@@ -415,7 +415,7 @@ def test_cli_clean_flag_bakes_in_accepted_changes(tmp_path):
     original = tmp_path / "in.docx"
     _doc(["Payment shall be due within 30 days.", "Termination clause here."]).save(str(original))
 
-    # mirrors the contract-review "final docx" pass: only accepted ops, applied clean
+    # mirrors the legal-review "final docx" pass: only accepted ops, applied clean
     ops = {"operations": [
         {"op": "replace", "anchor_text": "Payment shall be due within 30 days",
          "new_text": "Payment shall be due within 45 days."},

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Segment a contract .docx into clauses with verbatim, matchable anchors.
 
-The deterministic *segment* helper for the contract-review skill. The agent does
+The deterministic *segment* helper for the legal-review skill. The agent does
 the *analyze* step (judging risk and drafting suggested changes per clause); this
 script does the mechanical part first: walk the base OOXML, group paragraphs into
 clauses at section/heading boundaries, and emit each paragraph with a stable id
