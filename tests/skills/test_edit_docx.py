@@ -52,6 +52,11 @@ def _apply(doc, operations):
     return helper.apply_operations(doc, operations, AUTHOR, DATE)
 
 
+def _apply_clean(doc, operations):
+    """apply_operations in clean mode — edits baked in, no tracked-change markup."""
+    return helper.apply_operations(doc, operations, AUTHOR, DATE, tracked=False)
+
+
 def _doc(paragraphs: list[str]) -> Document:
     doc = Document()
     for text in paragraphs:
@@ -316,3 +321,123 @@ def test_cli_applies_ops_and_reports(tmp_path):
     assert "Termination clause here." in deleted
     # author propagated from the CLI flag onto the tracked changes
     assert redlined.element.body.iter(qn("w:ins")).__next__().get(qn("w:author")) == "Jun Luo"
+
+
+# ---------------------------------------------------------------------------
+# clean mode (tracked=False / --clean) — edits baked in as a final document
+#
+# The contract-review skill hands back a clean final docx once the user has
+# accepted/rejected the redline's suggestions: accepted changes applied directly,
+# with no <w:ins>/<w:del> markup. Here the edits land in the *visible* text, so
+# these assertions read paragraph.text/.runs and confirm no tracked changes exist.
+# ---------------------------------------------------------------------------
+
+
+def _has_tracked_changes(doc) -> bool:
+    body = doc.element.body
+    return (
+        next(body.iter(qn("w:ins")), None) is not None
+        or next(body.iter(qn("w:del")), None) is not None
+    )
+
+
+def test_clean_replace_overwrites_visible_text():
+    doc = _doc(["Payment shall be due within 30 days.", "Other clause."])
+    report = _apply_clean(
+        doc,
+        [{"op": "replace", "anchor_text": "Payment shall be due within 30 days",
+          "new_text": "Payment shall be due within 45 days."}],
+    )
+    # new text is live; old text is gone entirely — not struck through
+    assert doc.paragraphs[0].text == "Payment shall be due within 45 days."
+    assert doc.paragraphs[1].text == "Other clause."
+    assert not _has_tracked_changes(doc)
+    assert report == [{"op": "replace", "anchor_text": "Payment shall be due within 30 days", "matched": True}]
+
+
+def test_clean_replace_preserves_run_formatting():
+    doc = Document()
+    para = doc.add_paragraph()
+    run = para.add_run("Payment due in 30 days")
+    run.bold = True
+
+    _apply_clean(doc, [{"op": "replace", "anchor_text": "Payment due in 30 days", "new_text": "Payment due in 45 days"}])
+
+    assert para.text == "Payment due in 45 days"
+    # the surviving run clones the original <w:rPr>, so bold carries over
+    assert para.runs[0].bold is True
+    assert not _has_tracked_changes(doc)
+
+
+def test_clean_delete_removes_paragraph():
+    doc = _doc(["Keep this.", "Either party may terminate with 60 days notice.", "Keep that."])
+    report = _apply_clean(
+        doc, [{"op": "delete", "anchor_text": "Either party may terminate with 60 days notice"}]
+    )
+    # paragraph is gone outright — not retained as a struck-through deletion
+    assert [p.text for p in doc.paragraphs] == ["Keep this.", "Keep that."]
+    assert not _has_tracked_changes(doc)
+    assert report[0]["matched"] is True
+
+
+def test_clean_insert_after_adds_plain_paragraph_in_position():
+    doc = _doc(["Section 8 Term", "Section 10 Misc"])
+    _apply_clean(
+        doc,
+        [{"op": "insert_after", "anchor_text": "Section 8 Term",
+          "new_text": "Section 9 Governing Law: State of Delaware."}],
+    )
+    assert [p.text for p in doc.paragraphs] == [
+        "Section 8 Term",
+        "Section 9 Governing Law: State of Delaware.",
+        "Section 10 Misc",
+    ]
+    assert not _has_tracked_changes(doc)
+
+
+def test_clean_append_adds_plain_paragraph_at_end():
+    doc = _doc(["First.", "Second."])
+    _apply_clean(doc, [{"op": "append", "new_text": "Appended clause."}])
+    assert doc.paragraphs[-1].text == "Appended clause."
+    assert not _has_tracked_changes(doc)
+
+
+def test_clean_unmatched_anchor_is_reported_not_applied():
+    doc = _doc(["Only clause."])
+    report = _apply_clean(
+        doc, [{"op": "replace", "anchor_text": "nonexistent section", "new_text": "x"}]
+    )
+    assert report[0]["matched"] is False
+    assert doc.paragraphs[0].text == "Only clause."  # unchanged
+
+
+def test_cli_clean_flag_bakes_in_accepted_changes(tmp_path):
+    original = tmp_path / "in.docx"
+    _doc(["Payment shall be due within 30 days.", "Termination clause here."]).save(str(original))
+
+    # mirrors the contract-review "final docx" pass: only accepted ops, applied clean
+    ops = {"operations": [
+        {"op": "replace", "anchor_text": "Payment shall be due within 30 days",
+         "new_text": "Payment shall be due within 45 days."},
+        {"op": "delete", "anchor_text": "Termination clause here"},
+    ]}
+    ops_path = tmp_path / "ops.json"
+    ops_path.write_text(json.dumps(ops))
+    output = tmp_path / "final.docx"
+
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT),
+         "--original", str(original), "--ops", str(ops_path), "--output", str(output),
+         "--clean"],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    report = json.loads(proc.stdout)
+    assert report["unmatched"] == 0
+    assert [r["matched"] for r in report["operations"]] == [True, True]
+
+    final = Document(str(output))
+    # accepted change is live; deleted clause is gone; no redline markup remains
+    assert [p.text for p in final.paragraphs] == ["Payment shall be due within 45 days."]
+    assert not _has_tracked_changes(final)

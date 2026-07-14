@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-"""Apply a list of edit operations to a base .docx as Word tracked changes.
+"""Apply a list of edit operations to a base .docx, as a redline or a clean edit.
 
 The deterministic *apply* helper for the edit-docx skill. The agent does
 the *understand* step (reading the change source and deriving the operation list);
-this script applies them as a **redline** — editing the base OOXML in place,
-matching each operation to a paragraph by an anchor snippet and recording the
-change as Word tracked changes (``<w:ins>`` / ``<w:del>``) rather than a clean
-overwrite. Styles, numbering, and fonts survive, and a reviewer opening the
-result in Word sees every insertion and deletion and can accept or reject each.
+this script applies them to the base OOXML in place, matching each operation to a
+paragraph by an anchor snippet. Two output modes:
+
+- **tracked** (default) — record each change as Word tracked changes
+  (``<w:ins>`` / ``<w:del>``) rather than a clean overwrite, so a reviewer opening
+  the result in Word sees every insertion and deletion and can accept or reject each.
+- **clean** (``--clean``) — apply each change directly, producing a *final*
+  document with the edits baked in and no tracked-change markup. Use this once the
+  edits are settled (e.g. after the user has accepted/rejected a redline's
+  suggestions) to hand back the final contract.
+
+Either way styles, numbering, and fonts survive.
 
 Usage::
 
     python apply_operations.py --original in.docx --ops ops.json --output out.docx \
-        [--author "Name"]
+        [--author "Name"] [--clean]
 
 ``ops.json`` shape::
 
@@ -181,8 +188,41 @@ def _insert_after_tracked(para: Paragraph, new_text: str, author: str, date: str
     return new_para
 
 
-def apply_operations(doc, operations: list[dict], author: str, date: str) -> list[dict]:
-    """Apply operations in order as tracked changes; return a per-op match report."""
+def _replace_clean(para: Paragraph, new_text: str) -> None:
+    """Overwrite a paragraph's text directly, reusing the first run's formatting."""
+    rpr = _first_run_rpr(para)
+    for run in list(para.runs):
+        run._element.getparent().remove(run._element)
+    para._p.append(_make_text_run(new_text, rpr))
+
+
+def _delete_clean(para: Paragraph) -> None:
+    """Remove a whole paragraph outright."""
+    para._p.getparent().remove(para._p)
+
+
+def _insert_after_clean(para: Paragraph, new_text: str) -> Paragraph:
+    """Insert a new plain paragraph immediately after *para*."""
+    new_p = OxmlElement("w:p")
+    para._p.addnext(new_p)
+    new_para = Paragraph(new_p, para._parent)
+    try:
+        new_para.style = para.style
+    except Exception:
+        pass  # style may not be assignable on some documents; leave default
+    new_para._p.append(_make_text_run(new_text))
+    return new_para
+
+
+def apply_operations(
+    doc, operations: list[dict], author: str, date: str, tracked: bool = True
+) -> list[dict]:
+    """Apply operations in order; return a per-op match report.
+
+    With *tracked* (the default) each change is recorded as Word tracked changes;
+    otherwise the edits are applied cleanly, producing a final document with no
+    tracked-change markup.
+    """
     report: list[dict] = []
     for op in operations:
         kind = op.get("op")
@@ -191,17 +231,20 @@ def apply_operations(doc, operations: list[dict], author: str, date: str) -> lis
         matched = True
 
         if kind == "append":
-            _fill_inserted_paragraph(doc.add_paragraph(), new_text, author, date)
+            if tracked:
+                _fill_inserted_paragraph(doc.add_paragraph(), new_text, author, date)
+            else:
+                doc.add_paragraph(new_text)
         else:
             para = _find_paragraph(doc, anchor)
             if para is None:
                 matched = False
             elif kind == "replace":
-                _replace_tracked(para, new_text, author, date)
+                _replace_tracked(para, new_text, author, date) if tracked else _replace_clean(para, new_text)
             elif kind == "insert_after":
-                _insert_after_tracked(para, new_text, author, date)
+                _insert_after_tracked(para, new_text, author, date) if tracked else _insert_after_clean(para, new_text)
             elif kind == "delete":
-                _delete_tracked(para, author, date)
+                _delete_tracked(para, author, date) if tracked else _delete_clean(para)
             else:
                 matched = False  # unknown op type
 
@@ -213,11 +256,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--original", required=True, help="path to the original .docx")
     parser.add_argument("--ops", required=True, help="path to the operations JSON file")
-    parser.add_argument("--output", required=True, help="path to write the redlined .docx")
+    parser.add_argument("--output", required=True, help="path to write the edited .docx")
     parser.add_argument(
         "--author",
         default="edit-docx",
         help="author name recorded on each tracked change (default: edit-docx)",
+    )
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="apply edits directly (final document) instead of as tracked changes",
     )
     args = parser.parse_args()
 
@@ -227,7 +275,7 @@ def main() -> int:
     date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     doc = Document(args.original)
-    report = apply_operations(doc, operations, args.author, date)
+    report = apply_operations(doc, operations, args.author, date, tracked=not args.clean)
     doc.save(args.output)
 
     unmatched = sum(1 for r in report if not r["matched"])
