@@ -36,9 +36,14 @@ export default function QueryTab({ active }) {
   const currentDoc = latestDocxArtifact(msgs, apiUrl, currentApp)
   const prevDocIdRef = useRef(null)
   // Auto-reveal the panel when a new document appears (e.g. a refined redline).
+  // Also auto-hide the references pane so the wide docx gets the room; the user
+  // can bring references back via its min-rail toggle.
   useEffect(() => {
     const id = currentDoc?.id || null
-    if (id && id !== prevDocIdRef.current) setDocHidden(false)
+    if (id && id !== prevDocIdRef.current) {
+      setDocHidden(false)
+      setRefsHidden(true)
+    }
     prevDocIdRef.current = id
   }, [currentDoc?.id])
 
@@ -387,9 +392,47 @@ export default function QueryTab({ active }) {
 // A right-hand panel that renders the latest generated .docx (redline etc.) with
 // tracked changes visible, via the docx-preview library — lazily imported so the
 // dependency is code-split and only loaded once a document actually appears.
+// Persisted doc-panel width. Best-effort: any storage failure (private mode,
+// quota, disabled) just falls back to the flex default.
+const DOC_WIDTH_KEY = 'cogbase.docPanelWidth'
+function readStoredDocWidth() {
+  try {
+    const v = parseInt(localStorage.getItem(DOC_WIDTH_KEY), 10)
+    return Number.isFinite(v) ? Math.min(Math.max(v, 360), 1200) : null
+  } catch { return null }
+}
+function writeStoredDocWidth(w) {
+  try { localStorage.setItem(DOC_WIDTH_KEY, String(w)) } catch {}
+}
+
 function DocPanel({ doc, t, onHide }) {
   const bodyRef = useRef(null)
+  const panelRef = useRef(null)
   const [status, setStatus] = useState('loading')  // 'loading' | 'ready' | 'error'
+  // null → grow to the CSS default (flex up to max-width); a number → explicit
+  // width the user dragged the panel to. Persisted across mounts/reloads so the
+  // panel reopens at the width the user last chose.
+  const [width, setWidth] = useState(readStoredDocWidth)
+  const [dragging, setDragging] = useState(false)
+
+  // Drag the left-edge handle: the panel is right-anchored, so width is the gap
+  // between the panel's right edge and the cursor. Clamped to a sane range.
+  function startResize(e) {
+    e.preventDefault()
+    const rightEdge = panelRef.current.getBoundingClientRect().right
+    setDragging(true)
+    document.body.style.userSelect = 'none'
+    const onMove = ev => setWidth(Math.min(Math.max(rightEdge - ev.clientX, 360), 1200))
+    const onUp = () => {
+      setDragging(false)
+      document.body.style.userSelect = ''
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      setWidth(w => { writeStoredDocWidth(w); return w })
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -422,7 +465,18 @@ function DocPanel({ doc, t, onHide }) {
   }, [doc.url])
 
   return (
-    <div className="chat-doc-panel">
+    <div
+      className="chat-doc-panel"
+      ref={panelRef}
+      style={width != null ? { flex: 'none', width, maxWidth: 'none' } : undefined}
+    >
+      <div
+        className={`chat-doc-resizer${dragging ? ' dragging' : ''}`}
+        onMouseDown={startResize}
+        title={t('query.resizeDoc')}
+        role="separator"
+        aria-orientation="vertical"
+      />
       <div className="aside-hd">
         <button className="aside-toggle" title={t('query.hideDoc')} aria-label={t('query.hideDoc')} onClick={onHide}><PanelIcon /></button>
         <h3 className="chat-doc-title" title={artifactLabel(doc.id)}>{artifactLabel(doc.id)}</h3>

@@ -1205,10 +1205,20 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 
 /* ── Query tab: document (docx) panel ── */
 .chat-doc-panel {
-  width: 460px; flex-shrink: 0; min-width: 320px;
+  /* Grow to fill available width (competing with the chat column) up to a
+     comfortable max, so a redline gets room without swallowing the chat. A
+     drag on the left-edge resizer switches to an explicit inline width. */
+  flex: 1 1 460px; min-width: 320px; max-width: 760px;
+  position: relative;
   border-left: 1px solid var(--border);
   background: var(--bg2); display: flex; flex-direction: column;
 }
+/* Left-edge drag handle for resizing the doc panel. */
+.chat-doc-resizer {
+  position: absolute; left: -3px; top: 0; bottom: 0; width: 6px;
+  cursor: col-resize; z-index: 5;
+}
+.chat-doc-resizer:hover, .chat-doc-resizer.dragging { background: var(--accent, #6b8afd); opacity: .5; }
 .chat-doc-title {
   flex: 1; font-size: 12px; font-weight: 600; color: var(--text);
   text-transform: none; letter-spacing: 0;
@@ -1219,4 +1229,7 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 .chat-doc-note { padding: 24px 12px; text-align: center; color: var(--muted); font-size: 12px; }
 .chat-doc-err { color: var(--red); }
 .chat-doc-body { flex: 1; overflow: auto; background: #f5f5f5; padding: 14px; }
-.chat-doc-body .docx-wrapper { background: #f5f5f5; padding: 0; }
+/* docx-preview centers pages (align-items: center); when the fixed-width page
+   is wider than the panel, centering pushes the left edge out of reach of the
+   horizontal scroll. Left-align so the whole page width stays scrollable. */
+.chat-doc-body .docx-wrapper { background: #f5f5f5; padding: 0; align-items: flex-start; }

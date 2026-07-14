@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render } from '@testing-library/react'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AppProvider, useApp } from '../context'
 import { I18nProvider } from '../i18n'
@@ -105,7 +105,10 @@ async function ask(user, text) {
   await user.click(screen.getByText('Send'))
 }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  localStorage.clear()
+})
 
 it('starts a session on the first question and threads session_id into the query', async () => {
   const fetchSpy = mockFetch()
@@ -586,4 +589,95 @@ it('shows no document panel when the answer has no .docx artifact', async () => 
   await waitFor(() => expect(screen.getByText('Just a text answer.')).toBeInTheDocument())
   expect(screen.queryByRole('button', { name: 'Hide document panel' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Show document panel' })).not.toBeInTheDocument()
+})
+
+it('auto-collapses the references pane when a document artifact appears', async () => {
+  mockFetch({ streamEvents: [DOCX_ANSWER] })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await ask(user, 'redline the accepted changes')
+  await waitFor(() => expect(screen.getByText('msa-redline.docx')).toBeInTheDocument())
+
+  // The wide docx claims the room: the references pane collapses to its rail
+  // toggle instead of showing its header.
+  expect(screen.queryByText('References')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Show references panel' })).toBeInTheDocument()
+
+  // The user can bring it back from the rail.
+  await user.click(screen.getByRole('button', { name: 'Show references panel' }))
+  expect(screen.getByText('References')).toBeInTheDocument()
+})
+
+// ---------------------------------------------------------------------------
+// Document panel resizing (drag handle + persisted width)
+// ---------------------------------------------------------------------------
+
+const DOC_WIDTH_KEY = 'cogbase.docPanelWidth'
+
+async function openDocPanel(user) {
+  renderQueryTab()
+  await ask(user, 'redline it')
+  await waitFor(() => expect(screen.getByText('msa-redline.docx')).toBeInTheDocument())
+  return document.querySelector('.chat-doc-panel')
+}
+
+it('restores a persisted panel width from localStorage on open', async () => {
+  localStorage.setItem(DOC_WIDTH_KEY, '640')
+  mockFetch({ streamEvents: [DOCX_ANSWER] })
+  const panel = await openDocPanel(userEvent.setup())
+
+  // A stored width switches the panel to an explicit inline width.
+  expect(panel).toHaveStyle({ width: '640px' })
+})
+
+it('clamps an out-of-range persisted width to the allowed range', async () => {
+  localStorage.setItem(DOC_WIDTH_KEY, '5000')
+  mockFetch({ streamEvents: [DOCX_ANSWER] })
+  const panel = await openDocPanel(userEvent.setup())
+
+  // Above the 1200 max -> clamped down.
+  expect(panel).toHaveStyle({ width: '1200px' })
+})
+
+it('ignores a non-numeric persisted width and grows to the flex default', async () => {
+  localStorage.setItem(DOC_WIDTH_KEY, 'not-a-number')
+  mockFetch({ streamEvents: [DOCX_ANSWER] })
+  const panel = await openDocPanel(userEvent.setup())
+
+  // No explicit width was applied; the panel keeps its CSS flex sizing.
+  expect(panel.style.width).toBe('')
+})
+
+it('resizes the panel by dragging its left-edge handle and persists the width', async () => {
+  mockFetch({ streamEvents: [DOCX_ANSWER] })
+  const panel = await openDocPanel(userEvent.setup())
+
+  // The right-anchored panel measures width as (right edge - cursor X). jsdom
+  // reports no layout, so pin the right edge for the drag math.
+  vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue({ right: 1000 })
+
+  const resizer = screen.getByRole('separator')
+  fireEvent.mouseDown(resizer)
+  fireEvent(window, new MouseEvent('mousemove', { clientX: 300 }))
+  fireEvent(window, new MouseEvent('mouseup', {}))
+
+  // 1000 - 300 = 700, within range and applied inline.
+  expect(panel).toHaveStyle({ width: '700px' })
+  // The chosen width is persisted for the next open.
+  expect(localStorage.getItem(DOC_WIDTH_KEY)).toBe('700')
+})
+
+it('clamps a drag below the minimum width', async () => {
+  mockFetch({ streamEvents: [DOCX_ANSWER] })
+  const panel = await openDocPanel(userEvent.setup())
+  vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue({ right: 1000 })
+
+  const resizer = screen.getByRole('separator')
+  fireEvent.mouseDown(resizer)
+  // Cursor near the right edge -> would be a tiny width; clamped up to 360.
+  fireEvent(window, new MouseEvent('mousemove', { clientX: 950 }))
+  fireEvent(window, new MouseEvent('mouseup', {}))
+
+  expect(panel).toHaveStyle({ width: '360px' })
+  expect(localStorage.getItem(DOC_WIDTH_KEY)).toBe('360')
 })
