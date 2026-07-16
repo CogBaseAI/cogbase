@@ -387,6 +387,68 @@ def test_system_prompt_advertises_paths(tmp_path):
     assert "COGBASE_WORKDIR" not in no_wd and "COGBASE_SKILL_DIR" in no_wd
 
 
+def _skill_for_prompt(tmp_path):
+    from pathlib import Path
+
+    skill = MagicMock()
+    skill.name = "legal-review"
+    skill.source_path = Path("/skills/abc123/SKILL.md")
+    skill.metadata = {}
+    skill.raw_markdown = "body"
+    return skill
+
+
+def test_system_prompt_lists_persisted_workdir_files(tmp_path):
+    # A follow-up turn inherits the prior turn's materialized state; the prompt
+    # advertises it so the model reuses review.json / the fetched original in
+    # place rather than re-fetching and re-reviewing from scratch.
+    runner = _runner(MagicMock())
+    workdir = tmp_path / "work"
+    (workdir / "originals").mkdir(parents=True)
+    (workdir / "originals" / "base.docx").write_bytes(b"x" * 10)
+    (workdir / "review.json").write_text("{}")
+    (workdir / "redline.docx").write_bytes(b"y" * 20)
+
+    prompt = runner.build_system_prompt("base", _skill_for_prompt(tmp_path), str(workdir))
+
+    assert "Files already in the working directory" in prompt
+    assert "`review.json` (2 bytes)" in prompt
+    assert "`redline.docx` (20 bytes)" in prompt
+    assert "`originals/base.docx` (10 bytes)" in prompt  # nested files shown by relative path
+
+
+def test_system_prompt_omits_listing_for_empty_or_missing_workdir(tmp_path):
+    runner = _runner(MagicMock())
+    skill = _skill_for_prompt(tmp_path)
+
+    # Non-existent workdir (fresh node) → still advertises the path, no listing.
+    missing = runner.build_system_prompt("base", skill, str(tmp_path / "nope"))
+    assert "COGBASE_WORKDIR" in missing
+    assert "Files already in the working directory" not in missing
+
+    # Existing but empty workdir → no listing block.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert "Files already in the working directory" not in runner.build_system_prompt(
+        "base", skill, str(empty)
+    )
+
+
+def test_system_prompt_caps_workdir_listing(tmp_path):
+    runner = _runner(MagicMock())
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    for i in range(60):
+        (workdir / f"f{i:02d}.txt").write_text("x")
+
+    prompt = runner.build_system_prompt("base", _skill_for_prompt(tmp_path), str(workdir))
+    block = prompt.split("Files already in the working directory", 1)[1]
+    # 50 entries + one "…and N more" summary line, not all 60.
+    assert "…and 10 more" in block
+    assert "`f00.txt`" in block and "`f49.txt`" in block
+    assert "`f59.txt`" not in block
+
+
 @pytest.mark.asyncio
 async def test_shell_refuses_whole_filesystem_scan(tmp_path):
     runner = _runner(MagicMock())

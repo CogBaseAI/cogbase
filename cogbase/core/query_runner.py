@@ -902,6 +902,7 @@ class QueryRunner:
                     "(relative paths work); it persists across turns, so reuse files already present."
                 )
             paths_block = ("Paths:\n" + "\n".join(path_lines) + "\n\n") if path_lines else ""
+            paths_block += self._workdir_listing_block(workdir)
             skill_section = (
                 f"## Active Skill: {skill.name}\n\n"
                 + paths_block
@@ -913,6 +914,47 @@ class QueryRunner:
             parts.append(skill_section)
 
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _workdir_listing_block(workdir: str | None) -> str:
+        """Render the files already present in *workdir* as a prompt block.
+
+        The workdir persists across turns (per app+session), so a follow-up turn
+        inherits the prior turn's materialized state — the fetched original, the
+        review file, intermediate JSON, prior redline/final drafts. The model
+        can't ``ls`` before it plans, so surface that inventory in the system
+        prompt: a refine turn should reuse ``review.json`` and the fetched
+        original in place rather than re-fetching and re-editing from scratch.
+        Empty (fresh workdir) or on any I/O error, returns "".
+        """
+        if not workdir:
+            return ""
+        entries: list[str] = []
+        try:
+            for root, _dirs, files in os.walk(workdir):
+                for fname in files:
+                    full = os.path.join(root, fname)
+                    rel = os.path.relpath(full, workdir)
+                    try:
+                        size = os.path.getsize(full)
+                    except OSError:
+                        continue
+                    entries.append(f"- `{rel}` ({size} bytes)")
+        except OSError:
+            return ""
+        if not entries:
+            return ""
+        entries.sort()
+        # Cap to keep the prompt bounded on long, file-heavy sessions.
+        capped = entries[:50]
+        if len(entries) > 50:
+            capped.append(f"- …and {len(entries) - 50} more")
+        return (
+            "Files already in the working directory (persisted from earlier turns — "
+            "reuse these in place; do not re-fetch or regenerate what is already here):\n"
+            + "\n".join(capped)
+            + "\n\n"
+        )
 
     # ------------------------------------------------------------------
     # Main loop

@@ -148,10 +148,13 @@ If the base id, or which lens fits, is unclear, ask before proceeding.
    A non-existent `para_id` or a malformed op fails loudly here — fix the analysis and
    rerun rather than shipping a review that can't be applied.
 
-6. **Persist the review as working state.** Call `save_artifact` with `review.json` and a
-   descriptive `filename` (e.g. `<contract-name>-review.json`). Note the returned
-   **artifact id** — it is the handle for the rest of the conversation. Reopen it later
-   with `fetch_artifact`, patch verdicts or suggestions, and `save_artifact` a fresh copy.
+6. **Persist the review as working state.** `review.json` in `$COGBASE_WORKDIR` is the
+   durable source of truth for the rest of the conversation: the working directory persists
+   across turns, so a later turn reopens `$COGBASE_WORKDIR/review.json` in place — no fetch,
+   no artifact id to track. Also `save_artifact` it once with a descriptive `filename`
+   (e.g. `<contract-name>-review.json`) as a cross-node backup; if a follow-up turn finds
+   the workdir empty (fresh node), recover the review from that artifact with `fetch_artifact`
+   before doing anything else — do **not** start the review over.
 
 7. **Produce and return the redline.** Don't stop at the review file — on the first review
    the redline is the primary deliverable. Project every suggestion to a tracked-changes
@@ -206,12 +209,30 @@ any misses in either pass.
 
 ## Refining across turns
 
-The review file is the single source of truth for the review. When the user accepts,
-rejects, or asks to reword suggestions ("accept clause 1, reject clause 3, soften clause
-5"), don't hand-edit the JSON — apply the changes deterministically with `build_ops.py
-patch` so a mistyped `clause_id` or verdict fails loudly instead of corrupting the file:
+Once a review exists, every follow-up — "soften clause 5", "reject c3", "update the
+redline", "改一下红线里的第 3 条", "regenerate with the accepted changes" — is a **refine of
+the existing review, not a new review.** Two rules make this reliable:
 
-1. `fetch_artifact` the current review file to a local path.
+- **Reuse the working directory; never start over.** The system prompt lists the files
+  already in `$COGBASE_WORKDIR` — the fetched original (under `originals/`),
+  `clauses.json`, `review.json`, and any prior `redline.docx` / `final.docx`. Reuse them in
+  place. Do **not** `fetch_document` the original again, do **not** re-segment, and do
+  **not** re-run the analysis when `review.json` is already present. (Only if the workdir is
+  empty — a fresh node — recover `review.json` via `fetch_artifact`, then continue.)
+- **Edit only `review.json`, never a `.docx`.** The redline and the final docx are
+  *projections* of `review.json`, not editable sources. "Update the redline" / "改红线"
+  means: patch `review.json`, then re-project it to a fresh redline (or final) docx and hand
+  back the new link — it does **not** mean opening the redline `.docx` and editing it, and it
+  never means editing the **original** contract. The original is only ever the base the
+  projection is applied to; your suggestions live in `review.json`.
+
+When the user accepts, rejects, or asks to reword suggestions ("accept clause 1, reject
+clause 3, soften clause 5"), don't hand-edit the JSON — apply the changes deterministically
+with `build_ops.py patch` so a mistyped `clause_id` or verdict fails loudly instead of
+corrupting the file:
+
+1. Use the existing `$COGBASE_WORKDIR/review.json` (or, only if the workdir is empty,
+   `fetch_artifact` the saved review file back to a local path first).
 2. Apply the changes:
 
    ```
