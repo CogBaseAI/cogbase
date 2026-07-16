@@ -27,6 +27,11 @@ export default function QueryTab({ active }) {
   const [sessions, setSessions] = useState([])
   const [activeSid, setActiveSid] = useState(null)
   const msgsRef = useRef(null)
+  // Whether the message pane is pinned to the bottom. Streaming token updates
+  // only auto-scroll while pinned, so a user who scrolls up to read the start of
+  // a long answer isn't yanked back down on every token. Scrolling back to the
+  // bottom re-pins.
+  const atBottomRef = useRef(true)
   const sessionIdRef = useRef(null)
   const textareaRef = useRef(null)
   const hasApp = !!currentApp
@@ -156,7 +161,25 @@ export default function QueryTab({ active }) {
     return data.session_id
   }
 
-  function scrollMsgs() { if (msgsRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight }
+  // Force the pane to the bottom and re-pin. Used when the user drives an action
+  // that should follow the newest content (sending a query, opening a chat).
+  function scrollMsgs() {
+    if (msgsRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight
+    atBottomRef.current = true
+  }
+
+  // Scroll to the bottom only if the user hasn't scrolled up. Used during token
+  // streaming so it follows new output without fighting a manual scroll-up.
+  function scrollMsgsIfPinned() {
+    if (atBottomRef.current && msgsRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight
+  }
+
+  // Re-evaluate the pin on manual scroll: pinned when within a small slack of the
+  // bottom, so tiny rounding gaps still count as "at bottom".
+  function onMsgsScroll() {
+    const el = msgsRef.current
+    if (el) atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+  }
 
   function autoResize(el) {
     el.style.height = 'auto'
@@ -201,7 +224,7 @@ export default function QueryTab({ active }) {
           if (!started) { started = true }
           answer += d.token
           setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: answer }])
-          setTimeout(scrollMsgs, 0)
+          setTimeout(scrollMsgsIfPinned, 0)
         } else if (d.result) {
           if (!started) started = true
           const refs = d.result.references || {}
@@ -301,7 +324,7 @@ export default function QueryTab({ active }) {
         </div>
         )}
         <div className="chat-col">
-          <div className="msgs" ref={msgsRef}>
+          <div className="msgs" ref={msgsRef} onScroll={onMsgsScroll}>
             {msgs.map((m, i) => {
               const selectable = m.role === 'bot' && !!m.refs
               return (

@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, act } from '@testing-library/react'
 import { screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AppProvider, useApp } from '../context'
@@ -680,4 +680,146 @@ it('clamps a drag below the minimum width', async () => {
 
   expect(panel).toHaveStyle({ width: '360px' })
   expect(localStorage.getItem(DOC_WIDTH_KEY)).toBe('360')
+})
+
+// ---------------------------------------------------------------------------
+// Scroll-follow during streaming: the pane sticks to the bottom as tokens
+// arrive, but only while the user hasn't scrolled up to read earlier output.
+// ---------------------------------------------------------------------------
+
+// A streaming Response whose chunks are released one at a time via the returned
+// `push`/`close` controls, so a test can act (scroll) between tokens. streamSSE
+// parks on read() until a chunk (or close) is available.
+function controllableStream() {
+  const encoder = new TextEncoder()
+  const pending = []   // resolve() fns from awaiting read() calls
+  const chunks = []    // encoded chunks not yet read
+  let done = false
+  function deliver() {
+    while (pending.length && (chunks.length || done)) {
+      const resolve = pending.shift()
+      if (chunks.length) resolve({ done: false, value: chunks.shift() })
+      else resolve({ done: true, value: undefined })
+    }
+  }
+  return {
+    resp: { ok: true, body: { getReader: () => ({ read: () => new Promise(res => { pending.push(res); deliver() }) }) } },
+    push(event) { chunks.push(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)); deliver() },
+    close() { done = true; deliver() },
+  }
+}
+
+// Route the session + query-stream calls, returning a controllable stream body.
+function mockFetchStreaming(streamResp) {
+  return vi.spyOn(global, 'fetch').mockImplementation((url, opts = {}) => {
+    const u = String(url)
+    const method = (opts.method || 'GET').toUpperCase()
+    if (u.endsWith('/sessions') && method === 'POST') return Promise.resolve({ ok: true, json: async () => ({ session_id: 'sess-1' }) })
+    if (u.endsWith('/sessions') && method === 'GET') return Promise.resolve({ ok: true, json: async () => ({ sessions: [] }) })
+    if (u.endsWith('/query/stream')) return Promise.resolve(streamResp)
+    return Promise.resolve({ ok: true, json: async () => ({}) })
+  })
+}
+
+// jsdom computes no layout, so pin the scroll metrics the follow logic reads.
+function stubScrollMetrics(el, { scrollHeight, clientHeight }) {
+  Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => scrollHeight })
+  Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => clientHeight })
+}
+
+const flushTimers = () => new Promise(r => setTimeout(r, 0))
+
+// Release one streamed token and let the follow-scroll setTimeout(0) run, all
+// inside act() so React state settles without warnings.
+async function pushToken(ctrl, event) {
+  await act(async () => { ctrl.push(event); await flushTimers() })
+}
+
+it('sticks the message pane to the bottom as tokens stream in', async () => {
+  const ctrl = controllableStream()
+  mockFetchStreaming(ctrl.resp)
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+
+  await ask(user, 'stream a long answer')
+  await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(
+    expect.stringMatching(/\/query\/stream$/), expect.anything()
+  ))
+
+  const pane = document.querySelector('.msgs')
+  stubScrollMetrics(pane, { scrollHeight: 1000, clientHeight: 300 })
+
+  await pushToken(ctrl, { token: 'First chunk. ' })
+  expect(pane.textContent).toContain('First chunk.')
+  // Pinned by default -> glued to the bottom (scrollTop == scrollHeight).
+  expect(pane.scrollTop).toBe(1000)
+
+  await pushToken(ctrl, { token: 'Second chunk.' })
+  expect(pane.textContent).toContain('Second chunk.')
+  // Still pinned -> follows the new token to the bottom.
+  expect(pane.scrollTop).toBe(1000)
+
+  await act(async () => { ctrl.close(); await flushTimers() })
+})
+
+it('stops following streamed tokens once the user scrolls up', async () => {
+  const ctrl = controllableStream()
+  mockFetchStreaming(ctrl.resp)
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+
+  await ask(user, 'stream a long answer')
+  await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(
+    expect.stringMatching(/\/query\/stream$/), expect.anything()
+  ))
+
+  const pane = document.querySelector('.msgs')
+  stubScrollMetrics(pane, { scrollHeight: 1000, clientHeight: 300 })
+
+  await pushToken(ctrl, { token: 'First chunk. ' })
+  expect(pane.scrollTop).toBe(1000)  // glued while pinned
+
+  // The user scrolls up to read the start of the answer; this unpins the pane.
+  pane.scrollTop = 100
+  fireEvent.scroll(pane)
+
+  await pushToken(ctrl, { token: 'More content that would otherwise yank the view down.' })
+  expect(pane.textContent).toContain('More content')
+  // The view stayed where the user left it — no snap back to the bottom.
+  expect(pane.scrollTop).toBe(100)
+
+  await act(async () => { ctrl.close(); await flushTimers() })
+})
+
+it('re-pins to the bottom when the user scrolls back down', async () => {
+  const ctrl = controllableStream()
+  mockFetchStreaming(ctrl.resp)
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+
+  await ask(user, 'stream a long answer')
+  await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(
+    expect.stringMatching(/\/query\/stream$/), expect.anything()
+  ))
+
+  const pane = document.querySelector('.msgs')
+  stubScrollMetrics(pane, { scrollHeight: 1000, clientHeight: 300 })
+
+  // Scroll up (unpin), then back to the bottom (within the 40px slack -> re-pin).
+  await pushToken(ctrl, { token: 'First. ' })
+  expect(pane.scrollTop).toBe(1000)
+  pane.scrollTop = 100
+  fireEvent.scroll(pane)
+  pane.scrollTop = 700           // 1000 - 700 - 300 = 0 < 40 -> at bottom
+  fireEvent.scroll(pane)
+
+  await pushToken(ctrl, { token: 'Second.' })
+  expect(pane.textContent).toContain('Second.')
+  // Re-pinned -> follows back to the bottom.
+  expect(pane.scrollTop).toBe(1000)
+
+  await act(async () => { ctrl.close(); await flushTimers() })
 })
