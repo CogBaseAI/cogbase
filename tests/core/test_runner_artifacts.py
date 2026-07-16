@@ -48,7 +48,7 @@ async def test_fetch_document_materializes_original_to_local_path(tmp_path):
     await store.save_bytes("app1", "originals/contract1.docx", b"PK-docx-bytes")
     runner = _runner(store)
 
-    out = await runner._run_fetch_document({"doc_id": "contract1"})
+    out = await runner._run_fetch_document({"doc_id": "contract1"}, str(tmp_path / "work"))
 
     assert "Fetched document 'contract1'" in out
     path = out.rsplit(" to ", 1)[1]
@@ -65,7 +65,7 @@ async def test_fetch_document_falls_back_to_suffixless_key(tmp_path):
     await store.save_bytes("app1", "originals/note", b"raw")
     runner = _runner(store)
 
-    out = await runner._run_fetch_document({"doc_id": "note"})
+    out = await runner._run_fetch_document({"doc_id": "note"}, str(tmp_path / "work"))
 
     assert "Fetched document 'note'" in out
     path = out.rsplit(" to ", 1)[1]
@@ -188,7 +188,7 @@ async def test_fetch_artifact_materializes_saved_artifact_to_local_path(tmp_path
     await store.save_bytes("app1", "generated/ops__abc123.json", b'{"clauses": []}')
     runner = _runner(store)
 
-    out = await runner._run_fetch_artifact({"artifact_id": "ops__abc123.json"})
+    out = await runner._run_fetch_artifact({"artifact_id": "ops__abc123.json"}, str(tmp_path / "work"))
 
     assert "Fetched artifact 'ops__abc123.json'" in out
     path = out.rsplit(" to ", 1)[1]
@@ -256,7 +256,9 @@ async def test_fetch_then_save_round_trip(tmp_path):
     await store.save_bytes("app1", "originals/c.docx", b"orig")
     runner = _runner(store)
 
-    fetched_path = (await runner._run_fetch_document({"doc_id": "c"})).rsplit(" to ", 1)[1]
+    fetched_path = (
+        await runner._run_fetch_document({"doc_id": "c"}, str(tmp_path / "work"))
+    ).rsplit(" to ", 1)[1]
     # Simulate a skill editing the fetched file and writing an output.
     produced = tmp_path / "produced.docx"
     produced.write_bytes(open(fetched_path, "rb").read() + b"+edits")
@@ -276,7 +278,7 @@ async def test_save_fetch_patch_resave_round_trip(tmp_path):
     saved, _ = await runner._run_save_artifact({"path": str(ops), "filename": "ops.json"})
 
     fetched_path = (
-        await runner._run_fetch_artifact({"artifact_id": saved.artifact_id})
+        await runner._run_fetch_artifact({"artifact_id": saved.artifact_id}, str(tmp_path / "work"))
     ).rsplit(" to ", 1)[1]
     with open(fetched_path, "rb") as f:
         assert f.read() == b'{"verdict": "pending"}'
@@ -468,6 +470,42 @@ async def test_shell_allows_scoped_commands(tmp_path):
     assert not _ROOT_FS_SCAN.search("find /skills/abc -name x")  # scoped → allowed
     assert not _ROOT_FS_SCAN.search('find "$COGBASE_WORKDIR" -type f')  # anchored → allowed
     assert not _ROOT_FS_SCAN.search("find . -name x")      # relative → allowed
+
+
+# ---------------------------------------------------------------------------
+# inline python execution (stdlib preamble)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_python_runs_snippet_that_omits_stdlib_import(tmp_path):
+    # The model frequently uses json/re/etc. without emitting the `import`. The
+    # preamble makes these snippets succeed instead of raising NameError.
+    runner = _runner(MagicMock())
+    out = await runner._run_python(
+        'json.dump({"ok": True}, sys.stdout)\nprint()\nprint(re.sub("a", "b", "aaa"))',
+        dict(os.environ),
+    )
+    assert out == '{"ok": true}\nbbb'
+
+
+@pytest.mark.asyncio
+async def test_python_explicit_import_is_idempotent(tmp_path):
+    # Re-importing a preamble module in the snippet must not conflict.
+    runner = _runner(MagicMock())
+    out = await runner._run_python(
+        "import json\nprint(json.dumps([1, 2]))", dict(os.environ)
+    )
+    assert out == "[1, 2]"
+
+
+@pytest.mark.asyncio
+async def test_python_runtime_error_reports_traceback(tmp_path):
+    # A genuine error still surfaces, so debugging behavior is preserved.
+    runner = _runner(MagicMock())
+    out = await runner._run_python('raise ValueError("boom")', dict(os.environ))
+    assert "Traceback (most recent call last):" in out
+    assert "ValueError: boom" in out
 
 
 # ---------------------------------------------------------------------------

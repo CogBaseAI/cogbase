@@ -80,6 +80,16 @@ logger = logging.getLogger(__name__)
 
 _TOOL_TIMEOUT = 30  # seconds
 
+# Common stdlib modules pre-imported before every inline `python` snippet. The
+# model frequently uses these (json.dump, re.sub, datetime, pathlib) without
+# emitting the corresponding `import`, which fails as a NameError even though the
+# module is always available. Re-imports are idempotent, so prepending this can
+# never shadow or conflict with code that does import them. Kept on a single
+# physical line so tracebacks only shift by one line relative to the model's code.
+_PY_PREAMBLE = (
+    "import json, os, sys, re, math, datetime, pathlib, collections, itertools\n"
+)
+
 # Root of the per-(app, session) local scratch dirs that skill subprocesses use
 # for their working files (fetched documents, intermediate JSON, redline drafts).
 # Deterministic and reusable so retries/follow-up turns reuse materialized files
@@ -1543,7 +1553,7 @@ class QueryRunner:
     async def _run_python(self, code: str, env: dict, cwd: str | None = None) -> str:
         try:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-                f.write(code)
+                f.write(_PY_PREAMBLE + code)
                 tmp = f.name
             try:
                 proc = await asyncio.create_subprocess_exec(
