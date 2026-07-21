@@ -20,10 +20,17 @@ from fastapi.responses import StreamingResponse
 
 from cogbase.config.config import AppConfig
 from cogbase.stores import AppScope, build_document_store, build_structured_store, build_vector_store
-from api.dependencies import AppCacheDep, SkillRegistryDep, SystemResourcesDep, SystemStoreDep
+from api.dependencies import (
+    AccountIdDep,
+    AppCacheDep,
+    RequestScopeDep,
+    SkillRegistryDep,
+    SystemResourcesDep,
+    SystemStoreDep,
+)
 from api.system_resources import SystemResources
 from api.factory import build_app
-from api.app_cache import AppCache
+from api.app_cache import AppCache, cache_key
 from api.models import (
     AddMemoryRequest,
     AddMemoryResponse,
@@ -75,7 +82,13 @@ from api.system_store import (
 from cogbase.stores.filters import Filter, Op
 from api.task_runner import DEFAULT_TASK_CONCURRENCY, run_distill_task, run_ingest_task
 
-router = APIRouter(prefix="/applications", tags=["applications"])
+# Name-addressed routes live under a namespace path segment: an app's client-facing
+# name is only unique within (account, namespace). The account is the X-Account-Id
+# header (see RequestScopeDep); the namespace is the {namespace} path param.
+router = APIRouter(prefix="/namespaces/{namespace}/applications", tags=["applications"])
+
+# Account-wide routes (no namespace segment) — e.g. list every app in the account.
+account_router = APIRouter(prefix="/applications", tags=["applications"])
 
 
 def _now() -> str:
@@ -135,6 +148,8 @@ def _to_response(record: AppRecord) -> ApplicationResponse:
         config_dict = {}
     return ApplicationResponse(
         name=record.name,
+        account_id=record.account_id,
+        namespace_id=record.namespace_id,
         status=record.status,
         config=config_dict,
         error=record.error,
@@ -272,6 +287,7 @@ def _app_skills_response(app_name: str, skill_ids: list[str], skill_registry) ->
 
 @router.post("", response_model=ApplicationResponse, status_code=status.HTTP_201_CREATED)
 async def create_application(
+    scope: RequestScopeDep,
     system_store: SystemStoreDep,
     app_cache: AppCacheDep,
     system_resources: SystemResourcesDep,
@@ -293,7 +309,7 @@ async def create_application(
     if config.skills:
         _validate_skills(config.skills, skill_registry)
 
-    if await system_store.get_app(config.name) is not None:
+    if await system_store.get_app(scope.account_id, scope.namespace_id, config.name) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Application '{config.name}' already exists",
@@ -303,6 +319,8 @@ async def create_application(
     app_id = new_app_id()
     record = AppRecord(
         app_id=app_id,
+        account_id=scope.account_id,
+        namespace_id=scope.namespace_id,
         name=config.name,
         config_yaml=yaml_text,
         status="initializing",
@@ -310,11 +328,18 @@ async def create_application(
         updated_at=now,
     )
     await system_store.save_app(record)
-    logger.info("Creating application '%s' (app_id=%s)", config.name, app_id)
+    logger.info(
+        "Creating application '%s' (app_id=%s account=%s namespace=%s)",
+        config.name, app_id, scope.account_id, scope.namespace_id,
+    )
 
     try:
-        app = await build_app(config, app_id=app_id, system=system_resources, app_status=record.status, task_store=system_store)
-        app_cache.add(config.name, app)
+        app = await build_app(
+            config, app_id=app_id, account_id=scope.account_id,
+            namespace_id=scope.namespace_id, system=system_resources,
+            app_status=record.status, task_store=system_store,
+        )
+        app_cache.add(cache_key(scope.account_id, scope.namespace_id, config.name), app)
         record = record.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("Application '%s' created successfully", config.name)
     except Exception as exc:
@@ -327,22 +352,38 @@ async def create_application(
     return _to_response(record)
 
 
-@router.get("", response_model=ApplicationListResponse)
-async def list_applications(system_store: SystemStoreDep) -> ApplicationListResponse:
-    """Return all registered applications."""
-    records = await system_store.list_apps()
+@account_router.get("", response_model=ApplicationListResponse)
+async def list_account_applications(
+    account_id: AccountIdDep,
+    system_store: SystemStoreDep,
+) -> ApplicationListResponse:
+    """Return every application in the calling account, across all namespaces."""
+    records = await system_store.list_apps(account_id)
     items = [_to_response(r) for r in records]
-    logger.info("list apps=%d", len(items))
+    logger.info("list account=%s apps=%d", account_id, len(items))
+    return ApplicationListResponse(applications=items, total=len(items))
+
+
+@router.get("", response_model=ApplicationListResponse)
+async def list_applications(
+    scope: RequestScopeDep,
+    system_store: SystemStoreDep,
+) -> ApplicationListResponse:
+    """Return the applications in one namespace of the calling account."""
+    records = await system_store.list_apps(scope.account_id, scope.namespace_id)
+    items = [_to_response(r) for r in records]
+    logger.info("list account=%s namespace=%s apps=%d", scope.account_id, scope.namespace_id, len(items))
     return ApplicationListResponse(applications=items, total=len(items))
 
 
 @router.get("/{app_name}", response_model=ApplicationResponse)
 async def get_application(
     app_name: str,
+    scope: RequestScopeDep,
     system_store: SystemStoreDep,
 ) -> ApplicationResponse:
     """Return metadata for a single application."""
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
     return _to_response(record)
@@ -351,6 +392,7 @@ async def get_application(
 @router.patch("/{app_name}", response_model=ApplicationResponse)
 async def update_application(
     app_name: str,
+    scope: RequestScopeDep,
     system_store: SystemStoreDep,
     app_cache: AppCacheDep,
     system_resources: SystemResourcesDep,
@@ -363,7 +405,7 @@ async def update_application(
     config fails to initialise the application, the record is kept with
     ``status=error`` so you can inspect and fix the config.
     """
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
@@ -372,13 +414,13 @@ async def update_application(
     if config.skills:
         _validate_skills(config.skills, skill_registry)
 
-    if config.name != app_name and await system_store.get_app(config.name) is not None:
+    if config.name != app_name and await system_store.get_app(scope.account_id, scope.namespace_id, config.name) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Application '{config.name}' already exists",
         )
 
-    app_cache.remove(app_name)
+    app_cache.remove(cache_key(scope.account_id, scope.namespace_id, app_name))
 
     # The record's identity is its stable app_id, so a rename just updates the
     # ``name`` field on the same row — storage keyed by app_id never moves.
@@ -395,8 +437,12 @@ async def update_application(
     logger.info("Updating application '%s' (app_id=%s)", app_name, record.app_id)
 
     try:
-        app = await build_app(config, app_id=record.app_id, system=system_resources, app_status=updated.status, task_store=system_store)
-        app_cache.add(config.name, app)
+        app = await build_app(
+            config, app_id=record.app_id, account_id=record.account_id,
+            namespace_id=record.namespace_id, system=system_resources,
+            app_status=updated.status, task_store=system_store,
+        )
+        app_cache.add(cache_key(scope.account_id, scope.namespace_id, config.name), app)
         updated = updated.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("Application '%s' updated successfully", config.name)
     except Exception as exc:
@@ -412,17 +458,20 @@ async def update_application(
 @router.delete("/{app_name}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_application(
     app_name: str,
+    scope: RequestScopeDep,
     system_store: SystemStoreDep,
     app_cache: AppCacheDep,
     system_resources: SystemResourcesDep,
 ) -> None:
     """Permanently remove an application and its metadata."""
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
     config = AppConfig.from_yaml(record.config_yaml)
-    app_scope = AppScope(app_id=record.app_id)
+    app_scope = AppScope(
+        account_id=record.account_id, namespace_id=record.namespace_id, app_id=record.app_id
+    )
 
     vector_store = (
         build_vector_store(config.vector_store, scope=app_scope)
@@ -471,12 +520,14 @@ async def delete_application(
                 app_name, exc_info=True,
             )
 
-    app_cache.remove(app_name)
+    app_cache.remove(cache_key(scope.account_id, scope.namespace_id, app_name))
     await system_store.delete_app(record.app_id)
     logger.info("Application '%s' deleted", app_name)
 
 
 async def _get_active_app(
+    account_id: str,
+    namespace_id: str,
     app_name: str,
     app_cache: AppCache,
     system_store: SystemStore,
@@ -484,24 +535,30 @@ async def _get_active_app(
     *,
     force_refresh: bool = False,
 ) -> object:
+    key = cache_key(account_id, namespace_id, app_name)
     if not force_refresh:
-        app = app_cache.get(app_name)
+        app = app_cache.get(key)
         if app is not None:
             return app
     else:
-        app_cache.remove(app_name)
-    record = await system_store.get_app(app_name)
+        app_cache.remove(key)
+    record = await system_store.get_app(account_id, namespace_id, app_name)
     if record is None or record.status != "active":
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found or not active")
     config = AppConfig.from_yaml(record.config_yaml)
-    app = await build_app(config, app_id=record.app_id, system=system_resources, app_status=record.status, task_store=system_store)
-    app_cache.add(app_name, app)
+    app = await build_app(
+        config, app_id=record.app_id, account_id=record.account_id,
+        namespace_id=record.namespace_id, system=system_resources,
+        app_status=record.status, task_store=system_store,
+    )
+    app_cache.add(key, app)
     return app
 
 
 @router.post("/{app_name}/upload_documents", response_model=IngestDocumentsAcceptedResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_documents(
     app_name: str,
+    scope: RequestScopeDep,
     files: list[UploadFile],
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
@@ -529,10 +586,10 @@ async def upload_documents(
     if not isinstance(extra_metadata, dict):
         raise HTTPException(status_code=422, detail="metadata must be a JSON object")
 
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     # Identity for all storage keys comes from the persisted record, not the app
     # instance — the stable app_id, not the (mutable) client-facing name.
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     app_id = record.app_id
 
     def _safe_doc_id(filename: str) -> str:
@@ -567,6 +624,8 @@ async def upload_documents(
         #    reconstruct everything it needs from the task record + document store alone.
         await system_store.create_task(TaskRecord(
             task_id=task_id,
+            account_id=record.account_id,
+            namespace_id=record.namespace_id,
             app_id=app_id,
             task_type="ingest",
             task_name="ingest",
@@ -625,7 +684,7 @@ async def _record_session_turn(system_store, app, session_id: str | None, text: 
     if not session_id:
         return
     try:
-        await system_store.touch_session(app.app_id, session_id, text)
+        await system_store.touch_session(app.account_id, app.namespace_id, app.app_id, session_id, text)
     except Exception:
         logger.exception("failed to index session turn for '%s'", session_id)
 
@@ -633,6 +692,7 @@ async def _record_session_turn(system_store, app, session_id: str | None, text: 
 @router.post("/{app_name}/query", response_model=QueryResponse)
 async def query_application(
     app_name: str,
+    scope: RequestScopeDep,
     body: QueryRequest,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
@@ -644,14 +704,14 @@ async def query_application(
     then synthesises a final answer.  Large structured result sets are returned
     directly (passthrough=True) without an additional synthesis step.
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     history = [{"role": m.role, "content": m.content} for m in body.history] or None
     try:
         result = await _drain_query(app, body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k, session_id=body.session_id)
     except Exception:
         logger.exception("query failed for app '%s', retrying with fresh app", app_name)
         app = await _get_active_app(
-            app_name, app_cache, system_store, system_resources, force_refresh=True
+            scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources, force_refresh=True
         )
         result = await _drain_query(app, body.text, history=history, system_prompt=body.system_prompt, top_k=body.top_k, session_id=body.session_id)
     await _record_session_turn(system_store, app, body.session_id, body.text)
@@ -667,6 +727,7 @@ async def query_application(
 @router.post("/{app_name}/query/stream")
 async def query_application_stream(
     app_name: str,
+    scope: RequestScopeDep,
     body: QueryRequest,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
@@ -680,7 +741,7 @@ async def query_application_stream(
                   (structured_records, chunks, document_slices, memories).
     Sentinel:     ``data: [DONE]``
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     history = [{"role": m.role, "content": m.content} for m in body.history] or None
 
     async def event_stream():
@@ -718,6 +779,7 @@ async def query_application_stream(
 @router.post("/{app_name}/sessions", response_model=SessionResponse)
 async def start_session(
     app_name: str,
+    scope: RequestScopeDep,
     body: SessionStartRequest,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
@@ -728,7 +790,7 @@ async def start_session(
     Seeds the short-term metadata cache; the conversational thread itself lives
     in the episodic log and is materialised on the first query.
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     try:
         session_id = await app.start_session(
             metadata=body.metadata,
@@ -742,6 +804,7 @@ async def start_session(
 @router.get("/{app_name}/sessions", response_model=SessionListResponse)
 async def list_sessions(
     app_name: str,
+    scope: RequestScopeDep,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
     system_resources: SystemResourcesDep,
@@ -752,7 +815,7 @@ async def list_sessions(
     never replays episodic logs; a session's actual messages are loaded on demand
     via ``GET /{app_name}/sessions/{session_id}``.
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     records = await system_store.list_session_records(app.app_id)
     return SessionListResponse(
         sessions=[
@@ -773,12 +836,13 @@ async def list_sessions(
 async def get_session_transcript(
     app_name: str,
     session_id: str,
+    scope: RequestScopeDep,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
     system_resources: SystemResourcesDep,
 ) -> SessionTranscriptResponse:
     """Return a session's full conversation transcript from the episodic log."""
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     try:
         messages = await app.get_session_transcript(session_id)
     except RuntimeError as exc:
@@ -802,6 +866,7 @@ async def get_session_transcript(
 async def delete_session(
     app_name: str,
     session_id: str,
+    scope: RequestScopeDep,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
     system_resources: SystemResourcesDep,
@@ -812,7 +877,7 @@ async def delete_session(
     session's row from the history index so it disappears from the sidebar.  Any
     long-term memory already distilled from the session is left intact.
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     await app.delete_session(session_id)
     await system_store.delete_session_record(session_id)
     return SessionDeleteResponse(session_id=session_id, deleted=True)
@@ -822,6 +887,7 @@ async def delete_session(
 async def close_session(
     app_name: str,
     session_id: str,
+    scope: RequestScopeDep,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
     system_resources: SystemResourcesDep,
@@ -832,7 +898,7 @@ async def close_session(
     model) so close returns immediately.  When no distiller is wired the cache
     is still evicted and distillation is reported 'skipped'.
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     await app.end_session(session_id)
     # Flip the session's history-index row to 'closed' (no-op if it never took a turn).
     await system_store.close_session_record(session_id)
@@ -841,7 +907,7 @@ async def close_session(
     if distiller is None:
         return SessionCloseResponse(session_id=session_id, distillation="skipped")
 
-    task_id = await system_store.create_distill_task(app.app_id, session_id)
+    task_id = await system_store.create_distill_task(app.account_id, app.namespace_id, app.app_id, session_id)
 
     # Shared with the startup recovery sweep so an interrupted distillation is
     # requeued on restart (see api/task_runner.py).
@@ -859,6 +925,7 @@ async def close_session(
 @router.post("/{app_name}/memory", response_model=AddMemoryResponse)
 async def add_memory(
     app_name: str,
+    scope: RequestScopeDep,
     body: AddMemoryRequest,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
@@ -872,7 +939,7 @@ async def add_memory(
     separate session-close or review step.  ``session_id`` is optional; a fresh
     one is generated and returned when omitted.
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     try:
         session_id, records = await app.add_memory(
             messages=[m.model_dump() for m in body.messages],
@@ -925,6 +992,7 @@ def _to_answer_references(result) -> AnswerReferences:
 @router.get("/{app_name}/memory", response_model=MemoryListResponse)
 async def list_memories(
     app_name: str,
+    scope: RequestScopeDep,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
     system_resources: SystemResourcesDep,
@@ -939,7 +1007,7 @@ async def list_memories(
     ``active`` records (what the query path actually recalls); pass ``status=all``
     to span every lifecycle state, or a specific status / ``kind`` to filter.
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     # `status` is a query param here, shadowing the fastapi `status` module — use
     # literal HTTP codes below rather than `status.HTTP_*`.
     parsed_status = _parse_memory_status(status)
@@ -957,6 +1025,7 @@ async def list_memories(
 @router.get("/{app_name}/memory/pending", response_model=PendingMemoriesResponse)
 async def list_pending_memories(
     app_name: str,
+    scope: RequestScopeDep,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
     system_resources: SystemResourcesDep,
@@ -969,7 +1038,7 @@ async def list_pending_memories(
     Behaviour-affecting kinds (facts, corrections) are promoted to
     ``pending_review`` and stay out of recall until accepted here.
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     parsed_kind = _parse_memory_kind(kind)
     try:
         records = await app.pending_memories(kind=parsed_kind, limit=limit, offset=offset)
@@ -981,6 +1050,7 @@ async def list_pending_memories(
 @router.post("/{app_name}/memory/review", response_model=MemoryReviewResponse)
 async def review_memories(
     app_name: str,
+    scope: RequestScopeDep,
     body: MemoryReviewRequest,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
@@ -994,7 +1064,7 @@ async def review_memories(
     """
     from cogbase.memory import ReviewDecision
 
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     decisions = [
         ReviewDecision(memory_id=item.memory_id, accept=item.decision == "accept")
         for item in body.decisions
@@ -1056,11 +1126,12 @@ def _parse_memory_status(status_value: str | None):
 @router.get("/{app_name}/skills", response_model=AppSkillsResponse)
 async def list_application_skills(
     app_name: str,
+    scope: RequestScopeDep,
     system_store: SystemStoreDep,
     skill_registry: SkillRegistryDep,
 ) -> AppSkillsResponse:
     """Return the skills currently assigned to an application (id + display name)."""
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
     config = AppConfig.from_yaml(record.config_yaml)
@@ -1070,6 +1141,7 @@ async def list_application_skills(
 @router.post("/{app_name}/skills", response_model=AppSkillsResponse, status_code=status.HTTP_201_CREATED)
 async def add_application_skill(
     app_name: str,
+    scope: RequestScopeDep,
     body: AddSkillRequest,
     system_store: SystemStoreDep,
     skill_registry: SkillRegistryDep,
@@ -1079,12 +1151,12 @@ async def add_application_skill(
     The skill must exist in the system skill registry (uploaded via ``POST /skills``
     or loaded from ``skills_dir``).  Adding the same skill twice is idempotent.
     """
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
     try:
-        skill = skill_registry.get_by_name(body.skill_name)
+        skill = skill_registry.get_by_name(body.skill_name, scope.account_id)
     except KeyError:
         raise HTTPException(
             status_code=404,
@@ -1109,6 +1181,7 @@ async def add_application_skill(
 async def remove_application_skill(
     app_name: str,
     skill_ref: str,
+    scope: RequestScopeDep,
     system_store: SystemStoreDep,
     skill_registry: SkillRegistryDep,
 ) -> None:
@@ -1119,12 +1192,12 @@ async def remove_application_skill(
     be resolved by name, so the raw skill id is also accepted — this is what lets
     the UI clean up a ``missing`` ref surfaced by ``_app_skills_response``.
     """
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
     try:
-        skill_id = skill_registry.get_by_name(skill_ref).id
+        skill_id = skill_registry.get_by_name(skill_ref, scope.account_id).id
     except KeyError:
         skill_id = skill_ref  # fall back to treating the ref as a raw skill id (missing skill)
 
@@ -1146,10 +1219,11 @@ async def remove_application_skill(
 @router.get("/{app_name}/collections", response_model=CollectionsResponse)
 async def list_collections(
     app_name: str,
+    scope: RequestScopeDep,
     system_store: SystemStoreDep,
 ) -> CollectionsResponse:
     """List all structured and vector collections registered for an application."""
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None or record.status != "active":
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found or not active")
     config = AppConfig.from_yaml(record.config_yaml)
@@ -1162,6 +1236,7 @@ async def list_collections(
 async def query_collection(
     app_name: str,
     collection: str,
+    scope: RequestScopeDep,
     body: CollectionQueryRequest,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
@@ -1172,7 +1247,7 @@ async def query_collection(
     Structured collections support field filtering and field selection.
     Vector collections do not yet support direct querying.
     """
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None or record.status != "active":
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found or not active")
     config = AppConfig.from_yaml(record.config_yaml)
@@ -1180,7 +1255,7 @@ async def query_collection(
     vc_names = {vc.name for vc in config.vector_collections}
 
     if collection in sc_names:
-        app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+        app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
         filters = [_to_filter(f) for f in body.filters]
         records = await app.query_runner.query_collection(collection, filters or None, body.fields or None)
         return CollectionQueryResponse(collection=collection, records=records, total=len(records))
@@ -1202,6 +1277,7 @@ async def query_collection(
 @router.get("/{app_name}/docs", response_model=DocListResponse)
 async def list_docs(
     app_name: str,
+    scope: RequestScopeDep,
     system_store: SystemStoreDep,
     status: str | None = None,
 ) -> DocListResponse:
@@ -1209,7 +1285,7 @@ async def list_docs(
 
     Filter by status: 'active', 'failed', or 'deleted'.
     """
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
     docs = await system_store.list_docs(record.app_id, status=status)
@@ -1221,10 +1297,11 @@ async def list_docs(
 async def get_doc(
     app_name: str,
     doc_id: str,
+    scope: RequestScopeDep,
     system_store: SystemStoreDep,
 ) -> DocResponse:
     """Return the registry record for a single ingested document."""
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
     doc = await system_store.get_doc(record.app_id, doc_id)
@@ -1237,6 +1314,7 @@ async def get_doc(
 async def download_original_document(
     app_name: str,
     doc_id: str,
+    scope: RequestScopeDep,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
     system_resources: SystemResourcesDep,
@@ -1247,7 +1325,7 @@ async def download_original_document(
     the suffix and download filename are reconstructed from the document's upload
     metadata (``source_format`` / ``source_filename``).
     """
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
     doc = await system_store.get_doc(record.app_id, doc_id)
@@ -1259,7 +1337,7 @@ async def download_original_document(
     suffix = f".{source_format}" if source_format else ""
     filename = meta.get("source_filename") or f"{doc_id}{suffix}"
 
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     try:
         data = await app.document_store.load_bytes(record.app_id, f"originals/{doc_id}{suffix}")
     except (KeyError, NotImplementedError):
@@ -1284,6 +1362,7 @@ async def download_original_document(
 async def delete_doc(
     app_name: str,
     doc_id: str,
+    scope: RequestScopeDep,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
     system_resources: SystemResourcesDep,
@@ -1296,7 +1375,7 @@ async def delete_doc(
     purge runs first so a failure there surfaces before the registry entry — the
     only handle on the document — is gone.
     """
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
     doc = await system_store.get_doc(record.app_id, doc_id)
@@ -1306,7 +1385,7 @@ async def delete_doc(
     # Purge derived data (vector + structured + parsed text) from every pipeline's
     # stores before touching the registry. Best-effort for the raw original, whose
     # path we reconstruct from the upload metadata (originals/{doc_id}{suffix}).
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     await app.delete_document(doc_id)
 
     source_format = (json.loads(doc.metadata) if doc.metadata else {}).get("source_format")
@@ -1331,28 +1410,39 @@ async def delete_doc(
 # merge logic itself lives in the edit-docx skill, not here.
 #
 # The link the runner emits is keyed by the stable ``app_id`` (not the mutable
-# client-facing name), so it keeps resolving after a rename.  ``app_ref`` is
-# therefore resolved as an app_id first, with a name lookup kept as a fallback
-# for links that were persisted before the switch to app_id keying.
+# client-facing name), so it keeps resolving after a rename — and it needs no
+# tenant scope because ``app_id`` is a global UUID.  The route therefore lives on
+# the account-wide router (``/applications/{app_id}/…``, matching the runner link,
+# ``QueryRunner._artifact_download_path``) rather than under a namespace segment;
+# the owning account/namespace come from the resolved record.
 
 
-@router.get("/{app_ref}/documents/{doc_id}/download")
+@account_router.get("/{app_ref}/documents/{doc_id}/download")
 async def download_generated_document(
     app_ref: str,
     doc_id: str,
+    account_id: AccountIdDep,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
     system_resources: SystemResourcesDep,
 ) -> StreamingResponse:
     """Stream a generated artifact (identified by its full ``artifact_id``) as a download.
 
-    ``app_ref`` is the application's stable ``app_id`` (falling back to its name for
-    legacy links); the artifact is scoped to that app's document store.
+    ``app_ref`` is the application's stable global ``app_id`` (what the runner emits);
+    a name is also accepted as a fallback, resolved within the caller's account.
     """
-    record = await system_store.get_app_by_id(app_ref) or await system_store.get_app(app_ref)
+    record = await system_store.get_app_by_id(app_ref)
+    if record is None:
+        # Fallback for a name-keyed link: match within the caller's account
+        # (a name is unique per namespace, so pick the first match across them).
+        matches = [r for r in await system_store.list_apps(account_id) if r.name == app_ref]
+        record = matches[0] if matches else None
     if record is None or record.status != "active":
         raise HTTPException(status_code=404, detail=f"Application '{app_ref}' not found or not active")
-    app = await _get_active_app(record.name, app_cache, system_store, system_resources)
+    app = await _get_active_app(
+        record.account_id, record.namespace_id, record.name,
+        app_cache, system_store, system_resources,
+    )
     try:
         data = await app.document_store.load_bytes(record.app_id, f"generated/{doc_id}")
     except (KeyError, NotImplementedError):
@@ -1381,6 +1471,7 @@ async def download_generated_document(
 @router.get("/{app_name}/tasks", response_model=TaskListResponse)
 async def list_tasks(
     app_name: str,
+    scope: RequestScopeDep,
     system_store: SystemStoreDep,
     task_type: str | None = None,
     task_name: str | None = None,
@@ -1395,7 +1486,7 @@ async def list_tasks(
     'failed').  Finished ingest tasks carry a ``result`` with per-document chunk
     and record counts and any warning.
     """
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
     tasks = await system_store.list_tasks(
@@ -1409,6 +1500,7 @@ async def list_tasks(
 @router.get("/{app_name}/tasks/summary", response_model=TaskSummaryResponse)
 async def task_summary(
     app_name: str,
+    scope: RequestScopeDep,
     system_store: SystemStoreDep,
     batch_id: str | None = None,
     task_type: str | None = None,
@@ -1420,7 +1512,7 @@ async def task_summary(
     Scope to one upload with ``batch_id`` (returned by upload_documents); narrow
     to ingest or workflow tasks with ``task_type``.
     """
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
     tasks = await system_store.list_tasks(
@@ -1460,10 +1552,11 @@ async def task_summary(
 async def get_task(
     app_name: str,
     task_id: str,
+    scope: RequestScopeDep,
     system_store: SystemStoreDep,
 ) -> TaskResponse:
     """Return a single task by ID."""
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     task = await system_store.get_task(task_id)
     if record is None or task is None or task.app_id != record.app_id:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
@@ -1478,12 +1571,13 @@ async def get_task(
 @router.get("/{app_name}/workflows", response_model=WorkflowListResponse)
 async def list_workflows(
     app_name: str,
+    scope: RequestScopeDep,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
     system_resources: SystemResourcesDep,
 ) -> WorkflowListResponse:
     """List all workflows registered for an application."""
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     return WorkflowListResponse(app_name=app_name, workflows=app.workflows)
 
 
@@ -1492,6 +1586,7 @@ async def list_workflows(
 async def list_workflow_docs(
     app_name: str,
     workflow_name: str,
+    scope: RequestScopeDep,
     system_store: SystemStoreDep,
     status: DocWorkflowStatus | None = None,
 ) -> WorkflowDocListResponse:
@@ -1499,7 +1594,7 @@ async def list_workflow_docs(
 
     status options: 'ready', 'pending', 'running', 'done', 'failed' — omit to return all.
     """
-    record = await system_store.get_app(app_name)
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
 
@@ -1530,6 +1625,7 @@ async def list_workflow_docs(
 async def stream_workflow(
     app_name: str,
     workflow_name: str,
+    scope: RequestScopeDep,
     body: WorkflowRunRequest,
     app_cache: AppCacheDep,
     system_store: SystemStoreDep,
@@ -1540,8 +1636,8 @@ async def stream_workflow(
     Each saved record yields: ``{"record": {...}}``
     Sentinel: ``data: [DONE]``
     """
-    app = await _get_active_app(app_name, app_cache, system_store, system_resources)
-    app_id = (await system_store.get_app(app_name)).app_id
+    app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
+    app_id = app.app_id
     try:
         wf_runner = app.get_workflow(workflow_name)
     except KeyError:
@@ -1553,7 +1649,7 @@ async def stream_workflow(
     if not pending:
         params_list = await app.resolve_workflow_params(wf_runner, body.doc_id)
         pending = await system_store.create_workflow_tasks(
-            app_id, workflow_name, body.doc_id, params_list
+            app.account_id, app.namespace_id, app_id, workflow_name, body.doc_id, params_list
         )
 
     async def event_stream():
@@ -1585,7 +1681,7 @@ async def stream_workflow(
             # TODO if failed, some items such as some clauses in a contract may be successfully processed,
             #      need to clean up the partial results.
             await system_store.upsert_doc_workflow_status(
-                app_id, body.doc_id, workflow_name,
+                app.account_id, app.namespace_id, app_id, body.doc_id, workflow_name,
                 DocWorkflowStatus.DONE if all_ok else DocWorkflowStatus.FAILED,
             )
         yield "data: [DONE]\n\n"

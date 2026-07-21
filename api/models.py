@@ -12,6 +12,8 @@ from api.system_store import DocWorkflowStatus, TaskStatus
 
 class ApplicationResponse(BaseModel):
     name: str
+    account_id: str
+    namespace_id: str
     status: str   # "initializing" | "active" | "error"
     config: dict[str, Any]
     error: str | None

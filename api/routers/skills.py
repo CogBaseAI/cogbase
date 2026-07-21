@@ -17,7 +17,13 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
-from api.dependencies import SkillBundleStoreDep, SkillRegistryDep, SystemStoreDep
+from api.dependencies import (
+    DEFAULT_NAMESPACE,
+    AccountIdDep,
+    SkillBundleStoreDep,
+    SkillRegistryDep,
+    SystemStoreDep,
+)
 from api.models import (
     SkillContentResponse,
     SkillFile,
@@ -102,10 +108,10 @@ def _to_response(skill) -> SkillResponse:
     )
 
 
-def _get_skill_by_name(skill_registry, skill_name: str):
-    """Return the skill with *skill_name*, raising HTTP 404 if not found."""
+def _get_skill_by_name(skill_registry, skill_name: str, account_id: str):
+    """Return the account's skill named *skill_name*, raising HTTP 404 if not found."""
     try:
-        return skill_registry.get_by_name(skill_name)
+        return skill_registry.get_by_name(skill_name, account_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"No skill with name '{skill_name}'")
 
@@ -125,10 +131,11 @@ async def _ingest_bundle(
     bundle_store,
     skill_registry,
     system_store,
+    account_id: str,
     *,
     replace: bool,
 ) -> SkillResponse:
-    """Materialize, validate, persist, and register a skill bundle."""
+    """Materialize, validate, persist, and register a skill bundle for *account_id*."""
     try:
         skill_root = bundle_store.materialize(skill_id, raw)
     except Exception as exc:
@@ -148,6 +155,8 @@ async def _ingest_bundle(
     existing = await system_store.get_skill(skill_id) if replace else None
     record = SkillRecord(
         skill_id=skill_id,
+        account_id=account_id,
+        namespace_id=DEFAULT_NAMESPACE,  # skills are account-scoped, not per-namespace
         name=skill.name,
         description=skill.description,
         metadata_json=json.dumps(skill.metadata) if skill.metadata else None,
@@ -156,13 +165,17 @@ async def _ingest_bundle(
         updated_at=now,
     )
     await system_store.save_skill(record)
-    skill_registry.register(skill, replace=replace)
-    logger.info("[skills] %s skill id=%s name=%s", "replaced" if replace else "uploaded", skill_id, skill.name)
+    skill_registry.register(skill, account_id=account_id, replace=replace)
+    logger.info(
+        "[skills] %s skill id=%s name=%s account=%s",
+        "replaced" if replace else "uploaded", skill_id, skill.name, account_id,
+    )
     return _to_response(skill)
 
 
 @router.post("", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
 async def upload_skill(
+    account_id: AccountIdDep,
     skill_registry: SkillRegistryDep,
     bundle_store: SkillBundleStoreDep,
     system_store: SystemStoreDep,
@@ -172,50 +185,57 @@ async def upload_skill(
     raw = await bundle.read()
     skill_id = uuid.uuid4().hex
     return await _ingest_bundle(
-        skill_id, raw, bundle_store, skill_registry, system_store, replace=False
+        skill_id, raw, bundle_store, skill_registry, system_store, account_id, replace=False
     )
 
 
 @router.put("/{skill_name}", response_model=SkillResponse)
 async def replace_skill(
     skill_name: str,
+    account_id: AccountIdDep,
     skill_registry: SkillRegistryDep,
     bundle_store: SkillBundleStoreDep,
     system_store: SystemStoreDep,
     bundle: UploadFile = File(..., description="Updated ZIP bundle containing SKILL.md and any scripts/assets"),
 ) -> SkillResponse:
     """Replace an existing skill's bundle by name, keeping its id (and so all app references)."""
-    skill = _get_skill_by_name(skill_registry, skill_name)
+    skill = _get_skill_by_name(skill_registry, skill_name, account_id)
     _reject_if_builtin(skill)
     if await system_store.get_skill(skill.id) is None:
         raise HTTPException(status_code=404, detail=f"No skill with name '{skill_name}'")
     raw = await bundle.read()
     return await _ingest_bundle(
-        skill.id, raw, bundle_store, skill_registry, system_store, replace=True
+        skill.id, raw, bundle_store, skill_registry, system_store, account_id, replace=True
     )
 
 
 @router.get("", response_model=SkillListResponse)
-async def list_skills(skill_registry: SkillRegistryDep) -> SkillListResponse:
-    """Return all skills available in the system."""
-    items = [_to_response(s) for s in skill_registry.all_skills()]
+async def list_skills(
+    account_id: AccountIdDep, skill_registry: SkillRegistryDep
+) -> SkillListResponse:
+    """Return the skills available to the calling account (its own + global builtins)."""
+    items = [_to_response(s) for s in skill_registry.all_skills(account_id)]
     return SkillListResponse(skills=items, total=len(items))
 
 
 @router.get("/{skill_name}", response_model=SkillResponse)
-async def get_skill(skill_name: str, skill_registry: SkillRegistryDep) -> SkillResponse:
+async def get_skill(
+    skill_name: str, account_id: AccountIdDep, skill_registry: SkillRegistryDep
+) -> SkillResponse:
     """Return a single skill by name."""
-    return _to_response(_get_skill_by_name(skill_registry, skill_name))
+    return _to_response(_get_skill_by_name(skill_registry, skill_name, account_id))
 
 
 @router.get("/{skill_name}/content", response_model=SkillContentResponse)
-async def get_skill_content(skill_name: str, skill_registry: SkillRegistryDep) -> SkillContentResponse:
+async def get_skill_content(
+    skill_name: str, account_id: AccountIdDep, skill_registry: SkillRegistryDep
+) -> SkillContentResponse:
     """Return the full SKILL.md plus a listing of the bundle's scripts/assets.
 
     Lets the UI show exactly what a skill contains — the LLM-facing markdown and
     the files that ship (and execute) with it.
     """
-    skill = _get_skill_by_name(skill_registry, skill_name)
+    skill = _get_skill_by_name(skill_registry, skill_name, account_id)
     return SkillContentResponse(
         id=skill.id,
         name=skill.name,
@@ -226,14 +246,14 @@ async def get_skill_content(skill_name: str, skill_registry: SkillRegistryDep) -
 
 @router.get("/{skill_name}/files/{file_path:path}", response_model=SkillFileResponse)
 async def get_skill_file(
-    skill_name: str, file_path: str, skill_registry: SkillRegistryDep
+    skill_name: str, file_path: str, account_id: AccountIdDep, skill_registry: SkillRegistryDep
 ) -> SkillFileResponse:
     """Return the text content of a single file inside the skill bundle.
 
     Path-traversal guarded, text-only, and capped at 512 KiB so the UI can let
     users read a skill's scripts without exposing the whole filesystem.
     """
-    skill = _get_skill_by_name(skill_registry, skill_name)
+    skill = _get_skill_by_name(skill_registry, skill_name, account_id)
     target = _resolve_bundle_file(_bundle_root(skill), file_path)
     raw = target.read_bytes()
     if not _is_text_bytes(raw):
@@ -248,6 +268,7 @@ async def get_skill_file(
 @router.delete("/{skill_name}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_skill(
     skill_name: str,
+    account_id: AccountIdDep,
     skill_registry: SkillRegistryDep,
     bundle_store: SkillBundleStoreDep,
     system_store: SystemStoreDep,
@@ -257,14 +278,15 @@ async def delete_skill(
     A skill that is still assigned to one or more applications cannot be deleted;
     unassign it from those apps first (DELETE /applications/{name}/skills/{skill_name}).
     """
-    skill = _get_skill_by_name(skill_registry, skill_name)
+    skill = _get_skill_by_name(skill_registry, skill_name, account_id)
     _reject_if_builtin(skill)
     if await system_store.get_skill(skill.id) is None:
         raise HTTPException(status_code=404, detail=f"No skill with name '{skill_name}'")
 
     # TODO if app count grows large, consider an index of skill_id → apps.
+    # A skill is account-scoped, so only this account's apps can reference it.
     referencing = []
-    for app in await system_store.list_apps():
+    for app in await system_store.list_apps(account_id):
         if skill.id in AppConfig.from_yaml(app.config_yaml).skills:
             referencing.append(app.name)
     if referencing:

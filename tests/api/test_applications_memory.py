@@ -131,14 +131,14 @@ async def test_query_endpoint_threads_session_through_real_short_term_memory(cli
     # Deploy the real app behind the API.
     with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=real_app):
         resp = await client.post(
-            "/applications",
+            "/namespaces/default/applications",
             files={"bundle": ("bundle.zip", _make_bundle(), "application/zip")},
         )
     assert resp.status_code == 201
 
     # Turn 1 — no caller history; the session is the source of truth.
     r1 = await client.post(
-        "/applications/memory-e2e-app/query",
+        "/namespaces/default/applications/memory-e2e-app/query",
         json={"text": "What is the capital of France?", "session_id": sid},
     )
     assert r1.status_code == 200
@@ -147,7 +147,7 @@ async def test_query_endpoint_threads_session_through_real_short_term_memory(cli
 
     # Turn 2 — same session, a follow-up that only resolves via prior context.
     r2 = await client.post(
-        "/applications/memory-e2e-app/query",
+        "/namespaces/default/applications/memory-e2e-app/query",
         json={"text": "How many people live there?", "session_id": sid},
     )
     assert r2.status_code == 200
@@ -181,28 +181,28 @@ async def test_session_history_list_and_transcript(client, tmp_path):
 
     with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=real_app):
         resp = await client.post(
-            "/applications",
+            "/namespaces/default/applications",
             files={"bundle": ("bundle.zip", _make_bundle(), "application/zip")},
         )
     assert resp.status_code == 201
 
     # No turns yet -> the session is not in the history list.
-    r = await client.get("/applications/memory-e2e-app/sessions")
+    r = await client.get("/namespaces/default/applications/memory-e2e-app/sessions")
     assert r.status_code == 200
     assert r.json()["sessions"] == []
 
     # Two turns on the same session.
     await client.post(
-        "/applications/memory-e2e-app/query",
+        "/namespaces/default/applications/memory-e2e-app/query",
         json={"text": "What is the capital of France?", "session_id": sid},
     )
     await client.post(
-        "/applications/memory-e2e-app/query",
+        "/namespaces/default/applications/memory-e2e-app/query",
         json={"text": "How many people live there?", "session_id": sid},
     )
 
     # The session now shows once, titled by the first message, count == turns.
-    r = await client.get("/applications/memory-e2e-app/sessions")
+    r = await client.get("/namespaces/default/applications/memory-e2e-app/sessions")
     sessions = r.json()["sessions"]
     assert len(sessions) == 1
     assert sessions[0]["session_id"] == sid
@@ -211,7 +211,7 @@ async def test_session_history_list_and_transcript(client, tmp_path):
     assert sessions[0]["status"] == "open"
 
     # Transcript reads the durable log: user + assistant turns, in order.
-    r = await client.get(f"/applications/memory-e2e-app/sessions/{sid}")
+    r = await client.get(f"/namespaces/default/applications/memory-e2e-app/sessions/{sid}")
     msgs = r.json()["messages"]
     assert [m["role"] for m in msgs] == ["user", "assistant", "user", "assistant"]
     assert msgs[0]["content"] == "What is the capital of France?"
@@ -227,9 +227,9 @@ async def test_session_history_list_and_transcript(client, tmp_path):
     }
 
     # Closing flips the index row to 'closed'.
-    r = await client.post(f"/applications/memory-e2e-app/sessions/{sid}/close")
+    r = await client.post(f"/namespaces/default/applications/memory-e2e-app/sessions/{sid}/close")
     assert r.status_code == 200
-    r = await client.get("/applications/memory-e2e-app/sessions")
+    r = await client.get("/namespaces/default/applications/memory-e2e-app/sessions")
     assert r.json()["sessions"][0]["status"] == "closed"
 
 
@@ -245,30 +245,30 @@ async def test_delete_session_removes_index_row_and_transcript(client, tmp_path)
 
     with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=real_app):
         resp = await client.post(
-            "/applications",
+            "/namespaces/default/applications",
             files={"bundle": ("bundle.zip", _make_bundle(), "application/zip")},
         )
     assert resp.status_code == 201
 
     await client.post(
-        "/applications/memory-e2e-app/query",
+        "/namespaces/default/applications/memory-e2e-app/query",
         json={"text": "What is the capital of France?", "session_id": sid},
     )
 
     # The session is listed and its transcript is readable.
-    r = await client.get("/applications/memory-e2e-app/sessions")
+    r = await client.get("/namespaces/default/applications/memory-e2e-app/sessions")
     assert len(r.json()["sessions"]) == 1
 
     # Delete it.
-    r = await client.delete(f"/applications/memory-e2e-app/sessions/{sid}")
+    r = await client.delete(f"/namespaces/default/applications/memory-e2e-app/sessions/{sid}")
     assert r.status_code == 200
     assert r.json() == {"session_id": sid, "deleted": True}
 
     # Gone from the history list.
-    r = await client.get("/applications/memory-e2e-app/sessions")
+    r = await client.get("/namespaces/default/applications/memory-e2e-app/sessions")
     assert r.json()["sessions"] == []
 
     # The durable episodic log is gone: transcript replays empty.
-    r = await client.get(f"/applications/memory-e2e-app/sessions/{sid}")
+    r = await client.get(f"/namespaces/default/applications/memory-e2e-app/sessions/{sid}")
     assert r.status_code == 200
     assert r.json()["messages"] == []

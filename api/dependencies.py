@@ -2,15 +2,52 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 
 from api.app_cache import AppCache
 from api.system_resources import SystemResources
 from api.system_store import SystemStore
 from cogbase.skills.registry import SkillRegistry
 from cogbase.skills.store import SkillBundleStore
+
+
+#: Default account/namespace used when a request omits the tenancy header.
+#: Tenancy is logical for now — ``account_id`` is trust-on-declaration until an
+#: auth layer binds the header to an authenticated principal.
+DEFAULT_ACCOUNT_ID = "default"
+DEFAULT_NAMESPACE = "default"
+
+
+def get_account_id(
+    x_account_id: Annotated[str | None, Header()] = None,
+) -> str:
+    """Resolve the calling tenant from the ``X-Account-Id`` header.
+
+    Falls back to ``DEFAULT_ACCOUNT_ID`` so single-tenant callers keep working.
+    The account is the security boundary; the namespace is addressed in the path.
+    """
+    return x_account_id or DEFAULT_ACCOUNT_ID
+
+
+@dataclass
+class RequestScope:
+    """The tenant scope a request addresses: account (header) + namespace (path)."""
+
+    account_id: str
+    namespace_id: str
+
+
+def get_request_scope(request: Request, account_id: AccountIdDep) -> RequestScope:
+    """Resolve the full ``(account_id, namespace_id)`` scope for a route.
+
+    ``account_id`` comes from the ``X-Account-Id`` header; ``namespace_id`` is the
+    ``{namespace}`` URL path segment (absent on account-wide routes → default).
+    """
+    namespace = request.path_params.get("namespace") or DEFAULT_NAMESPACE
+    return RequestScope(account_id=account_id, namespace_id=namespace)
 
 
 def get_system_store(request: Request) -> SystemStore:
@@ -40,6 +77,8 @@ def get_skill_bundle_store(request: Request) -> SkillBundleStore:
     return store  # type: ignore[no-any-return]
 
 
+AccountIdDep = Annotated[str, Depends(get_account_id)]
+RequestScopeDep = Annotated[RequestScope, Depends(get_request_scope)]
 SystemStoreDep = Annotated[SystemStore, Depends(get_system_store)]
 AppCacheDep = Annotated[AppCache, Depends(get_app_cache)]
 SystemResourcesDep = Annotated[SystemResources, Depends(get_system_resources)]

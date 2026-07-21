@@ -14,7 +14,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
-from api.dependencies import AppCacheDep, SystemResourcesDep, SystemStoreDep
+from api.app_cache import cache_key
+from api.dependencies import AppCacheDep, RequestScopeDep, SystemResourcesDep, SystemStoreDep
 from api.factory import build_app
 from api.models import (
     DeployResponse,
@@ -33,6 +34,10 @@ from cogbase.core.app_generator import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/generate", tags=["generate"])
+
+# Deploy creates an application, so it is addressed within a namespace (the account
+# comes from the X-Account-Id header). The stateless chat turns above need no scope.
+deploy_router = APIRouter(prefix="/namespaces/{namespace}/generate", tags=["generate"])
 
 _MAX_AGENT_CALLS = 20
 
@@ -223,8 +228,9 @@ async def chat_stream(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-@router.post("/deploy", response_model=DeployResponse, status_code=status.HTTP_201_CREATED)
+@deploy_router.post("/deploy", response_model=DeployResponse, status_code=status.HTTP_201_CREATED)
 async def deploy(
+    scope: RequestScopeDep,
     body: GenerateDeployRequest,
     system_store: SystemStoreDep,
     app_cache: AppCacheDep,
@@ -236,7 +242,7 @@ async def deploy(
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Invalid config: {exc}") from exc
 
-    if await system_store.get_app(config.name) is not None:
+    if await system_store.get_app(scope.account_id, scope.namespace_id, config.name) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Application '{config.name}' already exists",
@@ -247,6 +253,8 @@ async def deploy(
     app_id = new_app_id()
     record = AppRecord(
         app_id=app_id,
+        account_id=scope.account_id,
+        namespace_id=scope.namespace_id,
         name=config.name,
         config_yaml=stored_yaml,
         status="initializing",
@@ -256,8 +264,12 @@ async def deploy(
     await system_store.save_app(record)
 
     try:
-        app = await build_app(config, app_id=app_id, system=system_resources, app_status=record.status, task_store=system_store)
-        app_cache.add(config.name, app)
+        app = await build_app(
+            config, app_id=app_id, account_id=scope.account_id,
+            namespace_id=scope.namespace_id, system=system_resources,
+            app_status=record.status, task_store=system_store,
+        )
+        app_cache.add(cache_key(scope.account_id, scope.namespace_id, config.name), app)
         record = record.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("deployed app name=%s", config.name)
     except Exception as exc:

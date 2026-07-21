@@ -212,7 +212,7 @@ class TestCreateApplication:
     async def test_create_returns_201(self, client):
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         assert resp.status_code == 201
@@ -225,7 +225,7 @@ class TestCreateApplication:
     async def test_create_stores_config_in_response(self, client):
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         assert resp.status_code == 201
@@ -236,11 +236,11 @@ class TestCreateApplication:
     async def test_create_conflict_returns_409(self, client):
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
             resp = await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         assert resp.status_code == 409
@@ -249,7 +249,7 @@ class TestCreateApplication:
     @pytest.mark.asyncio
     async def test_create_not_a_zip_returns_422(self, client):
         resp = await client.post(
-            "/applications",
+            "/namespaces/default/applications",
             files={"bundle": ("bundle.zip", b"not a zip file", "application/zip")},
         )
         assert resp.status_code == 422
@@ -261,7 +261,7 @@ class TestCreateApplication:
         with zipfile.ZipFile(buf, "w") as zf:
             zf.writestr("other.txt", "hello")
         resp = await client.post(
-            "/applications",
+            "/namespaces/default/applications",
             files={"bundle": ("bundle.zip", buf.getvalue(), "application/zip")},
         )
         assert resp.status_code == 422
@@ -271,7 +271,7 @@ class TestCreateApplication:
     async def test_create_invalid_config_yaml_returns_422(self, client):
         bad_bundle = _make_bundle(b"not: valid: yaml: app: config\n")
         resp = await client.post(
-            "/applications",
+            "/namespaces/default/applications",
             files={"bundle": ("bundle.zip", bad_bundle, "application/zip")},
         )
         assert resp.status_code == 422
@@ -280,7 +280,7 @@ class TestCreateApplication:
     async def test_create_records_error_status_when_build_fails(self, client):
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, side_effect=RuntimeError("setup boom")):
             resp = await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         assert resp.status_code == 201
@@ -292,7 +292,7 @@ class TestCreateApplication:
     async def test_create_non_mapping_yaml_returns_422(self, client):
         bad_bundle = _make_bundle(b"- item1\n- item2\n")
         resp = await client.post(
-            "/applications",
+            "/namespaces/default/applications",
             files={"bundle": ("bundle.zip", bad_bundle, "application/zip")},
         )
         assert resp.status_code == 422
@@ -341,7 +341,7 @@ class TestCreateApplication:
 
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, side_effect=_capture):
             resp = await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", bundle, "application/zip")},
             )
 
@@ -370,8 +370,8 @@ class TestListApplications:
         bundle_a = _make_bundle(b"name: app-a\nllm:\n  model: gpt-4o-mini\n  api_key: sk-test\n")
         bundle_b = _make_bundle(b"name: app-b\nllm:\n  model: gpt-4o-mini\n  api_key: sk-test\n")
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
-            await client.post("/applications", files={"bundle": ("a.zip", bundle_a, "application/zip")})
-            await client.post("/applications", files={"bundle": ("b.zip", bundle_b, "application/zip")})
+            await client.post("/namespaces/default/applications", files={"bundle": ("a.zip", bundle_a, "application/zip")})
+            await client.post("/namespaces/default/applications", files={"bundle": ("b.zip", bundle_b, "application/zip")})
         resp = await client.get("/applications")
         assert resp.status_code == 200
         body = resp.json()
@@ -389,16 +389,16 @@ class TestGetApplication:
     async def test_get_existing(self, client):
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
-        resp = await client.get("/applications/my-contract-analyzer")
+        resp = await client.get("/namespaces/default/applications/my-contract-analyzer")
         assert resp.status_code == 200
         assert resp.json()["name"] == "my-contract-analyzer"
 
     @pytest.mark.asyncio
     async def test_get_nonexistent_returns_404(self, client):
-        resp = await client.get("/applications/does-not-exist")
+        resp = await client.get("/namespaces/default/applications/does-not-exist")
         assert resp.status_code == 404
         assert "not found" in resp.json()["detail"]
 
@@ -412,7 +412,7 @@ class TestUpdateApplication:
     async def test_update_success(self, client):
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
 
@@ -420,7 +420,7 @@ class TestUpdateApplication:
         updated_bundle = _make_bundle(updated_yaml)
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.patch(
-                "/applications/my-contract-analyzer",
+                "/namespaces/default/applications/my-contract-analyzer",
                 files={"bundle": ("bundle.zip", updated_bundle, "application/zip")},
             )
         assert resp.status_code == 200
@@ -429,7 +429,7 @@ class TestUpdateApplication:
     @pytest.mark.asyncio
     async def test_update_nonexistent_returns_404(self, client):
         resp = await client.patch(
-            "/applications/ghost",
+            "/namespaces/default/applications/ghost",
             files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
         )
         assert resp.status_code == 404
@@ -439,12 +439,12 @@ class TestUpdateApplication:
         bundle_a = _make_bundle(b"name: app-a\nllm:\n  model: gpt-4o-mini\n  api_key: sk-test\n")
         bundle_b = _make_bundle(b"name: app-b\nllm:\n  model: gpt-4o-mini\n  api_key: sk-test\n")
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
-            await client.post("/applications", files={"bundle": ("a.zip", bundle_a, "application/zip")})
-            await client.post("/applications", files={"bundle": ("b.zip", bundle_b, "application/zip")})
+            await client.post("/namespaces/default/applications", files={"bundle": ("a.zip", bundle_a, "application/zip")})
+            await client.post("/namespaces/default/applications", files={"bundle": ("b.zip", bundle_b, "application/zip")})
 
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.patch(
-                "/applications/app-a",
+                "/namespaces/default/applications/app-a",
                 files={"bundle": ("bundle.zip", bundle_b, "application/zip")},
             )
         assert resp.status_code == 409
@@ -453,13 +453,13 @@ class TestUpdateApplication:
     async def test_update_records_error_when_setup_fails(self, client):
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
 
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, side_effect=RuntimeError("update boom")):
             resp = await client.patch(
-                "/applications/my-contract-analyzer",
+                "/namespaces/default/applications/my-contract-analyzer",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
         assert resp.status_code == 200
@@ -477,26 +477,26 @@ class TestDeleteApplication:
     async def test_delete_returns_204(self, client):
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
-        resp = await client.delete("/applications/my-contract-analyzer")
+        resp = await client.delete("/namespaces/default/applications/my-contract-analyzer")
         assert resp.status_code == 204
 
     @pytest.mark.asyncio
     async def test_delete_removes_from_list(self, client):
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
-        await client.delete("/applications/my-contract-analyzer")
+        await client.delete("/namespaces/default/applications/my-contract-analyzer")
         resp = await client.get("/applications")
         assert resp.json()["total"] == 0
 
     @pytest.mark.asyncio
     async def test_delete_nonexistent_returns_404(self, client):
-        resp = await client.delete("/applications/ghost")
+        resp = await client.delete("/namespaces/default/applications/ghost")
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
@@ -506,13 +506,13 @@ class TestDeleteApplication:
 
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
-        assert app_cache.get("my-contract-analyzer") is not None
+        assert app_cache.get("default/default/my-contract-analyzer") is not None
 
-        await client.delete("/applications/my-contract-analyzer")
-        assert app_cache.get("my-contract-analyzer") is None
+        await client.delete("/namespaces/default/applications/my-contract-analyzer")
+        assert app_cache.get("default/default/my-contract-analyzer") is None
 
     @pytest.mark.asyncio
     async def test_delete_cleans_up_vector_collections(self, client):
@@ -529,9 +529,9 @@ class TestDeleteApplication:
 
         bundle = _make_collections_bundle(vector_collections=["doc_chunks", "doc_summaries"])
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
-            await client.post("/applications", files={"bundle": ("bundle.zip", bundle, "application/zip")})
+            await client.post("/namespaces/default/applications", files={"bundle": ("bundle.zip", bundle, "application/zip")})
 
-        resp = await client.delete("/applications/my-contract-analyzer")
+        resp = await client.delete("/namespaces/default/applications/my-contract-analyzer")
         assert resp.status_code == 204
 
         deleted = {call.args[0] for call in mock_scoped_vs.delete_collection.call_args_list}
@@ -551,9 +551,9 @@ class TestDeleteApplication:
 
         bundle = _make_collections_bundle(structured_collections=["contracts", "parties"])
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
-            await client.post("/applications", files={"bundle": ("bundle.zip", bundle, "application/zip")})
+            await client.post("/namespaces/default/applications", files={"bundle": ("bundle.zip", bundle, "application/zip")})
 
-        resp = await client.delete("/applications/my-contract-analyzer")
+        resp = await client.delete("/namespaces/default/applications/my-contract-analyzer")
         assert resp.status_code == 204
 
         deleted = {call.args[0] for call in mock_scoped_ss.delete_collection.call_args_list}
@@ -574,9 +574,9 @@ class TestDeleteApplication:
 
         bundle = _make_collections_bundle(vector_collections=["doc_chunks"])
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
-            await client.post("/applications", files={"bundle": ("bundle.zip", bundle, "application/zip")})
+            await client.post("/namespaces/default/applications", files={"bundle": ("bundle.zip", bundle, "application/zip")})
 
-        resp = await client.delete("/applications/my-contract-analyzer")
+        resp = await client.delete("/namespaces/default/applications/my-contract-analyzer")
         assert resp.status_code == 204
 
         list_resp = await client.get("/applications")
@@ -660,7 +660,7 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", return_value="parsed text"):
             resp = await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("contract.txt", b"raw text", "text/plain"))],
             )
 
@@ -679,7 +679,7 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", return_value="text"):
             await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("my contract 2024.pdf", b"bytes", "application/pdf"))],
             )
 
@@ -697,7 +697,7 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", side_effect=RuntimeError("bad pdf")):
             resp = await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("broken.pdf", b"not a pdf", "application/pdf"))],
             )
 
@@ -715,7 +715,7 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", return_value="text"):
             await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("contract.txt", b"text", "text/plain"))],
                 data={"metadata": '{"doc_type": "contract", "client": "acme"}'},
             )
@@ -735,7 +735,7 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", return_value="text"):
             await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("report.pdf", b"bytes", "application/pdf"))],
             )
 
@@ -754,7 +754,7 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", return_value="text"):
             await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("doc.txt", b"text", "text/plain"))],
                 data={"metadata": '{"source_format": "custom"}'},
             )
@@ -772,7 +772,7 @@ class TestUploadDocuments:
         await _create_app(client, mock_app)
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/upload_documents",
+            "/namespaces/default/applications/my-contract-analyzer/upload_documents",
             files=[("files", ("doc.txt", b"text", "text/plain"))],
             data={"metadata": "not json"},
         )
@@ -786,7 +786,7 @@ class TestUploadDocuments:
         await _create_app(client, mock_app)
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/upload_documents",
+            "/namespaces/default/applications/my-contract-analyzer/upload_documents",
             files=[("files", ("doc.txt", b"text", "text/plain"))],
             data={"metadata": '["not", "an", "object"]'},
         )
@@ -803,7 +803,7 @@ class TestUploadDocuments:
         raw_bytes = b"original pdf bytes"
         with patch("api.task_runner.parse_to_markdown", return_value="text"):
             await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("invoice.pdf", raw_bytes, "application/pdf"))],
             )
 
@@ -820,7 +820,7 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", return_value="text"):
             resp = await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("doc.txt", b"text", "text/plain"))],
             )
 
@@ -829,7 +829,7 @@ class TestUploadDocuments:
     @pytest.mark.asyncio
     async def test_upload_404_when_app_not_found(self, client):
         resp = await client.post(
-            "/applications/nonexistent/upload_documents",
+            "/namespaces/default/applications/nonexistent/upload_documents",
             files=[("files", ("doc.txt", b"text", "text/plain"))],
         )
         assert resp.status_code == 404
@@ -842,7 +842,7 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", return_value="text"):
             resp = await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("contract.txt", b"text", "text/plain"))],
             )
 
@@ -868,7 +868,7 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", side_effect=_parse):
             resp = await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[
                     ("files", ("good.txt", b"text", "text/plain")),
                     ("files", ("bad.pdf", b"broken", "application/pdf")),
@@ -889,7 +889,7 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", return_value="text"):
             resp = await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("invoice.pdf", b"bytes", "application/pdf"))],
                 data={"metadata": '{"client": "acme"}'},
             )
@@ -897,7 +897,7 @@ class TestUploadDocuments:
         assert resp.status_code == 202
         task_id = resp.json()["task_ids"][0]
 
-        task_resp = await client.get(f"/applications/my-contract-analyzer/tasks/{task_id}")
+        task_resp = await client.get(f"/namespaces/default/applications/my-contract-analyzer/tasks/{task_id}")
         assert task_resp.status_code == 200
         params = json.loads(task_resp.json()["params_json"])
         assert params["doc_path"] == "originals/invoice.pdf"
@@ -914,7 +914,7 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", return_value="text") as mock_parse:
             await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("invoice.pdf", raw_bytes, "application/pdf"))],
             )
             # Drain pending background tasks.
@@ -937,7 +937,7 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", return_value="text"):
             resp = await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("invoice.pdf", b"bytes", "application/pdf"))],
             )
 
@@ -947,7 +947,7 @@ class TestUploadDocuments:
         for _ in range(10):
             await asyncio.sleep(0)
 
-        task_resp = await client.get(f"/applications/my-contract-analyzer/tasks/{task_id}")
+        task_resp = await client.get(f"/namespaces/default/applications/my-contract-analyzer/tasks/{task_id}")
         data = task_resp.json()
         assert data["status"] == "failed"
         assert "load" in data["error"].lower() or "not found" in data["error"].lower()
@@ -968,13 +968,13 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", return_value="parsed text"):
             resp = await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("contract.txt", b"text", "text/plain"))],
             )
             task_id = resp.json()["task_ids"][0]
             await self._drain()
 
-        data = (await client.get(f"/applications/my-contract-analyzer/tasks/{task_id}")).json()
+        data = (await client.get(f"/namespaces/default/applications/my-contract-analyzer/tasks/{task_id}")).json()
         assert data["status"] == "done"
         assert data["result"]["chunks_written"] == 5
         assert data["result"]["records_extracted"] == 2
@@ -991,13 +991,13 @@ class TestUploadDocuments:
         # markitdown extracts no text from an image-only PDF.
         with patch("api.task_runner.parse_to_markdown", return_value="   \n  "):
             resp = await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("scan.pdf", b"%PDF-image", "application/pdf"))],
             )
             task_id = resp.json()["task_ids"][0]
             await self._drain()
 
-        data = (await client.get(f"/applications/my-contract-analyzer/tasks/{task_id}")).json()
+        data = (await client.get(f"/namespaces/default/applications/my-contract-analyzer/tasks/{task_id}")).json()
         assert data["status"] == "done"
         warning = data["result"]["warning"]
         assert warning is not None
@@ -1013,13 +1013,13 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", return_value="real content here"):
             resp = await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[("files", ("doc.txt", b"text", "text/plain"))],
             )
             task_id = resp.json()["task_ids"][0]
             await self._drain()
 
-        data = (await client.get(f"/applications/my-contract-analyzer/tasks/{task_id}")).json()
+        data = (await client.get(f"/namespaces/default/applications/my-contract-analyzer/tasks/{task_id}")).json()
         assert data["status"] == "done"
         assert "pipeline" in data["result"]["warning"]
 
@@ -1036,7 +1036,7 @@ class TestUploadDocuments:
 
         with patch("api.task_runner.parse_to_markdown", return_value="text"):
             resp = await client.post(
-                "/applications/my-contract-analyzer/upload_documents",
+                "/namespaces/default/applications/my-contract-analyzer/upload_documents",
                 files=[
                     ("files", ("a.txt", b"a", "text/plain")),
                     ("files", ("b.txt", b"b", "text/plain")),
@@ -1047,7 +1047,7 @@ class TestUploadDocuments:
             await self._drain()
 
         summary = (await client.get(
-            f"/applications/my-contract-analyzer/tasks/summary?batch_id={batch_id}"
+            f"/namespaces/default/applications/my-contract-analyzer/tasks/summary?batch_id={batch_id}"
         )).json()
         assert summary["total"] == 2
         assert summary["done"] == 2
@@ -1127,7 +1127,7 @@ def _parse_sse(body: str) -> list[str]:
 async def _create_app(client, mock_app: MagicMock) -> None:
     with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=mock_app):
         resp = await client.post(
-            "/applications",
+            "/namespaces/default/applications",
             files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
         )
     assert resp.status_code == 201
@@ -1144,7 +1144,7 @@ class TestQueryApplication:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query",
+            "/namespaces/default/applications/my-contract-analyzer/query",
             json={
                 "text": "what is the notice period?",
                 "history": [{"role": "user", "content": "summarize the contract first"}],
@@ -1164,7 +1164,7 @@ class TestQueryApplication:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query",
+            "/namespaces/default/applications/my-contract-analyzer/query",
             json={
                 "text": "list NDA contracts",
                 "history": [{"role": "assistant", "content": "I found one contract already."}],
@@ -1182,7 +1182,7 @@ class TestQueryApplication:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query",
+            "/namespaces/default/applications/my-contract-analyzer/query",
             json={"text": "payment terms?", "history": []},
         )
 
@@ -1199,7 +1199,7 @@ class TestQueryApplication:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query",
+            "/namespaces/default/applications/my-contract-analyzer/query",
             json={"text": "show me the excerpt", "history": []},
         )
 
@@ -1214,7 +1214,7 @@ class TestQueryApplication:
     @pytest.mark.asyncio
     async def test_404_when_app_not_found(self, client):
         resp = await client.post(
-            "/applications/nonexistent/query",
+            "/namespaces/default/applications/nonexistent/query",
             json={"text": "q", "history": []},
         )
         assert resp.status_code == 404
@@ -1223,12 +1223,12 @@ class TestQueryApplication:
     async def test_404_when_app_not_active(self, client):
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, side_effect=RuntimeError("setup boom")):
             await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
             )
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query",
+            "/namespaces/default/applications/my-contract-analyzer/query",
             json={"text": "q", "history": []},
         )
         assert resp.status_code == 404
@@ -1260,7 +1260,7 @@ class TestQueryApplication:
 
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=failing_then_good):
             resp = await client.post(
-                "/applications/my-contract-analyzer/query",
+                "/namespaces/default/applications/my-contract-analyzer/query",
                 json={"text": "q", "history": []},
             )
 
@@ -1274,7 +1274,7 @@ class TestQueryApplication:
         await _create_app(client, mock_app)
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query",
+            "/namespaces/default/applications/my-contract-analyzer/query",
             json={"text": "q?", "system_prompt": "Answer in one sentence."},
         )
 
@@ -1288,7 +1288,7 @@ class TestQueryApplication:
         await _create_app(client, mock_app)
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query",
+            "/namespaces/default/applications/my-contract-analyzer/query",
             json={"text": "q?"},
         )
 
@@ -1301,7 +1301,7 @@ class TestQueryApplication:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query",
+            "/namespaces/default/applications/my-contract-analyzer/query",
             json={"text": "q?", "history": []},
         )
 
@@ -1316,7 +1316,7 @@ class TestQueryApplication:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query",
+            "/namespaces/default/applications/my-contract-analyzer/query",
             json={"text": "q?", "history": []},
         )
 
@@ -1337,7 +1337,7 @@ class TestQueryApplicationStream:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query/stream",
+            "/namespaces/default/applications/my-contract-analyzer/query/stream",
             json={"text": "q", "history": []},
         )
 
@@ -1350,7 +1350,7 @@ class TestQueryApplicationStream:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query/stream",
+            "/namespaces/default/applications/my-contract-analyzer/query/stream",
             json={"text": "q", "history": []},
         )
 
@@ -1368,7 +1368,7 @@ class TestQueryApplicationStream:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query/stream",
+            "/namespaces/default/applications/my-contract-analyzer/query/stream",
             json={"text": "q", "history": []},
         )
 
@@ -1386,7 +1386,7 @@ class TestQueryApplicationStream:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query/stream",
+            "/namespaces/default/applications/my-contract-analyzer/query/stream",
             json={"text": "q", "history": []},
         )
 
@@ -1400,7 +1400,7 @@ class TestQueryApplicationStream:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query/stream",
+            "/namespaces/default/applications/my-contract-analyzer/query/stream",
             json={"text": "q", "history": []},
         )
 
@@ -1416,7 +1416,7 @@ class TestQueryApplicationStream:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query/stream",
+            "/namespaces/default/applications/my-contract-analyzer/query/stream",
             json={"text": "termination clause?", "history": []},
         )
 
@@ -1434,7 +1434,7 @@ class TestQueryApplicationStream:
     @pytest.mark.asyncio
     async def test_404_when_app_not_found(self, client):
         resp = await client.post(
-            "/applications/nonexistent/query/stream",
+            "/namespaces/default/applications/nonexistent/query/stream",
             json={"text": "q", "history": []},
         )
         assert resp.status_code == 404
@@ -1455,7 +1455,7 @@ class TestQueryApplicationStream:
         await _create_app(client, inst)
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query/stream",
+            "/namespaces/default/applications/my-contract-analyzer/query/stream",
             json={"text": "q", "history": []},
         )
 
@@ -1472,7 +1472,7 @@ class TestQueryApplicationStream:
         await _create_app(client, mock_app)
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query/stream",
+            "/namespaces/default/applications/my-contract-analyzer/query/stream",
             json={"text": "q?", "system_prompt": "Answer in one sentence."},
         )
 
@@ -1486,7 +1486,7 @@ class TestQueryApplicationStream:
         await _create_app(client, mock_app)
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query/stream",
+            "/namespaces/default/applications/my-contract-analyzer/query/stream",
             json={"text": "q?"},
         )
 
@@ -1499,7 +1499,7 @@ class TestQueryApplicationStream:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query/stream",
+            "/namespaces/default/applications/my-contract-analyzer/query/stream",
             json={"text": "q?", "history": []},
         )
 
@@ -1516,7 +1516,7 @@ class TestQueryApplicationStream:
         await _create_app(client, _mock_query_app(result))
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/query/stream",
+            "/namespaces/default/applications/my-contract-analyzer/query/stream",
             json={"text": "q?", "history": []},
         )
 
@@ -1563,7 +1563,7 @@ async def _create_collections_app(
     bundle = _make_collections_bundle(structured_collections, vector_collections)
     with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=mock_app):
         resp = await client.post(
-            "/applications",
+            "/namespaces/default/applications",
             files={"bundle": ("bundle.zip", bundle, "application/zip")},
         )
     assert resp.status_code == 201
@@ -1592,7 +1592,7 @@ class TestListCollections:
             vector_collections=["doc_chunks"],
         )
 
-        resp = await client.get("/applications/my-contract-analyzer/collections")
+        resp = await client.get("/namespaces/default/applications/my-contract-analyzer/collections")
 
         assert resp.status_code == 200
         body = resp.json()
@@ -1603,7 +1603,7 @@ class TestListCollections:
     async def test_no_structured_collections_returns_empty_structured(self, client):
         await _create_collections_app(client, MagicMock(), vector_collections=["doc_chunks"])
 
-        resp = await client.get("/applications/my-contract-analyzer/collections")
+        resp = await client.get("/namespaces/default/applications/my-contract-analyzer/collections")
 
         assert resp.status_code == 200
         body = resp.json()
@@ -1614,7 +1614,7 @@ class TestListCollections:
     async def test_no_vector_collections_returns_empty_vector(self, client):
         await _create_collections_app(client, MagicMock(), structured_collections=["contracts"])
 
-        resp = await client.get("/applications/my-contract-analyzer/collections")
+        resp = await client.get("/namespaces/default/applications/my-contract-analyzer/collections")
 
         assert resp.status_code == 200
         body = resp.json()
@@ -1625,7 +1625,7 @@ class TestListCollections:
     async def test_no_collections_returns_empty_lists(self, client):
         await _create_app(client, MagicMock())
 
-        resp = await client.get("/applications/my-contract-analyzer/collections")
+        resp = await client.get("/namespaces/default/applications/my-contract-analyzer/collections")
 
         assert resp.status_code == 200
         body = resp.json()
@@ -1634,7 +1634,7 @@ class TestListCollections:
 
     @pytest.mark.asyncio
     async def test_404_when_app_not_found(self, client):
-        resp = await client.get("/applications/nonexistent/collections")
+        resp = await client.get("/namespaces/default/applications/nonexistent/collections")
         assert resp.status_code == 404
 
 
@@ -1651,7 +1651,7 @@ class TestQueryCollection:
         await _create_collections_app(client, mock_app, structured_collections=["contracts"])
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/collections/contracts/query",
+            "/namespaces/default/applications/my-contract-analyzer/collections/contracts/query",
             json={},
         )
 
@@ -1667,7 +1667,7 @@ class TestQueryCollection:
         await _create_collections_app(client, mock_app, structured_collections=["contracts"])
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/collections/contracts/query",
+            "/namespaces/default/applications/my-contract-analyzer/collections/contracts/query",
             json={"filters": [{"field": "type", "op": "=", "value": "NDA"}]},
         )
 
@@ -1684,7 +1684,7 @@ class TestQueryCollection:
         await _create_collections_app(client, mock_app, structured_collections=["contracts"])
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/collections/contracts/query",
+            "/namespaces/default/applications/my-contract-analyzer/collections/contracts/query",
             json={"fields": ["type"]},
         )
 
@@ -1698,7 +1698,7 @@ class TestQueryCollection:
         await _create_collections_app(client, mock_app, structured_collections=["contracts"])
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/collections/contracts/query",
+            "/namespaces/default/applications/my-contract-analyzer/collections/contracts/query",
             json={},
         )
 
@@ -1712,7 +1712,7 @@ class TestQueryCollection:
         await _create_collections_app(client, MagicMock(), vector_collections=["doc_chunks"])
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/collections/doc_chunks/query",
+            "/namespaces/default/applications/my-contract-analyzer/collections/doc_chunks/query",
             json={},
         )
 
@@ -1728,7 +1728,7 @@ class TestQueryCollection:
         )
 
         resp = await client.post(
-            "/applications/my-contract-analyzer/collections/nonexistent/query",
+            "/namespaces/default/applications/my-contract-analyzer/collections/nonexistent/query",
             json={},
         )
 
@@ -1738,7 +1738,7 @@ class TestQueryCollection:
     @pytest.mark.asyncio
     async def test_404_when_app_not_found(self, client):
         resp = await client.post(
-            "/applications/nonexistent/collections/contracts/query",
+            "/namespaces/default/applications/nonexistent/collections/contracts/query",
             json={},
         )
         assert resp.status_code == 404
@@ -1751,6 +1751,7 @@ class TestQueryCollection:
 
 def _make_doc_record(app_id: str, doc_id: str, status: str = "active") -> DocRecord:
     return DocRecord(
+        account_id="default", namespace_id="default",
         app_id=app_id,
         doc_id=doc_id,
         status=status,
@@ -1766,7 +1767,7 @@ class TestListWorkflowDocs:
         await _create_app(client, _mock_app_instance())
 
         resp = await client.get(
-            "/applications/my-contract-analyzer/workflows/summarize/docs"
+            "/namespaces/default/applications/my-contract-analyzer/workflows/summarize/docs"
         )
 
         assert resp.status_code == 200
@@ -1781,14 +1782,15 @@ class TestListWorkflowDocs:
         client = app_overrides["client"]
         system_store: SystemStore = app_overrides["system_store"]
         await _create_app(client, _mock_app_instance())
-        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        app_id = (await system_store.get_app("default", "default", "my-contract-analyzer")).app_id
         await system_store.save_doc(_make_doc_record(app_id, "doc-1"))
         await system_store.upsert_doc_workflow_status(
+            "default", "default",
             app_id, "doc-1", "summarize", "done"
         )
 
         resp = await client.get(
-            "/applications/my-contract-analyzer/workflows/summarize/docs"
+            "/namespaces/default/applications/my-contract-analyzer/workflows/summarize/docs"
         )
 
         assert resp.status_code == 200
@@ -1802,15 +1804,16 @@ class TestListWorkflowDocs:
         client = app_overrides["client"]
         system_store: SystemStore = app_overrides["system_store"]
         await _create_app(client, _mock_app_instance())
-        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        app_id = (await system_store.get_app("default", "default", "my-contract-analyzer")).app_id
         for doc_id, wf_status in [("doc-1", "done"), ("doc-2", "pending"), ("doc-3", "done")]:
             await system_store.save_doc(_make_doc_record(app_id, doc_id))
             await system_store.upsert_doc_workflow_status(
+            "default", "default",
                 app_id, doc_id, "summarize", wf_status
             )
 
         resp = await client.get(
-            "/applications/my-contract-analyzer/workflows/summarize/docs?status=done"
+            "/namespaces/default/applications/my-contract-analyzer/workflows/summarize/docs?status=done"
         )
 
         assert resp.status_code == 200
@@ -1824,16 +1827,17 @@ class TestListWorkflowDocs:
         client = app_overrides["client"]
         system_store: SystemStore = app_overrides["system_store"]
         await _create_app(client, _mock_app_instance())
-        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        app_id = (await system_store.get_app("default", "default", "my-contract-analyzer")).app_id
         # doc-1 is active; doc-2 has a workflow record but no entry in the doc registry
         await system_store.save_doc(_make_doc_record(app_id, "doc-1"))
         for doc_id in ["doc-1", "doc-2"]:
             await system_store.upsert_doc_workflow_status(
+            "default", "default",
                 app_id, doc_id, "summarize", "done"
             )
 
         resp = await client.get(
-            "/applications/my-contract-analyzer/workflows/summarize/docs"
+            "/namespaces/default/applications/my-contract-analyzer/workflows/summarize/docs"
         )
 
         assert resp.status_code == 200
@@ -1845,7 +1849,7 @@ class TestListWorkflowDocs:
     async def test_returns_404_when_app_not_found(self, app_overrides):
         client = app_overrides["client"]
         resp = await client.get(
-            "/applications/nonexistent/workflows/summarize/docs"
+            "/namespaces/default/applications/nonexistent/workflows/summarize/docs"
         )
         assert resp.status_code == 404
         assert "nonexistent" in resp.json()["detail"]
@@ -1873,14 +1877,15 @@ class TestDeleteDoc:
         system_store: SystemStore = app_overrides["system_store"]
         mock_app = _mock_delete_app()
         await _create_app(client, mock_app)
-        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        app_id = (await system_store.get_app("default", "default", "my-contract-analyzer")).app_id
         await system_store.save_doc(DocRecord(
+        account_id="default", namespace_id="default",
             app_id=app_id, doc_id="doc-1", status="active",
             ingested_at="2024-01-01T00:00:00+00:00",
             metadata='{"source_filename": "doc-1.pdf", "source_format": "pdf"}',
         ))
 
-        resp = await client.delete("/applications/my-contract-analyzer/docs/doc-1")
+        resp = await client.delete("/namespaces/default/applications/my-contract-analyzer/docs/doc-1")
 
         assert resp.status_code == 204
         # Derived data purged from every pipeline's stores.
@@ -1896,7 +1901,7 @@ class TestDeleteDoc:
         mock_app = _mock_delete_app()
         await _create_app(client, mock_app)
 
-        resp = await client.delete("/applications/my-contract-analyzer/docs/ghost")
+        resp = await client.delete("/namespaces/default/applications/my-contract-analyzer/docs/ghost")
 
         assert resp.status_code == 404
         mock_app.delete_document.assert_not_awaited()
@@ -1904,7 +1909,7 @@ class TestDeleteDoc:
     @pytest.mark.asyncio
     async def test_delete_unknown_app_returns_404(self, app_overrides):
         client = app_overrides["client"]
-        resp = await client.delete("/applications/nonexistent/docs/doc-1")
+        resp = await client.delete("/namespaces/default/applications/nonexistent/docs/doc-1")
         assert resp.status_code == 404
 
 
@@ -1958,7 +1963,7 @@ class TestDownloadGeneratedDocument:
         doc_id = "contract__ab12ef.docx"
         mock_app = _mock_download_app({f"generated/{doc_id}": art})
         await _create_app(client, mock_app)
-        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        app_id = (await system_store.get_app("default", "default", "my-contract-analyzer")).app_id
 
         resp = await client.get(
             f"/applications/{app_id}/documents/{doc_id}/download"
@@ -2049,14 +2054,15 @@ class TestDownloadOriginalDocument:
         raw = b"%PDF-1.7 original bytes"
         mock_app = _mock_download_app({"originals/doc-1.pdf": raw})
         await _create_app(client, mock_app)
-        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        app_id = (await system_store.get_app("default", "default", "my-contract-analyzer")).app_id
         await system_store.save_doc(DocRecord(
+        account_id="default", namespace_id="default",
             app_id=app_id, doc_id="doc-1", status="active",
             ingested_at="2024-01-01T00:00:00+00:00",
             metadata='{"source_filename": "Contract A.pdf", "source_format": "pdf"}',
         ))
 
-        resp = await client.get("/applications/my-contract-analyzer/docs/doc-1/original")
+        resp = await client.get("/namespaces/default/applications/my-contract-analyzer/docs/doc-1/original")
 
         assert resp.status_code == 200
         assert resp.content == raw
@@ -2072,14 +2078,15 @@ class TestDownloadOriginalDocument:
         system_store: SystemStore = app_overrides["system_store"]
         mock_app = _mock_download_app({"originals/doc-1.txt": b"hi"})
         await _create_app(client, mock_app)
-        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        app_id = (await system_store.get_app("default", "default", "my-contract-analyzer")).app_id
         await system_store.save_doc(DocRecord(
+        account_id="default", namespace_id="default",
             app_id=app_id, doc_id="doc-1", status="active",
             ingested_at="2024-01-01T00:00:00+00:00",
             metadata='{"source_format": "txt"}',
         ))
 
-        resp = await client.get("/applications/my-contract-analyzer/docs/doc-1/original")
+        resp = await client.get("/namespaces/default/applications/my-contract-analyzer/docs/doc-1/original")
 
         assert resp.status_code == 200
         assert 'filename="doc-1.txt"' in resp.headers["content-disposition"]
@@ -2090,13 +2097,14 @@ class TestDownloadOriginalDocument:
         system_store: SystemStore = app_overrides["system_store"]
         mock_app = _mock_download_app({"originals/doc-1": b"bytes"})
         await _create_app(client, mock_app)
-        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        app_id = (await system_store.get_app("default", "default", "my-contract-analyzer")).app_id
         await system_store.save_doc(DocRecord(
+        account_id="default", namespace_id="default",
             app_id=app_id, doc_id="doc-1", status="active",
             ingested_at="2024-01-01T00:00:00+00:00", metadata="{}",
         ))
 
-        resp = await client.get("/applications/my-contract-analyzer/docs/doc-1/original")
+        resp = await client.get("/namespaces/default/applications/my-contract-analyzer/docs/doc-1/original")
 
         assert resp.status_code == 200
         assert mock_app.document_store.load_bytes.call_args[0][1] == "originals/doc-1"
@@ -2110,14 +2118,15 @@ class TestDownloadOriginalDocument:
         filename = "入住服务协议.pdf"
         mock_app = _mock_download_app({"originals/doc-1.pdf": b"data"})
         await _create_app(client, mock_app)
-        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        app_id = (await system_store.get_app("default", "default", "my-contract-analyzer")).app_id
         await system_store.save_doc(DocRecord(
+        account_id="default", namespace_id="default",
             app_id=app_id, doc_id="doc-1", status="active",
             ingested_at="2024-01-01T00:00:00+00:00",
             metadata=json.dumps({"source_filename": filename, "source_format": "pdf"}),
         ))
 
-        resp = await client.get("/applications/my-contract-analyzer/docs/doc-1/original")
+        resp = await client.get("/namespaces/default/applications/my-contract-analyzer/docs/doc-1/original")
 
         assert resp.status_code == 200
         cd = resp.headers["content-disposition"]
@@ -2131,14 +2140,15 @@ class TestDownloadOriginalDocument:
         system_store: SystemStore = app_overrides["system_store"]
         mock_app = _mock_download_app({})  # nothing stored → load_bytes raises KeyError
         await _create_app(client, mock_app)
-        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        app_id = (await system_store.get_app("default", "default", "my-contract-analyzer")).app_id
         await system_store.save_doc(DocRecord(
+        account_id="default", namespace_id="default",
             app_id=app_id, doc_id="doc-1", status="active",
             ingested_at="2024-01-01T00:00:00+00:00",
             metadata='{"source_format": "pdf"}',
         ))
 
-        resp = await client.get("/applications/my-contract-analyzer/docs/doc-1/original")
+        resp = await client.get("/namespaces/default/applications/my-contract-analyzer/docs/doc-1/original")
 
         assert resp.status_code == 404
 
@@ -2151,14 +2161,15 @@ class TestDownloadOriginalDocument:
         store.load_bytes = AsyncMock(side_effect=NotImplementedError)
         inst.document_store = store
         await _create_app(client, inst)
-        app_id = (await system_store.get_app("my-contract-analyzer")).app_id
+        app_id = (await system_store.get_app("default", "default", "my-contract-analyzer")).app_id
         await system_store.save_doc(DocRecord(
+        account_id="default", namespace_id="default",
             app_id=app_id, doc_id="doc-1", status="active",
             ingested_at="2024-01-01T00:00:00+00:00",
             metadata='{"source_format": "pdf"}',
         ))
 
-        resp = await client.get("/applications/my-contract-analyzer/docs/doc-1/original")
+        resp = await client.get("/namespaces/default/applications/my-contract-analyzer/docs/doc-1/original")
 
         assert resp.status_code == 404
 
@@ -2168,12 +2179,12 @@ class TestDownloadOriginalDocument:
         mock_app = _mock_download_app({})
         await _create_app(client, mock_app)
 
-        resp = await client.get("/applications/my-contract-analyzer/docs/ghost/original")
+        resp = await client.get("/namespaces/default/applications/my-contract-analyzer/docs/ghost/original")
 
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
     async def test_download_unknown_app_returns_404(self, app_overrides):
         client = app_overrides["client"]
-        resp = await client.get("/applications/nonexistent/docs/doc-1/original")
+        resp = await client.get("/namespaces/default/applications/nonexistent/docs/doc-1/original")
         assert resp.status_code == 404

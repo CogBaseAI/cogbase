@@ -88,6 +88,8 @@ async def build_app(
     config: AppConfig,
     *,
     app_id: str,
+    account_id: str = "default",
+    namespace_id: str = "default",
     system: SystemResources | None = None,
     app_status: str,
     task_store: Any | None = None,
@@ -95,8 +97,9 @@ async def build_app(
     """Instantiate a CogBase application from *config*.
 
     *app_id* is the application's stable internal id (distinct from the mutable
-    client-facing ``config.name``); it drives the store scope prefix and the
-    per-app document-store collection, so storage survives a rename.
+    client-facing ``config.name``); together with *account_id* / *namespace_id* it
+    drives the store scope prefix and the per-app document-store collection, so
+    storage survives a rename and is isolated per tenant.
 
     Resources are resolved in priority order:
 
@@ -105,7 +108,7 @@ async def build_app(
     3. No fallback — raises ``ValueError`` when a required resource is absent.
     """
     sys = system or SystemResources()
-    app_scope = AppScope(app_id=app_id)
+    app_scope = AppScope(account_id=account_id, namespace_id=namespace_id, app_id=app_id)
 
     # --- Top-level resources (independent of pipeline) ---
     llm = _build_llm(config.llm) if config.llm else sys.llm
@@ -380,6 +383,8 @@ async def build_app(
         pipelines,
         qrunner,
         app_id=app_id,
+        account_id=account_id,
+        namespace_id=namespace_id,
         document_store=document_store,
         structured_store=structured_store,
         workflow_runners=workflow_runners,

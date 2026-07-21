@@ -260,7 +260,7 @@ class TestAfterIngestTrigger:
             await app.ingest_documents([Document(doc_id="d-001", text="some text")])
 
         app._task_store.upsert_doc_workflow_status.assert_awaited_once_with(
-            "test-app", "d-001", "check", "pending"
+            "default", "default", "test-app", "d-001", "check", "pending"
         )
 
     async def test_create_workflow_task_called_for_after_ingest(self):
@@ -276,7 +276,7 @@ class TestAfterIngestTrigger:
             await app.ingest_documents([Document(doc_id="d-001", text="some text")])
 
         app._task_store.create_workflow_tasks.assert_awaited_once_with(
-            "test-app", "check", "d-001", [{"issue": "late_delivery"}]
+            "default", "default", "test-app", "check", "d-001", [{"issue": "late_delivery"}]
         )
 
     async def test_pending_not_marked_when_params_empty(self):
@@ -304,7 +304,7 @@ class TestAfterIngestTrigger:
         await app.ingest_documents([Document(doc_id="d-001", text="some text")])
 
         app._task_store.upsert_doc_workflow_status.assert_awaited_once_with(
-            "test-app", "d-001", "check", "ready"
+            "default", "default", "test-app", "d-001", "check", "ready"
         )
         app._task_store.create_workflow_tasks.assert_not_awaited()
 
@@ -352,7 +352,7 @@ class TestRunWorkflowBg:
         await app._run_workflow_tasks_bg(wf_runner, "d-001", [({"doc_id": "d-001"}, None)])
 
         app._task_store.upsert_doc_workflow_status.assert_awaited_once_with(
-            "test-app", "d-001", "wf", "done"
+            "default", "default", "test-app", "d-001", "wf", "done"
         )
 
     async def test_bg_marks_failed_after_task_exception(self):
@@ -368,7 +368,7 @@ class TestRunWorkflowBg:
         await app._run_workflow_tasks_bg(wf_runner, "d-001", [({"doc_id": "d-001"}, None)])
 
         app._task_store.upsert_doc_workflow_status.assert_awaited_once_with(
-            "test-app", "d-001", "wf", "failed"
+            "default", "default", "test-app", "d-001", "wf", "failed"
         )
 
     async def test_bg_completes_task_success_when_task_id_present(self):

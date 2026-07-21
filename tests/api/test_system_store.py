@@ -11,6 +11,7 @@ from api.system_store import AppRecord, DocRecord, DocWorkflowRecord, SkillRecor
 
 def _make_record(name: str = "my-app", status: str = "active") -> AppRecord:
     return AppRecord(
+        account_id="default", namespace_id="default",
         app_id=name,
         name=name,
         config_yaml="name: my-app\nllm:\n  model: gpt-4o-mini\n",
@@ -67,14 +68,14 @@ class TestSystemStoreSaveAndGet:
     async def test_save_and_get_app(self, store):
         record = _make_record()
         await store.save_app(record)
-        fetched = await store.get_app("my-app")
+        fetched = await store.get_app("default", "default", "my-app")
         assert fetched is not None
         assert fetched.name == "my-app"
         assert fetched.status == "active"
 
     @pytest.mark.asyncio
     async def test_get_app_returns_none_for_unknown(self, store):
-        result = await store.get_app("nonexistent")
+        result = await store.get_app("default", "default", "nonexistent")
         assert result is None
 
     @pytest.mark.asyncio
@@ -83,7 +84,7 @@ class TestSystemStoreSaveAndGet:
         await store.save_app(record)
         updated = record.model_copy(update={"status": "error", "error": "something failed"})
         await store.save_app(updated)
-        fetched = await store.get_app("my-app")
+        fetched = await store.get_app("default", "default", "my-app")
         assert fetched.status == "error"
         assert fetched.error == "something failed"
 
@@ -108,15 +109,15 @@ class TestSystemStoreDeleteApp:
     async def test_delete_removes_record(self, store):
         await store.save_app(_make_record(name="my-app"))
         await store.delete_app("my-app")
-        assert await store.get_app("my-app") is None
+        assert await store.get_app("default", "default", "my-app") is None
 
     @pytest.mark.asyncio
     async def test_delete_only_removes_target(self, store):
         await store.save_app(_make_record(name="a"))
         await store.save_app(_make_record(name="b"))
         await store.delete_app("a")
-        assert await store.get_app("a") is None
-        assert await store.get_app("b") is not None
+        assert await store.get_app("default", "default", "a") is None
+        assert await store.get_app("default", "default", "b") is not None
 
     @pytest.mark.asyncio
     async def test_delete_nonexistent_is_noop(self, store):
@@ -127,10 +128,12 @@ class TestSystemStoreDeleteApp:
     async def test_delete_cascades_doc_records(self, store):
         await store.save_app(_make_record(name="my-app"))
         await store.save_doc(DocRecord(
+        account_id="default", namespace_id="default",
             app_id="my-app", doc_id="doc-1", status="active",
             ingested_at="2026-01-01T00:00:00+00:00",
         ))
         await store.save_doc(DocRecord(
+        account_id="default", namespace_id="default",
             app_id="my-app", doc_id="doc-2", status="active",
             ingested_at="2026-01-01T00:00:00+00:00",
         ))
@@ -148,8 +151,8 @@ class TestSystemStoreDeleteApp:
     @pytest.mark.asyncio
     async def test_delete_cascades_doc_workflow_records(self, store):
         await store.save_app(_make_record(name="my-app"))
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "done")
-        await store.upsert_doc_workflow_status("my-app", "doc-2", "summarize", "pending")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-2", "summarize", "pending")
         await store.delete_app("my-app")
         assert await store.list_doc_workflows("my-app") == []
 
@@ -158,15 +161,16 @@ class TestSystemStoreDeleteApp:
         for name in ("app-a", "app-b"):
             await store.save_app(_make_record(name=name))
             await store.save_doc(DocRecord(
+        account_id="default", namespace_id="default",
                 app_id=name, doc_id="doc-1", status="active",
                 ingested_at="2026-01-01T00:00:00+00:00",
             ))
             await store.create_task(_make_task(task_id=f"t-{name}", app_id=name))
-            await store.upsert_doc_workflow_status(name, "doc-1", "analyze", "done")
+            await store.upsert_doc_workflow_status("default", "default", name, "doc-1", "analyze", "done")
 
         await store.delete_app("app-a")
 
-        assert await store.get_app("app-b") is not None
+        assert await store.get_app("default", "default", "app-b") is not None
         assert len(await store.list_docs("app-b")) == 1
         assert len(await store.list_tasks("app-b")) == 1
         assert len(await store.list_doc_workflows("app-b")) == 1
@@ -186,6 +190,7 @@ def _make_task(
     status: str = "pending",
 ) -> TaskRecord:
     return TaskRecord(
+        account_id="default", namespace_id="default",
         task_id=task_id,
         app_id=app_id,
         task_type=task_type,
@@ -318,7 +323,7 @@ class TestCreateWorkflowTasks:
     @pytest.mark.asyncio
     async def test_creates_all_in_order_with_unique_ids(self, store):
         params_list = [{"issue": "a"}, {"issue": "b"}, None]
-        records = await store.create_workflow_tasks("my-app", "analyze", "doc-1", params_list)
+        records = await store.create_workflow_tasks("default", "default", "my-app", "analyze", "doc-1", params_list)
         assert len(records) == 3
         assert len({r.task_id for r in records}) == 3
         assert [r.params_json for r in records] == ['{"issue": "a"}', '{"issue": "b"}', None]
@@ -332,7 +337,7 @@ class TestCreateWorkflowTasks:
 
     @pytest.mark.asyncio
     async def test_persists_every_record(self, store):
-        records = await store.create_workflow_tasks("my-app", "wf", "doc-1", [{"x": 1}, {"x": 2}])
+        records = await store.create_workflow_tasks("default", "default", "my-app", "wf", "doc-1", [{"x": 1}, {"x": 2}])
         for r in records:
             fetched = await store.get_task(r.task_id)
             assert fetched is not None
@@ -340,19 +345,19 @@ class TestCreateWorkflowTasks:
 
     @pytest.mark.asyncio
     async def test_doc_id_may_be_none(self, store):
-        records = await store.create_workflow_tasks("my-app", "wf", None, [None])
+        records = await store.create_workflow_tasks("default", "default", "my-app", "wf", None, [None])
         assert records[0].doc_id is None
 
     @pytest.mark.asyncio
     async def test_empty_list_creates_nothing(self, store):
-        records = await store.create_workflow_tasks("my-app", "wf", "doc-1", [])
+        records = await store.create_workflow_tasks("default", "default", "my-app", "wf", "doc-1", [])
         assert records == []
 
 
 class TestCompleteWorkflowTask:
     @staticmethod
     async def _make_task_id(store):
-        records = await store.create_workflow_tasks("my-app", "wf", "doc-1", [None])
+        records = await store.create_workflow_tasks("default", "default", "my-app", "wf", "doc-1", [None])
         return records[0].task_id
 
     @pytest.mark.asyncio
@@ -390,7 +395,7 @@ class TestCompleteWorkflowTask:
 class TestUpsertAndGetDocWorkflow:
     @pytest.mark.asyncio
     async def test_upsert_and_get(self, store):
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "pending")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "analyze", "pending")
         record = await store.get_doc_workflow("my-app", "doc-1", "analyze")
         assert record is not None
         assert record.app_id == "my-app"
@@ -404,21 +409,21 @@ class TestUpsertAndGetDocWorkflow:
 
     @pytest.mark.asyncio
     async def test_upsert_overwrites_status(self, store):
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "pending")
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "analyze", "pending")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "analyze", "done")
         record = await store.get_doc_workflow("my-app", "doc-1", "analyze")
         assert record.status == "done"
 
     @pytest.mark.asyncio
     async def test_upsert_sets_updated_at(self, store):
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "running")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "analyze", "running")
         record = await store.get_doc_workflow("my-app", "doc-1", "analyze")
         assert "T" in record.updated_at and record.updated_at.endswith("+00:00")
 
     @pytest.mark.asyncio
     async def test_distinct_workflows_for_same_doc(self, store):
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "done")
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "summarize", "pending")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "summarize", "pending")
         r_analyze = await store.get_doc_workflow("my-app", "doc-1", "analyze")
         r_summarize = await store.get_doc_workflow("my-app", "doc-1", "summarize")
         assert r_analyze.status == "done"
@@ -426,8 +431,8 @@ class TestUpsertAndGetDocWorkflow:
 
     @pytest.mark.asyncio
     async def test_same_workflow_distinct_docs(self, store):
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "done")
-        await store.upsert_doc_workflow_status("my-app", "doc-2", "analyze", "failed")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-2", "analyze", "failed")
         r1 = await store.get_doc_workflow("my-app", "doc-1", "analyze")
         r2 = await store.get_doc_workflow("my-app", "doc-2", "analyze")
         assert r1.status == "done"
@@ -441,45 +446,45 @@ class TestListDocWorkflows:
 
     @pytest.mark.asyncio
     async def test_list_returns_all_for_app(self, store):
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "done")
-        await store.upsert_doc_workflow_status("my-app", "doc-2", "analyze", "pending")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-2", "analyze", "pending")
         results = await store.list_doc_workflows("my-app")
         assert len(results) == 2
 
     @pytest.mark.asyncio
     async def test_list_isolated_by_app(self, store):
-        await store.upsert_doc_workflow_status("app-a", "doc-1", "analyze", "done")
-        await store.upsert_doc_workflow_status("app-b", "doc-1", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "app-a", "doc-1", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "app-b", "doc-1", "analyze", "done")
         assert len(await store.list_doc_workflows("app-a")) == 1
         assert len(await store.list_doc_workflows("app-b")) == 1
         assert len(await store.list_doc_workflows("app-c")) == 0
 
     @pytest.mark.asyncio
     async def test_filter_by_workflow_name(self, store):
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "done")
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "summarize", "pending")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "summarize", "pending")
         results = await store.list_doc_workflows("my-app", workflow_name="analyze")
         assert len(results) == 1 and results[0].workflow_name == "analyze"
 
     @pytest.mark.asyncio
     async def test_filter_by_doc_id(self, store):
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "done")
-        await store.upsert_doc_workflow_status("my-app", "doc-2", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-2", "analyze", "done")
         results = await store.list_doc_workflows("my-app", doc_id="doc-1")
         assert len(results) == 1 and results[0].doc_id == "doc-1"
 
     @pytest.mark.asyncio
     async def test_filter_by_status(self, store):
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "done")
-        await store.upsert_doc_workflow_status("my-app", "doc-2", "analyze", "pending")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-2", "analyze", "pending")
         done = await store.list_doc_workflows("my-app", status="done")
         assert len(done) == 1 and done[0].status == "done"
 
     @pytest.mark.asyncio
     async def test_filter_combined(self, store):
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "done")
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "summarize", "done")
-        await store.upsert_doc_workflow_status("my-app", "doc-2", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "summarize", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-2", "analyze", "done")
         results = await store.list_doc_workflows("my-app", workflow_name="analyze", doc_id="doc-1", status="done")
         assert len(results) == 1
         assert results[0].doc_id == "doc-1"
@@ -490,11 +495,12 @@ class TestDeleteDocCleansDocWorkflowRegistry:
     @pytest.mark.asyncio
     async def test_delete_doc_removes_workflow_records(self, store):
         await store.save_doc(DocRecord(
+        account_id="default", namespace_id="default",
             app_id="my-app", doc_id="doc-1", status="active",
             ingested_at="2026-01-01T00:00:00+00:00",
         ))
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "analyze", "done")
-        await store.upsert_doc_workflow_status("my-app", "doc-1", "summarize", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "analyze", "done")
+        await store.upsert_doc_workflow_status("default", "default", "my-app", "doc-1", "summarize", "done")
 
         await store.delete_doc("my-app", "doc-1")
 
@@ -505,10 +511,11 @@ class TestDeleteDocCleansDocWorkflowRegistry:
     async def test_delete_doc_only_removes_target_doc(self, store):
         for doc_id in ("doc-1", "doc-2"):
             await store.save_doc(DocRecord(
+        account_id="default", namespace_id="default",
                 app_id="my-app", doc_id=doc_id, status="active",
                 ingested_at="2026-01-01T00:00:00+00:00",
             ))
-            await store.upsert_doc_workflow_status("my-app", doc_id, "analyze", "done")
+            await store.upsert_doc_workflow_status("default", "default", "my-app", doc_id, "analyze", "done")
 
         await store.delete_doc("my-app", "doc-1")
 
@@ -518,6 +525,7 @@ class TestDeleteDocCleansDocWorkflowRegistry:
 
 def _make_skill_record(skill_id: str = "uuid-1", name: str = "greeter") -> SkillRecord:
     return SkillRecord(
+        account_id="default", namespace_id="default",
         skill_id=skill_id,
         name=name,
         description="Says hi.",
