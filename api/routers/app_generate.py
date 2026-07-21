@@ -248,6 +248,10 @@ async def deploy(
             detail=f"Application '{config.name}' already exists",
         )
 
+    # Register the namespace this app lives in so it surfaces in GET /namespaces
+    # even when it was never explicitly created. Idempotent.
+    await system_store.ensure_namespace(scope.account_id, scope.namespace_id)
+
     stored_yaml = config.to_yaml()
     now = _now()
     app_id = new_app_id()

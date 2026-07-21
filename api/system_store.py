@@ -49,6 +49,21 @@ APP_RECORDS_SCHEMA = CollectionSchema(
 )
 
 
+NAMESPACE_RECORDS_SCHEMA = CollectionSchema(
+    name="namespace_records",
+    description="Namespace registry: one record per namespace per account (an in-account organizational unit).",
+    primary_fields=["account_id", "namespace_id"],
+    fields={
+        "account_id":   FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "namespace_id": FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "display_name": FieldSchema(type=FieldType.STRING, nullable=True),
+        "description":  FieldSchema(type=FieldType.STRING, nullable=True),
+        "created_at":   FieldSchema(type=FieldType.STRING, nullable=False),
+        "updated_at":   FieldSchema(type=FieldType.STRING, nullable=False),
+    },
+)
+
+
 SYSTEM_CONFIG_OVERRIDES_SCHEMA = CollectionSchema(
     name="system_config_overrides",
     description="Runtime overrides for system-level LLM and embedding configuration, set via PATCH /system/config.",
@@ -226,6 +241,15 @@ class AppRecord(BaseModel):
     updated_at: str   # ISO-8601 UTC
 
 
+class NamespaceRecord(BaseModel):
+    account_id: str    # owning tenant
+    namespace_id: str  # URL-addressable handle, unique per account
+    display_name: str | None = None  # optional friendly label
+    description: str | None = None
+    created_at: str    # ISO-8601 UTC
+    updated_at: str    # ISO-8601 UTC
+
+
 class SkillRecord(BaseModel):
     skill_id: str
     account_id: str   # owning tenant; skills are account-scoped (shared across namespaces)
@@ -267,6 +291,7 @@ class SystemStore:
         """Create managed collections if they do not exist. Idempotent."""
         await self._store.create_collection(DOC_REGISTRY_SCHEMA)
         await self._store.create_collection(APP_RECORDS_SCHEMA)
+        await self._store.create_collection(NAMESPACE_RECORDS_SCHEMA)
         await self._store.create_collection(SYSTEM_CONFIG_OVERRIDES_SCHEMA)
         await self._store.create_collection(TASKS_SCHEMA)
         await self._store.create_collection(DOC_WORKFLOW_REGISTRY_SCHEMA)
@@ -330,6 +355,63 @@ class SystemStore:
         await self._store.delete_records("doc_workflow_registry", filters=[Col("app_id") == app_id])
         await self._store.delete_records("tasks", filters=[Col("app_id") == app_id])
         await self._store.delete_records("session_records", filters=[Col("app_id") == app_id])
+
+    # ------------------------------------------------------------------
+    # Namespace registry
+    # ------------------------------------------------------------------
+
+    async def save_namespace(self, record: NamespaceRecord) -> None:
+        await self._store.save("namespace_records", [record.model_dump()])
+
+    async def get_namespace(
+        self, account_id: str, namespace_id: str
+    ) -> NamespaceRecord | None:
+        """Resolve a namespace by its handle within an account."""
+        rows = await self._store.query_as(
+            "namespace_records",
+            filters=[
+                Col("account_id") == account_id,
+                Col("namespace_id") == namespace_id,
+            ],
+            model=NamespaceRecord,
+        )
+        return rows[0] if rows else None
+
+    async def list_namespaces(self, account_id: str) -> list[NamespaceRecord]:
+        """List a single account's namespaces, most-recently-created first."""
+        rows = await self._store.query_as(
+            "namespace_records",
+            filters=[Col("account_id") == account_id],
+            model=NamespaceRecord,
+        )
+        # ISO-8601 UTC timestamps sort lexicographically, so no parse needed.
+        return sorted(rows, key=lambda r: r.created_at, reverse=True)
+
+    async def ensure_namespace(self, account_id: str, namespace_id: str) -> None:
+        """Create a bare namespace record if one does not already exist.
+
+        Called when an app is created in a namespace so every namespace holding
+        resources surfaces in ``list_namespaces`` even if it was never explicitly
+        created via ``POST /namespaces``.  Idempotent.
+        """
+        if await self.get_namespace(account_id, namespace_id) is not None:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        await self.save_namespace(NamespaceRecord(
+            account_id=account_id,
+            namespace_id=namespace_id,
+            created_at=now,
+            updated_at=now,
+        ))
+
+    async def delete_namespace(self, account_id: str, namespace_id: str) -> None:
+        await self._store.delete_records(
+            "namespace_records",
+            filters=[
+                Col("account_id") == account_id,
+                Col("namespace_id") == namespace_id,
+            ],
+        )
 
     # ------------------------------------------------------------------
     # Session index (conversation history list)

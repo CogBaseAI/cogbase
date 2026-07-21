@@ -6,7 +6,7 @@ import pytest
 import pytest_asyncio
 
 from cogbase.stores.structured.memory import InMemoryStructuredStore
-from api.system_store import AppRecord, DocRecord, DocWorkflowRecord, SkillRecord, SystemStore, TaskRecord, new_app_id
+from api.system_store import AppRecord, DocRecord, DocWorkflowRecord, NamespaceRecord, SkillRecord, SystemStore, TaskRecord, new_app_id
 
 
 def _make_record(name: str = "my-app", status: str = "active") -> AppRecord:
@@ -521,6 +521,78 @@ class TestDeleteDocCleansDocWorkflowRegistry:
 
         assert await store.get_doc_workflow("my-app", "doc-1", "analyze") is None
         assert await store.get_doc_workflow("my-app", "doc-2", "analyze") is not None
+
+
+def _make_namespace_record(
+    namespace_id: str = "team-a",
+    account_id: str = "default",
+    display_name: str | None = None,
+    description: str | None = None,
+) -> NamespaceRecord:
+    return NamespaceRecord(
+        account_id=account_id,
+        namespace_id=namespace_id,
+        display_name=display_name,
+        description=description,
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+    )
+
+
+class TestSystemStoreNamespaces:
+    @pytest.mark.asyncio
+    async def test_save_and_get(self, store):
+        await store.save_namespace(_make_namespace_record(display_name="Team A"))
+        got = await store.get_namespace("default", "team-a")
+        assert got is not None
+        assert got.namespace_id == "team-a"
+        assert got.display_name == "Team A"
+
+    @pytest.mark.asyncio
+    async def test_get_missing_returns_none(self, store):
+        assert await store.get_namespace("default", "nope") is None
+
+    @pytest.mark.asyncio
+    async def test_get_is_scoped_by_account(self, store):
+        await store.save_namespace(_make_namespace_record(account_id="acct-1"))
+        assert await store.get_namespace("acct-1", "team-a") is not None
+        assert await store.get_namespace("acct-2", "team-a") is None
+
+    @pytest.mark.asyncio
+    async def test_save_overwrites(self, store):
+        await store.save_namespace(_make_namespace_record(display_name="v1"))
+        await store.save_namespace(_make_namespace_record(display_name="v2"))
+        got = await store.get_namespace("default", "team-a")
+        assert got.display_name == "v2"
+        assert len(await store.list_namespaces("default")) == 1
+
+    @pytest.mark.asyncio
+    async def test_list_scoped_by_account(self, store):
+        await store.save_namespace(_make_namespace_record("team-a", account_id="acct-1"))
+        await store.save_namespace(_make_namespace_record("team-b", account_id="acct-1"))
+        await store.save_namespace(_make_namespace_record("team-c", account_id="acct-2"))
+        rows = await store.list_namespaces("acct-1")
+        assert {r.namespace_id for r in rows} == {"team-a", "team-b"}
+
+    @pytest.mark.asyncio
+    async def test_delete(self, store):
+        await store.save_namespace(_make_namespace_record())
+        await store.delete_namespace("default", "team-a")
+        assert await store.get_namespace("default", "team-a") is None
+
+    @pytest.mark.asyncio
+    async def test_ensure_creates_when_absent(self, store):
+        await store.ensure_namespace("default", "team-x")
+        assert await store.get_namespace("default", "team-x") is not None
+
+    @pytest.mark.asyncio
+    async def test_ensure_is_idempotent_and_preserves_metadata(self, store):
+        await store.save_namespace(_make_namespace_record("team-a", display_name="Team A"))
+        await store.ensure_namespace("default", "team-a")
+        got = await store.get_namespace("default", "team-a")
+        # ensure must not clobber an existing record's metadata
+        assert got.display_name == "Team A"
+        assert len(await store.list_namespaces("default")) == 1
 
 
 def _make_skill_record(skill_id: str = "uuid-1", name: str = "greeter") -> SkillRecord:

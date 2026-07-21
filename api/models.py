@@ -10,6 +10,45 @@ from pydantic import BaseModel, Field, model_validator
 from api.system_store import DocWorkflowStatus, TaskStatus
 
 
+# ---------------------------------------------------------------------------
+# Namespace models
+# ---------------------------------------------------------------------------
+
+
+class NamespaceResponse(BaseModel):
+    account_id: str
+    namespace_id: str
+    display_name: str | None = None
+    description: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class NamespaceListResponse(BaseModel):
+    namespaces: list[NamespaceResponse]
+    total: int
+
+
+class CreateNamespaceRequest(BaseModel):
+    namespace_id: str = Field(
+        description=(
+            "URL-addressable handle, unique per account. Must start with a letter "
+            "or underscore, followed by letters, digits, underscores, or hyphens."
+        ),
+    )
+    display_name: str | None = Field(default=None, description="Optional friendly label.")
+    description: str | None = Field(default=None, description="Optional description.")
+
+
+class UpdateNamespaceRequest(BaseModel):
+    display_name: str | None = Field(
+        default=None, description="New friendly label; omit to leave unchanged."
+    )
+    description: str | None = Field(
+        default=None, description="New description; omit to leave unchanged."
+    )
+
+
 class ApplicationResponse(BaseModel):
     name: str
     account_id: str

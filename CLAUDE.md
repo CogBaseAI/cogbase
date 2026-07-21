@@ -138,8 +138,23 @@ App generator:
 - `POST /generate/{session_id}/revise` — revise the draft conversationally
 - `POST /generate/{session_id}/deploy` — deploy the draft as a new application
 
+Tenancy: every request carries an `account_id` (the tenant/security boundary, from
+the `X-Account-Id` header, defaulting to `default`) and a `namespace_id` (an
+in-account organizational unit, addressed as the `{namespace}` URL path segment).
+Name-addressed application routes live under `/namespaces/{namespace}/applications`;
+an app is unique by `(account_id, namespace_id, name)`. Account-wide routes (e.g.
+`GET /applications`) omit the namespace segment.
+
+Namespaces (account-scoped CRUD):
+- `POST /namespaces` — create a namespace (`namespace_id` + optional display_name/description)
+- `GET /namespaces` — list the calling account's namespaces
+- `GET /namespaces/{namespace}` — fetch one namespace
+- `PATCH /namespaces/{namespace}` — update display_name/description (the id is immutable)
+- `DELETE /namespaces/{namespace}` — delete an empty namespace (refuses `default` and namespaces still holding apps)
+- Creating an app auto-registers its namespace (idempotent) so it surfaces in the listing.
+
 Application lifecycle:
-- `POST /applications` — create from ZIP bundle (config.yaml + referenced files)
+- `POST /namespaces/{namespace}/applications` — create from ZIP bundle (config.yaml + referenced files)
 - `POST /applications/{name}/upload_documents` — upload documents (saved to doc store; ingestion task handles the rest)
 - `GET /applications/{name}/documents` — list all documents with workflow status
 - `POST /applications/{name}/query` — blocking query
