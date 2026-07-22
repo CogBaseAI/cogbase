@@ -3,6 +3,7 @@ import { AppProvider, useApp } from './context'
 import { I18nProvider, useT, LANGUAGES } from './i18n'
 import BuildTab from './components/tabs/BuildTab'
 import AppsTab from './components/tabs/AppsTab'
+import NamespacesTab from './components/tabs/NamespacesTab'
 import DemosTab from './components/tabs/DemosTab'
 import IngestTab from './components/tabs/IngestTab'
 import DataTab from './components/tabs/DataTab'
@@ -35,7 +36,7 @@ function Layout() {
   // (refreshNamespaces' identity tracks the account via authFetch).
   useEffect(() => { refreshNamespaces() }, [refreshNamespaces])
 
-  const tabs = ['build', 'apps', 'demos', 'ingest', 'data', 'query', 'memory', 'skills', 'settings']
+  const tabs = ['build', 'apps', 'namespaces', 'demos', 'ingest', 'data', 'query', 'memory', 'skills', 'settings']
 
   // Namespace suggestions: the account's namespaces, plus 'default' and whatever
   // is currently typed, de-duplicated so the active value is always offered.
@@ -91,6 +92,9 @@ function Layout() {
         </div>
         <div className={`panel ${activeTab === 'apps' ? 'active' : ''}`}>
           <AppsTab active={activeTab === 'apps'} onSwitchTab={switchTab} />
+        </div>
+        <div className={`panel ${activeTab === 'namespaces' ? 'active' : ''}`}>
+          <NamespacesTab active={activeTab === 'namespaces'} />
         </div>
         <div className={`panel ${activeTab === 'demos' ? 'active' : ''}`}>
           <DemosTab
