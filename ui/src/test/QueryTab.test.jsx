@@ -193,7 +193,10 @@ it('renders a skill download path as an absolute, app-resolved clickable link', 
 
   await user.click(link)
 
-  await waitFor(() => expect(dlSpy).toHaveBeenCalledWith(dlUrl))
+  await waitFor(() => expect(dlSpy).toHaveBeenCalledWith(
+    dlUrl,
+    expect.objectContaining({ headers: expect.objectContaining({ 'X-Account-Id': 'default' }) }),
+  ))
   expect(createObjSpy).toHaveBeenCalledWith(blob)
   // A save anchor was clicked carrying the server-provided filename.
   const saved = clickSpy.mock.instances.find(a => a.download)

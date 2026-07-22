@@ -4,7 +4,7 @@ import { useT } from '../../i18n'
 import { streamSSE } from '../../utils'
 
 export default function WfModal({ state, onClose }) {
-  const { apiUrl } = useApp()
+  const { appBase, authFetch } = useApp()
   const { t } = useT()
   const [selectedValue, setSelectedValue] = useState('')
   const [running, setRunning] = useState(false)
@@ -37,8 +37,8 @@ export default function WfModal({ state, onClose }) {
     setError(null)
     const localFindings = []
     try {
-      const resp = await fetch(
-        `${apiUrl}/applications/${encodeURIComponent(state.appName)}/workflows/${encodeURIComponent(state.workflowName)}/stream`,
+      const resp = await authFetch(
+        `${appBase}/${encodeURIComponent(state.appName)}/workflows/${encodeURIComponent(state.workflowName)}/stream`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ doc_id: selectedValue }) }
       )
       if (!resp.ok) { setError(t('wfModal.errStatus', { status: resp.status, msg: await resp.text() })); return }

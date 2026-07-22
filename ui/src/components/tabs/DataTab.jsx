@@ -4,7 +4,7 @@ import { useT } from '../../i18n'
 import { copyText } from '../../utils'
 
 export default function DataTab({ active, refreshKey, onOpenWfModal, wfCompleteCollection, onWfCompleteHandled }) {
-  const { apiUrl, currentApp, demoCatalog } = useApp()
+  const { appBase, authFetch, currentApp, demoCatalog } = useApp()
   const { t } = useT()
   const [collections, setCollections] = useState([])
   const [activeCollection, setActiveCollectionState] = useState('')
@@ -27,7 +27,7 @@ export default function DataTab({ active, refreshKey, onOpenWfModal, wfCompleteC
     if (!currentApp) { setCollections([]); return }
     setCollError(null)
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/collections`)
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/collections`)
       if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText)
       const { structured = [] } = await resp.json()
       setCollections(structured)
@@ -89,8 +89,8 @@ export default function DataTab({ active, refreshKey, onOpenWfModal, wfCompleteC
     setHiddenCols(new Set())
     setShowColMenu(false)
     try {
-      const resp = await fetch(
-        `${apiUrl}/applications/${encodeURIComponent(currentApp)}/collections/${encodeURIComponent(name)}/query`,
+      const resp = await authFetch(
+        `${appBase}/${encodeURIComponent(currentApp)}/collections/${encodeURIComponent(name)}/query`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filters: [], fields: null }) }
       )
       if (!resp.ok) throw new Error(resp.status + ': ' + await resp.text())
@@ -118,7 +118,7 @@ export default function DataTab({ active, refreshKey, onOpenWfModal, wfCompleteC
     const wf = (demo.workflow_actions || [])[target.workflow_action_index]
     if (!wf) return
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/tasks?task_type=workflow&task_name=${encodeURIComponent(wf.name)}&status=pending`)
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/tasks?task_type=workflow&task_name=${encodeURIComponent(wf.name)}&status=pending`)
       if (!resp.ok) return
       const { tasks = [] } = await resp.json()
       const pendingIds = [...new Set(tasks.map(t => t.doc_id).filter(Boolean))]

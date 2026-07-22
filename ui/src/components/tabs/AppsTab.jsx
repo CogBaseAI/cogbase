@@ -5,16 +5,21 @@ import AppDetailModal from '../modals/AppDetailModal'
 import DataTable from '../DataTable'
 
 export default function AppsTab({ active, onSwitchTab }) {
-  const { apiUrl, currentApp, setCurrentApp } = useApp()
+  const { apiUrl, namespaceId, authFetch, currentApp, setCurrentApp } = useApp()
   const { t } = useT()
   const [apps, setApps] = useState(null) // null=loading, []|[...]=loaded
   const [error, setError] = useState(null)
   const [detailApp, setDetailApp] = useState(null)
 
+  // The list is account-wide (every namespace), so address a single app by its
+  // own namespace rather than the header-selected one.
+  const appUrl = (a, suffix = '') =>
+    `${apiUrl}/namespaces/${encodeURIComponent(a.namespace_id || namespaceId)}/applications/${encodeURIComponent(a.name)}${suffix}`
+
   async function loadApps() {
     setApps(null); setError(null)
     try {
-      const resp = await fetch(`${apiUrl}/applications`)
+      const resp = await authFetch(`${apiUrl}/applications`)
       if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText)
       const { applications = [] } = await resp.json()
       setApps(applications)
@@ -27,16 +32,17 @@ export default function AppsTab({ active, onSwitchTab }) {
     // The list response already carries the full resolved config, but fetch
     // the single-app endpoint so the drawer always shows the freshest config.
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(a.name)}`)
+      const resp = await authFetch(appUrl(a))
       if (resp.ok) { setDetailApp(await resp.json()); return }
     } catch {}
     setDetailApp(a)
   }
 
-  async function deleteApp(name) {
+  async function deleteApp(a) {
+    const name = a.name
     if (!confirm(t('apps.confirmDelete', { name }))) return
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      const resp = await authFetch(appUrl(a), { method: 'DELETE' })
       if (resp.ok || resp.status === 204 || resp.status === 404) {
         if (currentApp === name) setCurrentApp('')
         loadApps()
@@ -90,7 +96,7 @@ export default function AppsTab({ active, onSwitchTab }) {
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button className="btn btn-ghost btn-sm" onClick={() => viewApp(a)}>{t('appDetail.details')}</button>
                   <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name); loadApps() }}>{t('common.use')}</button>
-                  <button className="btn btn-red btn-sm" onClick={() => deleteApp(a.name)}>{t('common.delete')}</button>
+                  <button className="btn btn-red btn-sm" onClick={() => deleteApp(a)}>{t('common.delete')}</button>
                 </div>
               ),
             },

@@ -5,7 +5,7 @@ import DataTable from '../DataTable'
 import SkillModal from '../modals/SkillModal'
 
 export default function SkillsTab({ active }) {
-  const { apiUrl, currentApp } = useApp()
+  const { apiUrl, appBase, authFetch, currentApp } = useApp()
   const { t } = useT()
   const [skills, setSkills] = useState(null)   // null=loading, []|[...]=loaded
   const [error, setError] = useState(null)
@@ -22,7 +22,7 @@ export default function SkillsTab({ active }) {
   async function loadSkills() {
     setSkills(null); setError(null)
     try {
-      const resp = await fetch(`${apiUrl}/skills`)
+      const resp = await authFetch(`${apiUrl}/skills`)
       if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText)
       const { skills: list = [] } = await resp.json()
       setSkills(list)
@@ -32,7 +32,7 @@ export default function SkillsTab({ active }) {
   async function loadAssigned() {
     if (!currentApp) { setAssigned(new Set()); return }
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/skills`)
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/skills`)
       if (!resp.ok) { setAssigned(new Set()); return }
       const { skills: refs = [] } = await resp.json()
       setAssigned(new Set(refs.map(r => r.name)))
@@ -52,7 +52,7 @@ export default function SkillsTab({ active }) {
     try {
       const form = new FormData()
       form.append('bundle', picked)
-      const resp = await fetch(`${apiUrl}/skills`, { method: 'POST', body: form })
+      const resp = await authFetch(`${apiUrl}/skills`, { method: 'POST', body: form })
       if (!resp.ok) {
         const d = await resp.json().catch(() => ({}))
         setUploadMsg({ text: (Array.isArray(d.detail) ? d.detail[0]?.msg : d.detail) || t('skills.errStatus', { status: resp.status }), cls: 'err' })
@@ -84,7 +84,7 @@ export default function SkillsTab({ active }) {
     try {
       const form = new FormData()
       form.append('bundle', file)
-      const resp = await fetch(`${apiUrl}/skills/${encodeURIComponent(skillName)}`, { method: 'PUT', body: form })
+      const resp = await authFetch(`${apiUrl}/skills/${encodeURIComponent(skillName)}`, { method: 'PUT', body: form })
       if (!resp.ok) {
         const d = await resp.json().catch(() => ({}))
         alert(t('skills.replaceFailed', { msg: (Array.isArray(d.detail) ? d.detail[0]?.msg : d.detail) || resp.status }))
@@ -99,7 +99,7 @@ export default function SkillsTab({ active }) {
     if (!confirm(t('skills.confirmDelete', { name: skill.name }))) return
     setBusyId(skill.name)
     try {
-      const resp = await fetch(`${apiUrl}/skills/${encodeURIComponent(skill.name)}`, { method: 'DELETE' })
+      const resp = await authFetch(`${apiUrl}/skills/${encodeURIComponent(skill.name)}`, { method: 'DELETE' })
       if (resp.ok || resp.status === 204 || resp.status === 404) {
         loadSkills()
         loadAssigned()
@@ -115,10 +115,10 @@ export default function SkillsTab({ active }) {
     const isOn = assigned.has(skill.name)
     setBusyId(skill.name)
     try {
-      const base = `${apiUrl}/applications/${encodeURIComponent(currentApp)}/skills`
+      const base = `${appBase}/${encodeURIComponent(currentApp)}/skills`
       const resp = isOn
-        ? await fetch(`${base}/${encodeURIComponent(skill.name)}`, { method: 'DELETE' })
-        : await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ skill_name: skill.name }) })
+        ? await authFetch(`${base}/${encodeURIComponent(skill.name)}`, { method: 'DELETE' })
+        : await authFetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ skill_name: skill.name }) })
       if (resp.ok || resp.status === 204 || resp.status === 201) {
         setAssigned(prev => {
           const next = new Set(prev)

@@ -41,6 +41,8 @@ const translations = {
     header: {
       apiLabel: 'API',
       apiPlaceholder: 'http://localhost:8000',
+      accountLabel: 'Account',
+      namespaceLabel: 'Namespace',
       noApp: 'No app selected',
       language: 'Language',
     },
@@ -446,6 +448,8 @@ const translations = {
     header: {
       apiLabel: 'API',
       apiPlaceholder: 'http://localhost:8000',
+      accountLabel: '账户',
+      namespaceLabel: '命名空间',
       noApp: '未选择应用',
       language: '语言',
     },

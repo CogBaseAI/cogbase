@@ -3,7 +3,7 @@ import { useApp } from '../../context'
 import { useT } from '../../i18n'
 
 export default function TaskProgressModal({ data, onClose, onDone }) {
-  const { apiUrl } = useApp()
+  const { appBase, authFetch } = useApp()
   const { t } = useT()
   const [task, setTask] = useState(null)
   const [error, setError] = useState(null)
@@ -14,8 +14,8 @@ export default function TaskProgressModal({ data, onClose, onDone }) {
     setTask(null); setError(null)
     async function poll() {
       try {
-        const resp = await fetch(
-          `${apiUrl}/applications/${encodeURIComponent(data.appName)}/tasks?task_type=workflow&task_name=${encodeURIComponent(data.workflowName)}&doc_id=${encodeURIComponent(data.docId)}`
+        const resp = await authFetch(
+          `${appBase}/${encodeURIComponent(data.appName)}/tasks?task_type=workflow&task_name=${encodeURIComponent(data.workflowName)}&doc_id=${encodeURIComponent(data.docId)}`
         )
         if (!resp.ok) { setError(t('taskModal.loadFail', { status: resp.status })); clearInterval(timerRef.current); return }
         const d = await resp.json()

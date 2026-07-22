@@ -47,6 +47,7 @@ header h1 span { color: var(--accent); }
   font-size: 12px; width: 190px;
 }
 .api-row input:focus { outline: none; border-color: var(--accent); }
+.api-row input.tenant-input { width: 110px; }
 
 .app-pill {
   margin-left: auto;

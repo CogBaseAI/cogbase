@@ -12,7 +12,7 @@ const EMB_DEFAULTS = {
 }
 
 export default function SettingsTab({ active, onAutoSwitch }) {
-  const { apiUrl, llmConfigured, embConfigured, setLlmConfigured, setEmbConfigured } = useApp()
+  const { apiUrl, authFetch, llmConfigured, embConfigured, setLlmConfigured, setEmbConfigured } = useApp()
   const { t } = useT()
 
   const [llm, setLlm] = useState({ provider: 'openai', model: 'gpt-5.4', mini_model: 'gpt-5.4-mini', base_url: 'https://api.openai.com/v1', api_key: '' })
@@ -22,7 +22,7 @@ export default function SettingsTab({ active, onAutoSwitch }) {
 
   async function loadConfig() {
     try {
-      const r = await fetch(`${apiUrl}/system/config`)
+      const r = await authFetch(`${apiUrl}/system/config`)
       if (!r.ok) return
       const d = await r.json()
       if (d.llm) setLlm(l => ({ ...l, provider: d.llm.provider || 'openai', model: d.llm.model || '', mini_model: d.llm.mini_model || '', base_url: d.llm.base_url || '', api_key: d.llm.api_key || '' }))
@@ -54,7 +54,7 @@ export default function SettingsTab({ active, onAutoSwitch }) {
       body.embedding = { provider: emb.provider, model: emb.model.trim(), base_url: emb.base_url.trim(), dimensions: dims, api_key: emb.api_key.trim() }
     }
     try {
-      const r = await fetch(`${apiUrl}/system/config`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const r = await authFetch(`${apiUrl}/system/config`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const d = await r.json()
       if (!r.ok) { setMsg({ text: (Array.isArray(d.detail) ? d.detail[0]?.msg : d.detail) || t('settings.errStatus', { status: r.status }), cls: 'err' }); return }
       setMsg({ text: t('settings.saved'), cls: 'ok' })

@@ -13,7 +13,7 @@ function stripConfigMarkers(text) {
 }
 
 export default function BuildTab({ active }) {
-  const { apiUrl, setCurrentApp } = useApp()
+  const { apiUrl, nsBase, authFetch, setCurrentApp } = useApp()
   const { t } = useT()
   const [msgs, setMsgs] = useState([{ role: 'sys', text: t('build.intro') }])
   const [input, setInput] = useState('')
@@ -65,7 +65,7 @@ export default function BuildTab({ active }) {
     setTimeout(scrollMsgsForce, 0)
 
     try {
-      const resp = await fetch(`${apiUrl}/generate/chat/stream`, {
+      const resp = await authFetch(`${apiUrl}/generate/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, history: historyRef.current }),
@@ -118,7 +118,7 @@ export default function BuildTab({ active }) {
   async function deployApp() {
     if (!cfgYaml) return
     try {
-      const resp = await fetch(`${apiUrl}/generate/deploy`, {
+      const resp = await authFetch(`${nsBase}/generate/deploy`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ config_yaml: cfgYaml }),

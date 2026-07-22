@@ -100,7 +100,7 @@ export default function AppDetailModal({ app, onClose }) {
             </Section>
           )}
 
-          <AppSkillsSection appName={app.name} />
+          <AppSkillsSection appName={app.name} namespace={app.namespace_id} />
         </div>
       </div>
     </div>
@@ -123,8 +123,11 @@ function Section({ title, children, defaultOpen = false }) {
 // lets the user assign more (from the system skill registry) or unassign them,
 // hitting the /applications/{name}/skills endpoints. Assigned skills are shown
 // by display name (resolved server-side) rather than raw skill ids.
-function AppSkillsSection({ appName }) {
-  const { apiUrl } = useApp()
+function AppSkillsSection({ appName, namespace }) {
+  const { apiUrl, namespaceId, authFetch } = useApp()
+  const ns = namespace || namespaceId
+  const skillsUrl = (suffix = '') =>
+    `${apiUrl}/namespaces/${encodeURIComponent(ns)}/applications/${encodeURIComponent(appName)}/skills${suffix}`
   const { t } = useT()
   const [all, setAll] = useState([])           // all system skills: [{ id, name, ... }]
   const [assigned, setAssigned] = useState(null) // assigned refs [{ id, name, missing }], null=loading
@@ -136,15 +139,15 @@ function AppSkillsSection({ appName }) {
     setError(null)
     try {
       const [skillsResp, assignedResp] = await Promise.all([
-        fetch(`${apiUrl}/skills`),
-        fetch(`${apiUrl}/applications/${encodeURIComponent(appName)}/skills`),
+        authFetch(`${apiUrl}/skills`),
+        authFetch(skillsUrl()),
       ])
       if (skillsResp.ok) { const { skills = [] } = await skillsResp.json(); setAll(skills) }
       if (!assignedResp.ok) throw new Error(assignedResp.status + ' ' + assignedResp.statusText)
       const { skills: refs = [] } = await assignedResp.json()
       setAssigned(refs)
     } catch (e) { setError(e.message); setAssigned([]) }
-  }, [apiUrl, appName])
+  }, [apiUrl, appName, ns, authFetch])
 
   useEffect(() => { load() }, [load])
 
@@ -152,7 +155,7 @@ function AppSkillsSection({ appName }) {
     if (!name) return
     setBusy('__add__')
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(appName)}/skills`, {
+      const resp = await authFetch(skillsUrl(), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ skill_name: name }),
       })
       if (!resp.ok && resp.status !== 201) {
@@ -171,7 +174,7 @@ function AppSkillsSection({ appName }) {
   async function unassign(ref) {
     setBusy(ref.id)
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(appName)}/skills/${encodeURIComponent(ref.id)}`, { method: 'DELETE' })
+      const resp = await authFetch(skillsUrl(`/${encodeURIComponent(ref.id)}`), { method: 'DELETE' })
       if (resp.ok || resp.status === 204 || resp.status === 404) {
         setAssigned(prev => (prev || []).filter(r => r.id !== ref.id))
       } else {

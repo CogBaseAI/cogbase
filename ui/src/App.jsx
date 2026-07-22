@@ -16,7 +16,7 @@ import WfModal from './components/modals/WfModal'
 import TaskProgressModal from './components/modals/TaskProgressModal'
 
 function Layout() {
-  const { apiUrl, setApiUrl, currentApp, llmConfigured, embConfigured } = useApp()
+  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceId, setNamespaceId, currentApp, llmConfigured, embConfigured } = useApp()
   const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
   const [docModal, setDocModal] = useState(null)        // null | doc object
@@ -41,6 +41,14 @@ function Layout() {
         <div className="api-row">
           <label htmlFor="apiUrl">{t('header.apiLabel')}</label>
           <input id="apiUrl" type="text" value={apiUrl} onChange={e => setApiUrl(e.target.value.replace(/\/$/, ''))} placeholder={t('header.apiPlaceholder')} />
+        </div>
+        <div className="api-row">
+          <label htmlFor="accountId">{t('header.accountLabel')}</label>
+          <input id="accountId" className="tenant-input" type="text" value={accountId} onChange={e => setAccountId(e.target.value)} />
+        </div>
+        <div className="api-row">
+          <label htmlFor="namespaceId">{t('header.namespaceLabel')}</label>
+          <input id="namespaceId" className="tenant-input" type="text" value={namespaceId} onChange={e => setNamespaceId(e.target.value)} />
         </div>
         <div className={`app-pill ${currentApp ? 'on' : ''}`}>
           <span className="dot" />

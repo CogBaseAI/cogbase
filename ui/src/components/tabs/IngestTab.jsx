@@ -11,7 +11,7 @@ function metaString(doc) {
 }
 
 export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOpenWfModal, onDocsChanged }) {
-  const { apiUrl, currentApp } = useApp()
+  const { appBase, authFetch, currentApp } = useApp()
   const { t } = useT()
   const [pickedFiles, setPickedFiles] = useState([])
   const [metaInput, setMetaInput] = useState('{}')
@@ -31,8 +31,8 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
     if (!currentApp) { setDocs(null); return }
     try {
       const [docsResp, wfResp] = await Promise.all([
-        fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/docs`),
-        fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/workflows`),
+        authFetch(`${appBase}/${encodeURIComponent(currentApp)}/docs`),
+        authFetch(`${appBase}/${encodeURIComponent(currentApp)}/workflows`),
       ])
       if (!docsResp.ok) { setDocs([]); return }
       const { docs: docList = [] } = await docsResp.json()
@@ -42,7 +42,7 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
 
       if (names.length > 0) {
         const wfResults = await Promise.all(
-          names.map(wf => fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/workflows/${encodeURIComponent(wf)}/docs`).then(r => r.ok ? r.json() : { docs: [] }))
+          names.map(wf => authFetch(`${appBase}/${encodeURIComponent(currentApp)}/workflows/${encodeURIComponent(wf)}/docs`).then(r => r.ok ? r.json() : { docs: [] }))
         )
         const maps = {}
         names.forEach((wf, i) => {
@@ -95,11 +95,11 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
       const form = new FormData()
       pickedFiles.forEach(f => form.append('files', f))
       form.append('metadata', JSON.stringify(meta))
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/upload_documents`, { method: 'POST', body: form })
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/upload_documents`, { method: 'POST', body: form })
       if (!resp.ok) { setUploadErr(t('ingest.errStatus', { status: resp.status, msg: await resp.text() })); return }
       const uploadBody = await resp.json()
       setUploadLog([{ status: 'processing' }])
-      const tasks = await waitForTasks(apiUrl, currentApp, uploadBody.task_ids, { timeout: 300000 })
+      const tasks = await waitForTasks(appBase, currentApp, uploadBody.task_ids, { fetchFn: authFetch, timeout: 300000 })
       setUploadLog(tasks.map(t => ({ status: t.status, docId: t.doc_id || t.task_id, error: t.error })))
       setPickedFiles([])
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -119,7 +119,7 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
     if (!confirm(t('ingest.confirmDelete', { docId }))) return
     setDeleting(docId)
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/docs/${encodeURIComponent(docId)}`, { method: 'DELETE' })
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/docs/${encodeURIComponent(docId)}`, { method: 'DELETE' })
       if (resp.ok || resp.status === 204 || resp.status === 404) {
         loadIngestDocs()
         onDocsChanged?.() // the doc's records were removed from structured collections
@@ -138,7 +138,7 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
     const docId = doc.doc_id
     setDownloading(docId)
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/docs/${encodeURIComponent(docId)}/original`)
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/docs/${encodeURIComponent(docId)}/original`)
       if (!resp.ok) { alert(t('ingest.downloadFailed', { msg: resp.status === 404 ? t('ingest.unknownError') : resp.statusText })); return }
       const blob = await resp.blob()
       const filename = (doc.metadata && doc.metadata.source_filename) || docId
