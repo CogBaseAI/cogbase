@@ -21,7 +21,6 @@ class NamespaceResponse(BaseModel):
     # ``namespace_id`` today (see ``NamespaceRecord``); exposed as ``name`` so
     # callers address namespaces by a readable handle, not an opaque id.
     name: str
-    display_name: str | None = None
     description: str | None = None
     created_at: str
     updated_at: str
@@ -41,14 +40,10 @@ class CreateNamespaceRequest(BaseModel):
             "underscores, or hyphens. It is fixed once created."
         ),
     )
-    display_name: str | None = Field(default=None, description="Optional friendly label.")
     description: str | None = Field(default=None, description="Optional description.")
 
 
 class UpdateNamespaceRequest(BaseModel):
-    display_name: str | None = Field(
-        default=None, description="New friendly label; omit to leave unchanged."
-    )
     description: str | None = Field(
         default=None, description="New description; omit to leave unchanged."
     )

@@ -22,10 +22,10 @@ Namespaces are account-scoped; the namespace id is immutable once created.
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/namespaces` | Create a namespace (`namespace_id` + optional `display_name`/`description`) |
+| `POST` | `/namespaces` | Create a namespace (`name` handle + optional `description`) |
 | `GET` | `/namespaces` | List the calling account's namespaces |
 | `GET` | `/namespaces/{namespace}` | Fetch one namespace |
-| `PATCH` | `/namespaces/{namespace}` | Update `display_name`/`description` |
+| `PATCH` | `/namespaces/{namespace}` | Update `description` |
 | `DELETE` | `/namespaces/{namespace}` | Delete an empty namespace (refuses `default` and namespaces still holding apps) |
 
 Creating an application auto-registers its namespace (idempotent), so it surfaces in the listing even when never explicitly created.

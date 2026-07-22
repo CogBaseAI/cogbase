@@ -56,7 +56,6 @@ NAMESPACE_RECORDS_SCHEMA = CollectionSchema(
     fields={
         "account_id":   FieldSchema(type=FieldType.STRING, nullable=False, index=True),
         "namespace_id": FieldSchema(type=FieldType.STRING, nullable=False, index=True),
-        "display_name": FieldSchema(type=FieldType.STRING, nullable=True),
         "description":  FieldSchema(type=FieldType.STRING, nullable=True),
         "created_at":   FieldSchema(type=FieldType.STRING, nullable=False),
         "updated_at":   FieldSchema(type=FieldType.STRING, nullable=False),
@@ -247,7 +246,6 @@ class AppRecord(BaseModel):
 class NamespaceRecord(BaseModel):
     account_id: str    # owning tenant
     namespace_id: str  # URL-addressable handle, unique per account
-    display_name: str | None = None  # optional friendly label
     description: str | None = None
     created_at: str    # ISO-8601 UTC
     updated_at: str    # ISO-8601 UTC

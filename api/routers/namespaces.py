@@ -43,7 +43,6 @@ def _to_response(record: NamespaceRecord) -> NamespaceResponse:
     return NamespaceResponse(
         account_id=record.account_id,
         name=record.namespace_id,
-        display_name=record.display_name,
         description=record.description,
         created_at=record.created_at,
         updated_at=record.updated_at,
@@ -80,7 +79,6 @@ async def create_namespace(
     record = NamespaceRecord(
         account_id=account_id,
         namespace_id=namespace_id,
-        display_name=body.display_name,
         description=body.description,
         created_at=now,
         updated_at=now,
@@ -122,15 +120,15 @@ async def update_namespace(
     system_store: SystemStoreDep,
     body: UpdateNamespaceRequest,
 ) -> NamespaceResponse:
-    """Update a namespace's display name and/or description.
+    """Update a namespace's description.
 
-    The namespace ``name`` is its identity and is not mutable — only the friendly
-    label and description can change.
+    The namespace ``name`` is its identity and is not mutable — only the
+    description can change.
     """
-    if body.display_name is None and body.description is None:
+    if body.description is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="At least one of 'display_name' or 'description' must be provided",
+            detail="'description' must be provided",
         )
 
     namespace_id = resolve_namespace_id(account_id, namespace)
@@ -139,8 +137,6 @@ async def update_namespace(
         raise HTTPException(status_code=404, detail=f"Namespace '{namespace}' not found")
 
     updates: dict = {"updated_at": _now()}
-    if body.display_name is not None:
-        updates["display_name"] = body.display_name
     if body.description is not None:
         updates["description"] = body.description
     updated = record.model_copy(update=updates)

@@ -63,12 +63,12 @@ class TestCreateNamespace:
         client = app_overrides["client"]
         resp = await client.post(
             "/namespaces",
-            json={"name": "team-a", "display_name": "Team A", "description": "d"},
+            json={"name": "team-a", "description": "d"},
         )
         assert resp.status_code == 201
         body = resp.json()
         assert body["name"] == "team-a"
-        assert body["display_name"] == "Team A"
+        assert body["description"] == "d"
         assert body["account_id"] == "default"
         assert body["created_at"]
 
@@ -77,7 +77,7 @@ class TestCreateNamespace:
         client = app_overrides["client"]
         resp = await client.post("/namespaces", json={"name": "team-a"})
         assert resp.status_code == 201
-        assert resp.json()["display_name"] is None
+        assert resp.json()["description"] is None
 
     @pytest.mark.asyncio
     async def test_duplicate_conflicts(self, app_overrides):
@@ -131,10 +131,10 @@ class TestGetNamespace:
     @pytest.mark.asyncio
     async def test_get(self, app_overrides):
         client = app_overrides["client"]
-        await client.post("/namespaces", json={"name": "team-a", "display_name": "Team A"})
+        await client.post("/namespaces", json={"name": "team-a", "description": "Team A"})
         resp = await client.get("/namespaces/team-a")
         assert resp.status_code == 200
-        assert resp.json()["display_name"] == "Team A"
+        assert resp.json()["description"] == "Team A"
 
     @pytest.mark.asyncio
     async def test_get_missing_404(self, app_overrides):
@@ -147,20 +147,10 @@ class TestUpdateNamespace:
     @pytest.mark.asyncio
     async def test_update_fields(self, app_overrides):
         client = app_overrides["client"]
-        await client.post("/namespaces", json={"name": "team-a", "display_name": "old"})
-        resp = await client.patch("/namespaces/team-a", json={"display_name": "new", "description": "d"})
+        await client.post("/namespaces", json={"name": "team-a", "description": "old"})
+        resp = await client.patch("/namespaces/team-a", json={"description": "new"})
         assert resp.status_code == 200
-        assert resp.json()["display_name"] == "new"
-        assert resp.json()["description"] == "d"
-
-    @pytest.mark.asyncio
-    async def test_partial_update_leaves_other_field(self, app_overrides):
-        client = app_overrides["client"]
-        await client.post("/namespaces", json={"name": "team-a", "display_name": "keep"})
-        resp = await client.patch("/namespaces/team-a", json={"description": "only-desc"})
-        assert resp.status_code == 200
-        assert resp.json()["display_name"] == "keep"
-        assert resp.json()["description"] == "only-desc"
+        assert resp.json()["description"] == "new"
 
     @pytest.mark.asyncio
     async def test_empty_update_422(self, app_overrides):
@@ -172,7 +162,7 @@ class TestUpdateNamespace:
     @pytest.mark.asyncio
     async def test_update_missing_404(self, app_overrides):
         client = app_overrides["client"]
-        resp = await client.patch("/namespaces/ghost", json={"display_name": "x"})
+        resp = await client.patch("/namespaces/ghost", json={"description": "x"})
         assert resp.status_code == 404
 
 

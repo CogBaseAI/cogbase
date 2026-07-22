@@ -6,8 +6,8 @@ import { renderWithCtx } from './renderWithCtx'
 import NamespacesTab from '../components/tabs/NamespacesTab'
 
 const NAMESPACES = [
-  { name: 'default', display_name: null, description: null, created_at: '2024-01-01T00:00:00Z' },
-  { name: 'legal-team', display_name: 'Legal', description: 'Contracts', created_at: '2024-02-01T00:00:00Z' },
+  { name: 'default', description: null, created_at: '2024-01-01T00:00:00Z' },
+  { name: 'legal-team', description: 'Contracts', created_at: '2024-02-01T00:00:00Z' },
 ]
 
 function mockList(items = NAMESPACES) {
@@ -25,7 +25,7 @@ afterEach(() => vi.restoreAllMocks())
 it('lists namespaces when active', async () => {
   renderWithCtx(<NamespacesTab active={true} />)
   await waitFor(() => expect(screen.getByText('legal-team')).toBeInTheDocument())
-  expect(screen.getByText('Legal')).toBeInTheDocument()
+  expect(screen.getByText('Contracts')).toBeInTheDocument()
   // The default namespace is present (shown as its id and a "default" flag).
   expect(screen.getAllByText('default').length).toBeGreaterThan(0)
 })

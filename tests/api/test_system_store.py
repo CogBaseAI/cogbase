@@ -526,13 +526,11 @@ class TestDeleteDocCleansDocWorkflowRegistry:
 def _make_namespace_record(
     namespace_id: str = "team-a",
     account_id: str = "default",
-    display_name: str | None = None,
     description: str | None = None,
 ) -> NamespaceRecord:
     return NamespaceRecord(
         account_id=account_id,
         namespace_id=namespace_id,
-        display_name=display_name,
         description=description,
         created_at="2026-01-01T00:00:00+00:00",
         updated_at="2026-01-01T00:00:00+00:00",
@@ -542,11 +540,11 @@ def _make_namespace_record(
 class TestSystemStoreNamespaces:
     @pytest.mark.asyncio
     async def test_save_and_get(self, store):
-        await store.save_namespace(_make_namespace_record(display_name="Team A"))
+        await store.save_namespace(_make_namespace_record(description="Team A"))
         got = await store.get_namespace("default", "team-a")
         assert got is not None
         assert got.namespace_id == "team-a"
-        assert got.display_name == "Team A"
+        assert got.description == "Team A"
 
     @pytest.mark.asyncio
     async def test_get_missing_returns_none(self, store):
@@ -560,10 +558,10 @@ class TestSystemStoreNamespaces:
 
     @pytest.mark.asyncio
     async def test_save_overwrites(self, store):
-        await store.save_namespace(_make_namespace_record(display_name="v1"))
-        await store.save_namespace(_make_namespace_record(display_name="v2"))
+        await store.save_namespace(_make_namespace_record(description="v1"))
+        await store.save_namespace(_make_namespace_record(description="v2"))
         got = await store.get_namespace("default", "team-a")
-        assert got.display_name == "v2"
+        assert got.description == "v2"
         assert len(await store.list_namespaces("default")) == 1
 
     @pytest.mark.asyncio
@@ -587,11 +585,11 @@ class TestSystemStoreNamespaces:
 
     @pytest.mark.asyncio
     async def test_ensure_is_idempotent_and_preserves_metadata(self, store):
-        await store.save_namespace(_make_namespace_record("team-a", display_name="Team A"))
+        await store.save_namespace(_make_namespace_record("team-a", description="Team A"))
         await store.ensure_namespace("default", "team-a")
         got = await store.get_namespace("default", "team-a")
         # ensure must not clobber an existing record's metadata
-        assert got.display_name == "Team A"
+        assert got.description == "Team A"
         assert len(await store.list_namespaces("default")) == 1
 
 

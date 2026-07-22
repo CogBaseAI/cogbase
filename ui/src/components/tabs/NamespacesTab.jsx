@@ -3,8 +3,8 @@ import { useApp } from '../../context'
 import { useT } from '../../i18n'
 import DataTable from '../DataTable'
 
-// Account-scoped namespace management: create, rename (display name/description),
-// delete, and switch the header's working namespace. Reads/writes the shared
+// Account-scoped namespace management: create, edit (description), delete, and
+// switch the header's working namespace. Reads/writes the shared
 // `namespaces` list in context and calls `refreshNamespaces` after every mutation
 // so the header switcher stays in sync. Backed by the /namespaces CRUD routes.
 export default function NamespacesTab({ active }) {
@@ -12,16 +12,16 @@ export default function NamespacesTab({ active }) {
   const { t } = useT()
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
-  // null = create mode; a name string = editing that namespace's labels.
+  // null = create mode; a name string = editing that namespace's description.
   const [editingId, setEditingId] = useState(null)
-  const [form, setForm] = useState({ name: '', display_name: '', description: '' })
+  const [form, setForm] = useState({ name: '', description: '' })
 
   // Pull a fresh list whenever the tab is opened.
   useEffect(() => { if (active) refreshNamespaces() }, [active, refreshNamespaces])
 
   function resetForm() {
     setEditingId(null)
-    setForm({ name: '', display_name: '', description: '' })
+    setForm({ name: '', description: '' })
     setError(null)
   }
 
@@ -29,7 +29,6 @@ export default function NamespacesTab({ active }) {
     setEditingId(ns.name)
     setForm({
       name: ns.name,
-      display_name: ns.display_name || '',
       description: ns.description || '',
     })
     setError(null)
@@ -42,19 +41,18 @@ export default function NamespacesTab({ active }) {
     setBusy(true)
     setError(null)
     try {
-      // PATCH sends only the labels (the id is immutable); POST creates.
+      // PATCH sends only the description (the id is immutable); POST creates.
       const resp = isEdit
         ? await authFetch(`${apiUrl}/namespaces/${encodeURIComponent(editingId)}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ display_name: form.display_name, description: form.description }),
+            body: JSON.stringify({ description: form.description }),
           })
         : await authFetch(`${apiUrl}/namespaces`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               name: form.name.trim(),
-              display_name: form.display_name || null,
               description: form.description || null,
             }),
           })
@@ -120,14 +118,6 @@ export default function NamespacesTab({ active }) {
               onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
             />
           </div>
-          <div className="settings-field">
-            <label>{t('nsAdmin.displayLabel')} · {t('nsAdmin.optional')}</label>
-            <input
-              type="text"
-              value={form.display_name}
-              onChange={e => setForm(f => ({ ...f, display_name: e.target.value }))}
-            />
-          </div>
           <div className="settings-field full">
             <label>{t('nsAdmin.descLabel')} · {t('nsAdmin.optional')}</label>
             <input
@@ -171,7 +161,6 @@ export default function NamespacesTab({ active }) {
                 )
               },
             },
-            { key: 'display_name', label: t('nsAdmin.colDisplay'), value: ns => ns.display_name || '—', cellClassName: 'muted-cell' },
             { key: 'description', label: t('nsAdmin.colDesc'), value: ns => ns.description || '—', cellClassName: 'muted-cell' },
             {
               key: 'created_at', label: t('nsAdmin.colCreated'), sortValue: ns => ns.created_at || '',

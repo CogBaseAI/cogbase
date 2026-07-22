@@ -146,10 +146,10 @@ an app is unique by `(account_id, namespace_id, name)`. Account-wide routes (e.g
 `GET /applications`) omit the namespace segment.
 
 Namespaces (account-scoped CRUD):
-- `POST /namespaces` — create a namespace (`name` handle + optional display_name/description; the name doubles as the internal `namespace_id`)
+- `POST /namespaces` — create a namespace (`name` handle + optional description; the name doubles as the internal `namespace_id`)
 - `GET /namespaces` — list the calling account's namespaces
 - `GET /namespaces/{namespace}` — fetch one namespace
-- `PATCH /namespaces/{namespace}` — update display_name/description (the id is immutable)
+- `PATCH /namespaces/{namespace}` — update description (the id is immutable)
 - `DELETE /namespaces/{namespace}` — delete an empty namespace (refuses `default` and namespaces still holding apps)
 - Creating an app auto-registers its namespace (idempotent) so it surfaces in the listing.
 
