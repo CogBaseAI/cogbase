@@ -14,10 +14,10 @@ export default function AppsTab({ active, onSwitchTab }) {
   // The list is account-wide (every namespace), so address a single app by its
   // own namespace rather than the header-selected one.
   const appUrl = (a, suffix = '') =>
-    `${apiUrl}/namespaces/${encodeURIComponent(a.namespace_id || namespaceId)}/applications/${encodeURIComponent(a.name)}${suffix}`
+    `${apiUrl}/namespaces/${encodeURIComponent(a.namespace || namespaceId)}/applications/${encodeURIComponent(a.name)}${suffix}`
 
   // A name is only unique within a namespace, so the selected app matches on both.
-  const isCurrent = (a) => a.name === currentApp && (a.namespace_id || namespaceId) === currentAppNs
+  const isCurrent = (a) => a.name === currentApp && (a.namespace || namespaceId) === currentAppNs
 
   async function loadApps() {
     setApps(null); setError(null)
@@ -98,7 +98,7 @@ export default function AppsTab({ active, onSwitchTab }) {
               render: a => (
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button className="btn btn-ghost btn-sm" onClick={() => viewApp(a)}>{t('appDetail.details')}</button>
-                  <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name, a.namespace_id); loadApps() }}>{t('common.use')}</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name, a.namespace); loadApps() }}>{t('common.use')}</button>
                   <button className="btn btn-red btn-sm" onClick={() => deleteApp(a)}>{t('common.delete')}</button>
                 </div>
               ),

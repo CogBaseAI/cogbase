@@ -40,7 +40,7 @@ function Layout() {
 
   // Namespace suggestions: the account's namespaces, plus 'default' and whatever
   // is currently typed, de-duplicated so the active value is always offered.
-  const nsOptions = [...new Set(['default', namespaceId, ...namespaces.map(n => n.namespace_id)])].filter(Boolean)
+  const nsOptions = [...new Set(['default', namespaceId, ...namespaces.map(n => n.name)])].filter(Boolean)
 
   return (
     <>

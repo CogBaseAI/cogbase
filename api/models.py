@@ -17,7 +17,10 @@ from api.system_store import DocWorkflowStatus, TaskStatus
 
 class NamespaceResponse(BaseModel):
     account_id: str
-    namespace_id: str
+    # The handle the user chose at creation. It doubles as the internal
+    # ``namespace_id`` today (see ``NamespaceRecord``); exposed as ``name`` so
+    # callers address namespaces by a readable handle, not an opaque id.
+    name: str
     display_name: str | None = None
     description: str | None = None
     created_at: str
@@ -30,10 +33,12 @@ class NamespaceListResponse(BaseModel):
 
 
 class CreateNamespaceRequest(BaseModel):
-    namespace_id: str = Field(
+    name: str = Field(
         description=(
-            "URL-addressable handle, unique per account. Must start with a letter "
-            "or underscore, followed by letters, digits, underscores, or hyphens."
+            "A handle you choose for the namespace, like a GitHub org or Slack "
+            "workspace name — unique within your account and used directly in URLs. "
+            "Must start with a letter or underscore, followed by letters, digits, "
+            "underscores, or hyphens. It is fixed once created."
         ),
     )
     display_name: str | None = Field(default=None, description="Optional friendly label.")
@@ -52,7 +57,9 @@ class UpdateNamespaceRequest(BaseModel):
 class ApplicationResponse(BaseModel):
     name: str
     account_id: str
-    namespace_id: str
+    # The namespace handle (its user-facing name) the app belongs to; the URL
+    # path segment. Maps to the internal ``AppRecord.namespace_id``.
+    namespace: str
     status: str   # "initializing" | "active" | "error"
     config: dict[str, Any]
     error: str | None

@@ -32,6 +32,20 @@ def get_account_id(
     return x_account_id or DEFAULT_ACCOUNT_ID
 
 
+def resolve_namespace_id(account_id: str, name: str) -> str:
+    """Map a user-facing namespace ``name`` to its internal ``namespace_id``.
+
+    Today the name *is* the internal id — a namespace is addressed by the handle
+    the user chose at creation, so this is an identity mapping. This is the single
+    seam for a future opaque ``namespace_uuid``: replace the body with a real
+    ``(account_id, name) -> uuid`` lookup here and every call site inherits it.
+    (That lookup will need async access to the system store, so this function and
+    ``get_request_scope`` would become async then; an existing namespace can be
+    upgraded by treating its current name as the generated uuid.)
+    """
+    return name
+
+
 @dataclass
 class RequestScope:
     """The tenant scope a request addresses: account (header) + namespace (path)."""
@@ -43,11 +57,15 @@ class RequestScope:
 def get_request_scope(request: Request, account_id: AccountIdDep) -> RequestScope:
     """Resolve the full ``(account_id, namespace_id)`` scope for a route.
 
-    ``account_id`` comes from the ``X-Account-Id`` header; ``namespace_id`` is the
-    ``{namespace}`` URL path segment (absent on account-wide routes → default).
+    ``account_id`` comes from the ``X-Account-Id`` header; the namespace ``name``
+    is the ``{namespace}`` URL path segment (absent on account-wide routes →
+    default) and is resolved to its internal id via :func:`resolve_namespace_id`.
     """
-    namespace = request.path_params.get("namespace") or DEFAULT_NAMESPACE
-    return RequestScope(account_id=account_id, namespace_id=namespace)
+    name = request.path_params.get("namespace") or DEFAULT_NAMESPACE
+    return RequestScope(
+        account_id=account_id,
+        namespace_id=resolve_namespace_id(account_id, name),
+    )
 
 
 def get_system_store(request: Request) -> SystemStore:

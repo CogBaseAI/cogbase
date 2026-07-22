@@ -6,8 +6,8 @@ import { renderWithCtx } from './renderWithCtx'
 import NamespacesTab from '../components/tabs/NamespacesTab'
 
 const NAMESPACES = [
-  { namespace_id: 'default', display_name: null, description: null, created_at: '2024-01-01T00:00:00Z' },
-  { namespace_id: 'legal-team', display_name: 'Legal', description: 'Contracts', created_at: '2024-02-01T00:00:00Z' },
+  { name: 'default', display_name: null, description: null, created_at: '2024-01-01T00:00:00Z' },
+  { name: 'legal-team', display_name: 'Legal', description: 'Contracts', created_at: '2024-02-01T00:00:00Z' },
 ]
 
 function mockList(items = NAMESPACES) {

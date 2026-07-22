@@ -149,7 +149,7 @@ def _to_response(record: AppRecord) -> ApplicationResponse:
     return ApplicationResponse(
         name=record.name,
         account_id=record.account_id,
-        namespace_id=record.namespace_id,
+        namespace=record.namespace_id,
         status=record.status,
         config=config_dict,
         error=record.error,

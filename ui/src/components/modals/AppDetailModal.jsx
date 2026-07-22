@@ -100,7 +100,7 @@ export default function AppDetailModal({ app, onClose }) {
             </Section>
           )}
 
-          <AppSkillsSection appName={app.name} namespace={app.namespace_id} />
+          <AppSkillsSection appName={app.name} namespace={app.namespace} />
         </div>
       </div>
     </div>

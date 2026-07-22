@@ -15,7 +15,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
 
-from api.dependencies import DEFAULT_NAMESPACE, AccountIdDep, SystemStoreDep
+from api.dependencies import (
+    DEFAULT_NAMESPACE,
+    AccountIdDep,
+    SystemStoreDep,
+    resolve_namespace_id,
+)
 from api.models import (
     CreateNamespaceRequest,
     NamespaceListResponse,
@@ -37,7 +42,7 @@ def _now() -> str:
 def _to_response(record: NamespaceRecord) -> NamespaceResponse:
     return NamespaceResponse(
         account_id=record.account_id,
-        namespace_id=record.namespace_id,
+        name=record.namespace_id,
         display_name=record.display_name,
         description=record.description,
         created_at=record.created_at,
@@ -53,16 +58,22 @@ async def create_namespace(
 ) -> NamespaceResponse:
     """Create a namespace in the calling account."""
     try:
-        namespace_id = validate_resource_name(body.namespace_id)
+        name = validate_resource_name(body.name)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         )
 
+    # The chosen name doubles as the internal id today. When an opaque
+    # ``namespace_uuid`` is introduced this is where it would be minted (and the
+    # record would carry both the uuid and the name); everything else already
+    # goes through ``resolve_namespace_id``.
+    namespace_id = name
+
     if await system_store.get_namespace(account_id, namespace_id) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Namespace '{namespace_id}' already exists",
+            detail=f"Namespace '{name}' already exists",
         )
 
     now = _now()
@@ -97,7 +108,8 @@ async def get_namespace(
     system_store: SystemStoreDep,
 ) -> NamespaceResponse:
     """Return metadata for a single namespace."""
-    record = await system_store.get_namespace(account_id, namespace)
+    namespace_id = resolve_namespace_id(account_id, namespace)
+    record = await system_store.get_namespace(account_id, namespace_id)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Namespace '{namespace}' not found")
     return _to_response(record)
@@ -112,8 +124,8 @@ async def update_namespace(
 ) -> NamespaceResponse:
     """Update a namespace's display name and/or description.
 
-    The ``namespace_id`` handle is the namespace's identity and is not mutable —
-    only the friendly label and description can change.
+    The namespace ``name`` is its identity and is not mutable — only the friendly
+    label and description can change.
     """
     if body.display_name is None and body.description is None:
         raise HTTPException(
@@ -121,7 +133,8 @@ async def update_namespace(
             detail="At least one of 'display_name' or 'description' must be provided",
         )
 
-    record = await system_store.get_namespace(account_id, namespace)
+    namespace_id = resolve_namespace_id(account_id, namespace)
+    record = await system_store.get_namespace(account_id, namespace_id)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Namespace '{namespace}' not found")
 
@@ -148,17 +161,18 @@ async def delete_namespace(
     callers that don't address a namespace), and a namespace that still holds
     applications is refused with 409 — delete or move its apps first.
     """
-    if namespace == DEFAULT_NAMESPACE:
+    namespace_id = resolve_namespace_id(account_id, namespace)
+    if namespace_id == DEFAULT_NAMESPACE:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="The default namespace cannot be deleted",
         )
 
-    record = await system_store.get_namespace(account_id, namespace)
+    record = await system_store.get_namespace(account_id, namespace_id)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Namespace '{namespace}' not found")
 
-    apps = await system_store.list_apps(account_id, namespace)
+    apps = await system_store.list_apps(account_id, namespace_id)
     if apps:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -168,5 +182,5 @@ async def delete_namespace(
             ),
         )
 
-    await system_store.delete_namespace(account_id, namespace)
-    logger.info("Deleted namespace '%s' (account=%s)", namespace, account_id)
+    await system_store.delete_namespace(account_id, namespace_id)
+    logger.info("Deleted namespace '%s' (account=%s)", namespace_id, account_id)

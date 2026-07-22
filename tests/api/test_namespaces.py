@@ -63,11 +63,11 @@ class TestCreateNamespace:
         client = app_overrides["client"]
         resp = await client.post(
             "/namespaces",
-            json={"namespace_id": "team-a", "display_name": "Team A", "description": "d"},
+            json={"name": "team-a", "display_name": "Team A", "description": "d"},
         )
         assert resp.status_code == 201
         body = resp.json()
-        assert body["namespace_id"] == "team-a"
+        assert body["name"] == "team-a"
         assert body["display_name"] == "Team A"
         assert body["account_id"] == "default"
         assert body["created_at"]
@@ -75,29 +75,29 @@ class TestCreateNamespace:
     @pytest.mark.asyncio
     async def test_create_minimal(self, app_overrides):
         client = app_overrides["client"]
-        resp = await client.post("/namespaces", json={"namespace_id": "team-a"})
+        resp = await client.post("/namespaces", json={"name": "team-a"})
         assert resp.status_code == 201
         assert resp.json()["display_name"] is None
 
     @pytest.mark.asyncio
     async def test_duplicate_conflicts(self, app_overrides):
         client = app_overrides["client"]
-        await client.post("/namespaces", json={"namespace_id": "team-a"})
-        resp = await client.post("/namespaces", json={"namespace_id": "team-a"})
+        await client.post("/namespaces", json={"name": "team-a"})
+        resp = await client.post("/namespaces", json={"name": "team-a"})
         assert resp.status_code == 409
 
     @pytest.mark.asyncio
     async def test_invalid_name_rejected(self, app_overrides):
         client = app_overrides["client"]
-        resp = await client.post("/namespaces", json={"namespace_id": "bad name!"})
+        resp = await client.post("/namespaces", json={"name": "bad name!"})
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
     async def test_scoped_by_account(self, app_overrides):
         client = app_overrides["client"]
-        await client.post("/namespaces", json={"namespace_id": "team-a"}, headers={"X-Account-Id": "acct-1"})
+        await client.post("/namespaces", json={"name": "team-a"}, headers={"X-Account-Id": "acct-1"})
         # Same handle in a different account is a distinct namespace.
-        resp = await client.post("/namespaces", json={"namespace_id": "team-a"}, headers={"X-Account-Id": "acct-2"})
+        resp = await client.post("/namespaces", json={"name": "team-a"}, headers={"X-Account-Id": "acct-2"})
         assert resp.status_code == 201
 
 
@@ -112,26 +112,26 @@ class TestListNamespaces:
     @pytest.mark.asyncio
     async def test_list_returns_created(self, app_overrides):
         client = app_overrides["client"]
-        await client.post("/namespaces", json={"namespace_id": "team-a"})
-        await client.post("/namespaces", json={"namespace_id": "team-b"})
+        await client.post("/namespaces", json={"name": "team-a"})
+        await client.post("/namespaces", json={"name": "team-b"})
         resp = await client.get("/namespaces")
         assert resp.json()["total"] == 2
-        assert {n["namespace_id"] for n in resp.json()["namespaces"]} == {"team-a", "team-b"}
+        assert {n["name"] for n in resp.json()["namespaces"]} == {"team-a", "team-b"}
 
     @pytest.mark.asyncio
     async def test_list_scoped_by_account(self, app_overrides):
         client = app_overrides["client"]
-        await client.post("/namespaces", json={"namespace_id": "team-a"}, headers={"X-Account-Id": "acct-1"})
-        await client.post("/namespaces", json={"namespace_id": "team-b"}, headers={"X-Account-Id": "acct-2"})
+        await client.post("/namespaces", json={"name": "team-a"}, headers={"X-Account-Id": "acct-1"})
+        await client.post("/namespaces", json={"name": "team-b"}, headers={"X-Account-Id": "acct-2"})
         resp = await client.get("/namespaces", headers={"X-Account-Id": "acct-1"})
-        assert {n["namespace_id"] for n in resp.json()["namespaces"]} == {"team-a"}
+        assert {n["name"] for n in resp.json()["namespaces"]} == {"team-a"}
 
 
 class TestGetNamespace:
     @pytest.mark.asyncio
     async def test_get(self, app_overrides):
         client = app_overrides["client"]
-        await client.post("/namespaces", json={"namespace_id": "team-a", "display_name": "Team A"})
+        await client.post("/namespaces", json={"name": "team-a", "display_name": "Team A"})
         resp = await client.get("/namespaces/team-a")
         assert resp.status_code == 200
         assert resp.json()["display_name"] == "Team A"
@@ -147,7 +147,7 @@ class TestUpdateNamespace:
     @pytest.mark.asyncio
     async def test_update_fields(self, app_overrides):
         client = app_overrides["client"]
-        await client.post("/namespaces", json={"namespace_id": "team-a", "display_name": "old"})
+        await client.post("/namespaces", json={"name": "team-a", "display_name": "old"})
         resp = await client.patch("/namespaces/team-a", json={"display_name": "new", "description": "d"})
         assert resp.status_code == 200
         assert resp.json()["display_name"] == "new"
@@ -156,7 +156,7 @@ class TestUpdateNamespace:
     @pytest.mark.asyncio
     async def test_partial_update_leaves_other_field(self, app_overrides):
         client = app_overrides["client"]
-        await client.post("/namespaces", json={"namespace_id": "team-a", "display_name": "keep"})
+        await client.post("/namespaces", json={"name": "team-a", "display_name": "keep"})
         resp = await client.patch("/namespaces/team-a", json={"description": "only-desc"})
         assert resp.status_code == 200
         assert resp.json()["display_name"] == "keep"
@@ -165,7 +165,7 @@ class TestUpdateNamespace:
     @pytest.mark.asyncio
     async def test_empty_update_422(self, app_overrides):
         client = app_overrides["client"]
-        await client.post("/namespaces", json={"namespace_id": "team-a"})
+        await client.post("/namespaces", json={"name": "team-a"})
         resp = await client.patch("/namespaces/team-a", json={})
         assert resp.status_code == 422
 
@@ -180,7 +180,7 @@ class TestDeleteNamespace:
     @pytest.mark.asyncio
     async def test_delete_empty(self, app_overrides):
         client = app_overrides["client"]
-        await client.post("/namespaces", json={"namespace_id": "team-a"})
+        await client.post("/namespaces", json={"name": "team-a"})
         resp = await client.delete("/namespaces/team-a")
         assert resp.status_code == 204
         assert (await client.get("/namespaces/team-a")).status_code == 404
@@ -201,7 +201,7 @@ class TestDeleteNamespace:
     async def test_delete_nonempty_refused(self, app_overrides):
         client = app_overrides["client"]
         system_store = app_overrides["system_store"]
-        await client.post("/namespaces", json={"namespace_id": "team-a"})
+        await client.post("/namespaces", json={"name": "team-a"})
         await _seed_app(system_store, "my-app", "team-a")
         resp = await client.delete("/namespaces/team-a")
         assert resp.status_code == 409
@@ -235,4 +235,4 @@ class TestNamespaceAutoRegistration:
         )
         assert resp.status_code == 201
         listed = await client.get("/namespaces")
-        assert "team-auto" in {n["namespace_id"] for n in listed.json()["namespaces"]}
+        assert "team-auto" in {n["name"] for n in listed.json()["namespaces"]}

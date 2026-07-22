@@ -12,23 +12,23 @@ export default function NamespacesTab({ active }) {
   const { t } = useT()
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
-  // null = create mode; a namespace_id string = editing that namespace's labels.
+  // null = create mode; a name string = editing that namespace's labels.
   const [editingId, setEditingId] = useState(null)
-  const [form, setForm] = useState({ namespace_id: '', display_name: '', description: '' })
+  const [form, setForm] = useState({ name: '', display_name: '', description: '' })
 
   // Pull a fresh list whenever the tab is opened.
   useEffect(() => { if (active) refreshNamespaces() }, [active, refreshNamespaces])
 
   function resetForm() {
     setEditingId(null)
-    setForm({ namespace_id: '', display_name: '', description: '' })
+    setForm({ name: '', display_name: '', description: '' })
     setError(null)
   }
 
   function startEdit(ns) {
-    setEditingId(ns.namespace_id)
+    setEditingId(ns.name)
     setForm({
-      namespace_id: ns.namespace_id,
+      name: ns.name,
       display_name: ns.display_name || '',
       description: ns.description || '',
     })
@@ -38,7 +38,7 @@ export default function NamespacesTab({ active }) {
   async function submit() {
     if (busy) return
     const isEdit = editingId !== null
-    if (!isEdit && !form.namespace_id.trim()) return
+    if (!isEdit && !form.name.trim()) return
     setBusy(true)
     setError(null)
     try {
@@ -53,7 +53,7 @@ export default function NamespacesTab({ active }) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              namespace_id: form.namespace_id.trim(),
+              name: form.name.trim(),
               display_name: form.display_name || null,
               description: form.description || null,
             }),
@@ -74,13 +74,13 @@ export default function NamespacesTab({ active }) {
 
   async function remove(ns) {
     if (busy) return
-    if (!confirm(t('nsAdmin.confirmDelete', { id: ns.namespace_id }))) return
+    if (!confirm(t('nsAdmin.confirmDelete', { id: ns.name }))) return
     setBusy(true)
     setError(null)
     try {
-      const resp = await authFetch(`${apiUrl}/namespaces/${encodeURIComponent(ns.namespace_id)}`, { method: 'DELETE' })
+      const resp = await authFetch(`${apiUrl}/namespaces/${encodeURIComponent(ns.name)}`, { method: 'DELETE' })
       if (resp.ok || resp.status === 204 || resp.status === 404) {
-        if (editingId === ns.namespace_id) resetForm()
+        if (editingId === ns.name) resetForm()
         await refreshNamespaces()
       } else {
         const d = await resp.json().catch(() => ({}))
@@ -114,10 +114,10 @@ export default function NamespacesTab({ active }) {
             <label>{t('nsAdmin.idLabel')}</label>
             <input
               type="text"
-              value={form.namespace_id}
+              value={form.name}
               disabled={isEdit}
               placeholder="legal-team"
-              onChange={e => setForm(f => ({ ...f, namespace_id: e.target.value }))}
+              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
             />
           </div>
           <div className="settings-field">
@@ -142,7 +142,7 @@ export default function NamespacesTab({ active }) {
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button
             className="btn btn-primary btn-sm"
-            disabled={busy || (!isEdit && !form.namespace_id.trim())}
+            disabled={busy || (!isEdit && !form.name.trim())}
             onClick={submit}
           >
             {isEdit ? t('nsAdmin.save') : t('nsAdmin.create')}
@@ -156,16 +156,16 @@ export default function NamespacesTab({ active }) {
       ) : (
         <DataTable
           rows={rows}
-          rowKey={ns => ns.namespace_id}
+          rowKey={ns => ns.name}
           columns={[
             {
-              key: 'namespace_id', label: t('nsAdmin.colId'), text: ns => ns.namespace_id,
+              key: 'name', label: t('nsAdmin.colId'), text: ns => ns.name,
               render: ns => {
-                const activeNs = ns.namespace_id === namespaceId
+                const activeNs = ns.name === namespaceId
                 return (
                   <span style={{ fontWeight: activeNs ? 600 : 400 }}>
-                    <code>{ns.namespace_id}</code>
-                    {ns.namespace_id === 'default' && <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 6 }}>{t('nsAdmin.isDefault')}</span>}
+                    <code>{ns.name}</code>
+                    {ns.name === 'default' && <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 6 }}>{t('nsAdmin.isDefault')}</span>}
                     {activeNs && <span style={{ fontSize: 10, color: 'var(--accent)', marginLeft: 6 }}>{t('nsAdmin.active')}</span>}
                   </span>
                 )
@@ -182,9 +182,9 @@ export default function NamespacesTab({ active }) {
               key: 'actions', label: t('nsAdmin.colActions'), sortable: false, cellClassName: 'actions-cell',
               render: ns => (
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <button className="btn btn-ghost btn-sm" disabled={ns.namespace_id === namespaceId} onClick={() => setNamespaceId(ns.namespace_id)}>{t('nsAdmin.switchTo')}</button>
+                  <button className="btn btn-ghost btn-sm" disabled={ns.name === namespaceId} onClick={() => setNamespaceId(ns.name)}>{t('nsAdmin.switchTo')}</button>
                   <button className="btn btn-ghost btn-sm" onClick={() => startEdit(ns)}>{t('nsAdmin.edit')}</button>
-                  <button className="btn btn-red btn-sm" disabled={ns.namespace_id === 'default'} onClick={() => remove(ns)}>{t('common.delete')}</button>
+                  <button className="btn btn-red btn-sm" disabled={ns.name === 'default'} onClick={() => remove(ns)}>{t('common.delete')}</button>
                 </div>
               ),
             },
