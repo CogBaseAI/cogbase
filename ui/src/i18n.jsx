@@ -58,6 +58,9 @@ const translations = {
       memory: 'Memory',
       skills: 'Skills',
       settings: 'Settings',
+      groupWorkspace: 'Workspace',
+      groupApplication: 'Application',
+      groupAccount: 'Account',
     },
     build: {
       intro: "Describe the app you want to build — documents, facts to extract, kinds of questions you'll ask. The AI will guide you through schema design and produce a deployable config.",
@@ -493,6 +496,9 @@ const translations = {
       memory: '记忆',
       skills: '技能',
       settings: '设置',
+      groupWorkspace: '工作区',
+      groupApplication: '应用实例',
+      groupAccount: '账户',
     },
     build: {
       intro: '描述你想构建的应用 — 文档类型、需要提取的事实、你会提出的问题类型。AI 将引导你完成模式设计并生成可部署的配置。',

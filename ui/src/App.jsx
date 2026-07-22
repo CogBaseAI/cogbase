@@ -36,7 +36,16 @@ function Layout() {
   // (refreshNamespaces' identity tracks the account via authFetch).
   useEffect(() => { refreshNamespaces() }, [refreshNamespaces])
 
-  const tabs = ['build', 'apps', 'namespaces', 'demos', 'ingest', 'data', 'query', 'memory', 'skills', 'settings']
+  // Sidebar nav grouped by scope tier. Order within the account is:
+  // account-wide switcher → namespace-scoped workspace → the selected application
+  // → account administration. This teaches the tenancy model (account ▸ namespace
+  // ▸ application) that the flat tab bar used to flatten. (Step A toward layout B,
+  // where these groups become switcher-driven views.)
+  const navGroups = [
+    { label: t('nav.groupWorkspace'),   tabs: ['build', 'apps', 'demos'] },
+    { label: t('nav.groupApplication'), tabs: ['ingest', 'data', 'query', 'memory'] },
+    { label: t('nav.groupAccount'),     tabs: ['namespaces', 'skills', 'settings'] },
+  ]
 
   // Namespace suggestions: the account's namespaces, plus 'default' and whatever
   // is currently typed, de-duplicated so the active value is always offered.
@@ -44,26 +53,12 @@ function Layout() {
 
   return (
     <>
-      {/* Header */}
+      {/* Top bar: brand + environment (API url) + language */}
       <header>
         <h1>⚡ Cog<span>Base</span></h1>
         <div className="api-row">
           <label htmlFor="apiUrl">{t('header.apiLabel')}</label>
           <input id="apiUrl" type="text" value={apiUrl} onChange={e => setApiUrl(e.target.value.replace(/\/$/, ''))} placeholder={t('header.apiPlaceholder')} />
-        </div>
-        <div className="api-row">
-          <label htmlFor="accountId">{t('header.accountLabel')}</label>
-          <input id="accountId" className="tenant-input" type="text" value={accountId} onChange={e => setAccountId(e.target.value)} />
-        </div>
-        <div className="api-row">
-          <label htmlFor="namespaceId">{t('header.namespaceLabel')}</label>
-          {/* Free-text input backed by a datalist: the account's namespaces are
-              offered as suggestions, but an arbitrary namespace can still be typed
-              (e.g. to deploy into one that doesn't exist yet — deploy registers it). */}
-          <input id="namespaceId" className="tenant-input" type="text" list="ns-options" value={namespaceId} onChange={e => setNamespaceId(e.target.value)} />
-          <datalist id="ns-options">
-            {nsOptions.map(ns => <option key={ns} value={ns} />)}
-          </datalist>
         </div>
         <div className={`app-pill ${currentApp ? 'on' : ''}`} title={currentApp ? t('header.appInNamespace', { namespace: currentAppNs }) : undefined}>
           <span className="dot" />
@@ -77,16 +72,43 @@ function Layout() {
         </div>
       </header>
 
-      {/* Tab nav */}
-      <nav>
-        {tabs.map(tab => (
-          <button key={tab} className={activeTab === tab ? 'active' : ''} onClick={() => switchTab(tab)}>
-            {t(`nav.${tab}`)}
-          </button>
-        ))}
-      </nav>
+      <div className="shell">
+        {/* Grouped sidebar nav */}
+        <aside className="sidebar">
+          {/* Account switcher — the tenant boundary that scopes everything below */}
+          <div className="side-switch">
+            <label htmlFor="accountId">{t('header.accountLabel')}</label>
+            <input id="accountId" type="text" value={accountId} onChange={e => setAccountId(e.target.value)} />
+          </div>
 
-      <main>
+          {navGroups.map(group => (
+            <div className="nav-group" key={group.label}>
+              <div className="nav-group-label">{group.label}</div>
+              {/* The namespace switcher scopes the Application group, so it sits
+                  at the head of that group. */}
+              {group.label === t('nav.groupApplication') && (
+                <div className="side-switch nested">
+                  <label htmlFor="namespaceId">{t('header.namespaceLabel')}</label>
+                  {/* Free-text input backed by a datalist: the account's namespaces
+                      are offered as suggestions, but an arbitrary namespace can still
+                      be typed (e.g. to deploy into one that doesn't exist yet —
+                      deploy registers it). */}
+                  <input id="namespaceId" type="text" list="ns-options" value={namespaceId} onChange={e => setNamespaceId(e.target.value)} />
+                  <datalist id="ns-options">
+                    {nsOptions.map(ns => <option key={ns} value={ns} />)}
+                  </datalist>
+                </div>
+              )}
+              {group.tabs.map(tab => (
+                <button key={tab} className={`side-item ${activeTab === tab ? 'active' : ''}`} onClick={() => switchTab(tab)}>
+                  {t(`nav.${tab}`)}
+                </button>
+              ))}
+            </div>
+          ))}
+        </aside>
+
+        <main>
         <div className={`panel ${activeTab === 'build' ? 'active' : ''}`}>
           <BuildTab active={activeTab === 'build'} />
         </div>
@@ -135,7 +157,8 @@ function Layout() {
         <div className={`panel ${activeTab === 'settings' ? 'active' : ''}`}>
           <SettingsTab active={activeTab === 'settings'} onAutoSwitch={() => switchTab('settings')} />
         </div>
-      </main>
+        </main>
+      </div>
 
       {/* Modals */}
       <DocModal doc={docModal} onClose={() => setDocModal(null)} />
