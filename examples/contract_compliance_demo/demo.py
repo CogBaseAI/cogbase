@@ -191,7 +191,7 @@ async def main() -> None:
                 try:
                     async with client._http.stream(
                         "POST",
-                        f"{client.api_base}/applications/{client.app_name}/workflows/check-contract-compliance/stream",
+                        f"{client.app_base}/workflows/check-contract-compliance/stream",
                         json={"doc_id": doc_id},
                         timeout=300,
                     ) as resp:

@@ -45,6 +45,8 @@ import pytest
 
 _APP_NAME = "contract-compliance"
 _API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000").rstrip("/")
+_NAMESPACE = os.environ.get("COGBASE_NAMESPACE", "default")
+_APP_BASE = f"{_API_BASE}/namespaces/{_NAMESPACE}/applications/{_APP_NAME}"
 
 _CONTRACT_IDS = {"contract-001", "contract-002", "contract-003"}
 
@@ -57,7 +59,7 @@ async def _query(text: str) -> dict:
     """POST to /query and return the parsed JSON response dict."""
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            f"{_API_BASE}/applications/{_APP_NAME}/query",
+            f"{_APP_BASE}/query",
             json={"text": text},
             timeout=120,
         )
@@ -68,7 +70,7 @@ async def _query(text: str) -> dict:
 async def _fetch_collection(collection: str, filters: list[dict] | None = None) -> list[dict]:
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            f"{_API_BASE}/applications/{_APP_NAME}/collections/{collection}/query",
+            f"{_APP_BASE}/collections/{collection}/query",
             json={"filters": filters or [], "fields": None},
             timeout=30,
         )
@@ -101,7 +103,7 @@ def findings_records() -> list[dict]:
 
 def test_application_exists():
     """The contract-compliance application must exist and be active."""
-    resp = httpx.get(f"{_API_BASE}/applications/{_APP_NAME}", timeout=10)
+    resp = httpx.get(f"{_APP_BASE}", timeout=10)
     assert resp.status_code == 200, (
         f"Expected application '{_APP_NAME}' to exist. "
         f"Got {resp.status_code}: {resp.text[:200]}"

@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable
 import httpx
 
 API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000")
+NAMESPACE = os.environ.get("COGBASE_NAMESPACE", "default")
 
 try:
     import readline as _readline
@@ -36,8 +37,14 @@ class GeneratorClient:
     _CONFIG_START = "---CONFIG---"
     _CONFIG_END = "---END CONFIG---"
 
-    def __init__(self, api_base: str, http_client: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        api_base: str,
+        http_client: httpx.AsyncClient,
+        namespace: str = NAMESPACE,
+    ) -> None:
         self.api_base = api_base.rstrip("/")
+        self.namespace = namespace
         self._http = http_client
         self.messages: list[dict] = []   # full history sent to the server each turn
         self.config_yaml: str | None = None
@@ -99,7 +106,7 @@ class GeneratorClient:
         if not self.config_yaml:
             raise RuntimeError("No config to deploy — keep chatting until the LLM proposes one")
         resp = await self._http.post(
-            f"{self.api_base}/generate/deploy",
+            f"{self.api_base}/namespaces/{self.namespace}/generate/deploy",
             json={"config_yaml": self.config_yaml},
             timeout=60,
         )
@@ -162,11 +169,22 @@ def configure_logging() -> None:
 
 
 class CogBaseClient:
-    def __init__(self, api_base: str = API_BASE) -> None:
+    def __init__(self, api_base: str = API_BASE, namespace: str = NAMESPACE) -> None:
         self.api_base = api_base.rstrip("/")
+        self.namespace = namespace
         self._http = httpx.AsyncClient()
         self.app_name = ""
         self._session_id: str | None = None
+
+    @property
+    def apps_base(self) -> str:
+        """Namespace-scoped collection URL for name-addressed application routes."""
+        return f"{self.api_base}/namespaces/{self.namespace}/applications"
+
+    @property
+    def app_base(self) -> str:
+        """Namespace-scoped URL for the currently selected application."""
+        return f"{self.apps_base}/{self.app_name}"
 
     async def __aenter__(self) -> "CogBaseClient":
         return self
@@ -186,9 +204,7 @@ class CogBaseClient:
         return resp.json()["applications"]
 
     async def get_app(self) -> dict | None:
-        resp = await self._http.get(
-            f"{self.api_base}/applications/{self.app_name}", timeout=10
-        )
+        resp = await self._http.get(f"{self.app_base}", timeout=10)
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
@@ -196,7 +212,7 @@ class CogBaseClient:
 
     async def create_app(self, bundle: bytes) -> dict:
         resp = await self._http.post(
-            f"{self.api_base}/applications",
+            f"{self.apps_base}",
             files={"bundle": ("bundle.zip", bundle, "application/zip")},
             timeout=30,
         )
@@ -206,7 +222,7 @@ class CogBaseClient:
     async def delete_app(self, name: str | None = None) -> None:
         target = name or self.app_name
         resp = await self._http.delete(
-            f"{self.api_base}/applications/{target}", timeout=10
+            f"{self.apps_base}/{target}", timeout=10
         )
         if resp.status_code not in (204, 404):
             resp.raise_for_status()
@@ -236,7 +252,7 @@ class CogBaseClient:
             await asyncio.sleep(poll_interval)
             for tid in list(pending):
                 resp = await self._http.get(
-                    f"{self.api_base}/applications/{self.app_name}/tasks/{tid}",
+                    f"{self.app_base}/tasks/{tid}",
                     timeout=10,
                 )
                 if resp.status_code == 200:
@@ -309,7 +325,7 @@ class CogBaseClient:
     async def start_session(self) -> str:
         """Open a conversation session for the current app and return its id."""
         resp = await self._http.post(
-            f"{self.api_base}/applications/{self.app_name}/sessions",
+            f"{self.app_base}/sessions",
             json={},
             timeout=30,
         )
@@ -334,7 +350,7 @@ class CogBaseClient:
             return
         try:
             resp = await self._http.post(
-                f"{self.api_base}/applications/{self.app_name}/sessions/{sid}/close",
+                f"{self.app_base}/sessions/{sid}/close",
                 timeout=30,
             )
             resp.raise_for_status()
@@ -358,7 +374,7 @@ class CogBaseClient:
         session_id = await self._ensure_session()
         async with self._http.stream(
             "POST",
-            f"{self.api_base}/applications/{self.app_name}/query/stream",
+            f"{self.app_base}/query/stream",
             json={"text": text, "session_id": session_id},
             timeout=120,
         ) as resp:
@@ -389,7 +405,7 @@ class CogBaseClient:
     async def list_collections(self) -> dict:
         """Returns {"structured": [...], "vector": [...]}."""
         resp = await self._http.get(
-            f"{self.api_base}/applications/{self.app_name}/collections", timeout=10
+            f"{self.app_base}/collections", timeout=10
         )
         resp.raise_for_status()
         return resp.json()
@@ -411,7 +427,7 @@ class CogBaseClient:
             for p in file_paths
         ]
         resp = await self._http.post(
-            f"{self.api_base}/applications/{self.app_name}/upload_documents",
+            f"{self.app_base}/upload_documents",
             files=files,
             data={"metadata": json.dumps(metadata or {})},
             timeout=30,
@@ -444,7 +460,7 @@ class CogBaseClient:
         filters: list[dict] | None = None,
     ) -> list[dict]:
         resp = await self._http.post(
-            f"{self.api_base}/applications/{self.app_name}/collections/{collection}/query",
+            f"{self.app_base}/collections/{collection}/query",
             json={"filters": filters or [], "fields": None},
             timeout=30,
         )
@@ -454,7 +470,7 @@ class CogBaseClient:
     async def list_workflows(self) -> list[str]:
         """Return workflow names registered for the current app."""
         resp = await self._http.get(
-            f"{self.api_base}/applications/{self.app_name}/workflows",
+            f"{self.app_base}/workflows",
             timeout=10,
         )
         resp.raise_for_status()
@@ -466,7 +482,7 @@ class CogBaseClient:
         if status:
             params["status"] = status
         resp = await self._http.get(
-            f"{self.api_base}/applications/{self.app_name}/docs",
+            f"{self.app_base}/docs",
             params=params,
             timeout=10,
         )
@@ -483,7 +499,7 @@ class CogBaseClient:
         if status:
             params["status"] = status
         resp = await self._http.get(
-            f"{self.api_base}/applications/{self.app_name}/workflows/{workflow_name}/docs",
+            f"{self.app_base}/workflows/{workflow_name}/docs",
             params=params,
             timeout=10,
         )
