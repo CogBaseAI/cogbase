@@ -128,7 +128,10 @@ SESSION_RECORDS_SCHEMA = CollectionSchema(
         "can be listed without replaying every episodic log. Message content stays "
         "in the episodic log — this is only the index."
     ),
-    primary_fields=["session_id"],
+    # Keyed by (app_id, session_id): session_id is client-suppliable and only
+    # unique within an app, so app_id is part of the identity — two apps may hold
+    # the same session_id without one's upsert clobbering the other's row.
+    primary_fields=["app_id", "session_id"],
     fields={
         "session_id":    FieldSchema(type=FieldType.STRING, nullable=False),
         "account_id":    FieldSchema(type=FieldType.STRING, nullable=False, index=True),
@@ -435,7 +438,7 @@ class SystemStore:
         message *content*, this index for the list view.
         """
         now = datetime.now(timezone.utc).isoformat()
-        existing = await self.get_session(session_id)
+        existing = await self.get_session(app_id, session_id)
         if existing is None:
             record = SessionRecord(
                 session_id=session_id,
@@ -457,13 +460,15 @@ class SystemStore:
             )
         await self._store.save("session_records", [record.model_dump()])
 
-    async def close_session_record(self, session_id: str) -> None:
+    async def close_session_record(self, app_id: str, session_id: str) -> None:
         """Flip a session's index row to ``closed``.
 
         No-op when the row was never created (a session opened but never asked a
-        question, so it has no turns and never entered the history list).
+        question, so it has no turns and never entered the history list).  Scoped
+        by ``app_id`` — a client-supplied ``session_id`` addressing another app's
+        session finds nothing and is a no-op.
         """
-        existing = await self.get_session(session_id)
+        existing = await self.get_session(app_id, session_id)
         if existing is None:
             return
         record = existing.model_copy(
@@ -474,20 +479,29 @@ class SystemStore:
         )
         await self._store.save("session_records", [record.model_dump()])
 
-    async def delete_session_record(self, session_id: str) -> None:
+    async def delete_session_record(self, app_id: str, session_id: str) -> None:
         """Remove a session's index row.
 
         No-op when the row was never created (a session opened but never asked a
-        question).  The durable episodic log is deleted separately by the app.
+        question).  Scoped by ``app_id`` so a client-supplied ``session_id`` can
+        only ever drop the calling app's own row.  The durable episodic log is
+        deleted separately by the app.
         """
         await self._store.delete_records(
-            "session_records", filters=[Col("session_id") == session_id]
+            "session_records",
+            filters=[Col("app_id") == app_id, Col("session_id") == session_id],
         )
 
-    async def get_session(self, session_id: str) -> SessionRecord | None:
+    async def get_session(self, app_id: str, session_id: str) -> SessionRecord | None:
+        """Resolve a session index row within an app.
+
+        ``session_id`` is client-suppliable, so it is scoped by the resolved
+        ``app_id`` (which already encodes the tenant) to keep one app from
+        reading or mutating another's session rows.
+        """
         rows = await self._store.query_as(
             "session_records",
-            filters=[Col("session_id") == session_id],
+            filters=[Col("app_id") == app_id, Col("session_id") == session_id],
             model=SessionRecord,
         )
         return rows[0] if rows else None

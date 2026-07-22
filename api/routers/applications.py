@@ -883,7 +883,7 @@ async def delete_session(
     """
     app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     await app.delete_session(session_id)
-    await system_store.delete_session_record(session_id)
+    await system_store.delete_session_record(app.app_id, session_id)
     return SessionDeleteResponse(session_id=session_id, deleted=True)
 
 
@@ -905,7 +905,7 @@ async def close_session(
     app = await _get_active_app(scope.account_id, scope.namespace_id, app_name, app_cache, system_store, system_resources)
     await app.end_session(session_id)
     # Flip the session's history-index row to 'closed' (no-op if it never took a turn).
-    await system_store.close_session_record(session_id)
+    await system_store.close_session_record(app.app_id, session_id)
 
     distiller = app.distiller
     if distiller is None:
@@ -1414,11 +1414,13 @@ async def delete_doc(
 # merge logic itself lives in the edit-docx skill, not here.
 #
 # The link the runner emits is keyed by the stable ``app_id`` (not the mutable
-# client-facing name), so it keeps resolving after a rename — and it needs no
-# tenant scope because ``app_id`` is a global UUID.  The route therefore lives on
-# the account-wide router (``/applications/{app_id}/…``, matching the runner link,
+# client-facing name), so it keeps resolving after a rename.  ``app_id`` is a
+# global UUID that spans namespaces, so the route lives on the account-wide router
+# (``/applications/{app_id}/…``, matching the runner link,
 # ``QueryRunner._artifact_download_path``) rather than under a namespace segment;
-# the owning account/namespace come from the resolved record.
+# the owning namespace comes from the resolved record.  The account boundary is
+# still enforced: a record resolved by id whose account differs from the caller's
+# is treated as not found, so one account can't download another's artifacts.
 
 
 @account_router.get("/{app_ref}/documents/{doc_id}/download")
@@ -1436,6 +1438,11 @@ async def download_generated_document(
     a name is also accepted as a fallback, resolved within the caller's account.
     """
     record = await system_store.get_app_by_id(app_ref)
+    # ``app_id`` is a global UUID, so guard the account boundary explicitly: a
+    # record resolved by id must belong to the calling account or it is treated
+    # as not found (rather than served cross-tenant).
+    if record is not None and record.account_id != account_id:
+        record = None
     if record is None:
         # Fallback for a name-keyed link: match within the caller's account
         # (a name is unique per namespace, so pick the first match across them).

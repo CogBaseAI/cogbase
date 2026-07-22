@@ -641,3 +641,90 @@ class TestSystemStoreSkills:
         await store.save_skill(_make_skill_record())
         await store.delete_skill("uuid-1")
         assert await store.get_skill("uuid-1") is None
+
+
+# ---------------------------------------------------------------------------
+# Session index (conversation history list)
+# ---------------------------------------------------------------------------
+
+
+class TestSystemStoreSessions:
+    @pytest.mark.asyncio
+    async def test_touch_creates_row_and_get_returns_it(self, store):
+        await store.touch_session("default", "default", "app-a", "sess-1", "hi there")
+        got = await store.get_session("app-a", "sess-1")
+        assert got is not None
+        assert got.app_id == "app-a"
+        assert got.title == "hi there"
+        assert got.message_count == 1
+        assert got.status == "open"
+
+    @pytest.mark.asyncio
+    async def test_touch_increments_count_and_keeps_title(self, store):
+        await store.touch_session("default", "default", "app-a", "sess-1", "first message")
+        await store.touch_session("default", "default", "app-a", "sess-1", "second message")
+        got = await store.get_session("app-a", "sess-1")
+        assert got.message_count == 2
+        # Title stays the first user message; later turns don't overwrite it.
+        assert got.title == "first message"
+
+    @pytest.mark.asyncio
+    async def test_get_is_scoped_by_app_id(self, store):
+        # session_id is client-suppliable, so it must be scoped by the resolved
+        # app_id — another app addressing the same id must not read the row.
+        await store.touch_session("default", "default", "app-a", "sess-1", "hi")
+        assert await store.get_session("app-a", "sess-1") is not None
+        assert await store.get_session("app-b", "sess-1") is None
+
+    @pytest.mark.asyncio
+    async def test_get_unknown_returns_none(self, store):
+        assert await store.get_session("app-a", "nope") is None
+
+    @pytest.mark.asyncio
+    async def test_close_is_scoped_by_app_id(self, store):
+        await store.touch_session("default", "default", "app-a", "sess-1", "hi")
+        # A foreign app addressing the same session_id must not close app-a's row.
+        await store.close_session_record("app-b", "sess-1")
+        assert (await store.get_session("app-a", "sess-1")).status == "open"
+        # The owning app closes it.
+        await store.close_session_record("app-a", "sess-1")
+        assert (await store.get_session("app-a", "sess-1")).status == "closed"
+
+    @pytest.mark.asyncio
+    async def test_close_missing_row_is_noop(self, store):
+        # Must not raise (a session opened but never took a turn has no index row).
+        await store.close_session_record("app-a", "sess-1")
+
+    @pytest.mark.asyncio
+    async def test_delete_is_scoped_by_app_id(self, store):
+        await store.touch_session("default", "default", "app-a", "sess-1", "hi")
+        # A foreign app addressing the same session_id must not delete app-a's row.
+        await store.delete_session_record("app-b", "sess-1")
+        assert await store.get_session("app-a", "sess-1") is not None
+        # The owning app deletes it.
+        await store.delete_session_record("app-a", "sess-1")
+        assert await store.get_session("app-a", "sess-1") is None
+
+    @pytest.mark.asyncio
+    async def test_same_session_id_across_apps_do_not_collide(self, store):
+        # (app_id, session_id) is the identity, so a reused session_id in a second
+        # app is a distinct row — neither touch clobbers the other's.
+        await store.touch_session("default", "default", "app-a", "sess-1", "a-first")
+        await store.touch_session("default", "default", "app-b", "sess-1", "b-first")
+        a = await store.get_session("app-a", "sess-1")
+        b = await store.get_session("app-b", "sess-1")
+        assert a.title == "a-first" and a.message_count == 1
+        assert b.title == "b-first" and b.message_count == 1
+        # Deleting one leaves the other intact.
+        await store.delete_session_record("app-a", "sess-1")
+        assert await store.get_session("app-a", "sess-1") is None
+        assert await store.get_session("app-b", "sess-1") is not None
+
+    @pytest.mark.asyncio
+    async def test_list_session_records_isolated_by_app(self, store):
+        await store.touch_session("default", "default", "app-a", "sess-1", "a1")
+        await store.touch_session("default", "default", "app-a", "sess-2", "a2")
+        await store.touch_session("default", "default", "app-b", "sess-3", "b1")
+        assert {r.session_id for r in await store.list_session_records("app-a")} == {"sess-1", "sess-2"}
+        assert {r.session_id for r in await store.list_session_records("app-b")} == {"sess-3"}
+        assert await store.list_session_records("app-c") == []

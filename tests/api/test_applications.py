@@ -1973,6 +1973,42 @@ class TestDownloadGeneratedDocument:
         assert resp.content == art
 
     @pytest.mark.asyncio
+    async def test_download_by_app_id_enforces_account_boundary(self, app_overrides):
+        """app_id is a global UUID that spans accounts, so the id path must still
+        gate on the caller's account: another account can't download the artifact
+        even knowing the app_id + doc_id."""
+        client = app_overrides["client"]
+        system_store = app_overrides["system_store"]
+        art = b"tenant-a-only-bytes"
+        doc_id = "contract__ab12ef.docx"
+        mock_app = _mock_download_app({f"generated/{doc_id}": art})
+
+        # Create the app under account "acct-a".
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=mock_app):
+            resp = await client.post(
+                "/namespaces/default/applications",
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
+                headers={"X-Account-Id": "acct-a"},
+            )
+        assert resp.status_code == 201
+        app_id = (await system_store.get_app("acct-a", "default", "my-contract-analyzer")).app_id
+
+        # A different account is refused (treated as not found) even with the id.
+        resp = await client.get(
+            f"/applications/{app_id}/documents/{doc_id}/download",
+            headers={"X-Account-Id": "acct-b"},
+        )
+        assert resp.status_code == 404
+
+        # The owning account still succeeds.
+        resp = await client.get(
+            f"/applications/{app_id}/documents/{doc_id}/download",
+            headers={"X-Account-Id": "acct-a"},
+        )
+        assert resp.status_code == 200
+        assert resp.content == art
+
+    @pytest.mark.asyncio
     async def test_download_reads_generated_key_verbatim(self, client):
         """The artifact id is the full stored filename; no extra suffix is appended."""
         mock_app = _mock_download_app({"generated/report.txt": b"data"})
