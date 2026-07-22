@@ -261,11 +261,19 @@ async def build_app(
     vc_schemas = [vc.schema for vc in vector_collections]
 
     # Episodic memory: the durable append-only event log.  Wired from the shared
-    # (system) log store — deliberately unscoped, so events from every app land
-    # in one log family and carry ``app_name`` for attribution (cross-app mining
-    # by the future evolution engine).  Engaged only when a query carries a
-    # session_id; absent a log store, the runner simply records nothing.
-    episodic = EpisodicMemory(sys.log_store) if sys.log_store is not None else None
+    # (system) log store, scoped to ``account_id`` + ``namespace_id`` (but *not*
+    # ``app_id``): sibling apps in a namespace share one log family — so the
+    # future evolution engine can still mine across them — while other tenants'
+    # sessions live behind a different prefix and can never be read or deleted by
+    # session_id alone.  Events additionally carry account/namespace/app
+    # attribution for self-containment (see ``bind_app``).  Engaged only when a
+    # query carries a session_id; absent a log store, the runner records nothing.
+    log_scope = AppScope(account_id=account_id, namespace_id=namespace_id)
+    episodic = (
+        EpisodicMemory(sys.log_store.with_scope(log_scope))
+        if sys.log_store is not None
+        else None
+    )
 
     # Short-term memory: session-local working context, projected from the same
     # episodic log (it has no store of its own).  Created only when episodic is
@@ -329,6 +337,8 @@ async def build_app(
 
     qrunner = QueryRunner(
         app_id=app_id,
+        account_id=account_id,
+        namespace_id=namespace_id,
         llm=llm,
         resources=RetrievalResources(
             document_store=document_store,

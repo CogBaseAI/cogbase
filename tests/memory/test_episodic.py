@@ -5,6 +5,7 @@ import pytest
 from cogbase.memory import EpisodicMemory, EventRef, EventType, MemoryEvent
 from cogbase.stores.log.base import LogFenced
 from cogbase.stores.log.local_fs import LocalFSLogStore
+from cogbase.stores.scope import AppScope
 
 SESSION = "session-abc"
 
@@ -252,3 +253,37 @@ async def test_delete_removes_log_and_state(episodic):
     # seq restarts after a delete (fresh stream).
     ref = await episodic.record_user_message(session_id=SESSION, content="new")
     assert ref.seq == 0
+
+
+# -- tenancy: scope isolation & attribution ---------------------------------
+
+
+async def test_scoped_log_isolates_sessions_across_tenants(tmp_path):
+    """Two accounts sharing one backing log store cannot see or delete each
+    other's session even when the session_id collides — isolation is by the
+    scoped log-type prefix, not session_id unguessability."""
+    backing = LocalFSLogStore(tmp_path)
+    acme = EpisodicMemory(backing.with_scope(AppScope(account_id="acme", namespace_id="eng")))
+    globex = EpisodicMemory(backing.with_scope(AppScope(account_id="globex", namespace_id="eng")))
+
+    await acme.record_user_message(session_id=SESSION, content="acme secret")
+    await acme.flush(SESSION)
+
+    # Same session_id under a different account sees nothing.
+    assert await globex.replay(session_id=SESSION) == []
+
+    # A delete from the other tenant does not touch acme's log.
+    await globex.delete(session_id=SESSION)
+    events = await acme.replay(session_id=SESSION)
+    assert [e.payload["text"] for e in events] == ["acme secret"]
+
+
+async def test_events_inherit_tenant_attribution_from_bind_app(episodic):
+    """bind_app stamps account/namespace/app onto every recorded event so the
+    durable log is self-describing for audit and tenant-safe mining."""
+    episodic.bind_app(SESSION, app_id="app-1", account_id="acme", namespace_id="eng")
+    await episodic.record_user_message(session_id=SESSION, content="hi")
+    await episodic.flush(SESSION)
+
+    (event,) = await episodic.replay(session_id=SESSION)
+    assert (event.account_id, event.namespace_id, event.app_id) == ("acme", "eng", "app-1")

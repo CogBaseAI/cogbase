@@ -759,6 +759,8 @@ class QueryRunner:
         resources: RetrievalResources,
         memory: MemoryTiers | None = None,
         *,
+        account_id: str | None = None,
+        namespace_id: str | None = None,
         skills: list | None = None,
         system_tools: list[SystemTool] | None = None,
         max_calls: int = 20,
@@ -768,6 +770,11 @@ class QueryRunner:
         work_root: str | None = None,
     ) -> None:
         self._app_id = app_id
+        # Tenant attribution stamped onto episodic events via ``bind_app`` so the
+        # per-session log is self-describing (audit + tenant-safe cross-app
+        # mining); physical isolation is by the scoped log store, not these.
+        self._account_id = account_id
+        self._namespace_id = namespace_id
         self._llm = llm
         self._work_root = work_root or _DEFAULT_WORK_ROOT
 
@@ -1006,10 +1013,15 @@ class QueryRunner:
         context: list[ChatMessage] = []
 
         if episodic_on:
-            # App attribution for every event this turn; idempotent per turn.
+            # Tenant attribution for every event this turn; idempotent per turn.
             # Recorded before build_context so the turn's user_message is in the
             # log family before the session's thread is (re)assembled.
-            self._episodic.bind_app(session_id, app_id=self._app_id)
+            self._episodic.bind_app(
+                session_id,
+                app_id=self._app_id,
+                account_id=self._account_id,
+                namespace_id=self._namespace_id,
+            )
             await self._episodic_record_user_message(session_id, user_input)
 
         if memory_active:

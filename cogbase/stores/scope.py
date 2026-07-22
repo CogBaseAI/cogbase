@@ -3,8 +3,13 @@
 All three levels are *stable internal ids*, not client-facing names — analogous
 to database and table. Clients address an application by its (mutable) name;
 the scope is keyed by ids so renaming never moves the underlying storage.
-Only ``app_id`` is populated today; ``account_id`` / ``namespace_id`` are wired
-when tenancy/auth lands.
+
+All three levels are populated once tenancy is wired: ``api.factory.build_app``
+builds ``AppScope(account_id, namespace_id, app_id)`` and prefixes every
+per-app store with it. A scope may still carry only a subset — the episodic log
+is scoped to ``account_id`` + ``namespace_id`` (no ``app_id``) so sessions from
+sibling apps in a namespace share one log family while staying isolated from
+other tenants — and only the non-None parts contribute to the prefix.
 """
 
 from __future__ import annotations

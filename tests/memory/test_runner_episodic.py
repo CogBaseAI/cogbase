@@ -65,6 +65,8 @@ def episodic(tmp_path):
 def _runner(llm, episodic=None, system_tools=None) -> QueryRunner:
     return QueryRunner(
         app_id="testapp",
+        account_id="acme",
+        namespace_id="eng",
         llm=llm,
         resources=RetrievalResources(document_store=MagicMock()),
         memory=MemoryTiers(episodic=episodic),
@@ -119,7 +121,12 @@ async def test_attribution_is_carried_onto_events(episodic):
     await _drain(_runner(llm, episodic=episodic), "q", session_id="s1")
 
     events = await episodic.replay(session_id="s1")
-    assert all(e.app_id == "testapp" for e in events)
+    # The runner threads its full tenant attribution onto every recorded event
+    # via bind_app, so the durable log is self-describing.
+    assert all(
+        (e.account_id, e.namespace_id, e.app_id) == ("acme", "eng", "testapp")
+        for e in events
+    )
 
 
 # -- tool call / result recording -------------------------------------------

@@ -527,10 +527,17 @@ class CogBaseApp:
         from cogbase.memory import ReviewDecision
 
         sid = session_id or f"add-{uuid4().hex}"
-        self._episodic.bind_app(sid, app_id=self.app_id)
+        self._episodic.bind_app(
+            sid,
+            app_id=self.app_id,
+            account_id=self.account_id,
+            namespace_id=self.namespace_id,
+        )
         await self._episodic.record_session_started(
             session_id=sid,
             app_id=self.app_id,
+            account_id=self.account_id,
+            namespace_id=self.namespace_id,
             metadata=metadata,
             observation_date=observation_date,
         )
