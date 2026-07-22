@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 import yaml
 
+from api.dependencies import RequestScope
 from api.models import ChatMessage, GenerateChatRequest
 from api.routers.app_generate import chat
 from cogbase.core.app_generator import _collect_save_targets
@@ -21,6 +22,9 @@ from cogbase.config.config import AppConfig
 from tests.live_setup import make_llm, make_embedding
 
 logger = logging.getLogger(__name__)
+
+# Stateless generate turns are account-scoped (no namespace until deploy).
+_SCOPE = RequestScope(account_id="default", namespace_id="default")
 
 _llm = make_llm()
 _embedder = make_embedding()
@@ -102,7 +106,7 @@ class TestChatEndpointLive:
             text="What CogBase pipeline step type produces structured records?",
             history=[],
         )
-        response = await chat(body, MagicMock(llm=llm))
+        response = await chat(_SCOPE, body, MagicMock(llm=llm))
         assert response.content
         assert response.config_yaml is None
 
@@ -115,7 +119,7 @@ class TestChatEndpointLive:
             ),
             history=history,
         )
-        response = await chat(body, MagicMock(llm=llm))
+        response = await chat(_SCOPE, body, MagicMock(llm=llm))
 
         assert response.config_yaml, (
             "expected the agent loop to call propose_app_config and return a "
@@ -152,6 +156,7 @@ class TestChatEndpointLive:
                 text = _confirm_text(round_num)
 
             response = await chat(
+                _SCOPE,
                 GenerateChatRequest(text=text, history=history),
                 MagicMock(llm=llm),
             )
@@ -221,6 +226,7 @@ class TestChatEndpointLive:
 
         for round_num in range(_MAX_ROUNDS):
             response = await chat(
+                _SCOPE,
                 GenerateChatRequest(text=text, history=history),
                 MagicMock(llm=llm),
             )
@@ -373,6 +379,7 @@ IN WITNESS WHEREOF, the parties have executed this Agreement as of the Effective
 
         for round_num in range(_MAX_ROUNDS):
             response = await chat(
+                _SCOPE,
                 GenerateChatRequest(text=text, history=history),
                 MagicMock(llm=llm),
             )
@@ -659,6 +666,7 @@ This Agreement is governed by the laws of the State of Texas.
 
         for round_num in range(_MAX_ROUNDS):
             response = await chat(
+                _SCOPE,
                 GenerateChatRequest(text=text, history=history),
                 MagicMock(llm=llm),
             )

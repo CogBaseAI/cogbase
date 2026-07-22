@@ -55,6 +55,7 @@ async def _chat_turn_events(
     body: GenerateChatRequest,
     system_resources: SystemResourcesDep,
     *,
+    account_id: str,
     log_prefix: str,
 ):
     llm = system_resources.llm
@@ -63,7 +64,10 @@ async def _chat_turn_events(
 
     from cogbase.llms.base import ChatMessage as LLMChatMessage
 
-    logger.info("%s start text=%s, history=%d", log_prefix, body.text, len(body.history))
+    logger.info(
+        "%s start account=%s text=%s, history=%d",
+        log_prefix, account_id, body.text, len(body.history),
+    )
 
     messages: list[LLMChatMessage] = (
         [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -164,6 +168,7 @@ async def _chat_turn_events(
 
 @router.post("/chat", response_model=GenerateChatResponse)
 async def chat(
+    scope: RequestScopeDep,
     body: GenerateChatRequest,
     system_resources: SystemResourcesDep,
 ) -> GenerateChatResponse:
@@ -172,10 +177,15 @@ async def chat(
     The client maintains the full message history (role: user/assistant) and sends
     it each call. The agent loop runs entirely server-side: the LLM calls tools,
     gets results, and may call tools again — the client sees only the final response.
+
+    Account-scoped (``X-Account-Id`` header) for multi-tenancy; no namespace is
+    needed since a draft config is produced but nothing is created until deploy.
     """
     validated_config_yaml: str | None = None
     final_content: str = ""
-    async for event in _chat_turn_events(body, system_resources, log_prefix="generate/chat"):
+    async for event in _chat_turn_events(
+        body, system_resources, account_id=scope.account_id, log_prefix="generate/chat"
+    ):
         if event["type"] == "result":
             result = event["result"]
             final_content = result["content"]
@@ -198,6 +208,7 @@ async def chat(
 
 @router.post("/chat/stream")
 async def chat_stream(
+    scope: RequestScopeDep,
     body: GenerateChatRequest,
     system_resources: SystemResourcesDep,
 ) -> StreamingResponse:
@@ -206,12 +217,16 @@ async def chat_stream(
     Token events:  ``{"token": "<text>"}``
     Final event:   ``{"result": {"content": "...", "config_yaml": "..."}}``
     Sentinel:      ``data: [DONE]``
+
+    Account-scoped (``X-Account-Id`` header) for multi-tenancy; no namespace is
+    needed since a draft config is produced but nothing is created until deploy.
     """
     async def event_stream():
         try:
             async for event in _chat_turn_events(
                 body,
                 system_resources,
+                account_id=scope.account_id,
                 log_prefix="generate/chat/stream",
             ):
                 if event["type"] == "token":
