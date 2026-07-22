@@ -4,7 +4,7 @@ import { useT } from '../../i18n'
 import { streamSSE } from '../../utils'
 
 export default function WfModal({ state, onClose }) {
-  const { appBase, authFetch } = useApp()
+  const { currentAppBase: appBase, authFetch } = useApp()
   const { t } = useT()
   const [selectedValue, setSelectedValue] = useState('')
   const [running, setRunning] = useState(false)

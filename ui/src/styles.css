@@ -58,6 +58,10 @@ header h1 span { color: var(--accent); }
 }
 .app-pill.on { border-color: var(--green); color: var(--green); }
 .app-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.app-pill .app-pill-ns {
+  font-size: 10px; color: var(--muted);
+  background: var(--bg2); border-radius: 10px; padding: 1px 7px;
+}
 
 .lang-row { display: flex; align-items: center; }
 .lang-select {

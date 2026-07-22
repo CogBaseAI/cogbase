@@ -6,7 +6,7 @@ import { useT } from '../../i18n'
 import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks, latestDocxArtifact, artifactLabel, filenameFromContentDisposition } from '../../utils'
 
 export default function QueryTab({ active }) {
-  const { apiUrl, appBase, authFetch, currentApp } = useApp()
+  const { apiUrl, currentAppBase: appBase, authFetch, currentApp } = useApp()
   const { t } = useT()
   const [msgs, setMsgs] = useState([{ role: 'sys', text: t('query.intro') }])
   const [input, setInput] = useState('')

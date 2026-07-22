@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { AppProvider, useApp } from './context'
 import { I18nProvider, useT, LANGUAGES } from './i18n'
 import BuildTab from './components/tabs/BuildTab'
@@ -16,7 +16,7 @@ import WfModal from './components/modals/WfModal'
 import TaskProgressModal from './components/modals/TaskProgressModal'
 
 function Layout() {
-  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceId, setNamespaceId, currentApp, llmConfigured, embConfigured } = useApp()
+  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceId, setNamespaceId, namespaces, refreshNamespaces, currentApp, currentAppNs, llmConfigured, embConfigured } = useApp()
   const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
   const [docModal, setDocModal] = useState(null)        // null | doc object
@@ -31,7 +31,15 @@ function Layout() {
     setActiveTab(name)
   }
 
+  // Populate the namespace switcher on mount and whenever the account changes
+  // (refreshNamespaces' identity tracks the account via authFetch).
+  useEffect(() => { refreshNamespaces() }, [refreshNamespaces])
+
   const tabs = ['build', 'apps', 'demos', 'ingest', 'data', 'query', 'memory', 'skills', 'settings']
+
+  // Namespace suggestions: the account's namespaces, plus 'default' and whatever
+  // is currently typed, de-duplicated so the active value is always offered.
+  const nsOptions = [...new Set(['default', namespaceId, ...namespaces.map(n => n.namespace_id)])].filter(Boolean)
 
   return (
     <>
@@ -48,11 +56,18 @@ function Layout() {
         </div>
         <div className="api-row">
           <label htmlFor="namespaceId">{t('header.namespaceLabel')}</label>
-          <input id="namespaceId" className="tenant-input" type="text" value={namespaceId} onChange={e => setNamespaceId(e.target.value)} />
+          {/* Free-text input backed by a datalist: the account's namespaces are
+              offered as suggestions, but an arbitrary namespace can still be typed
+              (e.g. to deploy into one that doesn't exist yet — deploy registers it). */}
+          <input id="namespaceId" className="tenant-input" type="text" list="ns-options" value={namespaceId} onChange={e => setNamespaceId(e.target.value)} />
+          <datalist id="ns-options">
+            {nsOptions.map(ns => <option key={ns} value={ns} />)}
+          </datalist>
         </div>
-        <div className={`app-pill ${currentApp ? 'on' : ''}`}>
+        <div className={`app-pill ${currentApp ? 'on' : ''}`} title={currentApp ? t('header.appInNamespace', { namespace: currentAppNs }) : undefined}>
           <span className="dot" />
           <span>{currentApp || t('header.noApp')}</span>
+          {currentApp && <span className="app-pill-ns">{currentAppNs}</span>}
         </div>
         <div className="lang-row" title={t('header.language')}>
           <select className="lang-select" value={lang} onChange={e => setLang(e.target.value)} aria-label={t('header.language')}>

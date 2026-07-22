@@ -3,7 +3,7 @@ import { useApp } from '../../context'
 import { useT } from '../../i18n'
 
 export default function TaskProgressModal({ data, onClose, onDone }) {
-  const { appBase, authFetch } = useApp()
+  const { currentAppBase: appBase, authFetch } = useApp()
   const { t } = useT()
   const [task, setTask] = useState(null)
   const [error, setError] = useState(null)

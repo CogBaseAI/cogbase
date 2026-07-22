@@ -11,7 +11,7 @@ function metaString(doc) {
 }
 
 export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOpenWfModal, onDocsChanged }) {
-  const { appBase, authFetch, currentApp } = useApp()
+  const { currentAppBase: appBase, authFetch, currentApp } = useApp()
   const { t } = useT()
   const [pickedFiles, setPickedFiles] = useState([])
   const [metaInput, setMetaInput] = useState('{}')

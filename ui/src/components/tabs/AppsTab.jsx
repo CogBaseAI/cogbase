@@ -5,7 +5,7 @@ import AppDetailModal from '../modals/AppDetailModal'
 import DataTable from '../DataTable'
 
 export default function AppsTab({ active, onSwitchTab }) {
-  const { apiUrl, namespaceId, authFetch, currentApp, setCurrentApp } = useApp()
+  const { apiUrl, namespaceId, authFetch, currentApp, currentAppNs, setCurrentApp } = useApp()
   const { t } = useT()
   const [apps, setApps] = useState(null) // null=loading, []|[...]=loaded
   const [error, setError] = useState(null)
@@ -15,6 +15,9 @@ export default function AppsTab({ active, onSwitchTab }) {
   // own namespace rather than the header-selected one.
   const appUrl = (a, suffix = '') =>
     `${apiUrl}/namespaces/${encodeURIComponent(a.namespace_id || namespaceId)}/applications/${encodeURIComponent(a.name)}${suffix}`
+
+  // A name is only unique within a namespace, so the selected app matches on both.
+  const isCurrent = (a) => a.name === currentApp && (a.namespace_id || namespaceId) === currentAppNs
 
   async function loadApps() {
     setApps(null); setError(null)
@@ -44,7 +47,7 @@ export default function AppsTab({ active, onSwitchTab }) {
     try {
       const resp = await authFetch(appUrl(a), { method: 'DELETE' })
       if (resp.ok || resp.status === 204 || resp.status === 404) {
-        if (currentApp === name) setCurrentApp('')
+        if (isCurrent(a)) setCurrentApp('')
         loadApps()
       } else {
         alert(t('apps.deleteFailed', { msg: resp.statusText }))
@@ -69,7 +72,7 @@ export default function AppsTab({ active, onSwitchTab }) {
             {
               key: 'name', label: t('apps.colName'), text: a => a.name,
               render: a => {
-                const cur = a.name === currentApp
+                const cur = isCurrent(a)
                 return (
                   <span style={{ fontWeight: cur ? 600 : 400 }}>
                     <button className="link-btn" onClick={() => viewApp(a)} title={t('appDetail.view')}>{a.name}</button>
@@ -95,7 +98,7 @@ export default function AppsTab({ active, onSwitchTab }) {
               render: a => (
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button className="btn btn-ghost btn-sm" onClick={() => viewApp(a)}>{t('appDetail.details')}</button>
-                  <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name); loadApps() }}>{t('common.use')}</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name, a.namespace_id); loadApps() }}>{t('common.use')}</button>
                   <button className="btn btn-red btn-sm" onClick={() => deleteApp(a)}>{t('common.delete')}</button>
                 </div>
               ),

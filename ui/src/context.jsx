@@ -39,7 +39,13 @@ export function AppProvider({ children }) {
   const [apiUrl, setApiUrl] = useState(defaultApiUrl)
   const [accountId, setAccountIdState] = useState(() => persisted('cogbase.accountId', DEFAULT_ACCOUNT_ID))
   const [namespaceId, setNamespaceIdState] = useState(() => persisted('cogbase.namespaceId', DEFAULT_NAMESPACE))
-  const [currentApp, setCurrentApp] = useState('')
+  // The selected app is a (namespace, name) pair — a name is only unique within a
+  // namespace, so operating on it must carry its own namespace, independent of the
+  // header-selected working namespace. currentApp stays the bare name for display
+  // and compatibility; currentAppNs pins the namespace it was selected from.
+  const [currentApp, setCurrentAppState] = useState('')
+  const [currentAppNs, setCurrentAppNs] = useState(namespaceId)
+  const [namespaces, setNamespaces] = useState([])
   const [demoCatalog, setDemoCatalog] = useState([])
   const [llmConfigured, setLlmConfigured] = useState(false)
   const [embConfigured, setEmbConfigured] = useState(false)
@@ -59,8 +65,20 @@ export function AppProvider({ children }) {
   // /namespaces/{namespace}/applications (api/routers/applications.py); nsBase
   // also fronts the namespace-scoped generate/deploy route. Account-wide routes
   // (GET /applications, /skills, /generate/chat, /system) keep the bare apiUrl.
+  // appBase is scoped to the header-selected working namespace (used for creating
+  // /deploying); currentAppBase is scoped to the selected app's own namespace
+  // (used for operating on it — query, ingest, workflows, ...).
   const nsBase = `${apiUrl}/namespaces/${encodeURIComponent(namespaceId)}`
   const appBase = `${nsBase}/applications`
+  const currentAppBase = `${apiUrl}/namespaces/${encodeURIComponent(currentAppNs)}/applications`
+
+  // Select an app: pin the namespace it was chosen from so later operations
+  // address it correctly regardless of the header's working namespace. Callers
+  // that omit the namespace (e.g. a fresh deploy) inherit the working namespace.
+  const setCurrentApp = useCallback((name, namespace) => {
+    setCurrentAppState(name || '')
+    if (name) setCurrentAppNs(namespace || namespaceId)
+  }, [namespaceId])
 
   // Every request carries the account as the X-Account-Id header (the security
   // boundary). authFetch injects it while leaving each call site's URL/options
@@ -69,14 +87,33 @@ export function AppProvider({ children }) {
     return fetch(url, { ...opts, headers: { 'X-Account-Id': accountId, ...(opts.headers || {}) } })
   }, [accountId])
 
+  // The account's namespaces, for the header switcher. The header drives the fetch
+  // (on mount and whenever the account changes) so tab-level renders that don't
+  // mount the header stay side-effect-free. A new account may have no namespaces
+  // until an app is created, so callers merge in 'default' + the current selection.
+  const refreshNamespaces = useCallback(async () => {
+    try {
+      const resp = await authFetch(`${apiUrl}/namespaces`)
+      if (resp.ok) {
+        const { namespaces: items = [] } = await resp.json()
+        setNamespaces(items)
+      } else {
+        setNamespaces([])
+      }
+    } catch {
+      setNamespaces([])
+    }
+  }, [apiUrl, authFetch])
+
   const value = useMemo(() => ({
     apiUrl, setApiUrl,
     accountId, setAccountId, namespaceId, setNamespaceId,
-    nsBase, appBase, authFetch,
-    currentApp, setCurrentApp,
+    namespaces, refreshNamespaces,
+    nsBase, appBase, currentAppBase, authFetch,
+    currentApp, currentAppNs, setCurrentApp,
     demoCatalog, setDemoCatalog,
     llmConfigured, setLlmConfigured, embConfigured, setEmbConfigured,
-  }), [apiUrl, accountId, namespaceId, nsBase, appBase, authFetch, currentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceId])
+  }), [apiUrl, accountId, namespaceId, namespaces, refreshNamespaces, nsBase, appBase, currentAppBase, authFetch, currentApp, currentAppNs, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceId])
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
 }

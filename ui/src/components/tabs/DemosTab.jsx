@@ -4,7 +4,7 @@ import { useT } from '../../i18n'
 import { previewText, metaText, waitForTasks } from '../../utils'
 
 export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, onOpenWfModal, onSwitchTab }) {
-  const { apiUrl, appBase, nsBase, authFetch, currentApp, setCurrentApp, demoCatalog, setDemoCatalog } = useApp()
+  const { apiUrl, appBase, currentAppBase, nsBase, authFetch, currentApp, setCurrentApp, demoCatalog, setDemoCatalog } = useApp()
   const { t } = useT()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -169,8 +169,8 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
     if (!overrideValues && currentApp === demo.name) {
       try {
         const [tasksResp, doneResp] = await Promise.all([
-          authFetch(`${appBase}/${encodeURIComponent(currentApp)}/tasks?task_type=workflow&task_name=${encodeURIComponent(wf.name)}&status=pending`),
-          authFetch(`${appBase}/${encodeURIComponent(currentApp)}/workflows/${encodeURIComponent(wf.name)}/docs?status=done`),
+          authFetch(`${currentAppBase}/${encodeURIComponent(currentApp)}/tasks?task_type=workflow&task_name=${encodeURIComponent(wf.name)}&status=pending`),
+          authFetch(`${currentAppBase}/${encodeURIComponent(currentApp)}/workflows/${encodeURIComponent(wf.name)}/docs?status=done`),
         ])
         const pendingIds = tasksResp.ok ? [...new Set(((await tasksResp.json()).tasks || []).map(t => t.doc_id).filter(Boolean))] : []
         const doneIds = doneResp.ok ? new Set(((await doneResp.json()).docs || []).map(d => d.doc_id).filter(Boolean)) : new Set()
