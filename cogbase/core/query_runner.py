@@ -223,7 +223,7 @@ class MemoryTiers:
 
 _BASE_TOOLS: list[ToolDefinition] = [
     {
-        "name": "python",
+        "name": "run_python",
         "description": (
             "Execute inline Python code and return stdout/stderr. "
             "Use for computation, data processing, or logic that does not need a separate script file."
@@ -1281,7 +1281,7 @@ class QueryRunner:
             return await self._run_delete_artifact(inputs)
 
         env = self._tool_env(skill, workdir)
-        if name == "python":
+        if name == "run_python":
             return await self._run_python(inputs.get("code", ""), env, cwd=workdir)
         if name == "shell":
             return await self._run_shell(inputs.get("command", ""), env, cwd=workdir)

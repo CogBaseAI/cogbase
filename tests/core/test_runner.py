@@ -529,7 +529,7 @@ async def test_run_custom_system_tool_is_called():
 @pytest.mark.asyncio
 async def test_execute_tool_python_returns_stdout():
     runner = _make_runner("test", MagicMock(), _doc_store())
-    output = await runner._execute_tool("python", {"code": "print('hello')"})
+    output = await runner._execute_tool("run_python", {"code": "print('hello')"})
     assert output == "hello"
 
 
@@ -550,7 +550,7 @@ async def test_execute_tool_unknown_returns_error():
 @pytest.mark.asyncio
 async def test_execute_tool_python_bad_code_returns_stderr():
     runner = _make_runner("test", MagicMock(), _doc_store())
-    output = await runner._execute_tool("python", {"code": "raise ValueError('boom')"})
+    output = await runner._execute_tool("run_python", {"code": "raise ValueError('boom')"})
     assert output  # stderr is captured, not empty
 
 
