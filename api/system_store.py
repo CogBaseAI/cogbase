@@ -55,7 +55,8 @@ NAMESPACE_RECORDS_SCHEMA = CollectionSchema(
     primary_fields=["account_id", "namespace_id"],
     fields={
         "account_id":   FieldSchema(type=FieldType.STRING, nullable=False, index=True),
-        "namespace_id": FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "namespace_id": FieldSchema(type=FieldType.STRING, nullable=False, index=True),  # stable internal id
+        "name":         FieldSchema(type=FieldType.STRING, nullable=False, index=True),  # user-facing handle (unique per account); the name→id lookup indexes this
         "description":  FieldSchema(type=FieldType.STRING, nullable=True),
         "created_at":   FieldSchema(type=FieldType.STRING, nullable=False),
         "updated_at":   FieldSchema(type=FieldType.STRING, nullable=False),
@@ -245,7 +246,8 @@ class AppRecord(BaseModel):
 
 class NamespaceRecord(BaseModel):
     account_id: str    # owning tenant
-    namespace_id: str  # URL-addressable handle, unique per account
+    namespace_id: str  # stable internal id (equals ``name`` today; opaque once rename lands)
+    name: str          # user-facing handle, unique per account; what the URL addresses and what resolves to ``namespace_id``
     description: str | None = None
     created_at: str    # ISO-8601 UTC
     updated_at: str    # ISO-8601 UTC
@@ -367,7 +369,11 @@ class SystemStore:
     async def get_namespace(
         self, account_id: str, namespace_id: str
     ) -> NamespaceRecord | None:
-        """Resolve a namespace by its handle within an account."""
+        """Fetch a namespace by its internal id within an account.
+
+        Callers pass the already-resolved ``namespace_id`` (the API layer maps the
+        user-facing name to it via ``resolve_namespace_id`` first).
+        """
         rows = await self._store.query_as(
             "namespace_records",
             filters=[
@@ -401,6 +407,8 @@ class SystemStore:
         await self.save_namespace(NamespaceRecord(
             account_id=account_id,
             namespace_id=namespace_id,
+            # id and name coincide today, so the auto-registered handle is the id.
+            name=namespace_id,
             created_at=now,
             updated_at=now,
         ))

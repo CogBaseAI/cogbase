@@ -531,6 +531,7 @@ def _make_namespace_record(
     return NamespaceRecord(
         account_id=account_id,
         namespace_id=namespace_id,
+        name=namespace_id,
         description=description,
         created_at="2026-01-01T00:00:00+00:00",
         updated_at="2026-01-01T00:00:00+00:00",
@@ -544,6 +545,7 @@ class TestSystemStoreNamespaces:
         got = await store.get_namespace("default", "team-a")
         assert got is not None
         assert got.namespace_id == "team-a"
+        assert got.name == "team-a"
         assert got.description == "Team A"
 
     @pytest.mark.asyncio
@@ -581,7 +583,10 @@ class TestSystemStoreNamespaces:
     @pytest.mark.asyncio
     async def test_ensure_creates_when_absent(self, store):
         await store.ensure_namespace("default", "team-x")
-        assert await store.get_namespace("default", "team-x") is not None
+        got = await store.get_namespace("default", "team-x")
+        assert got is not None
+        # auto-registered namespace: name coincides with the id
+        assert got.name == "team-x"
 
     @pytest.mark.asyncio
     async def test_ensure_is_idempotent_and_preserves_metadata(self, store):

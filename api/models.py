@@ -17,9 +17,9 @@ from api.system_store import DocWorkflowStatus, TaskStatus
 
 class NamespaceResponse(BaseModel):
     account_id: str
-    # The handle the user chose at creation. It doubles as the internal
-    # ``namespace_id`` today (see ``NamespaceRecord``); exposed as ``name`` so
-    # callers address namespaces by a readable handle, not an opaque id.
+    # The user-facing handle (``NamespaceRecord.name``). Callers address
+    # namespaces by this readable name; the internal ``namespace_id`` it resolves
+    # to stays server-side.
     name: str
     description: str | None = None
     created_at: str

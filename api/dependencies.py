@@ -35,13 +35,17 @@ def get_account_id(
 def resolve_namespace_id(account_id: str, name: str) -> str:
     """Map a user-facing namespace ``name`` to its internal ``namespace_id``.
 
-    Today the name *is* the internal id — a namespace is addressed by the handle
-    the user chose at creation, so this is an identity mapping. This is the single
-    seam for a future opaque ``namespace_uuid``: replace the body with a real
-    ``(account_id, name) -> uuid`` lookup here and every call site inherits it.
-    (That lookup will need async access to the system store, so this function and
-    ``get_request_scope`` would become async then; an existing namespace can be
-    upgraded by treating its current name as the generated uuid.)
+    A namespace is the first layer inside an account, so ``name`` is unique per
+    account and addresses exactly one namespace. The record already stores the
+    name and id as separate columns; today they coincide (the name is minted as
+    the id at creation), so this is an identity mapping and no store round-trip is
+    needed.
+
+    This is the single seam for renaming: when the id becomes opaque and the name
+    mutable, replace the body with a real ``(account_id, name) -> namespace_id``
+    lookup against the indexed ``name`` column and every call site inherits it.
+    (That lookup needs async access to the system store, so this function and
+    ``get_request_scope`` would become async then.)
     """
     return name
 

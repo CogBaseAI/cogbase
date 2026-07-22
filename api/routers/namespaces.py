@@ -42,7 +42,7 @@ def _now() -> str:
 def _to_response(record: NamespaceRecord) -> NamespaceResponse:
     return NamespaceResponse(
         account_id=record.account_id,
-        name=record.namespace_id,
+        name=record.name,
         description=record.description,
         created_at=record.created_at,
         updated_at=record.updated_at,
@@ -63,10 +63,10 @@ async def create_namespace(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         )
 
-    # The chosen name doubles as the internal id today. When an opaque
-    # ``namespace_uuid`` is introduced this is where it would be minted (and the
-    # record would carry both the uuid and the name); everything else already
-    # goes through ``resolve_namespace_id``.
+    # The record carries both a stable internal ``namespace_id`` and the
+    # user-facing ``name``. They coincide today (the name is minted as the id);
+    # when rename lands, ``namespace_id`` becomes an opaque uuid generated here
+    # and only ``resolve_namespace_id`` (the name→id seam) has to change.
     namespace_id = name
 
     if await system_store.get_namespace(account_id, namespace_id) is not None:
@@ -79,6 +79,7 @@ async def create_namespace(
     record = NamespaceRecord(
         account_id=account_id,
         namespace_id=namespace_id,
+        name=name,
         description=body.description,
         created_at=now,
         updated_at=now,
