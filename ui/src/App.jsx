@@ -27,7 +27,7 @@ const TAB_TIER = {
 const DEFAULT_TAB = { account: 'namespaces', namespace: 'apps', application: 'query' }
 
 function Layout() {
-  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceName, setNamespaceName, namespaces, refreshNamespaces, apps, refreshApps, currentApp, currentAppNs, setCurrentApp, llmConfigured, embConfigured } = useApp()
+  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceName, setNamespaceName, namespaces, refreshNamespaces, apps, refreshApps, currentApp, setCurrentApp, llmConfigured, embConfigured } = useApp()
   const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
   const [focus, setFocus] = useState(TAB_TIER['build'])   // which tier's sub-nav shows
@@ -73,9 +73,10 @@ function Layout() {
   // replaced by an empty state prompting selection.
   const appReady = !!currentApp
   const showEmpty = focus === 'application' && !appReady
-  // The App switcher lists the selected namespace's apps; a selection from another
-  // namespace (picked via the Apps tab) reads as unselected here.
-  const appSelectValue = currentAppNs === namespaceName ? currentApp : ''
+  // The App switcher lists the working namespace's apps. Under the unified model
+  // the selection lives in that namespace, but a manual namespace switch can leave
+  // currentApp pointing elsewhere — show it selected only while it's in the list.
+  const appSelectValue = apps.some(a => a.name === currentApp) ? currentApp : ''
 
   // Namespace suggestions: the account's namespaces, plus 'default' and whatever
   // is currently typed, de-duplicated so the active value is always offered.
@@ -90,10 +91,10 @@ function Layout() {
           <label htmlFor="apiUrl">{t('header.apiLabel')}</label>
           <input id="apiUrl" type="text" value={apiUrl} onChange={e => setApiUrl(e.target.value.replace(/\/$/, ''))} placeholder={t('header.apiPlaceholder')} />
         </div>
-        <div className={`app-pill ${currentApp ? 'on' : ''}`} title={currentApp ? t('header.appInNamespace', { namespace: currentAppNs }) : undefined}>
+        <div className={`app-pill ${currentApp ? 'on' : ''}`} title={currentApp ? t('header.appInNamespace', { namespace: namespaceName }) : undefined}>
           <span className="dot" />
           <span>{currentApp || t('header.noApp')}</span>
-          {currentApp && <span className="app-pill-ns">{currentAppNs}</span>}
+          {currentApp && <span className="app-pill-ns">{namespaceName}</span>}
         </div>
         <div className="lang-row" title={t('header.language')}>
           <select className="lang-select" value={lang} onChange={e => setLang(e.target.value)} aria-label={t('header.language')}>
@@ -133,7 +134,7 @@ function Layout() {
                 {open && group.tier === 'application' && (
                   <div className="side-switch nested">
                     <label htmlFor="appSelect">{t('nav.appLabel')}</label>
-                    <select id="appSelect" value={appSelectValue} onChange={e => setCurrentApp(e.target.value, namespaceName)}>
+                    <select id="appSelect" value={appSelectValue} onChange={e => setCurrentApp(e.target.value)}>
                       <option value="">{t('nav.appPlaceholder')}</option>
                       {apps.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
                     </select>

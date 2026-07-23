@@ -5,7 +5,7 @@ import DataTable from '../DataTable'
 import SkillModal from '../modals/SkillModal'
 
 export default function SkillsTab({ active }) {
-  const { apiUrl, currentAppBase: appBase, authFetch, currentApp } = useApp()
+  const { apiUrl, appBase, authFetch, currentApp } = useApp()
   const { t } = useT()
   const [skills, setSkills] = useState(null)   // null=loading, []|[...]=loaded
   const [error, setError] = useState(null)

@@ -5,7 +5,7 @@ import AppDetailModal from '../modals/AppDetailModal'
 import DataTable from '../DataTable'
 
 export default function AppsTab({ active, onSwitchTab }) {
-  const { apiUrl, namespaceName, authFetch, currentApp, currentAppNs, setCurrentApp } = useApp()
+  const { apiUrl, namespaceName, authFetch, currentApp, setCurrentApp } = useApp()
   const { t } = useT()
   const [apps, setApps] = useState(null) // null=loading, []|[...]=loaded
   const [error, setError] = useState(null)
@@ -16,8 +16,10 @@ export default function AppsTab({ active, onSwitchTab }) {
   const appUrl = (a, suffix = '') =>
     `${apiUrl}/namespaces/${encodeURIComponent(a.namespace || namespaceName)}/applications/${encodeURIComponent(a.name)}${suffix}`
 
-  // A name is only unique within a namespace, so the selected app matches on both.
-  const isCurrent = (a) => a.name === currentApp && (a.namespace || namespaceName) === currentAppNs
+  // A name is only unique within a namespace. Under the unified model, selecting
+  // an app snaps the working namespace to the app's own, so the selection matches
+  // on name plus the app's namespace equalling the working one.
+  const isCurrent = (a) => a.name === currentApp && (a.namespace || namespaceName) === namespaceName
 
   async function loadApps() {
     setApps(null); setError(null)

@@ -198,6 +198,13 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 .chat-aside-min-left { border-left: none; border-right: 1px solid var(--border); }
 .aside-body { flex: 1; overflow-y: auto; padding: 10px; }
 .aside-ft { padding: 10px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.deploy-ns { display: flex; align-items: center; gap: 6px; }
+.deploy-ns label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; }
+.deploy-ns input {
+  flex: 1; min-width: 0; padding: 5px 8px; font-size: 12px;
+  background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+}
+.deploy-ns input:focus { outline: none; border-color: var(--accent); }
 
 /* ── Messages ── */
 .msgs { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }

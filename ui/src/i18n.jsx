@@ -84,6 +84,7 @@ const translations = {
       raw: 'raw',
       noConfig: 'No config yet — keep chatting.',
       deployApp: '▲ Deploy App',
+      deployNsLabel: 'Deploy to',
       httpErr: 'HTTP {status}: {msg}',
     },
     apps: {
@@ -527,6 +528,7 @@ const translations = {
       raw: '原始',
       noConfig: '尚无配置 — 继续对话。',
       deployApp: '▲ 部署应用',
+      deployNsLabel: '部署到',
       httpErr: 'HTTP {status}：{msg}',
     },
     apps: {

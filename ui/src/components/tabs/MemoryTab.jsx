@@ -34,7 +34,7 @@ const STATUS_BADGE = { done: 'b-active', failed: 'b-error', running: 'b-init', p
 const MEM_STATUS_BADGE = { active: 'b-active', superseded: 'b-error', pending_review: 'b-init' }
 
 export default function MemoryTab({ active }) {
-  const { currentAppBase: appBase, authFetch, currentApp } = useApp()
+  const { appBase, authFetch, currentApp } = useApp()
   const { t } = useT()
   const [mode, setMode] = useState('review')       // 'review' (gate) | 'records' (browse)
   const [memories, setMemories] = useState(null)   // pending records; null=loading

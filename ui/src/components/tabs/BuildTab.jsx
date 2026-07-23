@@ -13,12 +13,18 @@ function stripConfigMarkers(text) {
 }
 
 export default function BuildTab({ active }) {
-  const { apiUrl, nsBase, authFetch, setCurrentApp } = useApp()
+  const { apiUrl, namespaceName, namespaces, authFetch, setCurrentApp } = useApp()
   const { t } = useT()
   const [msgs, setMsgs] = useState([{ role: 'sys', text: t('build.intro') }])
   const [input, setInput] = useState('')
   const [building, setBuilding] = useState(false)
   const [cfgYaml, setCfgYaml] = useState(null)
+  // Deploy target namespace. Defaults to the working namespace and tracks it, but
+  // can be overridden here for the rare "deploy into a different namespace than I'm
+  // viewing" case — the affordance the unified model moved off the global switcher
+  // (docs/ui-navigation.md, milestone B step 4).
+  const [deployNs, setDeployNs] = useState(namespaceName)
+  useEffect(() => { setDeployNs(namespaceName) }, [namespaceName])
   const [cfgSimplified, setCfgSimplified] = useState(true)
   const [cfgStatus, setCfgStatus] = useState('—')
   const [asideWidth, setAsideWidth] = useState(310)
@@ -117,8 +123,9 @@ export default function BuildTab({ active }) {
 
   async function deployApp() {
     if (!cfgYaml) return
+    const ns = (deployNs || namespaceName).trim() || namespaceName
     try {
-      const resp = await authFetch(`${nsBase}/generate/deploy`, {
+      const resp = await authFetch(`${apiUrl}/namespaces/${encodeURIComponent(ns)}/generate/deploy`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ config_yaml: cfgYaml }),
@@ -128,7 +135,8 @@ export default function BuildTab({ active }) {
         setMsgs(prev => [...prev, { role: 'sys', text: t('build.deployFailed', { msg: data.detail || resp.statusText }) }])
       } else if (data.status === 'active') {
         setMsgs(prev => [...prev, { role: 'sys', text: t('build.deployLive', { name: data.name }) }])
-        setCurrentApp(data.name)
+        // Selecting the deployed app snaps the working namespace to its target.
+        setCurrentApp(data.name, ns)
       } else {
         setMsgs(prev => [...prev, { role: 'sys', text: t('build.deployStatus', { status: data.status + (data.error ? ' — ' + data.error : '') }) }])
       }
@@ -170,6 +178,10 @@ export default function BuildTab({ active }) {
   }, [])
 
   const cfgDisplay = cfgYaml ? (cfgSimplified ? simplifyExtractionSchemas(cfgYaml) : cfgYaml) : t('build.noConfig')
+
+  // Namespace suggestions for the deploy-target picker: the account's namespaces,
+  // plus 'default' and the current target, de-duplicated (mirrors the sidebar's).
+  const nsOptions = [...new Set(['default', deployNs, ...namespaces.map(n => n.name)])].filter(Boolean)
 
   return (
     <div className="chat-layout">
@@ -217,6 +229,15 @@ export default function BuildTab({ active }) {
           <pre className="cfg-pre">{cfgDisplay}</pre>
         </div>
         <div className="aside-ft">
+          {/* Deploy target: defaults to the working namespace; override for a
+              cross-namespace deploy without touching the global switcher. */}
+          <div className="deploy-ns">
+            <label htmlFor="deployNs">{t('build.deployNsLabel')}</label>
+            <input id="deployNs" type="text" list="build-ns-options" value={deployNs} onChange={e => setDeployNs(e.target.value)} />
+            <datalist id="build-ns-options">
+              {nsOptions.map(ns => <option key={ns} value={ns} />)}
+            </datalist>
+          </div>
           <button className="btn btn-green" disabled={!cfgYaml} onClick={deployApp}>{t('build.deployApp')}</button>
         </div>
       </div>

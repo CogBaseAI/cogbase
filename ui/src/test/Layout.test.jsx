@@ -65,4 +65,32 @@ describe('Layout — focus-driven sidebar', () => {
     expect(screen.queryByRole('button', { name: 'Go to Apps' })).not.toBeInTheDocument()
     expect(within(sidebar()).getByRole('button', { name: 'Query' })).toBeInTheDocument()
   })
+
+  it('using an app from another namespace snaps the working namespace to it (unified model)', async () => {
+    // Persisted selection would otherwise leak between tests; start from default.
+    window.localStorage.clear()
+    // Account-wide list (Apps tab) has an app living in the 'legal' namespace; the
+    // namespace-scoped switcher list stays empty. Report configured providers so
+    // the Settings tab doesn't auto-switch away from Apps.
+    global.fetch.mockImplementation((url) => {
+      const u = String(url)
+      const body = u.endsWith('/system/config')
+        ? { llm: { provider: 'openai' }, embedding: { provider: 'openai' } }
+        : u.includes('/namespaces/') && u.endsWith('/applications')
+          ? { applications: [] }                                          // switcher (namespace-scoped)
+          : u.endsWith('/applications')
+            ? { applications: [{ name: 'contracts', namespace: 'legal', status: 'active' }] }  // Apps tab (account-wide)
+            : { namespaces: [] }
+      return Promise.resolve({ ok: true, json: async () => body, text: async () => '' })
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    // The working namespace starts at 'default'.
+    expect(within(sidebar()).getByLabelText('Namespace').value).toBe('default')
+    // Open the Apps tab and "Use" the app from the 'legal' namespace.
+    await user.click(within(sidebar()).getByRole('button', { name: 'Apps' }))
+    await user.click(await screen.findByRole('button', { name: 'Use' }))
+    // Selecting it snapped the working namespace to the app's own.
+    expect(within(sidebar()).getByLabelText('Namespace').value).toBe('legal')
+  })
 })

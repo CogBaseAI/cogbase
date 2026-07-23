@@ -4,7 +4,7 @@ import { useT } from '../../i18n'
 import { copyText } from '../../utils'
 
 export default function DataTab({ active, refreshKey, onOpenWfModal, wfCompleteCollection, onWfCompleteHandled }) {
-  const { currentAppBase: appBase, authFetch, currentApp, demoCatalog } = useApp()
+  const { appBase, authFetch, currentApp, demoCatalog } = useApp()
   const { t } = useT()
   const [collections, setCollections] = useState([])
   const [activeCollection, setActiveCollectionState] = useState('')
