@@ -16,10 +16,21 @@ import ConfigModal from './components/modals/ConfigModal'
 import WfModal from './components/modals/WfModal'
 import TaskProgressModal from './components/modals/TaskProgressModal'
 
+// Each tab belongs to one scope tier; the sidebar shows one tier ("focus") at a
+// time (docs/ui-navigation.md, milestone B). This map is the single source of the
+// tab→tier grouping, and DEFAULT_TAB is where focusing a tier lands you.
+const TAB_TIER = {
+  build: 'namespace', apps: 'namespace', demos: 'namespace',
+  ingest: 'application', data: 'application', query: 'application', memory: 'application',
+  namespaces: 'account', skills: 'account', settings: 'account',
+}
+const DEFAULT_TAB = { account: 'namespaces', namespace: 'apps', application: 'query' }
+
 function Layout() {
   const { apiUrl, setApiUrl, accountId, setAccountId, namespaceName, setNamespaceName, namespaces, refreshNamespaces, currentApp, currentAppNs, llmConfigured, embConfigured } = useApp()
   const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
+  const [focus, setFocus] = useState(TAB_TIER['build'])   // which tier's sub-nav shows
   const [docModal, setDocModal] = useState(null)        // null | doc object
   const [configModal, setConfigModal] = useState(null)  // null | { demo }
   const [wfModal, setWfModal] = useState(null)          // null | { appName, workflowName, paramKey, label, values, desc, allDone, fromIngest }
@@ -28,24 +39,35 @@ function Layout() {
   const [dataRefreshKey, setDataRefreshKey] = useState(0)
   const [wfCompleteCollection, setWfCompleteCollection] = useState(null)
 
-  function switchTab(name) {
+  // Two navigation actions keep focus and activeTab in lockstep: selecting a tab
+  // snaps focus to its tier; focusing a tier lands on that tier's default tab.
+  function goTab(name) {
     setActiveTab(name)
+    setFocus(TAB_TIER[name])
+  }
+  function goFocus(tier) {
+    setFocus(tier)
+    setActiveTab(DEFAULT_TAB[tier])
   }
 
   // Populate the namespace switcher on mount and whenever the account changes
   // (refreshNamespaces' identity tracks the account via authFetch).
   useEffect(() => { refreshNamespaces() }, [refreshNamespaces])
 
-  // Sidebar nav grouped by scope tier. Order within the account is:
-  // account-wide switcher → namespace-scoped workspace → the selected application
-  // → account administration. This teaches the tenancy model (account ▸ namespace
-  // ▸ application) that the flat tab bar used to flatten. (Step A toward layout B,
-  // where these groups become switcher-driven views.)
+  // Sidebar nav grouped by scope tier: account ▸ namespace (workspace) ▸ the
+  // selected application. Each group header focuses its tier; only the focused
+  // tier's items are shown, so out-of-scope actions stay hidden rather than empty
+  // (docs/ui-navigation.md, milestone B).
   const navGroups = [
-    { label: t('nav.groupWorkspace'),   tabs: ['build', 'apps', 'demos'] },
-    { label: t('nav.groupApplication'), tabs: ['ingest', 'data', 'query', 'memory'] },
-    { label: t('nav.groupAccount'),     tabs: ['namespaces', 'skills', 'settings'] },
+    { tier: 'namespace',   label: t('nav.groupWorkspace'),   tabs: ['build', 'apps', 'demos'] },
+    { tier: 'application', label: t('nav.groupApplication'), tabs: ['ingest', 'data', 'query', 'memory'] },
+    { tier: 'account',     label: t('nav.groupAccount'),     tabs: ['namespaces', 'skills', 'settings'] },
   ]
+
+  // The application tier needs a selected app; until one is picked, its panels are
+  // replaced by an empty state prompting selection.
+  const appReady = !!currentApp
+  const showEmpty = focus === 'application' && !appReady
 
   // Namespace suggestions: the account's namespaces, plus 'default' and whatever
   // is currently typed, de-duplicated so the active value is always offered.
@@ -73,39 +95,43 @@ function Layout() {
       </header>
 
       <div className="shell">
-        {/* Grouped sidebar nav */}
+        {/* Focus-driven sidebar nav */}
         <aside className="sidebar">
-          {/* Account switcher — the tenant boundary that scopes everything below */}
+          {/* Context switchers — account and namespace scope every tier below.
+              (In milestone B step 3 these graduate into the top-bar breadcrumb.) */}
           <div className="side-switch">
             <label htmlFor="accountId">{t('header.accountLabel')}</label>
             <input id="accountId" type="text" value={accountId} onChange={e => setAccountId(e.target.value)} />
           </div>
+          <div className="side-switch">
+            <label htmlFor="namespaceName">{t('header.namespaceLabel')}</label>
+            {/* Free-text input backed by a datalist: the account's namespaces are
+                offered as suggestions, but an arbitrary namespace can still be typed
+                (e.g. to deploy into one that doesn't exist yet — deploy registers it). */}
+            <input id="namespaceName" type="text" list="ns-options" value={namespaceName} onChange={e => setNamespaceName(e.target.value)} />
+            <datalist id="ns-options">
+              {nsOptions.map(ns => <option key={ns} value={ns} />)}
+            </datalist>
+          </div>
 
-          {navGroups.map(group => (
-            <div className="nav-group" key={group.label}>
-              <div className="nav-group-label">{group.label}</div>
-              {/* The namespace switcher scopes the Application group, so it sits
-                  at the head of that group. */}
-              {group.label === t('nav.groupApplication') && (
-                <div className="side-switch nested">
-                  <label htmlFor="namespaceName">{t('header.namespaceLabel')}</label>
-                  {/* Free-text input backed by a datalist: the account's namespaces
-                      are offered as suggestions, but an arbitrary namespace can still
-                      be typed (e.g. to deploy into one that doesn't exist yet —
-                      deploy registers it). */}
-                  <input id="namespaceName" type="text" list="ns-options" value={namespaceName} onChange={e => setNamespaceName(e.target.value)} />
-                  <datalist id="ns-options">
-                    {nsOptions.map(ns => <option key={ns} value={ns} />)}
-                  </datalist>
-                </div>
-              )}
-              {group.tabs.map(tab => (
-                <button key={tab} className={`side-item ${activeTab === tab ? 'active' : ''}`} onClick={() => switchTab(tab)}>
-                  {t(`nav.${tab}`)}
+          {navGroups.map(group => {
+            const open = focus === group.tier
+            return (
+              <div className={`nav-group ${open ? 'open' : ''}`} key={group.tier}>
+                <button className={`nav-group-header ${open ? 'active' : ''}`} onClick={() => goFocus(group.tier)}>
+                  {group.label}
                 </button>
-              ))}
-            </div>
-          ))}
+                {open && group.tabs.map(tab => (
+                  <button key={tab} className={`side-item ${activeTab === tab ? 'active' : ''}`} onClick={() => goTab(tab)}>
+                    {t(`nav.${tab}`)}
+                  </button>
+                ))}
+                {open && group.tier === 'application' && !appReady && (
+                  <div className="side-hint">{t('nav.appTierHint')}</div>
+                )}
+              </div>
+            )
+          })}
         </aside>
 
         <main>
@@ -113,7 +139,7 @@ function Layout() {
           <BuildTab active={activeTab === 'build'} />
         </div>
         <div className={`panel ${activeTab === 'apps' ? 'active' : ''}`}>
-          <AppsTab active={activeTab === 'apps'} onSwitchTab={switchTab} />
+          <AppsTab active={activeTab === 'apps'} onSwitchTab={goTab} />
         </div>
         <div className={`panel ${activeTab === 'namespaces' ? 'active' : ''}`}>
           <NamespacesTab active={activeTab === 'namespaces'} />
@@ -124,38 +150,48 @@ function Layout() {
             onOpenDocModal={setDocModal}
             onOpenConfigModal={demo => setConfigModal({ demo })}
             onOpenWfModal={setWfModal}
-            onSwitchTab={switchTab}
+            onSwitchTab={goTab}
           />
         </div>
-        <div className={`panel ${activeTab === 'ingest' ? 'active' : ''}`}>
+        <div className={`panel ${activeTab === 'ingest' && !showEmpty ? 'active' : ''}`}>
           <IngestTab
-            active={activeTab === 'ingest'}
+            active={activeTab === 'ingest' && !showEmpty}
             refreshKey={ingestRefreshKey}
             onOpenTaskProgress={setTaskProgress}
             onOpenWfModal={setWfModal}
             onDocsChanged={() => setDataRefreshKey(k => k + 1)}
           />
         </div>
-        <div className={`panel ${activeTab === 'data' ? 'active' : ''}`}>
+        <div className={`panel ${activeTab === 'data' && !showEmpty ? 'active' : ''}`}>
           <DataTab
-            active={activeTab === 'data'}
+            active={activeTab === 'data' && !showEmpty}
             refreshKey={dataRefreshKey}
             onOpenWfModal={setWfModal}
             wfCompleteCollection={wfCompleteCollection}
             onWfCompleteHandled={() => setWfCompleteCollection(null)}
           />
         </div>
-        <div className={`panel ${activeTab === 'query' ? 'active' : ''}`}>
-          <QueryTab active={activeTab === 'query'} />
+        <div className={`panel ${activeTab === 'query' && !showEmpty ? 'active' : ''}`}>
+          <QueryTab active={activeTab === 'query' && !showEmpty} />
         </div>
-        <div className={`panel ${activeTab === 'memory' ? 'active' : ''}`}>
-          <MemoryTab active={activeTab === 'memory'} />
+        <div className={`panel ${activeTab === 'memory' && !showEmpty ? 'active' : ''}`}>
+          <MemoryTab active={activeTab === 'memory' && !showEmpty} />
+        </div>
+        {/* Application tier with no app selected → prompt to pick one */}
+        <div className={`panel ${showEmpty ? 'active' : ''}`}>
+          {showEmpty && (
+            <div className="app-empty">
+              <div className="app-empty-icon">📦</div>
+              <p>{t('nav.appTierEmptyTitle')}</p>
+              <button className="btn btn-primary" onClick={() => goTab('apps')}>{t('nav.appTierEmptyCta')}</button>
+            </div>
+          )}
         </div>
         <div className={`panel ${activeTab === 'skills' ? 'active' : ''}`}>
           <SkillsTab active={activeTab === 'skills'} />
         </div>
         <div className={`panel ${activeTab === 'settings' ? 'active' : ''}`}>
-          <SettingsTab active={activeTab === 'settings'} onAutoSwitch={() => switchTab('settings')} />
+          <SettingsTab active={activeTab === 'settings'} onAutoSwitch={() => goTab('settings')} />
         </div>
         </main>
       </div>

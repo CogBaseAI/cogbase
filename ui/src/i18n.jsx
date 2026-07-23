@@ -61,6 +61,9 @@ const translations = {
       groupWorkspace: 'Workspace',
       groupApplication: 'Application',
       groupAccount: 'Account',
+      appTierHint: 'No application selected',
+      appTierEmptyTitle: 'Select an application to work in.',
+      appTierEmptyCta: 'Go to Apps',
     },
     build: {
       intro: "Describe the app you want to build — documents, facts to extract, kinds of questions you'll ask. The AI will guide you through schema design and produce a deployable config.",
@@ -499,6 +502,9 @@ const translations = {
       groupWorkspace: '工作区',
       groupApplication: '应用实例',
       groupAccount: '账户',
+      appTierHint: '未选择应用实例',
+      appTierEmptyTitle: '请选择一个要操作的应用实例。',
+      appTierEmptyCta: '前往应用',
     },
     build: {
       intro: '描述你想构建的应用 — 文档类型、需要提取的事实、你会提出的问题类型。AI 将引导你完成模式设计并生成可部署的配置。',

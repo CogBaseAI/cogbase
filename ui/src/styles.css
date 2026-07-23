@@ -92,19 +92,33 @@ header h1 span { color: var(--accent); }
 .side-switch input:focus { outline: none; border-color: var(--accent); }
 
 .nav-group { display: flex; flex-direction: column; gap: 1px; margin-top: 8px; }
-.nav-group-label {
+/* Group header doubles as the tier switcher: click to focus that tier */
+.nav-group-header {
+  text-align: left; width: 100%;
   font-size: 10px; font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: .6px;
-  padding: 4px 8px;
+  padding: 5px 8px; background: none; border: none; border-radius: 6px;
+  cursor: pointer; transition: color .15s, background .15s;
 }
+.nav-group-header:hover { color: var(--text); }
+.nav-group-header.active { color: var(--text); }
 .side-item {
-  text-align: left; padding: 7px 10px; background: none; border: none;
+  text-align: left; padding: 7px 10px 7px 18px; background: none; border: none;
   border-radius: 6px; color: var(--muted);
   cursor: pointer; font-size: 13px; font-weight: 500;
   transition: color .15s, background .15s;
 }
 .side-item:hover { color: var(--text); background: var(--bg3); }
 .side-item.active { color: var(--accent); background: var(--bg3); }
+.side-hint { padding: 4px 10px 4px 18px; font-size: 11px; color: var(--muted); font-style: italic; }
+
+/* Empty state when the application tier is focused with no app selected */
+.app-empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; color: var(--muted); text-align: center;
+}
+.app-empty-icon { font-size: 40px; opacity: .7; }
+.app-empty p { font-size: 14px; }
 
 /* ── Panels ── */
 main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
