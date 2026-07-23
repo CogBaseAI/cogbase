@@ -51,6 +51,7 @@ export function AppProvider({ children }) {
   const [currentApp, setCurrentAppState] = useState('')
   const [namespaces, setNamespaces] = useState([])
   const [apps, setApps] = useState([])   // apps in the selected namespace, for the App switcher
+  const [appsNs, setAppsNs] = useState(null)  // which namespace `apps` was loaded for
   const [demoCatalog, setDemoCatalog] = useState([])
   const [llmConfigured, setLlmConfigured] = useState(false)
   const [embConfigured, setEmbConfigured] = useState(false)
@@ -125,19 +126,23 @@ export function AppProvider({ children }) {
       }
     } catch {
       setApps([])
+    } finally {
+      // Stamp the list with its namespace so consumers can tell "loaded, app
+      // absent" from "not loaded yet" (see the currentApp reconciliation in App.jsx).
+      setAppsNs(namespaceName)
     }
-  }, [nsBase, authFetch])
+  }, [nsBase, authFetch, namespaceName])
 
   const value = useMemo(() => ({
     apiUrl, setApiUrl,
     accountId, setAccountId, namespaceName, setNamespaceName,
     namespaces, refreshNamespaces,
-    apps, refreshApps,
+    apps, appsNs, refreshApps,
     nsBase, appBase, authFetch,
     currentApp, setCurrentApp,
     demoCatalog, setDemoCatalog,
     llmConfigured, setLlmConfigured, embConfigured, setEmbConfigured,
-  }), [apiUrl, accountId, namespaceName, namespaces, refreshNamespaces, apps, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName])
+  }), [apiUrl, accountId, namespaceName, namespaces, refreshNamespaces, apps, appsNs, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName])
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
 }

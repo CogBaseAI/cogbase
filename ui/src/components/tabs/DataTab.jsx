@@ -4,7 +4,7 @@ import { useT } from '../../i18n'
 import { copyText } from '../../utils'
 
 export default function DataTab({ active, refreshKey, onOpenWfModal, wfCompleteCollection, onWfCompleteHandled }) {
-  const { appBase, authFetch, currentApp, demoCatalog } = useApp()
+  const { appBase, authFetch, currentApp, demoCatalog, namespaceName } = useApp()
   const { t } = useT()
   const [collections, setCollections] = useState([])
   const [activeCollection, setActiveCollectionState] = useState('')
@@ -54,9 +54,11 @@ export default function DataTab({ active, refreshKey, onOpenWfModal, wfCompleteC
     setColWidths({})
     setHiddenCols(new Set())
     setShowColMenu(false)
-  }, [currentApp])
+  }, [currentApp, namespaceName])
 
-  useEffect(() => { if (active) loadCollections() }, [active, currentApp])
+  // namespaceName is a dep so a namespace switch re-fetches even when the app name
+  // is unchanged (appBase carries the namespace and moved underneath us).
+  useEffect(() => { if (active) loadCollections() }, [active, currentApp, namespaceName])
 
   // Refresh if WfModal completed for our active collection
   useEffect(() => {

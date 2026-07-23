@@ -11,7 +11,7 @@ function metaString(doc) {
 }
 
 export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOpenWfModal, onDocsChanged }) {
-  const { appBase, authFetch, currentApp } = useApp()
+  const { appBase, authFetch, currentApp, namespaceName } = useApp()
   const { t } = useT()
   const [pickedFiles, setPickedFiles] = useState([])
   const [metaInput, setMetaInput] = useState('{}')
@@ -73,9 +73,11 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
     setAnyPendingWf(false)
     setUploadLog(null)
     setUploadErr(null)
-  }, [currentApp])
+  }, [currentApp, namespaceName])
 
-  useEffect(() => { if (active || refreshKey > 0) loadIngestDocs() }, [active, currentApp, refreshKey])
+  // namespaceName is a dep so switching namespaces re-fetches even when the app
+  // name is unchanged (appBase — which carries the namespace — moved underneath us).
+  useEffect(() => { if (active || refreshKey > 0) loadIngestDocs() }, [active, currentApp, namespaceName, refreshKey])
 
   function handleFiles(fileList) {
     setPickedFiles(Array.from(fileList))

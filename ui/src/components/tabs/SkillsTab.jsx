@@ -5,7 +5,7 @@ import DataTable from '../DataTable'
 import SkillModal from '../modals/SkillModal'
 
 export default function SkillsTab({ active }) {
-  const { apiUrl, appBase, authFetch, currentApp } = useApp()
+  const { apiUrl, appBase, authFetch, currentApp, namespaceName } = useApp()
   const { t } = useT()
   const [skills, setSkills] = useState(null)   // null=loading, []|[...]=loaded
   const [error, setError] = useState(null)
@@ -41,9 +41,11 @@ export default function SkillsTab({ active }) {
 
   // Drop the previous app's assignments when the selection changes/clears, so a
   // deleted app's skills don't stay marked "on" until the tab is reopened.
-  useEffect(() => { setAssigned(new Set()) }, [currentApp])
+  useEffect(() => { setAssigned(new Set()) }, [currentApp, namespaceName])
 
-  useEffect(() => { if (active) { loadSkills(); loadAssigned() } }, [active, currentApp])
+  // namespaceName is a dep so a namespace switch reloads the app's assigned skills
+  // even when the app name is unchanged (appBase carries the namespace).
+  useEffect(() => { if (active) { loadSkills(); loadAssigned() } }, [active, currentApp, namespaceName])
 
   async function uploadSkill() {
     if (!picked) return

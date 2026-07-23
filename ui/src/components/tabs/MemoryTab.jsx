@@ -34,7 +34,7 @@ const STATUS_BADGE = { done: 'b-active', failed: 'b-error', running: 'b-init', p
 const MEM_STATUS_BADGE = { active: 'b-active', superseded: 'b-error', pending_review: 'b-init' }
 
 export default function MemoryTab({ active }) {
-  const { appBase, authFetch, currentApp } = useApp()
+  const { appBase, authFetch, currentApp, namespaceName } = useApp()
   const { t } = useT()
   const [mode, setMode] = useState('review')       // 'review' (gate) | 'records' (browse)
   const [memories, setMemories] = useState(null)   // pending records; null=loading
@@ -91,8 +91,10 @@ export default function MemoryTab({ active }) {
     else { loadPending(); loadRuns() }
   }
 
-  useEffect(() => { if (active && mode === 'review') { loadPending(); loadRuns() } }, [active, currentApp, kind, mode])
-  useEffect(() => { if (active && mode === 'records') loadRecords() }, [active, currentApp, kind, recStatus, mode])
+  // namespaceName is a dep so a namespace switch re-fetches even when the app name
+  // is unchanged (appBase carries the namespace and moved underneath us).
+  useEffect(() => { if (active && mode === 'review') { loadPending(); loadRuns() } }, [active, currentApp, namespaceName, kind, mode])
+  useEffect(() => { if (active && mode === 'records') loadRecords() }, [active, currentApp, namespaceName, kind, recStatus, mode])
 
   // Send a single accept/reject verdict, then drop the row on success.
   async function review(memory, decision) {

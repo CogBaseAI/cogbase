@@ -5,6 +5,7 @@ import { I18nProvider, useT, LANGUAGES } from './i18n'
 import BuildTab from './components/tabs/BuildTab'
 import AppsTab from './components/tabs/AppsTab'
 import NamespacesTab from './components/tabs/NamespacesTab'
+import NamespaceSelect from './components/NamespaceSelect'
 import DemosTab from './components/tabs/DemosTab'
 import IngestTab from './components/tabs/IngestTab'
 import DataTab from './components/tabs/DataTab'
@@ -21,7 +22,7 @@ import TaskProgressModal from './components/modals/TaskProgressModal'
 // in ./nav alongside the hash router that also consumes them.
 
 function Layout() {
-  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceName, setNamespaceName, namespaces, refreshNamespaces, apps, refreshApps, currentApp, setCurrentApp } = useApp()
+  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceName, setNamespaceName, namespaces, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp } = useApp()
   const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
   const [focus, setFocus] = useState(TAB_TIER['build'])   // which tier's sub-nav shows
@@ -52,6 +53,18 @@ function Layout() {
   // Populate the App switcher on mount and whenever the namespace/account changes
   // (refreshApps' identity tracks nsBase).
   useEffect(() => { refreshApps() }, [refreshApps])
+
+  // Reconcile the selection with the working namespace: switching namespaces leaves
+  // currentApp pointing at the old app, which may not exist here. Once the new
+  // namespace's apps have loaded (appsNs caught up), drop a selection that's absent
+  // so the application tier falls back to its empty state instead of querying a
+  // phantom app. Gated on appsNs === namespaceName so a deep-linked app isn't
+  // wiped before its namespace list arrives.
+  useEffect(() => {
+    if (appsNs === namespaceName && currentApp && !apps.some(a => a.name === currentApp)) {
+      setCurrentApp('')
+    }
+  }, [appsNs, apps, currentApp, namespaceName, setCurrentApp])
 
   // ── Hash routing (docs/ui-navigation.md, milestone B step 5) ──
   // A pure mirror of the (focus, namespace, app, tab) tuple onto location.hash, so
@@ -143,13 +156,11 @@ function Layout() {
           </div>
           <div className="side-switch">
             <label htmlFor="namespaceName">{t('header.namespaceLabel')}</label>
-            {/* Free-text input backed by a datalist: the account's namespaces are
-                offered as suggestions, but an arbitrary namespace can still be typed
-                (e.g. to deploy into one that doesn't exist yet — deploy registers it). */}
-            <input id="namespaceName" type="text" list="ns-options" value={namespaceName} onChange={e => setNamespaceName(e.target.value)} />
-            <datalist id="ns-options">
-              {nsSuggestions.map(ns => <option key={ns} value={ns} />)}
-            </datalist>
+            {/* Filtering combobox: lists the account's namespaces and substring-
+                filters them as you type, but an arbitrary namespace can still be
+                committed (e.g. to deploy into one that doesn't exist yet — deploy
+                registers it). See components/NamespaceSelect.jsx. */}
+            <NamespaceSelect id="namespaceName" value={namespaceName} options={nsSuggestions} onChange={setNamespaceName} />
           </div>
 
           {navGroups.map(group => {

@@ -5,33 +5,34 @@ import AppDetailModal from '../modals/AppDetailModal'
 import DataTable from '../DataTable'
 
 export default function AppsTab({ active, onSwitchTab }) {
-  const { apiUrl, namespaceName, authFetch, currentApp, setCurrentApp, refreshApps } = useApp()
+  const { appBase, namespaceName, authFetch, currentApp, setCurrentApp, refreshApps } = useApp()
   const { t } = useT()
   const [apps, setApps] = useState(null) // null=loading, []|[...]=loaded
   const [error, setError] = useState(null)
   const [detailApp, setDetailApp] = useState(null)
 
-  // The list is account-wide (every namespace), so address a single app by its
-  // own namespace rather than the header-selected one.
+  // The list is scoped to the working namespace (appBase already carries it), so a
+  // single app is always addressed within that namespace.
   const appUrl = (a, suffix = '') =>
-    `${apiUrl}/namespaces/${encodeURIComponent(a.namespace || namespaceName)}/applications/${encodeURIComponent(a.name)}${suffix}`
+    `${appBase}/${encodeURIComponent(a.name)}${suffix}`
 
-  // A name is only unique within a namespace. Under the unified model, selecting
-  // an app snaps the working namespace to the app's own, so the selection matches
-  // on name plus the app's namespace equalling the working one.
-  const isCurrent = (a) => a.name === currentApp && (a.namespace || namespaceName) === namespaceName
+  // All rows live in the working namespace, so a name match is enough to flag the
+  // current selection (which the unified model keeps in that same namespace).
+  const isCurrent = (a) => a.name === currentApp
 
   async function loadApps() {
     setApps(null); setError(null)
     try {
-      const resp = await authFetch(`${apiUrl}/applications`)
+      const resp = await authFetch(appBase)
       if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText)
       const { applications = [] } = await resp.json()
       setApps(applications)
     } catch (e) { setError(e.message) }
   }
 
-  useEffect(() => { if (active) loadApps() }, [active])
+  // Reload when shown and whenever the working namespace changes — the list is
+  // namespace-scoped, so a namespace switch must re-fetch (appBase tracks it).
+  useEffect(() => { if (active) loadApps() }, [active, namespaceName])
 
   async function viewApp(a) {
     // The list response already carries the full resolved config, but fetch
@@ -50,9 +51,9 @@ export default function AppsTab({ active, onSwitchTab }) {
       const resp = await authFetch(appUrl(a), { method: 'DELETE' })
       if (resp.ok || resp.status === 204 || resp.status === 404) {
         if (isCurrent(a)) setCurrentApp('')
-        // Deleting an app in the working namespace also drops it from the sidebar
-        // App switcher's list; refresh that so it doesn't keep offering a gone app.
-        if ((a.namespace || namespaceName) === namespaceName) refreshApps()
+        // The deleted app also drops from the sidebar App switcher's list; refresh
+        // that so it doesn't keep offering a gone app.
+        refreshApps()
         loadApps()
       } else {
         alert(t('apps.deleteFailed', { msg: resp.statusText }))
@@ -103,7 +104,7 @@ export default function AppsTab({ active, onSwitchTab }) {
               render: a => (
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button className="btn btn-ghost btn-sm" onClick={() => viewApp(a)}>{t('appDetail.details')}</button>
-                  <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name, a.namespace); onSwitchTab?.('query') }}>{t('common.use')}</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name, namespaceName); onSwitchTab?.('query') }}>{t('common.use')}</button>
                   <button className="btn btn-red btn-sm" onClick={() => deleteApp(a)}>{t('common.delete')}</button>
                 </div>
               ),
