@@ -5,7 +5,7 @@ import AppDetailModal from '../modals/AppDetailModal'
 import DataTable from '../DataTable'
 
 export default function AppsTab({ active, onSwitchTab }) {
-  const { apiUrl, namespaceId, authFetch, currentApp, currentAppNs, setCurrentApp } = useApp()
+  const { apiUrl, namespaceName, authFetch, currentApp, currentAppNs, setCurrentApp } = useApp()
   const { t } = useT()
   const [apps, setApps] = useState(null) // null=loading, []|[...]=loaded
   const [error, setError] = useState(null)
@@ -14,10 +14,10 @@ export default function AppsTab({ active, onSwitchTab }) {
   // The list is account-wide (every namespace), so address a single app by its
   // own namespace rather than the header-selected one.
   const appUrl = (a, suffix = '') =>
-    `${apiUrl}/namespaces/${encodeURIComponent(a.namespace || namespaceId)}/applications/${encodeURIComponent(a.name)}${suffix}`
+    `${apiUrl}/namespaces/${encodeURIComponent(a.namespace || namespaceName)}/applications/${encodeURIComponent(a.name)}${suffix}`
 
   // A name is only unique within a namespace, so the selected app matches on both.
-  const isCurrent = (a) => a.name === currentApp && (a.namespace || namespaceId) === currentAppNs
+  const isCurrent = (a) => a.name === currentApp && (a.namespace || namespaceName) === currentAppNs
 
   async function loadApps() {
     setApps(null); setError(null)

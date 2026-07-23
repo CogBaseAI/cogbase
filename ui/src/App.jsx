@@ -17,7 +17,7 @@ import WfModal from './components/modals/WfModal'
 import TaskProgressModal from './components/modals/TaskProgressModal'
 
 function Layout() {
-  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceId, setNamespaceId, namespaces, refreshNamespaces, currentApp, currentAppNs, llmConfigured, embConfigured } = useApp()
+  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceName, setNamespaceName, namespaces, refreshNamespaces, currentApp, currentAppNs, llmConfigured, embConfigured } = useApp()
   const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
   const [docModal, setDocModal] = useState(null)        // null | doc object
@@ -49,7 +49,7 @@ function Layout() {
 
   // Namespace suggestions: the account's namespaces, plus 'default' and whatever
   // is currently typed, de-duplicated so the active value is always offered.
-  const nsOptions = [...new Set(['default', namespaceId, ...namespaces.map(n => n.name)])].filter(Boolean)
+  const nsOptions = [...new Set(['default', namespaceName, ...namespaces.map(n => n.name)])].filter(Boolean)
 
   return (
     <>
@@ -88,12 +88,12 @@ function Layout() {
                   at the head of that group. */}
               {group.label === t('nav.groupApplication') && (
                 <div className="side-switch nested">
-                  <label htmlFor="namespaceId">{t('header.namespaceLabel')}</label>
+                  <label htmlFor="namespaceName">{t('header.namespaceLabel')}</label>
                   {/* Free-text input backed by a datalist: the account's namespaces
                       are offered as suggestions, but an arbitrary namespace can still
                       be typed (e.g. to deploy into one that doesn't exist yet —
                       deploy registers it). */}
-                  <input id="namespaceId" type="text" list="ns-options" value={namespaceId} onChange={e => setNamespaceId(e.target.value)} />
+                  <input id="namespaceName" type="text" list="ns-options" value={namespaceName} onChange={e => setNamespaceName(e.target.value)} />
                   <datalist id="ns-options">
                     {nsOptions.map(ns => <option key={ns} value={ns} />)}
                   </datalist>

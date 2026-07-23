@@ -8,7 +8,7 @@ import DataTable from '../DataTable'
 // `namespaces` list in context and calls `refreshNamespaces` after every mutation
 // so the header switcher stays in sync. Backed by the /namespaces CRUD routes.
 export default function NamespacesTab({ active }) {
-  const { apiUrl, authFetch, namespaces, refreshNamespaces, namespaceId, setNamespaceId } = useApp()
+  const { apiUrl, authFetch, namespaces, refreshNamespaces, namespaceName, setNamespaceName } = useApp()
   const { t } = useT()
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -151,7 +151,7 @@ export default function NamespacesTab({ active }) {
             {
               key: 'name', label: t('nsAdmin.colId'), text: ns => ns.name,
               render: ns => {
-                const activeNs = ns.name === namespaceId
+                const activeNs = ns.name === namespaceName
                 return (
                   <span style={{ fontWeight: activeNs ? 600 : 400 }}>
                     <code>{ns.name}</code>
@@ -171,7 +171,7 @@ export default function NamespacesTab({ active }) {
               key: 'actions', label: t('nsAdmin.colActions'), sortable: false, cellClassName: 'actions-cell',
               render: ns => (
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <button className="btn btn-ghost btn-sm" disabled={ns.name === namespaceId} onClick={() => setNamespaceId(ns.name)}>{t('nsAdmin.switchTo')}</button>
+                  <button className="btn btn-ghost btn-sm" disabled={ns.name === namespaceName} onClick={() => setNamespaceName(ns.name)}>{t('nsAdmin.switchTo')}</button>
                   <button className="btn btn-ghost btn-sm" onClick={() => startEdit(ns)}>{t('nsAdmin.edit')}</button>
                   <button className="btn btn-red btn-sm" disabled={ns.name === 'default'} onClick={() => remove(ns)}>{t('common.delete')}</button>
                 </div>

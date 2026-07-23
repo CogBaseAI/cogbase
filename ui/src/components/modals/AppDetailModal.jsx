@@ -124,8 +124,8 @@ function Section({ title, children, defaultOpen = false }) {
 // hitting the /applications/{name}/skills endpoints. Assigned skills are shown
 // by display name (resolved server-side) rather than raw skill ids.
 function AppSkillsSection({ appName, namespace }) {
-  const { apiUrl, namespaceId, authFetch } = useApp()
-  const ns = namespace || namespaceId
+  const { apiUrl, namespaceName, authFetch } = useApp()
+  const ns = namespace || namespaceName
   const skillsUrl = (suffix = '') =>
     `${apiUrl}/namespaces/${encodeURIComponent(ns)}/applications/${encodeURIComponent(appName)}/skills${suffix}`
   const { t } = useT()

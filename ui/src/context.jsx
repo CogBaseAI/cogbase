@@ -38,13 +38,17 @@ export function AppProvider({ children }) {
       : 'http://localhost:8000'
   const [apiUrl, setApiUrl] = useState(defaultApiUrl)
   const [accountId, setAccountIdState] = useState(() => persisted('cogbase.accountId', DEFAULT_ACCOUNT_ID))
-  const [namespaceId, setNamespaceIdState] = useState(() => persisted('cogbase.namespaceId', DEFAULT_NAMESPACE))
+  // The API addresses namespaces by their user-facing *name* (the {namespace} URL
+  // path segment); the internal namespace_id is a server-side concept the client
+  // never sends (api/dependencies.py resolve_namespace_id maps name -> id). So this
+  // holds a name, not an id.
+  const [namespaceName, setNamespaceNameState] = useState(() => persisted('cogbase.namespaceName', DEFAULT_NAMESPACE))
   // The selected app is a (namespace, name) pair — a name is only unique within a
   // namespace, so operating on it must carry its own namespace, independent of the
   // header-selected working namespace. currentApp stays the bare name for display
   // and compatibility; currentAppNs pins the namespace it was selected from.
   const [currentApp, setCurrentAppState] = useState('')
-  const [currentAppNs, setCurrentAppNs] = useState(namespaceId)
+  const [currentAppNs, setCurrentAppNs] = useState(namespaceName)
   const [namespaces, setNamespaces] = useState([])
   const [demoCatalog, setDemoCatalog] = useState([])
   const [llmConfigured, setLlmConfigured] = useState(false)
@@ -55,10 +59,10 @@ export function AppProvider({ children }) {
     persist('cogbase.accountId', next)
     setAccountIdState(next)
   }, [])
-  const setNamespaceId = useCallback((v) => {
+  const setNamespaceName = useCallback((v) => {
     const next = (v || DEFAULT_NAMESPACE).trim() || DEFAULT_NAMESPACE
-    persist('cogbase.namespaceId', next)
-    setNamespaceIdState(next)
+    persist('cogbase.namespaceName', next)
+    setNamespaceNameState(next)
   }, [])
 
   // Namespace-scoped bases. Name-addressed application routes moved under
@@ -68,7 +72,7 @@ export function AppProvider({ children }) {
   // appBase is scoped to the header-selected working namespace (used for creating
   // /deploying); currentAppBase is scoped to the selected app's own namespace
   // (used for operating on it — query, ingest, workflows, ...).
-  const nsBase = `${apiUrl}/namespaces/${encodeURIComponent(namespaceId)}`
+  const nsBase = `${apiUrl}/namespaces/${encodeURIComponent(namespaceName)}`
   const appBase = `${nsBase}/applications`
   const currentAppBase = `${apiUrl}/namespaces/${encodeURIComponent(currentAppNs)}/applications`
 
@@ -77,8 +81,8 @@ export function AppProvider({ children }) {
   // that omit the namespace (e.g. a fresh deploy) inherit the working namespace.
   const setCurrentApp = useCallback((name, namespace) => {
     setCurrentAppState(name || '')
-    if (name) setCurrentAppNs(namespace || namespaceId)
-  }, [namespaceId])
+    if (name) setCurrentAppNs(namespace || namespaceName)
+  }, [namespaceName])
 
   // Every request carries the account as the X-Account-Id header (the security
   // boundary). authFetch injects it while leaving each call site's URL/options
@@ -107,13 +111,13 @@ export function AppProvider({ children }) {
 
   const value = useMemo(() => ({
     apiUrl, setApiUrl,
-    accountId, setAccountId, namespaceId, setNamespaceId,
+    accountId, setAccountId, namespaceName, setNamespaceName,
     namespaces, refreshNamespaces,
     nsBase, appBase, currentAppBase, authFetch,
     currentApp, currentAppNs, setCurrentApp,
     demoCatalog, setDemoCatalog,
     llmConfigured, setLlmConfigured, embConfigured, setEmbConfigured,
-  }), [apiUrl, accountId, namespaceId, namespaces, refreshNamespaces, nsBase, appBase, currentAppBase, authFetch, currentApp, currentAppNs, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceId])
+  }), [apiUrl, accountId, namespaceName, namespaces, refreshNamespaces, nsBase, appBase, currentAppBase, authFetch, currentApp, currentAppNs, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName])
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
 }
