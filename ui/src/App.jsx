@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { AppProvider, useApp } from './context'
+import { TAB_TIER, DEFAULT_TAB, buildHash, parseHash } from './nav'
 import { I18nProvider, useT, LANGUAGES } from './i18n'
 import BuildTab from './components/tabs/BuildTab'
 import AppsTab from './components/tabs/AppsTab'
@@ -16,15 +17,8 @@ import ConfigModal from './components/modals/ConfigModal'
 import WfModal from './components/modals/WfModal'
 import TaskProgressModal from './components/modals/TaskProgressModal'
 
-// Each tab belongs to one scope tier; the sidebar shows one tier ("focus") at a
-// time (docs/ui-navigation.md, milestone B). This map is the single source of the
-// tab→tier grouping, and DEFAULT_TAB is where focusing a tier lands you.
-const TAB_TIER = {
-  build: 'namespace', apps: 'namespace', demos: 'namespace',
-  ingest: 'application', data: 'application', query: 'application', memory: 'application',
-  namespaces: 'account', skills: 'account', settings: 'account',
-}
-const DEFAULT_TAB = { account: 'namespaces', namespace: 'apps', application: 'query' }
+// TAB_TIER / DEFAULT_TAB (the tab→tier grouping and each tier's landing tab) live
+// in ./nav alongside the hash router that also consumes them.
 
 function Layout() {
   const { apiUrl, setApiUrl, accountId, setAccountId, namespaceName, setNamespaceName, namespaces, refreshNamespaces, apps, refreshApps, currentApp, setCurrentApp, llmConfigured, embConfigured } = useApp()
@@ -58,6 +52,43 @@ function Layout() {
   // Populate the App switcher on mount and whenever the namespace/account changes
   // (refreshApps' identity tracks nsBase).
   useEffect(() => { refreshApps() }, [refreshApps])
+
+  // ── Hash routing (docs/ui-navigation.md, milestone B step 5) ──
+  // A pure mirror of the (focus, namespace, app, tab) tuple onto location.hash, so
+  // views deep-link and survive refresh. Applying a parsed hash only touches the
+  // pieces it carries — a namespace/account hash leaves the selected app alone.
+  function applyRoute(r) {
+    if (r.namespaceName != null && r.namespaceName !== namespaceName) setNamespaceName(r.namespaceName)
+    if (r.currentApp != null && r.currentApp !== currentApp) setCurrentApp(r.currentApp, r.namespaceName)
+    setActiveTab(r.activeTab)
+    setFocus(r.focus)
+  }
+  // Keep the latest applyRoute reachable from the mount-only listener without
+  // re-subscribing (which would re-run the initial parse and revert live state).
+  const applyRouteRef = useRef(applyRoute)
+  applyRouteRef.current = applyRoute
+
+  // Read: restore from the URL on mount (or seed it from default state), then
+  // follow back/forward. Mount-only; the handler reads fresh state via the ref.
+  useEffect(() => {
+    const r0 = parseHash(window.location.hash)
+    if (r0) applyRouteRef.current(r0)
+    else window.location.hash = buildHash({ focus, namespaceName, currentApp, activeTab })
+    const onHash = () => { const r = parseHash(window.location.hash); if (r) applyRouteRef.current(r) }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  // Write: mirror subsequent changes into the hash. Skip the mount run — the reader
+  // already reconciled the URL, and a just-applied initial route hasn't committed
+  // to state yet, so writing here would clobber it. Guard on equality so the
+  // reader's echo (and back/forward) don't loop.
+  const hashMountedRef = useRef(false)
+  useEffect(() => {
+    if (!hashMountedRef.current) { hashMountedRef.current = true; return }
+    const h = buildHash({ focus, namespaceName, currentApp, activeTab })
+    if (window.location.hash !== h) window.location.hash = h
+  }, [focus, namespaceName, currentApp, activeTab])
 
   // Sidebar nav grouped by scope tier: account ▸ namespace (workspace) ▸ the
   // selected application. Each group header focuses its tier; only the focused
