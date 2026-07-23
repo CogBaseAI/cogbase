@@ -117,6 +117,7 @@ export default function NamespacesTab({ active }) {
               placeholder="legal-team"
               onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
             />
+            {!isEdit && <p className="sub" style={{ marginTop: 6 }}>{t('nsAdmin.idHint')}</p>}
           </div>
           <div className="settings-field full">
             <label>{t('nsAdmin.descLabel')} · {t('nsAdmin.optional')}</label>
@@ -127,8 +128,7 @@ export default function NamespacesTab({ active }) {
             />
           </div>
         </div>
-        {!isEdit && <p className="sub" style={{ marginTop: 6 }}>{t('nsAdmin.idHint')}</p>}
-        {error && <p style={{ color: 'var(--red)', fontSize: 12, marginTop: 8 }}>{error}</p>}
+        {error &&<p style={{ color: 'var(--red)', fontSize: 12, marginTop: 8 }}>{error}</p>}
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button
             className="btn btn-primary btn-sm"
