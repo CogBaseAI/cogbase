@@ -22,7 +22,7 @@ import TaskProgressModal from './components/modals/TaskProgressModal'
 // in ./nav alongside the hash router that also consumes them.
 
 function Layout() {
-  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceName, setNamespaceName, namespaces, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp } = useApp()
+  const { apiUrl, setApiUrl, accountId, bootstrap, namespaceName, setNamespaceName, namespaces, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp } = useApp()
   const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
   const [focus, setFocus] = useState(TAB_TIER['build'])   // which tier's sub-nav shows
@@ -45,6 +45,17 @@ function Layout() {
     setActiveTab(DEFAULT_TAB[tier])
     if (tier === 'application') refreshApps()   // keep the App switcher current
   }
+
+  // Resolve the calling account + deployment mode from the server on mount, so
+  // the UI adopts a server-authoritative account rather than sourcing one itself.
+  useEffect(() => { bootstrap() }, [bootstrap])
+
+  // Reflect the resolved account in the browser tab title so multiple accounts
+  // open side by side are distinguishable. The default account is unnamed context
+  // (dev/single-tenant), so it falls back to the bare brand.
+  useEffect(() => {
+    document.title = accountId && accountId !== 'default' ? `CogBase — ${accountId}` : 'CogBase'
+  }, [accountId])
 
   // Populate the namespace switcher on mount and whenever the account changes
   // (refreshNamespaces' identity tracks the account via authFetch).
@@ -133,6 +144,13 @@ function Layout() {
           <label htmlFor="apiUrl">{t('header.apiLabel')}</label>
           <input id="apiUrl" type="text" value={apiUrl} onChange={e => setApiUrl(e.target.value.replace(/\/$/, ''))} placeholder={t('header.apiPlaceholder')} />
         </div>
+        {/* Read-only tenant context: the server-resolved account (via /whoami).
+            Muted for the default (dev/single-tenant) account, highlighted once a
+            real tenant is in play. */}
+        <div className={`acct-chip ${accountId && accountId !== 'default' ? 'on' : ''}`} title={t('header.accountLabel')}>
+          <span className="acct-chip-label">{t('header.accountLabel')}</span>
+          <span className="acct-chip-val">{accountId}</span>
+        </div>
         <div className={`app-pill ${currentApp ? 'on' : ''}`} title={currentApp ? t('header.appInNamespace', { namespace: namespaceName }) : undefined}>
           <span className="dot" />
           <span>{currentApp || t('header.noApp')}</span>
@@ -148,12 +166,9 @@ function Layout() {
       <div className="shell">
         {/* Focus-driven sidebar nav */}
         <aside className="sidebar">
-          {/* Context switchers — account and namespace scope every tier below.
-              (In milestone B step 3 these graduate into the top-bar breadcrumb.) */}
-          <div className="side-switch">
-            <label htmlFor="accountId">{t('header.accountLabel')}</label>
-            <input id="accountId" type="text" value={accountId} onChange={e => setAccountId(e.target.value)} />
-          </div>
+          {/* Namespace switcher scopes every tier below. The account is the
+              tenant/security boundary, not a nav dimension — it's resolved by the
+              server via /whoami and shown read-only in the top bar, not here. */}
           <div className="side-switch">
             <label htmlFor="namespaceName">{t('header.namespaceLabel')}</label>
             {/* Filtering combobox: lists the account's namespaces and substring-

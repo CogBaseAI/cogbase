@@ -57,6 +57,20 @@ header h1 span { color: var(--accent); }
 }
 .app-pill.on { border-color: var(--green); color: var(--green); }
 .app-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+/* Read-only tenant context in the top bar (server-resolved via /whoami). Starts
+   the right-aligned cluster; the app-pill then sits beside it with a fixed gap. */
+.acct-chip {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 12px;
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 20px;
+  font-size: 12px; color: var(--muted); user-select: none;
+}
+.acct-chip.on { border-color: var(--accent); color: var(--accent); }
+.acct-chip .acct-chip-label { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.acct-chip .acct-chip-val { font-weight: 600; }
+.acct-chip + .app-pill { margin-left: 8px; }
 .app-pill .app-pill-ns {
   font-size: 10px; color: var(--muted);
   background: var(--bg2); border-radius: 10px; padding: 1px 7px;
@@ -116,7 +130,7 @@ header h1 span { color: var(--accent); }
 /* Group header doubles as the tier switcher: click to focus that tier */
 .nav-group-header {
   text-align: left; width: 100%;
-  font-size: 10px; font-weight: 600; color: var(--muted);
+  font-size: 13px; font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: .6px;
   padding: 5px 8px; background: none; border: none; border-radius: 6px;
   cursor: pointer; transition: color .15s, background .15s;

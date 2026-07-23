@@ -104,6 +104,43 @@ function mockApi({ nsApps = [], acctApps = [] } = {}) {
   })
 }
 
+// A fetch mock that answers GET /whoami with the given identity and otherwise
+// behaves like the permissive default (empty lists). Used to drive the account
+// bootstrap without touching the other mount-time fetches.
+function mockWhoami({ account_id = 'default', mode = 'dev' } = {}) {
+  global.fetch.mockImplementation((url) => {
+    const u = String(url)
+    const body = u.endsWith('/whoami')
+      ? { account_id, mode }
+      : { applications: [], namespaces: [], skills: [] }
+    return Promise.resolve({ ok: true, json: async () => body, text: async () => '' })
+  })
+}
+
+describe('Layout — account bootstrap (/whoami)', () => {
+  it('adopts the server-resolved account and shows it read-only in the top bar', async () => {
+    mockWhoami({ account_id: 'acct-saas', mode: 'saas' })
+    render(<App />)
+    // The resolved account surfaces as a read-only chip in the header…
+    await waitFor(() => expect(screen.getByText('acct-saas')).toBeInTheDocument())
+    // …and there is no editable account field anywhere — it's not a nav knob.
+    expect(screen.queryByLabelText('Account')).toBeNull()
+  })
+
+  it('reflects a real account in the document title', async () => {
+    mockWhoami({ account_id: 'acct-saas', mode: 'saas' })
+    render(<App />)
+    await waitFor(() => expect(document.title).toBe('CogBase — acct-saas'))
+  })
+
+  it('falls back to the bare brand title for the default account', async () => {
+    document.title = 'stale'
+    mockWhoami({ account_id: 'default', mode: 'dev' })
+    render(<App />)
+    await waitFor(() => expect(document.title).toBe('CogBase'))
+  })
+})
+
 describe('Layout — hash routing', () => {
   it('mirrors the default view into the hash on mount', async () => {
     mockApi()

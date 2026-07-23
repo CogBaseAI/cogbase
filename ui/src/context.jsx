@@ -55,6 +55,11 @@ export function AppProvider({ children }) {
   const [demoCatalog, setDemoCatalog] = useState([])
   const [llmConfigured, setLlmConfigured] = useState(false)
   const [embConfigured, setEmbConfigured] = useState(false)
+  // Deployment mode from GET /whoami. 'dev' means the account is trust-on-
+  // declaration (the header we send is echoed back), so the UI keeps an editable
+  // account field. Any other mode (saas/single_tenant/demo) means the server
+  // resolves the account authoritatively, so the UI treats it as read-only.
+  const [mode, setMode] = useState('dev')
 
   const setAccountId = useCallback((v) => {
     const next = (v || DEFAULT_ACCOUNT_ID).trim() || DEFAULT_ACCOUNT_ID
@@ -93,6 +98,25 @@ export function AppProvider({ children }) {
   const authFetch = useCallback((url, opts = {}) => {
     return fetch(url, { ...opts, headers: { 'X-Account-Id': accountId, ...(opts.headers || {}) } })
   }, [accountId])
+
+  // Bootstrap the calling identity from the server: GET /whoami returns the
+  // account the server resolved (which we adopt) and the deployment mode (which
+  // decides whether the account is editable). The UI never sources an account
+  // itself — in 'dev' this echoes the header we sent, and in managed modes it
+  // becomes the authoritative account once auth binds it server-side. Like
+  // refreshNamespaces, this is driven by the mounted header (App.jsx), not a
+  // provider mount effect, so tab-level renders stay side-effect-free.
+  const bootstrap = useCallback(async () => {
+    try {
+      const resp = await authFetch(`${apiUrl}/whoami`)
+      if (!resp.ok) return
+      const data = await resp.json()
+      if (data.mode) setMode(data.mode)
+      if (data.account_id && data.account_id !== accountId) setAccountId(data.account_id)
+    } catch {
+      /* no /whoami (old server) — keep dev defaults */
+    }
+  }, [apiUrl, authFetch, accountId, setAccountId])
 
   // The account's namespaces, for the header switcher. The header drives the fetch
   // (on mount and whenever the account changes) so tab-level renders that don't
@@ -135,14 +159,14 @@ export function AppProvider({ children }) {
 
   const value = useMemo(() => ({
     apiUrl, setApiUrl,
-    accountId, setAccountId, namespaceName, setNamespaceName,
+    accountId, setAccountId, mode, bootstrap, namespaceName, setNamespaceName,
     namespaces, refreshNamespaces,
     apps, appsNs, refreshApps,
     nsBase, appBase, authFetch,
     currentApp, setCurrentApp,
     demoCatalog, setDemoCatalog,
     llmConfigured, setLlmConfigured, embConfigured, setEmbConfigured,
-  }), [apiUrl, accountId, namespaceName, namespaces, refreshNamespaces, apps, appsNs, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName])
+  }), [apiUrl, accountId, mode, bootstrap, namespaceName, namespaces, refreshNamespaces, apps, appsNs, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName])
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
 }
