@@ -98,7 +98,7 @@ export default function AppsTab({ active, onSwitchTab }) {
               render: a => (
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button className="btn btn-ghost btn-sm" onClick={() => viewApp(a)}>{t('appDetail.details')}</button>
-                  <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name, a.namespace); loadApps() }}>{t('common.use')}</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name, a.namespace); onSwitchTab?.('query') }}>{t('common.use')}</button>
                   <button className="btn btn-red btn-sm" onClick={() => deleteApp(a)}>{t('common.delete')}</button>
                 </div>
               ),

@@ -27,7 +27,7 @@ const TAB_TIER = {
 const DEFAULT_TAB = { account: 'namespaces', namespace: 'apps', application: 'query' }
 
 function Layout() {
-  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceName, setNamespaceName, namespaces, refreshNamespaces, currentApp, currentAppNs, llmConfigured, embConfigured } = useApp()
+  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceName, setNamespaceName, namespaces, refreshNamespaces, apps, refreshApps, currentApp, currentAppNs, setCurrentApp, llmConfigured, embConfigured } = useApp()
   const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
   const [focus, setFocus] = useState(TAB_TIER['build'])   // which tier's sub-nav shows
@@ -48,11 +48,16 @@ function Layout() {
   function goFocus(tier) {
     setFocus(tier)
     setActiveTab(DEFAULT_TAB[tier])
+    if (tier === 'application') refreshApps()   // keep the App switcher current
   }
 
   // Populate the namespace switcher on mount and whenever the account changes
   // (refreshNamespaces' identity tracks the account via authFetch).
   useEffect(() => { refreshNamespaces() }, [refreshNamespaces])
+
+  // Populate the App switcher on mount and whenever the namespace/account changes
+  // (refreshApps' identity tracks nsBase).
+  useEffect(() => { refreshApps() }, [refreshApps])
 
   // Sidebar nav grouped by scope tier: account ▸ namespace (workspace) ▸ the
   // selected application. Each group header focuses its tier; only the focused
@@ -68,6 +73,9 @@ function Layout() {
   // replaced by an empty state prompting selection.
   const appReady = !!currentApp
   const showEmpty = focus === 'application' && !appReady
+  // The App switcher lists the selected namespace's apps; a selection from another
+  // namespace (picked via the Apps tab) reads as unselected here.
+  const appSelectValue = currentAppNs === namespaceName ? currentApp : ''
 
   // Namespace suggestions: the account's namespaces, plus 'default' and whatever
   // is currently typed, de-duplicated so the active value is always offered.
@@ -121,14 +129,22 @@ function Layout() {
                 <button className={`nav-group-header ${open ? 'active' : ''}`} onClick={() => goFocus(group.tier)}>
                   {group.label}
                 </button>
+                {/* The App switcher scopes the application tier, so it heads its items */}
+                {open && group.tier === 'application' && (
+                  <div className="side-switch nested">
+                    <label htmlFor="appSelect">{t('nav.appLabel')}</label>
+                    <select id="appSelect" value={appSelectValue} onChange={e => setCurrentApp(e.target.value, namespaceName)}>
+                      <option value="">{t('nav.appPlaceholder')}</option>
+                      {apps.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
+                    </select>
+                    {apps.length === 0 && <div className="side-hint">{t('nav.appNoneInNs')}</div>}
+                  </div>
+                )}
                 {open && group.tabs.map(tab => (
                   <button key={tab} className={`side-item ${activeTab === tab ? 'active' : ''}`} onClick={() => goTab(tab)}>
                     {t(`nav.${tab}`)}
                   </button>
                 ))}
-                {open && group.tier === 'application' && !appReady && (
-                  <div className="side-hint">{t('nav.appTierHint')}</div>
-                )}
               </div>
             )
           })}

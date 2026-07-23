@@ -50,6 +50,7 @@ export function AppProvider({ children }) {
   const [currentApp, setCurrentAppState] = useState('')
   const [currentAppNs, setCurrentAppNs] = useState(namespaceName)
   const [namespaces, setNamespaces] = useState([])
+  const [apps, setApps] = useState([])   // apps in the selected namespace, for the App switcher
   const [demoCatalog, setDemoCatalog] = useState([])
   const [llmConfigured, setLlmConfigured] = useState(false)
   const [embConfigured, setEmbConfigured] = useState(false)
@@ -109,15 +110,33 @@ export function AppProvider({ children }) {
     }
   }, [apiUrl, authFetch])
 
+  // Apps in the selected namespace, for the App switcher. Namespace-scoped (the
+  // breadcrumb's account ▸ namespace ▸ app path), unlike the Apps tab's account-wide
+  // listing. Re-fetched whenever the namespace (nsBase) or account changes.
+  const refreshApps = useCallback(async () => {
+    try {
+      const resp = await authFetch(`${nsBase}/applications`)
+      if (resp.ok) {
+        const { applications: items = [] } = await resp.json()
+        setApps(items)
+      } else {
+        setApps([])
+      }
+    } catch {
+      setApps([])
+    }
+  }, [nsBase, authFetch])
+
   const value = useMemo(() => ({
     apiUrl, setApiUrl,
     accountId, setAccountId, namespaceName, setNamespaceName,
     namespaces, refreshNamespaces,
+    apps, refreshApps,
     nsBase, appBase, currentAppBase, authFetch,
     currentApp, currentAppNs, setCurrentApp,
     demoCatalog, setDemoCatalog,
     llmConfigured, setLlmConfigured, embConfigured, setEmbConfigured,
-  }), [apiUrl, accountId, namespaceName, namespaces, refreshNamespaces, nsBase, appBase, currentAppBase, authFetch, currentApp, currentAppNs, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName])
+  }), [apiUrl, accountId, namespaceName, namespaces, refreshNamespaces, apps, refreshApps, nsBase, appBase, currentAppBase, authFetch, currentApp, currentAppNs, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName])
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
 }

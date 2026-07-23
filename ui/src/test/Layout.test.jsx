@@ -45,8 +45,24 @@ describe('Layout — focus-driven sidebar', () => {
     const user = userEvent.setup()
     render(<App />)
     await user.click(within(sidebar()).getByRole('button', { name: 'Application' }))
-    // sidebar shows the "no app" hint; main shows the CTA to pick one
-    expect(within(sidebar()).getByText('No application selected')).toBeInTheDocument()
+    // sidebar shows the App switcher (empty namespace → "no apps" hint); main shows
+    // the CTA to pick one
+    expect(within(sidebar()).getByLabelText('App')).toBeInTheDocument()
+    expect(within(sidebar()).getByText('No apps in this namespace')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Go to Apps' })).toBeInTheDocument()
+  })
+
+  it('selecting an app in the App switcher clears the empty state', async () => {
+    // Namespace-scoped app list returns one app for this test.
+    global.fetch.mockResolvedValue({ ok: true, json: async () => ({ applications: [{ name: 'contracts' }] }), text: async () => '' })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(within(sidebar()).getByRole('button', { name: 'Application' }))
+    const select = await within(sidebar()).findByRole('option', { name: 'contracts' })
+    expect(select).toBeInTheDocument()
+    await user.selectOptions(within(sidebar()).getByLabelText('App'), 'contracts')
+    // app selected → empty-state CTA gone, app tabs now available
+    expect(screen.queryByRole('button', { name: 'Go to Apps' })).not.toBeInTheDocument()
+    expect(within(sidebar()).getByRole('button', { name: 'Query' })).toBeInTheDocument()
   })
 })
