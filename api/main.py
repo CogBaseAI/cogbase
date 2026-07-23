@@ -32,6 +32,7 @@ from api.routers.app_generate import deploy_router as generate_deploy_router
 from api.routers.namespaces import router as namespaces_router
 from api.routers.skills import router as skills_router
 from api.routers.system import router as system_router
+from api.routers.whoami import router as whoami_router
 from api.system_config import SystemConfig
 from api.system_resources import SystemResources
 from api.system_store import SystemStore
@@ -253,6 +254,7 @@ app.include_router(generate_router)
 app.include_router(generate_deploy_router)
 app.include_router(skills_router)
 app.include_router(system_router)
+app.include_router(whoami_router)
 
 
 # For production services, common pattern is nginx in front:

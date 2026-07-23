@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -19,6 +20,23 @@ from cogbase.skills.store import SkillBundleStore
 #: auth layer binds the header to an authenticated principal.
 DEFAULT_ACCOUNT_ID = "default"
 DEFAULT_NAMESPACE = "default"
+
+#: How this instance resolves the calling account, set by the operator at deploy
+#: time via ``COGBASE_DEPLOYMENT_MODE``. It is advisory metadata the UI reads from
+#: ``GET /whoami`` to decide whether to expose an account switcher:
+#:   - ``dev`` (default): account is trust-on-declaration via the X-Account-Id
+#:     header, so the UI keeps an editable account field.
+#:   - ``saas`` / ``single_tenant`` / ``demo``: the account is server-authoritative
+#:     (derived from the host/session or fixed at deploy), so the UI treats the
+#:     account returned by /whoami as read-only.
+#: The value does not yet change server-side resolution — it is the seam that will,
+#: once an auth layer binds the account to an authenticated principal.
+DEPLOYMENT_MODE = os.environ.get("COGBASE_DEPLOYMENT_MODE", "dev")
+
+
+def get_deployment_mode() -> str:
+    """Return the operator-declared deployment mode (see :data:`DEPLOYMENT_MODE`)."""
+    return DEPLOYMENT_MODE
 
 
 def get_account_id(

@@ -11,6 +11,25 @@ from api.system_store import DocWorkflowStatus, TaskStatus
 
 
 # ---------------------------------------------------------------------------
+# Identity models
+# ---------------------------------------------------------------------------
+
+
+class WhoAmIResponse(BaseModel):
+    """The resolved calling identity the UI bootstraps from on load.
+
+    ``account_id`` is the tenant/security boundary the server resolved for this
+    request; the UI adopts it rather than sourcing an account itself. ``mode`` is
+    the operator-declared deployment mode (see ``api.dependencies.DEPLOYMENT_MODE``)
+    and tells the UI whether the account is server-authoritative (read-only) or a
+    ``dev`` trust-on-declaration knob it may expose as an editable field.
+    """
+
+    account_id: str
+    mode: str
+
+
+# ---------------------------------------------------------------------------
 # Namespace models
 # ---------------------------------------------------------------------------
 
