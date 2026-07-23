@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
 import { streamSSE, simplifyExtractionSchemas } from '../../utils'
+import { nsOptions } from '../../nav'
 
 function stripConfigMarkers(text) {
   const S = '---CONFIG---', E = '---END CONFIG---'
@@ -13,7 +14,7 @@ function stripConfigMarkers(text) {
 }
 
 export default function BuildTab({ active }) {
-  const { apiUrl, namespaceName, namespaces, authFetch, setCurrentApp } = useApp()
+  const { apiUrl, namespaceName, namespaces, authFetch, setCurrentApp, refreshApps } = useApp()
   const { t } = useT()
   const [msgs, setMsgs] = useState([{ role: 'sys', text: t('build.intro') }])
   const [input, setInput] = useState('')
@@ -137,6 +138,9 @@ export default function BuildTab({ active }) {
         setMsgs(prev => [...prev, { role: 'sys', text: t('build.deployLive', { name: data.name }) }])
         // Selecting the deployed app snaps the working namespace to its target.
         setCurrentApp(data.name, ns)
+        // A same-namespace deploy leaves nsBase unchanged, so the App switcher's
+        // list won't auto-refresh — pull it in so the new app shows up there.
+        refreshApps()
       } else {
         setMsgs(prev => [...prev, { role: 'sys', text: t('build.deployStatus', { status: data.status + (data.error ? ' — ' + data.error : '') }) }])
       }
@@ -179,9 +183,8 @@ export default function BuildTab({ active }) {
 
   const cfgDisplay = cfgYaml ? (cfgSimplified ? simplifyExtractionSchemas(cfgYaml) : cfgYaml) : t('build.noConfig')
 
-  // Namespace suggestions for the deploy-target picker: the account's namespaces,
-  // plus 'default' and the current target, de-duplicated (mirrors the sidebar's).
-  const nsOptions = [...new Set(['default', deployNs, ...namespaces.map(n => n.name)])].filter(Boolean)
+  // Namespace suggestions for the deploy-target picker (mirrors the sidebar's).
+  const nsSuggestions = nsOptions(namespaces.map(n => n.name), deployNs)
 
   return (
     <div className="chat-layout">
@@ -235,7 +238,7 @@ export default function BuildTab({ active }) {
             <label htmlFor="deployNs">{t('build.deployNsLabel')}</label>
             <input id="deployNs" type="text" list="build-ns-options" value={deployNs} onChange={e => setDeployNs(e.target.value)} />
             <datalist id="build-ns-options">
-              {nsOptions.map(ns => <option key={ns} value={ns} />)}
+              {nsSuggestions.map(ns => <option key={ns} value={ns} />)}
             </datalist>
           </div>
           <button className="btn btn-green" disabled={!cfgYaml} onClick={deployApp}>{t('build.deployApp')}</button>

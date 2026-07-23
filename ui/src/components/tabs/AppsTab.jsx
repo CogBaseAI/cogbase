@@ -5,7 +5,7 @@ import AppDetailModal from '../modals/AppDetailModal'
 import DataTable from '../DataTable'
 
 export default function AppsTab({ active, onSwitchTab }) {
-  const { apiUrl, namespaceName, authFetch, currentApp, setCurrentApp } = useApp()
+  const { apiUrl, namespaceName, authFetch, currentApp, setCurrentApp, refreshApps } = useApp()
   const { t } = useT()
   const [apps, setApps] = useState(null) // null=loading, []|[...]=loaded
   const [error, setError] = useState(null)
@@ -50,6 +50,9 @@ export default function AppsTab({ active, onSwitchTab }) {
       const resp = await authFetch(appUrl(a), { method: 'DELETE' })
       if (resp.ok || resp.status === 204 || resp.status === 404) {
         if (isCurrent(a)) setCurrentApp('')
+        // Deleting an app in the working namespace also drops it from the sidebar
+        // App switcher's list; refresh that so it doesn't keep offering a gone app.
+        if ((a.namespace || namespaceName) === namespaceName) refreshApps()
         loadApps()
       } else {
         alert(t('apps.deleteFailed', { msg: resp.statusText }))

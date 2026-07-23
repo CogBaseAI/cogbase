@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { AppProvider, useApp } from './context'
-import { TAB_TIER, DEFAULT_TAB, buildHash, parseHash } from './nav'
+import { TAB_TIER, DEFAULT_TAB, buildHash, parseHash, nsOptions } from './nav'
 import { I18nProvider, useT, LANGUAGES } from './i18n'
 import BuildTab from './components/tabs/BuildTab'
 import AppsTab from './components/tabs/AppsTab'
@@ -21,7 +21,7 @@ import TaskProgressModal from './components/modals/TaskProgressModal'
 // in ./nav alongside the hash router that also consumes them.
 
 function Layout() {
-  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceName, setNamespaceName, namespaces, refreshNamespaces, apps, refreshApps, currentApp, setCurrentApp, llmConfigured, embConfigured } = useApp()
+  const { apiUrl, setApiUrl, accountId, setAccountId, namespaceName, setNamespaceName, namespaces, refreshNamespaces, apps, refreshApps, currentApp, setCurrentApp } = useApp()
   const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
   const [focus, setFocus] = useState(TAB_TIER['build'])   // which tier's sub-nav shows
@@ -109,9 +109,7 @@ function Layout() {
   // currentApp pointing elsewhere — show it selected only while it's in the list.
   const appSelectValue = apps.some(a => a.name === currentApp) ? currentApp : ''
 
-  // Namespace suggestions: the account's namespaces, plus 'default' and whatever
-  // is currently typed, de-duplicated so the active value is always offered.
-  const nsOptions = [...new Set(['default', namespaceName, ...namespaces.map(n => n.name)])].filter(Boolean)
+  const nsSuggestions = nsOptions(namespaces.map(n => n.name), namespaceName)
 
   return (
     <>
@@ -150,7 +148,7 @@ function Layout() {
                 (e.g. to deploy into one that doesn't exist yet — deploy registers it). */}
             <input id="namespaceName" type="text" list="ns-options" value={namespaceName} onChange={e => setNamespaceName(e.target.value)} />
             <datalist id="ns-options">
-              {nsOptions.map(ns => <option key={ns} value={ns} />)}
+              {nsSuggestions.map(ns => <option key={ns} value={ns} />)}
             </datalist>
           </div>
 

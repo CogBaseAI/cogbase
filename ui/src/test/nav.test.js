@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildHash, parseHash } from '../nav'
+import { buildHash, parseHash, nsOptions } from '../nav'
 
 describe('buildHash', () => {
   it('encodes each tier as its own shape', () => {
@@ -49,5 +49,27 @@ describe('parseHash', () => {
     expect(parseHash('#/account/query')).toBeNull()      // query is an application tab
     expect(parseHash('#/ns/legal/settings')).toBeNull()  // settings is an account tab
     expect(parseHash('#/ns/legal/app/contracts/apps')).toBeNull()  // apps is a namespace tab
+  })
+})
+
+describe('nsOptions', () => {
+  it('always offers default and the current selection', () => {
+    expect(nsOptions([], 'legal')).toEqual(['default', 'legal'])
+  })
+
+  it('prepends default and dedupes it out of the names list', () => {
+    expect(nsOptions(['default', 'legal', 'finance'], 'legal'))
+      .toEqual(['default', 'legal', 'finance'])
+  })
+
+  it('keeps the current selection first among the names when already listed', () => {
+    // Order is: default, current, then remaining names — deduped.
+    expect(nsOptions(['finance', 'legal'], 'legal'))
+      .toEqual(['default', 'legal', 'finance'])
+  })
+
+  it('drops falsy entries (empty current, blank names)', () => {
+    expect(nsOptions(['legal', '', null], '')).toEqual(['default', 'legal'])
+    expect(nsOptions([], '')).toEqual(['default'])
   })
 })
