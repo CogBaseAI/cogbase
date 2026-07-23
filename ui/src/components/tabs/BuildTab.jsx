@@ -3,6 +3,7 @@ import { useApp } from '../../context'
 import { useT } from '../../i18n'
 import { streamSSE, simplifyExtractionSchemas } from '../../utils'
 import { nsOptions } from '../../nav'
+import NamespaceSelect from '../NamespaceSelect'
 
 function stripConfigMarkers(text) {
   const S = '---CONFIG---', E = '---END CONFIG---'
@@ -236,10 +237,9 @@ export default function BuildTab({ active }) {
               cross-namespace deploy without touching the global switcher. */}
           <div className="deploy-ns">
             <label htmlFor="deployNs">{t('build.deployNsLabel')}</label>
-            <input id="deployNs" type="text" list="build-ns-options" value={deployNs} onChange={e => setDeployNs(e.target.value)} />
-            <datalist id="build-ns-options">
-              {nsSuggestions.map(ns => <option key={ns} value={ns} />)}
-            </datalist>
+            {/* Same filtering combobox as the sidebar switcher; opens upward so the
+                menu isn't clipped by the aside footer. See components/NamespaceSelect.jsx. */}
+            <NamespaceSelect id="deployNs" value={deployNs} options={nsSuggestions} onChange={setDeployNs} openUp />
           </div>
           <button className="btn btn-green" disabled={!cfgYaml} onClick={deployApp}>{t('build.deployApp')}</button>
         </div>

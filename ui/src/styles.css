@@ -102,6 +102,8 @@ header h1 span { color: var(--accent); }
   box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
   max-height: 220px; overflow-y: auto;
 }
+/* Open above the input (for bottom-pinned placements like the Build aside footer). */
+.ns-combo-menu.up { top: auto; bottom: calc(100% + 3px); }
 .ns-combo-option {
   padding: 5px 8px; border-radius: 4px; font-size: 12px; color: var(--text);
   cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -218,8 +220,9 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 .aside-ft { padding: 10px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 .deploy-ns { display: flex; align-items: center; gap: 6px; }
 .deploy-ns label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; }
+.deploy-ns .ns-combo { flex: 1; min-width: 0; }
 .deploy-ns input {
-  flex: 1; min-width: 0; padding: 5px 8px; font-size: 12px;
+  padding: 5px 8px; font-size: 12px;
   background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
 }
 .deploy-ns input:focus { outline: none; border-color: var(--accent); }

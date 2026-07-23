@@ -7,7 +7,10 @@ import { useT } from '../i18n'
 // option — by click or arrow-keys + Enter — commits it. Arbitrary free text is
 // still allowed (Enter / blur commits the draft) so a not-yet-created namespace
 // can be typed to deploy into, preserving the old free-text input's behaviour.
-export default function NamespaceSelect({ id, value, options, onChange }) {
+// `openUp` flips the dropdown above the input — for placements pinned near the
+// viewport bottom (e.g. the Build tab's "Deploy to" in the aside footer) where a
+// downward menu would be clipped.
+export default function NamespaceSelect({ id, value, options, onChange, openUp = false }) {
   const { t } = useT()
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState(value)
@@ -78,7 +81,7 @@ export default function NamespaceSelect({ id, value, options, onChange }) {
         onBlur={() => { if (open) commit(draft) }}
       />
       {open && (
-        <ul className="ns-combo-menu" role="listbox">
+        <ul className={`ns-combo-menu${openUp ? ' up' : ''}`} role="listbox">
           {filtered.length === 0 && (
             <li className="ns-combo-empty">{t('header.namespaceNoMatch')}</li>
           )}
