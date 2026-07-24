@@ -580,23 +580,6 @@ class TestSystemStoreNamespaces:
         await store.delete_namespace("default", "team-a")
         assert await store.get_namespace("default", "team-a") is None
 
-    @pytest.mark.asyncio
-    async def test_ensure_creates_when_absent(self, store):
-        await store.ensure_namespace("default", "team-x")
-        got = await store.get_namespace("default", "team-x")
-        assert got is not None
-        # auto-registered namespace: name coincides with the id
-        assert got.name == "team-x"
-
-    @pytest.mark.asyncio
-    async def test_ensure_is_idempotent_and_preserves_metadata(self, store):
-        await store.save_namespace(_make_namespace_record("team-a", description="Team A"))
-        await store.ensure_namespace("default", "team-a")
-        got = await store.get_namespace("default", "team-a")
-        # ensure must not clobber an existing record's metadata
-        assert got.description == "Team A"
-        assert len(await store.list_namespaces("default")) == 1
-
 
 def _make_skill_record(skill_id: str = "uuid-1", name: str = "greeter") -> SkillRecord:
     return SkillRecord(

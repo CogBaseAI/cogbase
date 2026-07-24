@@ -315,9 +315,16 @@ async def create_application(
             detail=f"Application '{config.name}' already exists",
         )
 
-    # Register the namespace this app lives in so it surfaces in GET /namespaces
-    # even when it was never explicitly created. Idempotent.
-    await system_store.ensure_namespace(scope.account_id, scope.namespace_id)
+    # The namespace must be created explicitly (POST /namespaces) before it can
+    # hold applications — there is no implicit landing namespace.
+    if await system_store.get_namespace(scope.account_id, scope.namespace_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Namespace '{scope.namespace_id}' does not exist; "
+                "create it via POST /namespaces before creating an application"
+            ),
+        )
 
     now = _now()
     app_id = new_app_id()

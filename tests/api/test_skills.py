@@ -32,7 +32,7 @@ from api.dependencies import (
 from api.system_resources import SystemResources
 from api.main import app
 from api.app_cache import AppCache
-from api.system_store import SystemStore
+from api.system_store import NamespaceRecord, SystemStore
 from cogbase.skills.registry import SkillRegistry
 from cogbase.skills.skill import Skill
 from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -104,6 +104,15 @@ async def client(registry):
     """AsyncClient with all external dependencies overridden."""
     system_store = _make_system_store()
     await system_store.setup()
+    await system_store.save_namespace(
+        NamespaceRecord(
+            account_id="default",
+            namespace_id="default",
+            name="default",
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        )
+    )
 
     app.dependency_overrides[get_system_store] = lambda: system_store
     app.dependency_overrides[get_app_cache] = lambda: AppCache()

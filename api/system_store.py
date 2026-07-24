@@ -394,25 +394,6 @@ class SystemStore:
         # ISO-8601 UTC timestamps sort lexicographically, so no parse needed.
         return sorted(rows, key=lambda r: r.created_at, reverse=True)
 
-    async def ensure_namespace(self, account_id: str, namespace_id: str) -> None:
-        """Create a bare namespace record if one does not already exist.
-
-        Called when an app is created in a namespace so every namespace holding
-        resources surfaces in ``list_namespaces`` even if it was never explicitly
-        created via ``POST /namespaces``.  Idempotent.
-        """
-        if await self.get_namespace(account_id, namespace_id) is not None:
-            return
-        now = datetime.now(timezone.utc).isoformat()
-        await self.save_namespace(NamespaceRecord(
-            account_id=account_id,
-            namespace_id=namespace_id,
-            # id and name coincide today, so the auto-registered handle is the id.
-            name=namespace_id,
-            created_at=now,
-            updated_at=now,
-        ))
-
     async def delete_namespace(self, account_id: str, namespace_id: str) -> None:
         await self._store.delete_records(
             "namespace_records",

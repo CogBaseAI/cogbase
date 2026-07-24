@@ -16,7 +16,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status
 
 from api.dependencies import (
-    DEFAULT_NAMESPACE,
     AccountIdDep,
     SystemStoreDep,
     resolve_namespace_id,
@@ -154,17 +153,10 @@ async def delete_namespace(
 ) -> None:
     """Delete an empty namespace.
 
-    The default namespace can't be deleted (it is the implicit fallback for
-    callers that don't address a namespace), and a namespace that still holds
-    applications is refused with 409 — delete or move its apps first.
+    A namespace that still holds applications is refused with 409 — delete or
+    move its apps first.
     """
     namespace_id = resolve_namespace_id(account_id, namespace)
-    if namespace_id == DEFAULT_NAMESPACE:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="The default namespace cannot be deleted",
-        )
-
     record = await system_store.get_namespace(account_id, namespace_id)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Namespace '{namespace}' not found")

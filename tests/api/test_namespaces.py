@@ -182,10 +182,13 @@ class TestDeleteNamespace:
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_delete_default_refused(self, app_overrides):
+    async def test_default_namespace_is_not_special(self, app_overrides):
+        """'default' has no privileged status: it 404s when absent and, once
+        created, deletes like any other namespace."""
         client = app_overrides["client"]
-        resp = await client.delete("/namespaces/default")
-        assert resp.status_code == 409
+        assert (await client.delete("/namespaces/default")).status_code == 404
+        await client.post("/namespaces", json={"name": "default"})
+        assert (await client.delete("/namespaces/default")).status_code == 204
 
     @pytest.mark.asyncio
     async def test_delete_nonempty_refused(self, app_overrides):
@@ -199,10 +202,10 @@ class TestDeleteNamespace:
         assert (await client.get("/namespaces/team-a")).status_code == 200
 
 
-class TestNamespaceAutoRegistration:
+class TestNamespaceRequiredForApps:
     @pytest.mark.asyncio
-    async def test_app_create_registers_namespace(self, app_overrides):
-        """Creating an app in a namespace should surface it in GET /namespaces."""
+    async def test_app_create_requires_existing_namespace(self, app_overrides):
+        """An app cannot be created in a namespace that was never created."""
         import io
         import textwrap
         import zipfile
@@ -218,10 +221,20 @@ class TestNamespaceAutoRegistration:
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
             zf.writestr("config.yaml", config_yaml)
+        bundle = buf.getvalue()
 
+        # The namespace does not exist yet -> app creation is refused.
         resp = await client.post(
             "/namespaces/team-auto/applications",
-            files={"bundle": ("a.zip", buf.getvalue(), "application/zip")},
+            files={"bundle": ("a.zip", bundle, "application/zip")},
+        )
+        assert resp.status_code == 404
+
+        # After creating the namespace, the same request succeeds.
+        await client.post("/namespaces", json={"name": "team-auto"})
+        resp = await client.post(
+            "/namespaces/team-auto/applications",
+            files={"bundle": ("a.zip", bundle, "application/zip")},
         )
         assert resp.status_code == 201
         listed = await client.get("/namespaces")

@@ -141,17 +141,19 @@ App generator (stateless, account-scoped chat; the client holds message history,
 Tenancy: every request carries an `account_id` (the tenant/security boundary, from
 the `X-Account-Id` header, defaulting to `default`) and a `namespace_id` (an
 in-account organizational unit, addressed as the `{namespace}` URL path segment).
-Name-addressed application routes live under `/namespaces/{namespace}/applications`;
-an app is unique by `(account_id, namespace_id, name)`. Account-wide routes (e.g.
-`GET /applications`) omit the namespace segment.
+There is no default namespace — a namespace must be created explicitly (`POST
+/namespaces`) before it can hold applications. Name-addressed application routes
+live under `/namespaces/{namespace}/applications`; an app is unique by
+`(account_id, namespace_id, name)`. Account-wide routes (e.g. `GET /applications`)
+omit the namespace segment.
 
 Namespaces (account-scoped CRUD):
 - `POST /namespaces` — create a namespace (`name` handle + optional description; the name doubles as the internal `namespace_id`)
 - `GET /namespaces` — list the calling account's namespaces
 - `GET /namespaces/{namespace}` — fetch one namespace
 - `PATCH /namespaces/{namespace}` — update description (the id is immutable)
-- `DELETE /namespaces/{namespace}` — delete an empty namespace (refuses `default` and namespaces still holding apps)
-- Creating an app auto-registers its namespace (idempotent) so it surfaces in the listing.
+- `DELETE /namespaces/{namespace}` — delete an empty namespace (refuses namespaces still holding apps)
+- Creating an app requires its namespace to already exist; a request into an unknown namespace is refused with 404.
 
 Application lifecycle (name-addressed → namespace-scoped):
 - `POST /namespaces/{namespace}/applications` — create from ZIP bundle (config.yaml + referenced files)

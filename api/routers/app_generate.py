@@ -15,7 +15,13 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from api.app_cache import cache_key
-from api.dependencies import AppCacheDep, RequestScopeDep, SystemResourcesDep, SystemStoreDep
+from api.dependencies import (
+    AccountIdDep,
+    AppCacheDep,
+    RequestScopeDep,
+    SystemResourcesDep,
+    SystemStoreDep,
+)
 from api.factory import build_app
 from api.models import (
     DeployResponse,
@@ -168,7 +174,7 @@ async def _chat_turn_events(
 
 @router.post("/chat", response_model=GenerateChatResponse)
 async def chat(
-    scope: RequestScopeDep,
+    account_id: AccountIdDep,
     body: GenerateChatRequest,
     system_resources: SystemResourcesDep,
 ) -> GenerateChatResponse:
@@ -184,7 +190,7 @@ async def chat(
     validated_config_yaml: str | None = None
     final_content: str = ""
     async for event in _chat_turn_events(
-        body, system_resources, account_id=scope.account_id, log_prefix="generate/chat"
+        body, system_resources, account_id=account_id, log_prefix="generate/chat"
     ):
         if event["type"] == "result":
             result = event["result"]
@@ -208,7 +214,7 @@ async def chat(
 
 @router.post("/chat/stream")
 async def chat_stream(
-    scope: RequestScopeDep,
+    account_id: AccountIdDep,
     body: GenerateChatRequest,
     system_resources: SystemResourcesDep,
 ) -> StreamingResponse:
@@ -226,7 +232,7 @@ async def chat_stream(
             async for event in _chat_turn_events(
                 body,
                 system_resources,
-                account_id=scope.account_id,
+                account_id=account_id,
                 log_prefix="generate/chat/stream",
             ):
                 if event["type"] == "token":
@@ -263,9 +269,16 @@ async def deploy(
             detail=f"Application '{config.name}' already exists",
         )
 
-    # Register the namespace this app lives in so it surfaces in GET /namespaces
-    # even when it was never explicitly created. Idempotent.
-    await system_store.ensure_namespace(scope.account_id, scope.namespace_id)
+    # The namespace must be created explicitly (POST /namespaces) before it can
+    # hold applications — there is no implicit landing namespace.
+    if await system_store.get_namespace(scope.account_id, scope.namespace_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Namespace '{scope.namespace_id}' does not exist; "
+                "create it via POST /namespaces before deploying an application"
+            ),
+        )
 
     stored_yaml = config.to_yaml()
     now = _now()

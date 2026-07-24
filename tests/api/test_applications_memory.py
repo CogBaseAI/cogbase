@@ -27,7 +27,7 @@ from api.dependencies import (
 )
 from api.main import app
 from api.system_resources import SystemResources
-from api.system_store import SystemStore
+from api.system_store import NamespaceRecord, SystemStore
 from cogbase.core.app import CogBaseApp
 from cogbase.core.query_runner import MemoryTiers, QueryRunner, RetrievalResources
 from cogbase.memory import EpisodicMemory, ShortTermMemory
@@ -101,6 +101,15 @@ def _real_app(name: str, mem: ShortTermMemory, episodic: EpisodicMemory, llm: Ma
 async def client():
     system_store = SystemStore(store=InMemoryStructuredStore())
     await system_store.setup()
+    await system_store.save_namespace(
+        NamespaceRecord(
+            account_id="default",
+            namespace_id="default",
+            name="default",
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        )
+    )
     app_cache = AppCache()
     system_resources = SystemResources(structured_store=InMemoryStructuredStore())
 

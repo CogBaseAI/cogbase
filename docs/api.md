@@ -9,7 +9,8 @@ Every request carries two tenancy dimensions:
 - **`account_id`** — the tenant and security boundary. Supplied via the `X-Account-Id`
   header; defaults to `default` when absent, so single-tenant callers keep working.
 - **`namespace_id`** — an organizational unit *inside* an account. Supplied as the
-  `{namespace}` URL path segment; defaults to `default`.
+  `{namespace}` URL path segment. There is no default namespace: one must be created
+  explicitly (`POST /namespaces`) before it can hold applications.
 
 An application is unique by `(account_id, namespace_id, name)`. **Name-addressed
 application routes** are nested under `/namespaces/{namespace}/applications/...`.
@@ -26,9 +27,9 @@ Namespaces are account-scoped; the namespace id is immutable once created.
 | `GET` | `/namespaces` | List the calling account's namespaces |
 | `GET` | `/namespaces/{namespace}` | Fetch one namespace |
 | `PATCH` | `/namespaces/{namespace}` | Update `description` |
-| `DELETE` | `/namespaces/{namespace}` | Delete an empty namespace (refuses `default` and namespaces still holding apps) |
+| `DELETE` | `/namespaces/{namespace}` | Delete an empty namespace (refuses namespaces still holding apps) |
 
-Creating an application auto-registers its namespace (idempotent), so it surfaces in the listing even when never explicitly created.
+A namespace must exist before it can hold applications: creating an application in an unknown namespace is refused with `404`. Create the namespace first via `POST /namespaces`.
 
 ## App generator
 

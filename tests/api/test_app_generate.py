@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from api.dependencies import RequestScope
 from api.routers.app_generate import (
     _chat_turn_events,
     chat,
@@ -27,17 +26,13 @@ def _make_llm(*responses: str) -> MagicMock:
     return llm
 
 
-def _scope(account_id: str = "acme", namespace_id: str = "default") -> RequestScope:
-    return RequestScope(account_id=account_id, namespace_id=namespace_id)
-
-
 class TestChatTurn:
     async def test_chat_drains_shared_stream_and_returns_final_response(self):
         llm = _make_llm("A final response")
         system_resources = MagicMock(llm=llm)
         body = GenerateChatRequest(text="hello", history=[])
 
-        response = await chat(_scope(), body, system_resources)
+        response = await chat("acme", body, system_resources)
 
         assert response.content == "A final response"
         assert response.config_yaml is None
@@ -68,6 +63,6 @@ class TestChatTurn:
         system_resources = MagicMock(llm=llm)
         body = GenerateChatRequest(text="hello", history=[])
 
-        response = await chat(_scope(account_id="tenant-42"), body, system_resources)
+        response = await chat("tenant-42", body, system_resources)
 
         assert response.content == "scoped response"

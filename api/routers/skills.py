@@ -18,7 +18,6 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from api.dependencies import (
-    DEFAULT_NAMESPACE,
     AccountIdDep,
     SkillBundleStoreDep,
     SkillRegistryDep,
@@ -156,7 +155,7 @@ async def _ingest_bundle(
     record = SkillRecord(
         skill_id=skill_id,
         account_id=account_id,
-        namespace_id=DEFAULT_NAMESPACE,  # skills are account-scoped, not per-namespace
+        namespace_id="",  # skills are account-scoped, not per-namespace
         name=skill.name,
         description=skill.description,
         metadata_json=json.dumps(skill.metadata) if skill.metadata else None,

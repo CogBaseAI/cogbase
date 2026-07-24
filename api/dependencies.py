@@ -15,11 +15,15 @@ from cogbase.skills.registry import SkillRegistry
 from cogbase.skills.store import SkillBundleStore
 
 
-#: Default account/namespace used when a request omits the tenancy header.
+#: Default account used when a request omits the tenancy header.
 #: Tenancy is logical for now — ``account_id`` is trust-on-declaration until an
 #: auth layer binds the header to an authenticated principal.
+#:
+#: There is deliberately no default *namespace*: a namespace must be created
+#: explicitly (``POST /namespaces``) before it can hold applications. Namespace-
+#: less routes (e.g. account-wide listings, ``/generate/chat``) resolve only the
+#: account and never address a namespace.
 DEFAULT_ACCOUNT_ID = "default"
-DEFAULT_NAMESPACE = "default"
 
 #: How this instance resolves the calling account, set by the operator at deploy
 #: time via ``COGBASE_DEPLOYMENT_MODE``. It is advisory metadata the UI reads from
@@ -80,10 +84,19 @@ def get_request_scope(request: Request, account_id: AccountIdDep) -> RequestScop
     """Resolve the full ``(account_id, namespace_id)`` scope for a route.
 
     ``account_id`` comes from the ``X-Account-Id`` header; the namespace ``name``
-    is the ``{namespace}`` URL path segment (absent on account-wide routes →
-    default) and is resolved to its internal id via :func:`resolve_namespace_id`.
+    is the ``{namespace}`` URL path segment, resolved to its internal id via
+    :func:`resolve_namespace_id`. This dependency is for namespace-scoped routes
+    only; account-wide routes take :data:`AccountIdDep` directly, since there is
+    no default namespace to fall back to.
     """
-    name = request.path_params.get("namespace") or DEFAULT_NAMESPACE
+    name = request.path_params.get("namespace")
+    if name is None:
+        # Programming error: this dependency was used on a route without a
+        # ``{namespace}`` path segment. There is no default namespace to assume.
+        raise RuntimeError(
+            "get_request_scope requires a '{namespace}' path segment; "
+            "use AccountIdDep for account-wide routes"
+        )
     return RequestScope(
         account_id=account_id,
         namespace_id=resolve_namespace_id(account_id, name),

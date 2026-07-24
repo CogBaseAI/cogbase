@@ -31,7 +31,7 @@ from cogbase.skills.registry import SkillRegistry
 from api.main import app
 from api.app_cache import AppCache
 
-from api.system_store import DocRecord, SystemStore
+from api.system_store import DocRecord, NamespaceRecord, SystemStore
 from cogbase.config.config import AppConfig, RecordMode
 from cogbase.core.models import Chunk
 from cogbase.core.query_runner import DocumentSlice, QueryResult
@@ -61,6 +61,25 @@ def _make_system_store() -> SystemStore:
     return SystemStore(store=backend)
 
 
+async def _seed_namespace(
+    system_store: SystemStore, name: str = "default", account_id: str = "default"
+) -> None:
+    """Create a namespace record so apps can be created in it.
+
+    Apps now require their namespace to exist first (POST /namespaces), so the
+    fixtures pre-create the namespace tests deploy into, mirroring real usage.
+    """
+    await system_store.save_namespace(
+        NamespaceRecord(
+            account_id=account_id,
+            namespace_id=name,
+            name=name,
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        )
+    )
+
+
 def _make_app_cache() -> AppCache:
     return AppCache()
 
@@ -86,6 +105,7 @@ async def client():
     """AsyncClient with all external dependencies swapped out."""
     system_store = _make_system_store()
     await system_store.setup()
+    await _seed_namespace(system_store)
     app_cache = _make_app_cache()
     system_resources = SystemResources(structured_store=InMemoryStructuredStore())
 
@@ -106,6 +126,7 @@ async def app_overrides():
     """Like ``client`` but also exposes the underlying SystemStore for seeding test data."""
     system_store = _make_system_store()
     await system_store.setup()
+    await _seed_namespace(system_store)
     app_cache = _make_app_cache()
     system_resources = SystemResources(structured_store=InMemoryStructuredStore())
 
@@ -1983,7 +2004,8 @@ class TestDownloadGeneratedDocument:
         doc_id = "contract__ab12ef.docx"
         mock_app = _mock_download_app({f"generated/{doc_id}": art})
 
-        # Create the app under account "acct-a".
+        # Create the app under account "acct-a" (its namespace must exist first).
+        await _seed_namespace(system_store, account_id="acct-a")
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=mock_app):
             resp = await client.post(
                 "/namespaces/default/applications",
