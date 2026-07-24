@@ -71,7 +71,7 @@ CogBase is organized into six layers with clean boundaries between them.
 ║          ↓                                                ║
 ║  Draft presented → user revises conversationally          ║
 ║          ↓                                                ║
-║  Deploy via POST /applications                            ║
+║  Deploy: POST /namespaces/{namespace}/generate/deploy     ║
 ╚═══════════════════════════════════════════════════════════╝
           ↓  config.yaml ZIP bundle
 ╔═══════════════════════════════════════════════════════════╗
@@ -271,7 +271,8 @@ About 90% of the codebase — the ingestion pipeline, workflow engine, query run
 - [x] SQLite schema evolution — detects and repairs constraint mismatches; no manual migration needed
 - [x] Demo UI: tabbed layout (Apps, Build, Ingest, Query, Demos, Data), per-document workflow status, deploy/ingest progress, Settings tab for provider configuration
 - [x] AppScope namespacing — all store adapters scope collections by app name, preventing conflicts between apps on a shared backend
-- [x] Full app deletion cleanup — vector/structured collections, document store entries, and system store records are all removed on `DELETE /applications/{name}`
+- [x] Multi-tenancy — every request carries an `account_id` (`X-Account-Id` header, the tenant/security boundary) and a `namespace_id` (`{namespace}` URL segment, an in-account organizational unit); apps are unique by `(account_id, namespace_id, name)` and name-addressed routes live under `/namespaces/{namespace}/applications`
+- [x] Full app deletion cleanup — vector/structured collections, document store entries, and system store records are all removed on `DELETE /namespaces/{namespace}/applications/{name}`
 - [x] LLM token usage — `input_tokens` and `output_tokens` counted across all LLM calls and returned in query responses (blocking and streaming)
 - [x] Query-time and app-level `system_prompt` — override the default system prompt per request via `QueryRequest.system_prompt`, or set a default in `config.yaml`
 - [x] `top_k` configurable in `QueryRequest` for per-request result tuning

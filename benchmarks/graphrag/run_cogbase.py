@@ -26,10 +26,10 @@ memory improves the next run's answers. Implies --build_memory.
 Output: benchmarks/results/{config_stem}/{subset}/{corpus_name}/predictions_{corpus_name}.json
 
 How it works:
-  1. For each corpus, creates a CogBase app named bench-{slug} via POST /applications (skips if already exists)
-  2. Uploads the corpus text via POST /applications/{name}/upload_documents
-  3. Polls GET /applications/{name}/tasks until ingestion completes
-  4. Queries each QA pair via POST /applications/{name}/query
+  1. For each corpus, creates a CogBase app named bench-{slug} via POST /namespaces/{ns}/applications (skips if already exists)
+  2. Uploads the corpus text via POST /namespaces/{ns}/applications/{name}/upload_documents
+  3. Polls GET /namespaces/{ns}/applications/{name}/tasks until ingestion completes
+  4. Queries each QA pair via POST /namespaces/{ns}/applications/{name}/query
   5. Writes results/{subset}/{corpus_name}/predictions_{corpus_name}.json in the benchmark's required format
 
 See benchmarks/README.md for the full evaluation workflow.
@@ -51,6 +51,14 @@ import yaml
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
+
+#: Namespace prefix for name-addressed application routes; set from --namespace in main().
+NAMESPACE = "default"
+
+
+def _apps() -> str:
+    """URL prefix for the namespace-scoped applications collection."""
+    return f"/namespaces/{NAMESPACE}/applications"
 
 SUBSET_FILES = {
     "novel": {
@@ -108,14 +116,14 @@ def _group_by_source(questions: list[dict]) -> dict[str, list[dict]]:
 
 async def ensure_app(client: httpx.AsyncClient, config_path: Path, app_name: str) -> None:
     """Create the CogBase application if it does not exist yet."""
-    resp = await client.get(f"/applications/{app_name}")
+    resp = await client.get(f"{_apps()}/{app_name}")
     if resp.status_code == 200:
         log.info("App '%s' already exists, reusing.", app_name)
         return
 
     bundle = _build_bundle(config_path, app_name)
     resp = await client.post(
-        "/applications",
+        _apps(),
         files={"bundle": ("bundle.zip", bundle, "application/zip")},
         timeout=60,
     )
@@ -125,14 +133,14 @@ async def ensure_app(client: httpx.AsyncClient, config_path: Path, app_name: str
 
 async def upload_corpus(client: httpx.AsyncClient, app_name: str, corpus_name: str, text: str) -> list[str]:
     """Upload corpus text and return the list of task IDs."""
-    resp = await client.get(f"/applications/{app_name}/docs")
+    resp = await client.get(f"{_apps()}/{app_name}/docs")
     if resp.status_code == 200 and resp.json().get("total", 0) > 0:
         log.info("Corpus '%s' already ingested, skipping upload.", corpus_name)
         return []
 
     filename = f"{corpus_name}.txt"
     resp = await client.post(
-        f"/applications/{app_name}/upload_documents",
+        f"{_apps()}/{app_name}/upload_documents",
         files={"files": (filename, text.encode(), "text/plain")},
         data={"metadata": "{}"},
         timeout=120,
@@ -150,7 +158,7 @@ async def wait_for_ingestion(client: httpx.AsyncClient, app_name: str, poll_inte
     while True:
         try:
             resp = await client.get(
-                f"/applications/{app_name}/tasks",
+                f"{_apps()}/{app_name}/tasks",
                 params={"task_type": "ingest"},
                 timeout=30,
             )
@@ -183,7 +191,7 @@ async def query(client: httpx.AsyncClient, app_name: str, question: str, questio
     are the long-term records recall injected (empty unless memory was built).
     """
     resp = await client.post(
-        f"/applications/{app_name}/query",
+        f"{_apps()}/{app_name}/query",
         json={"text": question, "system_prompt": system_prompt},
         timeout=120,
     )
@@ -215,7 +223,7 @@ async def add_memory(
 ) -> list[dict]:
     """Distill one QA pair into long-term memory; return the records created."""
     resp = await client.post(
-        f"/applications/{app_name}/memory",
+        f"{_apps()}/{app_name}/memory",
         json={"messages": messages, "session_id": session_id},
         timeout=300,
     )
@@ -482,7 +490,11 @@ async def main(args: argparse.Namespace) -> None:
             results_path, len(memory_results_by_corpus),
         )
 
-    async with httpx.AsyncClient(base_url=args.base_url) as client:
+    global NAMESPACE
+    NAMESPACE = args.namespace
+    async with httpx.AsyncClient(
+        base_url=args.base_url, headers={"X-Account-Id": args.account}
+    ) as client:
         for item in corpora:
             corpus_name: str = item["corpus_name"]
             corpus_text: str = item["context"]
@@ -518,6 +530,10 @@ if __name__ == "__main__":
     parser.add_argument("--subset", required=True, choices=["novel", "medical"])
     parser.add_argument("--base_url", default="http://localhost:8000",
                         help="CogBase API base URL")
+    parser.add_argument("--namespace", default="default",
+                        help="Namespace to create/query the app under (default: default)")
+    parser.add_argument("--account", default="default",
+                        help="Tenant account id, sent as the X-Account-Id header (default: default)")
     parser.add_argument("--dataset_dir", default="./GraphRAG-Benchmark/Datasets",
                         help="Path to the Datasets directory from the benchmark repo")
     parser.add_argument("--output_dir", default="./benchmarks/results",

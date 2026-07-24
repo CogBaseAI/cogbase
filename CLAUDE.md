@@ -13,7 +13,7 @@ CogBase is a framework for building AI applications that need to understand, cro
 **App Generator** (conversational)
 - User describes document types, facts that matter, and example questions in natural language
 - LLM generates a complete draft `config.yaml`: pipeline steps, vector/structured collections, extraction schemas, prompts, and workflows
-- Draft is revised conversationally then deployed via `POST /generate/{session_id}/deploy`
+- Draft is revised conversationally then deployed via `POST /namespaces/{namespace}/generate/deploy`
 
 **Knowledge Pipeline** (async, ingest-time)
 - An app may have multiple named pipelines; documents are routed to a pipeline by metadata (e.g. `doc_type`)
@@ -47,7 +47,7 @@ CogBase is a framework for building AI applications that need to understand, cro
 
 **Adaptive Evolution** (background, planned)
 - Gap detector mines episodic logs for signals the current config doesn't cover: low vector scores, repeated null answers, recurring tool chains
-- Surfaces concrete suggestions (new field, new step, new skill) with supporting evidence via `GET /applications/{name}/suggestions`
+- Surfaces concrete suggestions (new field, new step, new skill) with supporting evidence via `GET /namespaces/{namespace}/applications/{name}/suggestions`
 - On user acceptance: config is patched and only affected documents are re-ingested
 
 ## Current project structure
@@ -131,29 +131,48 @@ Domain-specific applications are in `examples/`, not in a `packs/` directory. Ea
 
 ## REST API
 
-Applications are created and managed through `POST /applications` (ZIP bundle upload). Key endpoints:
+Applications are created and managed through `POST /namespaces/{namespace}/applications` (ZIP bundle upload). Key endpoints:
 
-App generator:
-- `POST /generate` — start a generation session from a natural-language description
-- `POST /generate/{session_id}/revise` — revise the draft conversationally
-- `POST /generate/{session_id}/deploy` — deploy the draft as a new application
+App generator (stateless, account-scoped chat; the client holds message history, the server runs the agent loop):
+- `POST /generate/chat` — one chat turn; returns `content` + (when ready) a validated `config_yaml`
+- `POST /generate/chat/stream` — same as `/generate/chat`, streamed as SSE
+- `POST /namespaces/{namespace}/generate/deploy` — deploy a generated `config_yaml` as a new application (namespace-scoped, since it creates the app)
 
-Application lifecycle:
-- `POST /applications` — create from ZIP bundle (config.yaml + referenced files)
-- `POST /applications/{name}/upload_documents` — upload documents (saved to doc store; ingestion task handles the rest)
-- `GET /applications/{name}/documents` — list all documents with workflow status
-- `POST /applications/{name}/query` — blocking query
-- `POST /applications/{name}/query/stream` — streaming query (SSE)
-- `GET/POST/DELETE /applications/{name}/skills` — assign/unassign system skills to an application (by skill id)
+Tenancy: every request carries an `account_id` (the tenant/security boundary, from
+the `X-Account-Id` header, defaulting to `default`) and a `namespace_id` (an
+in-account organizational unit, addressed as the `{namespace}` URL path segment).
+There is no default namespace — a namespace must be created explicitly (`POST
+/namespaces`) before it can hold applications. Name-addressed application routes
+live under `/namespaces/{namespace}/applications`; an app is unique by
+`(account_id, namespace_id, name)`. Account-wide routes (e.g. `GET /applications`)
+omit the namespace segment.
+
+Namespaces (account-scoped CRUD):
+- `POST /namespaces` — create a namespace (`name` handle + optional description; the name doubles as the internal `namespace_id`)
+- `GET /namespaces` — list the calling account's namespaces
+- `GET /namespaces/{namespace}` — fetch one namespace
+- `PATCH /namespaces/{namespace}` — update description (the id is immutable)
+- `DELETE /namespaces/{namespace}` — delete an empty namespace (refuses namespaces still holding apps)
+- Creating an app requires its namespace to already exist; a request into an unknown namespace is refused with 404.
+
+Application lifecycle (name-addressed → namespace-scoped):
+- `POST /namespaces/{namespace}/applications` — create from ZIP bundle (config.yaml + referenced files)
+- `GET /applications` — list apps account-wide (all namespaces); `GET /namespaces/{namespace}/applications` lists within a namespace
+- `GET/PATCH/DELETE /namespaces/{namespace}/applications/{name}` — fetch / update+restart / remove
+- `POST /namespaces/{namespace}/applications/{name}/upload_documents` — upload documents (saved to doc store; ingestion task handles the rest)
+- `GET /namespaces/{namespace}/applications/{name}/docs` — list all documents with workflow status
+- `POST /namespaces/{namespace}/applications/{name}/query` — blocking query
+- `POST /namespaces/{namespace}/applications/{name}/query/stream` — streaming query (SSE)
+- `GET/POST/DELETE /namespaces/{namespace}/applications/{name}/skills` — assign/unassign system skills to an application
 
 Workflows:
-- `POST /applications/{name}/workflows/{workflow_name}/stream` — run a workflow (SSE)
+- `POST /namespaces/{namespace}/applications/{name}/workflows/{workflow_name}/stream` — run a workflow (SSE)
 
-Skills (system-wide, uploadable):
+Skills (system-wide registry, uploadable; account-scoped via `X-Account-Id`, shared across namespaces, addressed by account-unique `skill_name`):
 - `POST /skills` — upload a skill ZIP bundle (SKILL.md + scripts/assets); assigns a stable UUID
-- `PUT /skills/{skill_id}` — replace a skill's bundle, keeping its id (and so all app references)
-- `GET /skills` / `GET /skills/{skill_id}` — list / fetch skills
-- `DELETE /skills/{skill_id}` — remove a skill from the document store, local cache, and registry
+- `PUT /skills/{skill_name}` — replace a skill's bundle, keeping its id (and so all app references)
+- `GET /skills` / `GET /skills/{skill_name}` — list / fetch skills
+- `DELETE /skills/{skill_name}` — remove a skill from the document store, local cache, and registry
 - Bundles persist in the system document store (the shared, multi-node source of truth) and are
   materialized into a local cache dir for execution; a fresh node syncs skills from the store on startup.
   See `cogbase/skills/store.py` (`SkillBundleStore`) and the `skill_records` index in `api/system_store.py`.
@@ -162,6 +181,6 @@ System:
 - `POST /system/config` — configure LLM and embedding providers at runtime (no restart required)
 
 Adaptive evolution (planned):
-- `GET /applications/{name}/suggestions` — list pending suggestions with supporting evidence
-- `POST /applications/{name}/suggestions/{id}/accept` — accept; triggers config patch + targeted re-ingest
-- `POST /applications/{name}/suggestions/{id}/reject` — reject
+- `GET /namespaces/{namespace}/applications/{name}/suggestions` — list pending suggestions with supporting evidence
+- `POST /namespaces/{namespace}/applications/{name}/suggestions/{id}/accept` — accept; triggers config patch + targeted re-ingest
+- `POST /namespaces/{namespace}/applications/{name}/suggestions/{id}/reject` — reject

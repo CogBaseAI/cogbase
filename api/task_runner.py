@@ -27,9 +27,9 @@ import logging
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
-from api.app_cache import AppCache
+from api.app_cache import AppCache, cache_key
 from api.models import IngestResultSummary
-from api.system_store import DocRecord, SystemStore, TaskStatus
+from api.system_store import AppRecord, DocRecord, SystemStore, TaskStatus
 from cogbase.core.models import Document, DocWorkflowStatus
 from cogbase.pipeline.document_parser import parse_to_markdown
 
@@ -80,8 +80,9 @@ async def run_ingest_task(
     doc_id = task.doc_id or ""
     filename = doc_metadata.get("source_filename", doc_id)
 
+    key = cache_key(task.account_id, task.namespace_id, app_name)
     try:
-        current_app = app_cache.get(app_name) or app
+        current_app = app_cache.get(key) or app
         content = await current_app.document_store.load_bytes(app_id, doc_path)
     except Exception as exc:
         await system_store.update_task(
@@ -102,7 +103,7 @@ async def run_ingest_task(
     doc = Document(doc_id=doc_id, text=markdown_text, metadata=doc_metadata)
     await system_store.update_task(task_id, status=TaskStatus.RUNNING, started_at=_now())
     try:
-        current_app = app_cache.get(app_name) or app
+        current_app = app_cache.get(key) or app
         results = await current_app.ingest_documents([doc])
         result = results[0]
         if result.success:
@@ -133,6 +134,8 @@ async def run_ingest_task(
                 result_json=summary.model_dump_json(),
             )
             await system_store.save_doc(DocRecord(
+                account_id=task.account_id,
+                namespace_id=task.namespace_id,
                 app_id=app_id,
                 doc_id=doc.doc_id,
                 status="active",
@@ -242,7 +245,7 @@ async def _finalize_doc_workflow_if_settled(
     all_ok = not any(t.status == TaskStatus.FAILED for t in tasks)
     try:
         await system_store.upsert_doc_workflow_status(
-            app.app_id, doc_id, workflow_name,
+            app.account_id, app.namespace_id, app.app_id, doc_id, workflow_name,
             DocWorkflowStatus.DONE if all_ok else DocWorkflowStatus.FAILED,
         )
     except Exception:
@@ -258,20 +261,20 @@ async def _finalize_doc_workflow_if_settled(
 
 async def recover_orphaned_tasks(
     system_store: SystemStore,
-    resolve_app: Callable[[str], Awaitable[object | None]],
+    resolve_app: Callable[[AppRecord], Awaitable[object | None]],
     app_cache: AppCache,
     *,
     concurrency: int = DEFAULT_TASK_CONCURRENCY,
 ) -> int:
     """Requeue tasks left unfinished by a previous process.
 
-    For every active application, RUNNING tasks (interrupted mid-flight) are
-    reset to PENDING, then all PENDING tasks are dispatched to their executor.
-    ``resolve_app`` maps an app name to a live instance (cache hit or rebuild),
-    returning ``None`` if it cannot be resolved.  Returns the number of tasks
-    requeued.
+    Sweeps every active application in every account/namespace. RUNNING tasks
+    (interrupted mid-flight) are reset to PENDING, then all PENDING tasks are
+    dispatched to their executor.  ``resolve_app`` maps an ``AppRecord`` to a live
+    instance (cache hit or rebuild), returning ``None`` if it cannot be resolved.
+    Returns the number of tasks requeued.
     """
-    apps = await system_store.list_apps()
+    apps = await system_store.list_apps()  # all accounts/namespaces
     semaphore = asyncio.Semaphore(concurrency)
     coros: list[Awaitable[None]] = []
 
@@ -279,7 +282,7 @@ async def recover_orphaned_tasks(
         if record.status != "active":
             continue
         try:
-            app = await resolve_app(record.name)
+            app = await resolve_app(record)
         except Exception:
             logger.exception("recover_orphaned_tasks: failed to resolve app=%s", record.name)
             app = None

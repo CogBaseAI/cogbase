@@ -5,40 +5,55 @@ import AppDetailModal from '../modals/AppDetailModal'
 import DataTable from '../DataTable'
 
 export default function AppsTab({ active, onSwitchTab }) {
-  const { apiUrl, currentApp, setCurrentApp } = useApp()
+  const { appBase, namespaceName, authFetch, currentApp, setCurrentApp, refreshApps } = useApp()
   const { t } = useT()
   const [apps, setApps] = useState(null) // null=loading, []|[...]=loaded
   const [error, setError] = useState(null)
   const [detailApp, setDetailApp] = useState(null)
 
+  // The list is scoped to the working namespace (appBase already carries it), so a
+  // single app is always addressed within that namespace.
+  const appUrl = (a, suffix = '') =>
+    `${appBase}/${encodeURIComponent(a.name)}${suffix}`
+
+  // All rows live in the working namespace, so a name match is enough to flag the
+  // current selection (which the unified model keeps in that same namespace).
+  const isCurrent = (a) => a.name === currentApp
+
   async function loadApps() {
     setApps(null); setError(null)
     try {
-      const resp = await fetch(`${apiUrl}/applications`)
+      const resp = await authFetch(appBase)
       if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText)
       const { applications = [] } = await resp.json()
       setApps(applications)
     } catch (e) { setError(e.message) }
   }
 
-  useEffect(() => { if (active) loadApps() }, [active])
+  // Reload when shown and whenever the working namespace changes — the list is
+  // namespace-scoped, so a namespace switch must re-fetch (appBase tracks it).
+  useEffect(() => { if (active) loadApps() }, [active, namespaceName])
 
   async function viewApp(a) {
     // The list response already carries the full resolved config, but fetch
     // the single-app endpoint so the drawer always shows the freshest config.
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(a.name)}`)
+      const resp = await authFetch(appUrl(a))
       if (resp.ok) { setDetailApp(await resp.json()); return }
     } catch {}
     setDetailApp(a)
   }
 
-  async function deleteApp(name) {
+  async function deleteApp(a) {
+    const name = a.name
     if (!confirm(t('apps.confirmDelete', { name }))) return
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      const resp = await authFetch(appUrl(a), { method: 'DELETE' })
       if (resp.ok || resp.status === 204 || resp.status === 404) {
-        if (currentApp === name) setCurrentApp('')
+        if (isCurrent(a)) setCurrentApp('')
+        // The deleted app also drops from the sidebar App switcher's list; refresh
+        // that so it doesn't keep offering a gone app.
+        refreshApps()
         loadApps()
       } else {
         alert(t('apps.deleteFailed', { msg: resp.statusText }))
@@ -63,7 +78,7 @@ export default function AppsTab({ active, onSwitchTab }) {
             {
               key: 'name', label: t('apps.colName'), text: a => a.name,
               render: a => {
-                const cur = a.name === currentApp
+                const cur = isCurrent(a)
                 return (
                   <span style={{ fontWeight: cur ? 600 : 400 }}>
                     <button className="link-btn" onClick={() => viewApp(a)} title={t('appDetail.view')}>{a.name}</button>
@@ -89,8 +104,8 @@ export default function AppsTab({ active, onSwitchTab }) {
               render: a => (
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button className="btn btn-ghost btn-sm" onClick={() => viewApp(a)}>{t('appDetail.details')}</button>
-                  <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name); loadApps() }}>{t('common.use')}</button>
-                  <button className="btn btn-red btn-sm" onClick={() => deleteApp(a.name)}>{t('common.delete')}</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => { setCurrentApp(a.name, namespaceName); onSwitchTab?.('query') }}>{t('common.use')}</button>
+                  <button className="btn btn-red btn-sm" onClick={() => deleteApp(a)}>{t('common.delete')}</button>
                 </div>
               ),
             },

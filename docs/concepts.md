@@ -7,7 +7,7 @@ Instead of authoring `config.yaml` manually, describe what you want to build and
 1. **Describe your use case** — the document types you have (contracts, medical records, emails, transcripts), the facts that matter, and a handful of example questions you want to answer.
 2. **Review the draft** — the system generates a complete `config.yaml` with pipeline steps, vector and structured collections, extraction schemas, extraction prompts, and any workflows needed to answer your example questions.
 3. **Revise conversationally** — adjust any part of the generated config through follow-up chat: add a field, rename a collection, change a workflow step, tighten an extraction prompt.
-4. **Deploy** — when satisfied, submit the config directly via `POST /generate/{session_id}/deploy` (equivalent to `POST /applications` with the generated bundle).
+4. **Deploy** — when satisfied, submit the generated config via `POST /namespaces/{namespace}/generate/deploy` (equivalent to `POST /namespaces/{namespace}/applications` with the generated bundle).
 
 The generator is opinionated: it infers the minimal set of collections and steps needed to cover the example questions, defaulting to one passage-chunk vector collection, one document-summary vector collection, and one or more structured collections with typed fields. Workflows are only generated when example questions require multi-record fan-out (e.g., "flag all contracts that…").
 
@@ -67,7 +67,7 @@ Workflows are named, YAML-declared analytical pipelines that run over already-in
 
 Step parameters are Jinja2 templates with three namespaces: `input` (invocation params), `steps.<id>` (prior step outputs), and `item` (current foreach element). A `{{ expr }}` that resolves to a list returns an actual Python list, not a string.
 
-Workflows can be triggered manually via `POST /applications/{name}/workflows/{workflow_name}/run` or automatically after each successful document ingest (`trigger.type: after_ingest`, optionally gated by document metadata). Blocking and streaming (`/stream`) endpoints are both available.
+Workflows can be triggered manually via `POST /namespaces/{namespace}/applications/{name}/workflows/{workflow_name}/stream` or automatically after each successful document ingest (`trigger.type: after_ingest`, optionally gated by document metadata). Results stream back as Server-Sent Events.
 
 ---
 

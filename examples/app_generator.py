@@ -46,6 +46,7 @@ from examples.cogbase_client import (  # noqa: E402
 configure_logging()
 
 _API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000")
+_NAMESPACE = os.environ.get("COGBASE_NAMESPACE", "default")
 _COMMANDS = ["/preview", "/save", "/deploy", "/restart", "/q", "/quit", "/exit"]
 
 # ---------------------------------------------------------------------------
@@ -93,7 +94,7 @@ async def main() -> None:
     _setup_completion()
 
     async with httpx.AsyncClient() as http:
-        gen = GeneratorClient(_API_BASE, http)
+        gen = GeneratorClient(_API_BASE, http, namespace=_NAMESPACE)
 
         while True:
             try:
@@ -174,10 +175,12 @@ async def main() -> None:
                     return
                 if launch == "y":
                     print()
-                    client = CogBaseClient(deployed_name, _API_BASE, http)
+                    client = CogBaseClient(_API_BASE, namespace=gen.namespace)
+                    client.use_app(deployed_name)
                     print("Commands: /list | /ingest <file> | /list_collections | /query_structured | /clear | /reset | /q")
                     print()
-                    await run_interactive_loop(client, lambda: b"")
+                    async with client:
+                        await run_interactive_loop(client, lambda: b"")
                 return
 
             # Natural-language message — send to the LLM

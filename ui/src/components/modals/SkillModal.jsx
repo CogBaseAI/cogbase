@@ -21,7 +21,7 @@ function stripFrontMatter(md) {
 // Detail view for a skill: renders SKILL.md and lets the user browse the
 // bundle's scripts/assets so they can fully audit what the skill does.
 export default function SkillModal({ skill, onClose }) {
-  const { apiUrl } = useApp()
+  const { apiUrl, authFetch } = useApp()
   const { t } = useT()
   const [content, setContent] = useState(null)   // { markdown, files } | null=loading
   const [error, setError] = useState(null)
@@ -38,7 +38,7 @@ export default function SkillModal({ skill, onClose }) {
   useEffect(() => {
     if (!skill) return
     setContent(null); setError(null)
-    fetch(`${apiUrl}/skills/${encodeURIComponent(skill.name)}/content`)
+    authFetch(`${apiUrl}/skills/${encodeURIComponent(skill.name)}/content`)
       .then(async r => { if (!r.ok) throw new Error(r.status + ' ' + r.statusText); return r.json() })
       .then(setContent)
       .catch(e => setError(e.message))
@@ -47,7 +47,7 @@ export default function SkillModal({ skill, onClose }) {
   async function openFile(path) {
     setSelected(path); setFileBody(null); setFileError(null)
     try {
-      const r = await fetch(`${apiUrl}/skills/${encodeURIComponent(skill.name)}/files/${path.split('/').map(encodeURIComponent).join('/')}`)
+      const r = await authFetch(`${apiUrl}/skills/${encodeURIComponent(skill.name)}/files/${path.split('/').map(encodeURIComponent).join('/')}`)
       if (!r.ok) throw new Error(r.status + ' ' + r.statusText)
       setFileBody(await r.json())
     } catch (e) { setFileError(e.message) }

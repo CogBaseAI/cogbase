@@ -10,8 +10,70 @@ from pydantic import BaseModel, Field, model_validator
 from api.system_store import DocWorkflowStatus, TaskStatus
 
 
+# ---------------------------------------------------------------------------
+# Identity models
+# ---------------------------------------------------------------------------
+
+
+class WhoAmIResponse(BaseModel):
+    """The resolved calling identity the UI bootstraps from on load.
+
+    ``account_id`` is the tenant/security boundary the server resolved for this
+    request; the UI adopts it rather than sourcing an account itself. ``mode`` is
+    the operator-declared deployment mode (see ``api.dependencies.DEPLOYMENT_MODE``)
+    and tells the UI whether the account is server-authoritative (read-only) or a
+    ``dev`` trust-on-declaration knob it may expose as an editable field.
+    """
+
+    account_id: str
+    mode: str
+
+
+# ---------------------------------------------------------------------------
+# Namespace models
+# ---------------------------------------------------------------------------
+
+
+class NamespaceResponse(BaseModel):
+    account_id: str
+    # The user-facing handle (``NamespaceRecord.name``). Callers address
+    # namespaces by this readable name; the internal ``namespace_id`` it resolves
+    # to stays server-side.
+    name: str
+    description: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class NamespaceListResponse(BaseModel):
+    namespaces: list[NamespaceResponse]
+    total: int
+
+
+class CreateNamespaceRequest(BaseModel):
+    name: str = Field(
+        description=(
+            "A handle you choose for the namespace, like a GitHub org or Slack "
+            "workspace name — unique within your account and used directly in URLs. "
+            "Must start with a letter or underscore, followed by letters, digits, "
+            "underscores, or hyphens. It is fixed once created."
+        ),
+    )
+    description: str | None = Field(default=None, description="Optional description.")
+
+
+class UpdateNamespaceRequest(BaseModel):
+    description: str | None = Field(
+        default=None, description="New description; omit to leave unchanged."
+    )
+
+
 class ApplicationResponse(BaseModel):
     name: str
+    account_id: str
+    # The namespace handle (its user-facing name) the app belongs to; the URL
+    # path segment. Maps to the internal ``AppRecord.namespace_id``.
+    namespace: str
     status: str   # "initializing" | "active" | "error"
     config: dict[str, Any]
     error: str | None

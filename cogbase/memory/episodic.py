@@ -85,6 +85,8 @@ class EpisodicMemory:
         self._next_seq: dict[str, int] = {}                # next seq to assign
         self._expected_offset: dict[str, int] = {}         # log byte length this writer last observed
         self._app_ids: dict[str, str | None] = {}          # app_id per session
+        self._account_ids: dict[str, str | None] = {}      # account_id per session
+        self._namespace_ids: dict[str, str | None] = {}    # namespace_id per session
         # One lock per session keeps cross-session appends concurrent while
         # serializing a session's own record/flush (it has a single writer).
         self._locks: dict[str, asyncio.Lock] = {}
@@ -99,17 +101,22 @@ class EpisodicMemory:
         session_id: str,
         *,
         app_id: str | None = None,
+        account_id: str | None = None,
+        namespace_id: str | None = None,
     ) -> None:
-        """Register a session's app attribution without emitting an event.
+        """Register a session's tenant attribution without emitting an event.
 
-        Later recorded events inherit ``app_id`` so callers need not re-pass it
-        on every record.  Idempotent and process-local (rebuilt on a cold
-        start), so it is safe — and expected — to call once per turn.  Use this
-        where ``record_session_started`` would be wrong: the per-turn query
-        runner does not own session creation and must not log a
-        ``session_started`` event on every turn.
+        Later recorded events inherit ``account_id`` / ``namespace_id`` /
+        ``app_id`` so callers need not re-pass them on every record.  Idempotent
+        and process-local (rebuilt on a cold start), so it is safe — and
+        expected — to call once per turn.  Use this where
+        ``record_session_started`` would be wrong: the per-turn query runner does
+        not own session creation and must not log a ``session_started`` event on
+        every turn.
         """
         self._app_ids[session_id] = app_id
+        self._account_ids[session_id] = account_id
+        self._namespace_ids[session_id] = namespace_id
 
     async def record(self, event: MemoryEvent) -> EventRef:
         """Stamp *event* with its ``seq`` + ``ulid`` and buffer it for the next flush.
@@ -133,12 +140,16 @@ class EpisodicMemory:
         *,
         session_id: str,
         app_id: str | None = None,
+        account_id: str | None = None,
+        namespace_id: str | None = None,
         metadata: dict | None = None,
         observation_date: datetime | None = None,
     ) -> EventRef:
-        # Establish the session's app attribution so later events inherit it
-        # without the caller re-passing app_id on every record.
+        # Establish the session's tenant attribution so later events inherit it
+        # without the caller re-passing it on every record.
         self._app_ids[session_id] = app_id
+        self._account_ids[session_id] = account_id
+        self._namespace_ids[session_id] = namespace_id
         logger.info(
             "[episodic] app=%s session=%s session started", app_id, session_id
         )
@@ -152,6 +163,8 @@ class EpisodicMemory:
             session_id=session_id,
             event_type=EventType.SESSION_STARTED,
             app_id=app_id,
+            account_id=account_id,
+            namespace_id=namespace_id,
             payload=SessionStartedPayload(metadata=metadata or {}).model_dump(),
         )
         if observation_date is not None:
@@ -472,6 +485,8 @@ class EpisodicMemory:
             await self._log.delete(self._log_type, session_id)
             self._drop_session_locked(session_id)
             self._app_ids.pop(session_id, None)
+            self._account_ids.pop(session_id, None)
+            self._namespace_ids.pop(session_id, None)
 
     # ------------------------------------------------------------------
     # Internals
@@ -560,6 +575,10 @@ class EpisodicMemory:
             )
 
     def _fill_app_locked(self, event: MemoryEvent) -> None:
-        """Inherit app_id from the session's recorded attribution."""
+        """Inherit tenant attribution from the session's recorded binding."""
         if event.app_id is None:
             event.app_id = self._app_ids.get(event.session_id)
+        if event.account_id is None:
+            event.account_id = self._account_ids.get(event.session_id)
+        if event.namespace_id is None:
+            event.namespace_id = self._namespace_ids.get(event.session_id)

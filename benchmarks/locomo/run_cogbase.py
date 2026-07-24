@@ -54,6 +54,15 @@ import httpx
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
 
+#: Namespace prefix for name-addressed application routes; set from --namespace in main().
+NAMESPACE = "default"
+
+
+def _apps() -> str:
+    """URL prefix for the namespace-scoped applications collection."""
+    return f"/namespaces/{NAMESPACE}/applications"
+
+
 PREDICTION_KEY = "cogbase_prediction"
 JUDGE_LABEL_KEY = "cogbase_judge_label"
 JUDGE_SCORE_KEY = "cogbase_judge_score"
@@ -401,13 +410,13 @@ def _build_system_prompt(reference_date: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 async def ensure_app(client: httpx.AsyncClient, app_name: str) -> None:
-    resp = await client.get(f"/applications/{app_name}")
+    resp = await client.get(f"{_apps()}/{app_name}")
     if resp.status_code == 200:
         log.info("App '%s' already exists, reusing.", app_name)
         return
     bundle = _build_bundle(app_name)
     resp = await client.post(
-        "/applications",
+        _apps(),
         files={"bundle": ("bundle.zip", bundle, "application/zip")},
         timeout=60,
     )
@@ -418,7 +427,7 @@ async def ensure_app(client: httpx.AsyncClient, app_name: str) -> None:
 async def ingest_conversation(
     client: httpx.AsyncClient, app_name: str, sample_id: str, conv: dict
 ) -> list[str]:
-    resp = await client.get(f"/applications/{app_name}/docs")
+    resp = await client.get(f"{_apps()}/{app_name}/docs")
     if resp.status_code == 200:
         body = resp.json()
         total = body.get("total", 0) if isinstance(body, dict) else len(body)
@@ -432,7 +441,7 @@ async def ingest_conversation(
         for n in session_nums
     ]
     resp = await client.post(
-        f"/applications/{app_name}/upload_documents",
+        f"{_apps()}/{app_name}/upload_documents",
         files=files,
         data={"metadata": "{}"},
         timeout=300,
@@ -451,7 +460,7 @@ async def wait_for_ingestion(
     while True:
         try:
             resp = await client.get(
-                f"/applications/{app_name}/tasks",
+                f"{_apps()}/{app_name}/tasks",
                 params={"task_type": "ingest"},
                 timeout=30,
             )
@@ -488,7 +497,7 @@ async def add_memory(
     if observation_date:
         payload["observation_date"] = observation_date
     resp = await client.post(
-        f"/applications/{app_name}/memory",
+        f"{_apps()}/{app_name}/memory",
         json=payload,
         timeout=300,
     )
@@ -529,7 +538,7 @@ async def query_cogbase(
     if system_prompt is None:
         system_prompt = _build_system_prompt(None)
     resp = await client.post(
-        f"/applications/{app_name}/query",
+        f"{_apps()}/{app_name}/query",
         json={"text": question, "system_prompt": system_prompt},
         timeout=120,
     )
@@ -1054,7 +1063,11 @@ async def main(args: argparse.Namespace) -> None:
     if args.conversations is not None:
         samples = samples[: args.conversations]
 
-    async with httpx.AsyncClient(base_url=args.base_url) as client:
+    global NAMESPACE
+    NAMESPACE = args.namespace
+    async with httpx.AsyncClient(
+        base_url=args.base_url, headers={"X-Account-Id": args.account}
+    ) as client:
         with _GracefulShutdown() as shutdown:
             for sample in samples:
                 if shutdown.requested:
@@ -1108,6 +1121,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--base_url", default="http://localhost:8000",
         help="CogBase API base URL",
+    )
+    parser.add_argument(
+        "--namespace", default="default",
+        help="Namespace to create/query the app under (default: default)",
+    )
+    parser.add_argument(
+        "--account", default="default",
+        help="Tenant account id, sent as the X-Account-Id header (default: default)",
     )
     parser.add_argument(
         "--conversations", type=int, default=None,

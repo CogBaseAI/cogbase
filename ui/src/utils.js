@@ -226,7 +226,10 @@ export async function* streamSSE(response) {
   }
 }
 
-export async function waitForTasks(apiUrl, appName, taskIds, { pollInterval = 2000, timeout = 300000, onProgress } = {}) {
+// `appBase` is the namespace-scoped applications base
+// (`${apiUrl}/namespaces/{namespace}/applications`) and `fetchFn` an account-aware
+// fetch (authFetch), so task polling stays inside the caller's tenant scope.
+export async function waitForTasks(appBase, appName, taskIds, { fetchFn = fetch, pollInterval = 2000, timeout = 300000, onProgress } = {}) {
   const deadline = Date.now() + timeout
   const pending = new Set(taskIds)
   const results = {}
@@ -238,7 +241,7 @@ export async function waitForTasks(apiUrl, appName, taskIds, { pollInterval = 20
     await new Promise(r => setTimeout(r, pollInterval))
     for (const tid of [...pending]) {
       try {
-        const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(appName)}/tasks/${encodeURIComponent(tid)}`)
+        const resp = await fetchFn(`${appBase}/${encodeURIComponent(appName)}/tasks/${encodeURIComponent(tid)}`)
         if (resp.ok) {
           const task = await resp.json()
           if (task.status === 'done' || task.status === 'failed') {

@@ -34,7 +34,7 @@ const STATUS_BADGE = { done: 'b-active', failed: 'b-error', running: 'b-init', p
 const MEM_STATUS_BADGE = { active: 'b-active', superseded: 'b-error', pending_review: 'b-init' }
 
 export default function MemoryTab({ active }) {
-  const { apiUrl, currentApp } = useApp()
+  const { appBase, authFetch, currentApp, namespaceName } = useApp()
   const { t } = useT()
   const [mode, setMode] = useState('review')       // 'review' (gate) | 'records' (browse)
   const [memories, setMemories] = useState(null)   // pending records; null=loading
@@ -53,7 +53,7 @@ export default function MemoryTab({ active }) {
     setMemories(null); setError(null)
     try {
       const qs = kind ? `?kind=${encodeURIComponent(kind)}` : ''
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/memory/pending${qs}`)
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/memory/pending${qs}`)
       if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText)
       const { memories: list = [] } = await resp.json()
       setMemories(list)
@@ -64,7 +64,7 @@ export default function MemoryTab({ active }) {
   async function loadRuns() {
     if (!currentApp) { setRuns([]); return }
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/tasks?task_type=distill`)
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/tasks?task_type=distill`)
       if (!resp.ok) { setRuns([]); return }
       const { tasks = [] } = await resp.json()
       tasks.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
@@ -79,7 +79,7 @@ export default function MemoryTab({ active }) {
     try {
       const params = new URLSearchParams({ status: recStatus })
       if (kind) params.set('kind', kind)
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/memory?${params}`)
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/memory?${params}`)
       if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText)
       const { memories: list = [] } = await resp.json()
       setRecords(list)
@@ -91,15 +91,17 @@ export default function MemoryTab({ active }) {
     else { loadPending(); loadRuns() }
   }
 
-  useEffect(() => { if (active && mode === 'review') { loadPending(); loadRuns() } }, [active, currentApp, kind, mode])
-  useEffect(() => { if (active && mode === 'records') loadRecords() }, [active, currentApp, kind, recStatus, mode])
+  // namespaceName is a dep so a namespace switch re-fetches even when the app name
+  // is unchanged (appBase carries the namespace and moved underneath us).
+  useEffect(() => { if (active && mode === 'review') { loadPending(); loadRuns() } }, [active, currentApp, namespaceName, kind, mode])
+  useEffect(() => { if (active && mode === 'records') loadRecords() }, [active, currentApp, namespaceName, kind, recStatus, mode])
 
   // Send a single accept/reject verdict, then drop the row on success.
   async function review(memory, decision) {
     setBusyId(memory.memory_id)
     setMsg({ text: '', cls: '' })
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/memory/review`, {
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/memory/review`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decisions: [{ memory_id: memory.memory_id, decision }] }),

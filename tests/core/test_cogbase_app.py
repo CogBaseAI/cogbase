@@ -694,7 +694,7 @@ class TestIngestMany:
 
         app._task_store.upsert_doc_workflow_status = AsyncMock()
 
-        async def _create(app_id, wf_name, doc_id, params_list):
+        async def _create(account_id, namespace_id, app_id, wf_name, doc_id, params_list):
             events.append(f"create:{doc_id}")
             return []
 

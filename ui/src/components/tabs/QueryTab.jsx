@@ -6,7 +6,7 @@ import { useT } from '../../i18n'
 import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks, latestDocxArtifact, artifactLabel, filenameFromContentDisposition } from '../../utils'
 
 export default function QueryTab({ active }) {
-  const { apiUrl, currentApp } = useApp()
+  const { apiUrl, appBase, authFetch, currentApp } = useApp()
   const { t } = useT()
   const [msgs, setMsgs] = useState([{ role: 'sys', text: t('query.intro') }])
   const [input, setInput] = useState('')
@@ -80,7 +80,7 @@ export default function QueryTab({ active }) {
   async function loadSessions() {
     if (!currentApp) return
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/sessions`)
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/sessions`)
       if (!resp.ok) return
       const data = await resp.json()
       setSessions(data.sessions || [])
@@ -92,7 +92,7 @@ export default function QueryTab({ active }) {
   async function openSession(sid) {
     if (querying || sid === sessionIdRef.current) return
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}`)
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}`)
       if (!resp.ok) return
       const data = await resp.json()
       const rawMsgs = data.messages || []
@@ -123,7 +123,7 @@ export default function QueryTab({ active }) {
     if (querying || !currentApp) return
     if (!window.confirm(t('query.confirmDeleteChat'))) return
     try {
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}`, {
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}`, {
         method: 'DELETE',
       })
       if (!resp.ok) return
@@ -142,7 +142,7 @@ export default function QueryTab({ active }) {
     const sid = sessionIdRef.current
     sessionIdRef.current = null
     if (!sid || !appName) return
-    fetch(`${apiUrl}/applications/${encodeURIComponent(appName)}/sessions/${encodeURIComponent(sid)}/close`, {
+    authFetch(`${appBase}/${encodeURIComponent(appName)}/sessions/${encodeURIComponent(sid)}/close`, {
       method: 'POST',
     }).catch(() => {})
   }
@@ -150,7 +150,7 @@ export default function QueryTab({ active }) {
   // Open a session for the current app if one isn't already open; returns its id.
   async function ensureSession() {
     if (sessionIdRef.current) return sessionIdRef.current
-    const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/sessions`, {
+    const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
@@ -208,7 +208,7 @@ export default function QueryTab({ active }) {
     try {
       const sessionId = await ensureSession()
       setActiveSid(sessionId)
-      const resp = await fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/query/stream`, {
+      const resp = await authFetch(`${appBase}/${encodeURIComponent(currentApp)}/query/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, session_id: sessionId }),
@@ -429,6 +429,7 @@ function writeStoredDocWidth(w) {
 }
 
 function DocPanel({ doc, t, onHide }) {
+  const { authFetch } = useApp()
   const bodyRef = useRef(null)
   const panelRef = useRef(null)
   const [status, setStatus] = useState('loading')  // 'loading' | 'ready' | 'error'
@@ -467,7 +468,7 @@ function DocPanel({ doc, t, onHide }) {
       try {
         const [{ renderAsync }, resp] = await Promise.all([
           import('docx-preview'),
-          fetch(doc.url),
+          authFetch(doc.url),
         ])
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
         const blob = await resp.blob()
@@ -635,6 +636,7 @@ function mdComponents(t) {
 // the fetch fails, fall back to opening the URL directly (the endpoint's
 // Content-Disposition: attachment still triggers a download).
 function DownloadLink({ href, children, t }) {
+  const { authFetch } = useApp()
   const [busy, setBusy] = useState(false)
   async function onClick(e) {
     e.preventDefault()
@@ -642,7 +644,7 @@ function DownloadLink({ href, children, t }) {
     if (busy) return
     setBusy(true)
     try {
-      const resp = await fetch(href)
+      const resp = await authFetch(href)
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const blob = await resp.blob()
       const cd = resp.headers.get('Content-Disposition') || ''

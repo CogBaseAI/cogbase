@@ -159,6 +159,14 @@ class MemoryEvent(BaseModel):
     ulid: str = ""
     event_type: EventType
     created_at: datetime = Field(default_factory=_utcnow)
+    # Tenant attribution, inherited from the session's ``bind_app`` binding.  The
+    # episodic log is physically isolated per tenant by the scoped log store
+    # (``account_id`` + ``namespace_id`` prefix — see ``api.factory.build_app``),
+    # so these are for self-containment / audit and tenant-safe cross-app mining
+    # by the evolution engine, not the enforcement path — mirroring
+    # ``LongTermRecord.app_id``.
+    account_id: str | None = None
+    namespace_id: str | None = None
     app_id: str | None = None
     # Causal link to a prior event in the same session (e.g. tool_result →
     # tool_called); stored as the full triplet so it resolves by log seek.

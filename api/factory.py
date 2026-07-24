@@ -88,6 +88,8 @@ async def build_app(
     config: AppConfig,
     *,
     app_id: str,
+    account_id: str = "default",
+    namespace_id: str = "default",
     system: SystemResources | None = None,
     app_status: str,
     task_store: Any | None = None,
@@ -95,8 +97,9 @@ async def build_app(
     """Instantiate a CogBase application from *config*.
 
     *app_id* is the application's stable internal id (distinct from the mutable
-    client-facing ``config.name``); it drives the store scope prefix and the
-    per-app document-store collection, so storage survives a rename.
+    client-facing ``config.name``); together with *account_id* / *namespace_id* it
+    drives the store scope prefix and the per-app document-store collection, so
+    storage survives a rename and is isolated per tenant.
 
     Resources are resolved in priority order:
 
@@ -105,7 +108,7 @@ async def build_app(
     3. No fallback — raises ``ValueError`` when a required resource is absent.
     """
     sys = system or SystemResources()
-    app_scope = AppScope(app_id=app_id)
+    app_scope = AppScope(account_id=account_id, namespace_id=namespace_id, app_id=app_id)
 
     # --- Top-level resources (independent of pipeline) ---
     llm = _build_llm(config.llm) if config.llm else sys.llm
@@ -258,11 +261,19 @@ async def build_app(
     vc_schemas = [vc.schema for vc in vector_collections]
 
     # Episodic memory: the durable append-only event log.  Wired from the shared
-    # (system) log store — deliberately unscoped, so events from every app land
-    # in one log family and carry ``app_name`` for attribution (cross-app mining
-    # by the future evolution engine).  Engaged only when a query carries a
-    # session_id; absent a log store, the runner simply records nothing.
-    episodic = EpisodicMemory(sys.log_store) if sys.log_store is not None else None
+    # (system) log store, scoped to ``account_id`` + ``namespace_id`` (but *not*
+    # ``app_id``): sibling apps in a namespace share one log family — so the
+    # future evolution engine can still mine across them — while other tenants'
+    # sessions live behind a different prefix and can never be read or deleted by
+    # session_id alone.  Events additionally carry account/namespace/app
+    # attribution for self-containment (see ``bind_app``).  Engaged only when a
+    # query carries a session_id; absent a log store, the runner records nothing.
+    log_scope = AppScope(account_id=account_id, namespace_id=namespace_id)
+    episodic = (
+        EpisodicMemory(sys.log_store.with_scope(log_scope))
+        if sys.log_store is not None
+        else None
+    )
 
     # Short-term memory: session-local working context, projected from the same
     # episodic log (it has no store of its own).  Created only when episodic is
@@ -326,6 +337,8 @@ async def build_app(
 
     qrunner = QueryRunner(
         app_id=app_id,
+        account_id=account_id,
+        namespace_id=namespace_id,
         llm=llm,
         resources=RetrievalResources(
             document_store=document_store,
@@ -380,6 +393,8 @@ async def build_app(
         pipelines,
         qrunner,
         app_id=app_id,
+        account_id=account_id,
+        namespace_id=namespace_id,
         document_store=document_store,
         structured_store=structured_store,
         workflow_runners=workflow_runners,

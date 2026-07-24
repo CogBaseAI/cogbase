@@ -67,6 +67,8 @@ class CogBaseApp:
         runner: QueryRunner,
         *,
         app_id: str,
+        account_id: str = "default",
+        namespace_id: str = "default",
         document_store: DocumentStoreBase,
         structured_store: StructuredStoreBase,
         workflow_runners: dict[str, "WorkflowRunner"],
@@ -83,6 +85,11 @@ class CogBaseApp:
         # Stable internal id — the per-app document-store collection key and the
         # storage identity that survives a rename of ``name``.
         self.app_id = app_id
+        # Tenancy scope — the account (tenant) and namespace this app belongs to.
+        # Carried on the instance so query-time write paths (session index,
+        # distillation tasks) can stamp child records without a registry round-trip.
+        self.account_id = account_id
+        self.namespace_id = namespace_id
         self._pipelines = pipelines
         self._runner = runner
         self._document_store = document_store
@@ -259,7 +266,8 @@ class CogBaseApp:
                 )
                 try:
                     await self._task_store.upsert_doc_workflow_status(
-                        self.app_id, doc.doc_id, wf_runner.workflow.name, initial_status
+                        self.account_id, self.namespace_id, self.app_id,
+                        doc.doc_id, wf_runner.workflow.name, initial_status
                     )
                 except Exception:
                     logger.exception(
@@ -290,7 +298,8 @@ class CogBaseApp:
         for wf_runner, doc_id, workflow_params in pending:
             try:
                 records = await self._task_store.create_workflow_tasks(
-                    self.app_id, wf_runner.workflow.name, doc_id, workflow_params
+                    self.account_id, self.namespace_id, self.app_id,
+                    wf_runner.workflow.name, doc_id, workflow_params
                 )
                 task_ids: list[str | None] = [r.task_id for r in records]
             except Exception:
@@ -390,7 +399,7 @@ class CogBaseApp:
             # TODO if failed, some items such as some clauses in a contract may be successfully processed,
             #      need to clean up the partial results.
             await self._task_store.upsert_doc_workflow_status(
-                self.app_id, doc_id, wf_name,
+                self.account_id, self.namespace_id, self.app_id, doc_id, wf_name,
                 DocWorkflowStatus.DONE if all_ok else DocWorkflowStatus.FAILED,
             )
         except Exception:
@@ -518,10 +527,17 @@ class CogBaseApp:
         from cogbase.memory import ReviewDecision
 
         sid = session_id or f"add-{uuid4().hex}"
-        self._episodic.bind_app(sid, app_id=self.app_id)
+        self._episodic.bind_app(
+            sid,
+            app_id=self.app_id,
+            account_id=self.account_id,
+            namespace_id=self.namespace_id,
+        )
         await self._episodic.record_session_started(
             session_id=sid,
             app_id=self.app_id,
+            account_id=self.account_id,
+            namespace_id=self.namespace_id,
             metadata=metadata,
             observation_date=observation_date,
         )

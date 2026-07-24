@@ -4,7 +4,7 @@ import { useT } from '../../i18n'
 import { previewText, metaText, waitForTasks } from '../../utils'
 
 export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, onOpenWfModal, onSwitchTab }) {
-  const { apiUrl, currentApp, setCurrentApp, demoCatalog, setDemoCatalog } = useApp()
+  const { apiUrl, appBase, nsBase, namespaceName, authFetch, currentApp, setCurrentApp, demoCatalog, setDemoCatalog, ensureNamespace } = useApp()
   const { t } = useT()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -36,7 +36,7 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
   async function loadDemos() {
     setLoading(true); setError(null)
     try {
-      const resp = await fetch(`${apiUrl}/examples/demos`)
+      const resp = await authFetch(`${apiUrl}/examples/demos`)
       if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText)
       const data = await resp.json()
       setDemoCatalog(data.demos || [])
@@ -66,13 +66,21 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
   async function deployDemo(key) {
     const demo = demoCatalog.find(d => d.key === key)
     if (!demo) return
+    // A demo deploys into the working namespace; on a fresh account there isn't one
+    // yet. Prompt the user to create/select a namespace first rather than POST to a
+    // malformed path.
+    if (!namespaceName) {
+      clearSteps(key)
+      addStep(key, t('demos.needNamespace'), 'error')
+      return
+    }
     setDeploying(prev => new Set([...prev, key]))
     clearSteps(key)
 
     try {
       // Step 1: check/create app
       const appStepId = addStep(key, t('demos.stepCheckApp', { name: demo.name }))
-      const appResp = await fetch(`${apiUrl}/applications/${encodeURIComponent(demo.name)}`)
+      const appResp = await authFetch(`${appBase}/${encodeURIComponent(demo.name)}`)
       if (appResp.ok) {
         const app = await appResp.json()
         if (app.status !== 'active') {
@@ -85,7 +93,13 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
         throw new Error(t('demos.stepCheckFailErr', { status: appResp.status }))
       } else {
         updateStep(key, appStepId, t('demos.stepCreating', { name: demo.name }), 'running')
-        const deployResp = await fetch(`${apiUrl}/generate/deploy`, {
+        // The working namespace must exist before it can hold the app (the server
+        // no longer auto-registers it on deploy). Create it on demand.
+        if (!(await ensureNamespace(namespaceName))) {
+          updateStep(key, appStepId, t('demos.stepCreateFail', { msg: t('build.nsCreateFailed', { ns: namespaceName }) }), 'error')
+          throw new Error(t('build.nsCreateFailed', { ns: namespaceName }))
+        }
+        const deployResp = await authFetch(`${nsBase}/generate/deploy`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ config_yaml: demo.config_yaml }),
@@ -126,7 +140,7 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
           }
         }
         formData.append('metadata', metaJson)
-        const ingestResp = await fetch(`${apiUrl}/applications/${encodeURIComponent(demo.name)}/upload_documents`, { method: 'POST', body: formData })
+        const ingestResp = await authFetch(`${appBase}/${encodeURIComponent(demo.name)}/upload_documents`, { method: 'POST', body: formData })
         const ingestData = await ingestResp.json()
         if (!ingestResp.ok) {
           updateStep(key, uploadStepId, t('demos.stepUploadFail', { msg: ingestData.detail || ingestResp.statusText }), 'error')
@@ -139,7 +153,8 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
       // Step 3: wait for ingest
       const total = allIngestTaskIds.length
       const ingestStepId = addStep(key, t('demos.stepIngesting', { done: 0, total }))
-      const ingestTasks = await waitForTasks(apiUrl, demo.name, allIngestTaskIds, {
+      const ingestTasks = await waitForTasks(appBase, demo.name, allIngestTaskIds, {
+        fetchFn: authFetch,
         timeout: 600000,
         onProgress: (done, n) => updateStep(key, ingestStepId, t('demos.stepIngesting', { done, total: n }), 'running'),
       })
@@ -168,8 +183,8 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
     if (!overrideValues && currentApp === demo.name) {
       try {
         const [tasksResp, doneResp] = await Promise.all([
-          fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/tasks?task_type=workflow&task_name=${encodeURIComponent(wf.name)}&status=pending`),
-          fetch(`${apiUrl}/applications/${encodeURIComponent(currentApp)}/workflows/${encodeURIComponent(wf.name)}/docs?status=done`),
+          authFetch(`${appBase}/${encodeURIComponent(currentApp)}/tasks?task_type=workflow&task_name=${encodeURIComponent(wf.name)}&status=pending`),
+          authFetch(`${appBase}/${encodeURIComponent(currentApp)}/workflows/${encodeURIComponent(wf.name)}/docs?status=done`),
         ])
         const pendingIds = tasksResp.ok ? [...new Set(((await tasksResp.json()).tasks || []).map(t => t.doc_id).filter(Boolean))] : []
         const doneIds = doneResp.ok ? new Set(((await doneResp.json()).docs || []).map(d => d.doc_id).filter(Boolean)) : new Set()

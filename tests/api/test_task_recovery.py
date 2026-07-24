@@ -51,7 +51,8 @@ async def store() -> SystemStore:
 async def _seed_app(store: SystemStore, *, status: str = "active") -> str:
     app_id = new_app_id()
     await store.save_app(AppRecord(
-        app_id=app_id, name=APP_NAME, config_yaml="name: recovery-app",
+        app_id=app_id, account_id="default", namespace_id="default",
+        name=APP_NAME, config_yaml="name: recovery-app",
         status=status, created_at=_now(), updated_at=_now(),
     ))
     return app_id
@@ -61,6 +62,8 @@ def _mock_ingest_app(app_id: str) -> MagicMock:
     """App whose document store returns bytes and whose ingest always succeeds."""
     app = MagicMock()
     app.app_id = app_id
+    app.account_id = "default"
+    app.namespace_id = "default"
     app.name = APP_NAME
     app.document_store = MagicMock()
     app.document_store.load_bytes = AsyncMock(return_value=b"raw bytes")
@@ -72,6 +75,7 @@ def _mock_ingest_app(app_id: str) -> MagicMock:
 
 def _ingest_task(app_id: str, task_id: str, doc_id: str, status: TaskStatus) -> TaskRecord:
     return TaskRecord(
+        account_id="default", namespace_id="default",
         task_id=task_id, app_id=app_id, task_type="ingest", task_name="ingest",
         doc_id=doc_id, batch_id="b1",
         params_json=json.dumps({"doc_path": f"originals/{doc_id}.txt",
@@ -153,10 +157,13 @@ async def test_recovers_distill_task(store):
     app_id = await _seed_app(store)
     app = MagicMock()
     app.app_id = app_id
+    app.account_id = "default"
+    app.namespace_id = "default"
     app.name = APP_NAME
     app.distiller = MagicMock()
     app.distiller.distill_session = AsyncMock(return_value=["mem-1"])
     await store.create_task(TaskRecord(
+        account_id="default", namespace_id="default",
         task_id="d1", app_id=app_id, task_type="distill", task_name="distill",
         doc_id="sess-1", params_json=json.dumps({"session_id": "sess-1"}),
         status=TaskStatus.PENDING, created_at=_now(),
@@ -176,9 +183,12 @@ async def test_distill_task_fails_cleanly_without_distiller(store):
     app_id = await _seed_app(store)
     app = MagicMock()
     app.app_id = app_id
+    app.account_id = "default"
+    app.namespace_id = "default"
     app.name = APP_NAME
     app.distiller = None
     await store.create_task(TaskRecord(
+        account_id="default", namespace_id="default",
         task_id="d2", app_id=app_id, task_type="distill", task_name="distill",
         doc_id="sess-2", params_json=json.dumps({"session_id": "sess-2"}),
         status=TaskStatus.PENDING, created_at=_now(),
@@ -204,6 +214,8 @@ async def test_recovers_workflow_task_and_rolls_up_doc_status(store):
     app_id = await _seed_app(store)
     app = MagicMock()
     app.app_id = app_id
+    app.account_id = "default"
+    app.namespace_id = "default"
     app.name = APP_NAME
 
     async def _run(params):
@@ -215,6 +227,7 @@ async def test_recovers_workflow_task_and_rolls_up_doc_status(store):
     app.get_workflow = MagicMock(return_value=runner)
 
     await store.create_task(TaskRecord(
+        account_id="default", namespace_id="default",
         task_id="w1", app_id=app_id, task_type="workflow", task_name="summarize",
         doc_id="doc-x", params_json=json.dumps({"doc_id": "doc-x"}),
         status=TaskStatus.PENDING, created_at=_now(),
@@ -265,6 +278,7 @@ async def test_unknown_task_type_is_skipped_not_crashed(store):
     app_id = await _seed_app(store)
     app = MagicMock(app_id=app_id, name=APP_NAME)
     await store.create_task(TaskRecord(
+        account_id="default", namespace_id="default",
         task_id="u1", app_id=app_id, task_type="mystery", task_name="mystery",
         status=TaskStatus.PENDING, created_at=_now(),
     ))

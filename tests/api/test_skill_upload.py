@@ -167,6 +167,8 @@ async def _seed_app(system_store, name: str, skill_id: str) -> None:
     await system_store.save_app(
         AppRecord(
             app_id=name,
+            account_id="default",
+            namespace_id="default",
             name=name,
             config_yaml=_app_config_yaml(name, skill_id),
             status="active",

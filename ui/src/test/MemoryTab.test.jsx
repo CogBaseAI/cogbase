@@ -114,7 +114,7 @@ it('filters by kind via the dropdown', async () => {
   await waitFor(() => screen.getByText(/EU data residency/))
   await user.selectOptions(screen.getByRole('combobox'), 'correction')
   await waitFor(() =>
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining('kind=correction'))
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('kind=correction'), expect.anything())
   )
 })
 
@@ -165,7 +165,7 @@ describe('distillation runs', () => {
     const spy = mockPending(PENDING, RUNS)
     renderMemoryTab()
     await waitFor(() =>
-      expect(spy).toHaveBeenCalledWith(expect.stringContaining('/tasks?task_type=distill'))
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining('/tasks?task_type=distill'), expect.anything())
     )
   })
 
@@ -215,7 +215,7 @@ describe('records mode', () => {
     await waitFor(() => expect(screen.getByText('User works at Acme.')).toBeInTheDocument())
     expect(screen.getByText('Prefers concise answers.')).toBeInTheDocument()
     // Defaults to status=active.
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining('status=active'))
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('status=active'), expect.anything())
   })
 
   it('reloads records when the status filter changes', async () => {
@@ -227,7 +227,7 @@ describe('records mode', () => {
 
     spy.mockClear()
     await user.selectOptions(screen.getAllByRole('combobox')[0], 'all')
-    await waitFor(() => expect(spy).toHaveBeenCalledWith(expect.stringContaining('status=all')))
+    await waitFor(() => expect(spy).toHaveBeenCalledWith(expect.stringContaining('status=all'), expect.anything()))
   })
 
   it('shows an empty state when there are no records', async () => {

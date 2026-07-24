@@ -24,11 +24,15 @@ from cogbase.stores import (
     build_structured_store,
     build_vector_store,
 )
-from api.app_cache import AppCache
+from api.app_cache import AppCache, cache_key
 from api.routers.applications import router as applications_router
+from api.routers.applications import account_router as applications_account_router
 from api.routers.app_generate import router as generate_router
+from api.routers.app_generate import deploy_router as generate_deploy_router
+from api.routers.namespaces import router as namespaces_router
 from api.routers.skills import router as skills_router
 from api.routers.system import router as system_router
+from api.routers.whoami import router as whoami_router
 from api.system_config import SystemConfig
 from api.system_resources import SystemResources
 from api.system_store import SystemStore
@@ -137,8 +141,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 skill_root = await skill_bundle_store.sync_from_store(sk.skill_id)
                 skill = load_skill_dir(skill_root, skill_id=sk.skill_id)
                 if skill is not None:
-                    skill_registry.register(skill, replace=True)
-                    logger.info("synced skill id=%s name=%s from document store", sk.skill_id, sk.name)
+                    skill_registry.register(skill, account_id=sk.account_id, replace=True)
+                    logger.info(
+                        "synced skill id=%s name=%s account=%s from document store",
+                        sk.skill_id, sk.name, sk.account_id,
+                    )
             except Exception as exc:
                 logger.warning("failed to sync skill id=%s: %s", sk.skill_id, exc)
 
@@ -154,9 +161,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             continue
         try:
             config = AppConfig.from_yaml(record.config_yaml)
-            instance = await build_app(config, app_id=record.app_id, system=system_resources, app_status=record.status, task_store=system_store)
-            app_cache.add(record.name, instance)
-            logger.info("restored app name=%s", record.name)
+            instance = await build_app(
+                config, app_id=record.app_id, account_id=record.account_id,
+                namespace_id=record.namespace_id, system=system_resources,
+                app_status=record.status, task_store=system_store,
+            )
+            app_cache.add(cache_key(record.account_id, record.namespace_id, record.name), instance)
+            logger.info(
+                "restored app name=%s account=%s namespace=%s",
+                record.name, record.account_id, record.namespace_id,
+            )
         except Exception as exc:
             logger.warning("failed to restore app name=%s: %s", record.name, exc)
 
@@ -170,18 +184,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # previous process: an in-process create_task is lost on crash/deploy/OOM,
     # stranding its task record in PENDING/RUNNING. Re-execution is idempotent.
     # Run in the background so startup stays fast.
-    async def _resolve_app(name: str) -> object | None:
-        inst = app_cache.get(name)
+    async def _resolve_app(rec) -> object | None:
+        # ``rec`` is the AppRecord (carries account/namespace); resolve by its
+        # scoped cache key, rebuilding from the config if not warm.
+        key = cache_key(rec.account_id, rec.namespace_id, rec.name)
+        inst = app_cache.get(key)
         if inst is not None:
             return inst
-        rec = await system_store.get_app(name)
-        if rec is None or rec.status != "active":
+        if rec.status != "active":
             return None
         built = await build_app(
             AppConfig.from_yaml(rec.config_yaml), app_id=rec.app_id,
+            account_id=rec.account_id, namespace_id=rec.namespace_id,
             system=system_resources, app_status=rec.status, task_store=system_store,
         )
-        app_cache.add(name, built)
+        app_cache.add(key, built)
         return built
 
     async def _recover() -> None:
@@ -230,10 +247,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(namespaces_router)
 app.include_router(applications_router)
+app.include_router(applications_account_router)
 app.include_router(generate_router)
+app.include_router(generate_deploy_router)
 app.include_router(skills_router)
 app.include_router(system_router)
+app.include_router(whoami_router)
 
 
 # For production services, common pattern is nginx in front:

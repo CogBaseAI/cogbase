@@ -32,7 +32,7 @@ from api.dependencies import (
 from api.system_resources import SystemResources
 from api.main import app
 from api.app_cache import AppCache
-from api.system_store import SystemStore
+from api.system_store import NamespaceRecord, SystemStore
 from cogbase.skills.registry import SkillRegistry
 from cogbase.skills.skill import Skill
 from cogbase.stores.structured.memory import InMemoryStructuredStore
@@ -104,6 +104,15 @@ async def client(registry):
     """AsyncClient with all external dependencies overridden."""
     system_store = _make_system_store()
     await system_store.setup()
+    await system_store.save_namespace(
+        NamespaceRecord(
+            account_id="default",
+            namespace_id="default",
+            name="default",
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        )
+    )
 
     app.dependency_overrides[get_system_store] = lambda: system_store
     app.dependency_overrides[get_app_cache] = lambda: AppCache()
@@ -121,7 +130,7 @@ async def _create_app(client, config_yaml: str = _BASE_CONFIG) -> None:
     bundle = _make_bundle(config_yaml)
     with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
         resp = await client.post(
-            "/applications",
+            "/namespaces/default/applications",
             files={"bundle": ("bundle.zip", bundle, "application/zip")},
         )
     assert resp.status_code == 201
@@ -170,7 +179,7 @@ class TestListApplicationSkills:
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_no_skills(self, client):
         await _create_app(client)
-        resp = await client.get("/applications/my-app/skills")
+        resp = await client.get("/namespaces/default/applications/my-app/skills")
         assert resp.status_code == 200
         assert resp.json() == {"app_name": "my-app", "skills": []}
 
@@ -178,13 +187,13 @@ class TestListApplicationSkills:
     async def test_returns_skills_declared_in_config(self, client):
         config = _BASE_CONFIG + "skills:\n  - skill-alpha\n"
         await _create_app(client, config)
-        resp = await client.get("/applications/my-app/skills")
+        resp = await client.get("/namespaces/default/applications/my-app/skills")
         assert resp.status_code == 200
         assert resp.json()["skills"] == [{"id": "skill-alpha", "name": "skill-alpha", "missing": False}]
 
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown_app(self, client):
-        resp = await client.get("/applications/ghost/skills")
+        resp = await client.get("/namespaces/default/applications/ghost/skills")
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
@@ -198,7 +207,7 @@ class TestListApplicationSkills:
         await _create_app(client, config)
         registry.unregister("skill-beta")
 
-        resp = await client.get("/applications/my-app/skills")
+        resp = await client.get("/namespaces/default/applications/my-app/skills")
         assert resp.status_code == 200
         assert resp.json()["skills"] == [
             {"id": "skill-alpha", "name": "skill-alpha", "missing": False},
@@ -215,7 +224,7 @@ class TestAddApplicationSkill:
     async def test_returns_201_with_updated_skills(self, client):
         await _create_app(client)
         resp = await client.post(
-            "/applications/my-app/skills",
+            "/namespaces/default/applications/my-app/skills",
             json={"skill_name": "skill-alpha"},
         )
         assert resp.status_code == 201
@@ -227,24 +236,24 @@ class TestAddApplicationSkill:
     @pytest.mark.asyncio
     async def test_skill_persisted_in_config_yaml(self, client):
         await _create_app(client)
-        await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
+        await client.post("/namespaces/default/applications/my-app/skills", json={"skill_name": "skill-alpha"})
 
-        resp = await client.get("/applications/my-app/skills")
+        resp = await client.get("/namespaces/default/applications/my-app/skills")
         assert "skill-alpha" in _skill_names(resp.json())
 
     @pytest.mark.asyncio
     async def test_adding_multiple_skills(self, client):
         await _create_app(client)
-        await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
-        resp = await client.post("/applications/my-app/skills", json={"skill_name": "skill-beta"})
+        await client.post("/namespaces/default/applications/my-app/skills", json={"skill_name": "skill-alpha"})
+        resp = await client.post("/namespaces/default/applications/my-app/skills", json={"skill_name": "skill-beta"})
         assert resp.status_code == 201
         assert _skill_names(resp.json()) == {"skill-alpha", "skill-beta"}
 
     @pytest.mark.asyncio
     async def test_idempotent_when_skill_already_assigned(self, client):
         await _create_app(client)
-        await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
-        resp = await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
+        await client.post("/namespaces/default/applications/my-app/skills", json={"skill_name": "skill-alpha"})
+        resp = await client.post("/namespaces/default/applications/my-app/skills", json={"skill_name": "skill-alpha"})
         assert resp.status_code == 201
         names = [s["name"] for s in resp.json()["skills"]]
         assert names.count("skill-alpha") == 1
@@ -252,7 +261,7 @@ class TestAddApplicationSkill:
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown_app(self, client):
         resp = await client.post(
-            "/applications/ghost/skills",
+            "/namespaces/default/applications/ghost/skills",
             json={"skill_name": "skill-alpha"},
         )
         assert resp.status_code == 404
@@ -261,7 +270,7 @@ class TestAddApplicationSkill:
     async def test_returns_404_for_skill_not_in_registry(self, client):
         await _create_app(client)
         resp = await client.post(
-            "/applications/my-app/skills",
+            "/namespaces/default/applications/my-app/skills",
             json={"skill_name": "nonexistent-skill"},
         )
         assert resp.status_code == 404
@@ -276,40 +285,40 @@ class TestRemoveApplicationSkill:
     @pytest.mark.asyncio
     async def test_returns_204_on_success(self, client):
         await _create_app(client)
-        await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
-        resp = await client.delete("/applications/my-app/skills/skill-alpha")
+        await client.post("/namespaces/default/applications/my-app/skills", json={"skill_name": "skill-alpha"})
+        resp = await client.delete("/namespaces/default/applications/my-app/skills/skill-alpha")
         assert resp.status_code == 204
 
     @pytest.mark.asyncio
     async def test_skill_removed_from_config_yaml(self, client):
         await _create_app(client)
-        await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
-        await client.delete("/applications/my-app/skills/skill-alpha")
+        await client.post("/namespaces/default/applications/my-app/skills", json={"skill_name": "skill-alpha"})
+        await client.delete("/namespaces/default/applications/my-app/skills/skill-alpha")
 
-        resp = await client.get("/applications/my-app/skills")
+        resp = await client.get("/namespaces/default/applications/my-app/skills")
         assert "skill-alpha" not in _skill_names(resp.json())
 
     @pytest.mark.asyncio
     async def test_removes_only_specified_skill(self, client):
         await _create_app(client)
-        await client.post("/applications/my-app/skills", json={"skill_name": "skill-alpha"})
-        await client.post("/applications/my-app/skills", json={"skill_name": "skill-beta"})
-        await client.delete("/applications/my-app/skills/skill-alpha")
+        await client.post("/namespaces/default/applications/my-app/skills", json={"skill_name": "skill-alpha"})
+        await client.post("/namespaces/default/applications/my-app/skills", json={"skill_name": "skill-beta"})
+        await client.delete("/namespaces/default/applications/my-app/skills/skill-alpha")
 
-        resp = await client.get("/applications/my-app/skills")
+        resp = await client.get("/namespaces/default/applications/my-app/skills")
         names = _skill_names(resp.json())
         assert "skill-alpha" not in names
         assert "skill-beta" in names
 
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown_app(self, client):
-        resp = await client.delete("/applications/ghost/skills/skill-alpha")
+        resp = await client.delete("/namespaces/default/applications/ghost/skills/skill-alpha")
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
     async def test_returns_404_when_skill_not_assigned(self, client):
         await _create_app(client)
-        resp = await client.delete("/applications/my-app/skills/skill-alpha")
+        resp = await client.delete("/namespaces/default/applications/my-app/skills/skill-alpha")
         assert resp.status_code == 404
         assert "skill-alpha" in resp.json()["detail"]
 
@@ -321,10 +330,10 @@ class TestRemoveApplicationSkill:
         await _create_app(client, config)
         registry.unregister("skill-beta")
 
-        resp = await client.delete("/applications/my-app/skills/skill-beta")
+        resp = await client.delete("/namespaces/default/applications/my-app/skills/skill-beta")
         assert resp.status_code == 204
 
-        resp = await client.get("/applications/my-app/skills")
+        resp = await client.get("/namespaces/default/applications/my-app/skills")
         assert resp.json()["skills"] == [{"id": "skill-alpha", "name": "skill-alpha", "missing": False}]
 
 
@@ -338,7 +347,7 @@ class TestSkillsInConfig:
         config = _BASE_CONFIG + "skills:\n  - skill-alpha\n  - skill-beta\n"
         await _create_app(client, config)
 
-        resp = await client.get("/applications/my-app/skills")
+        resp = await client.get("/namespaces/default/applications/my-app/skills")
         assert _skill_names(resp.json()) == {"skill-alpha", "skill-beta"}
 
     @pytest.mark.asyncio
@@ -347,7 +356,7 @@ class TestSkillsInConfig:
         bundle = _make_bundle(config)
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.post(
-                "/applications",
+                "/namespaces/default/applications",
                 files={"bundle": ("bundle.zip", bundle, "application/zip")},
             )
         assert resp.status_code == 422
@@ -362,12 +371,12 @@ class TestSkillsInConfig:
         bundle_v2 = _make_bundle(config_v2)
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.patch(
-                "/applications/my-app",
+                "/namespaces/default/applications/my-app",
                 files={"bundle": ("bundle.zip", bundle_v2, "application/zip")},
             )
         assert resp.status_code == 200
 
-        resp = await client.get("/applications/my-app/skills")
+        resp = await client.get("/namespaces/default/applications/my-app/skills")
         names = _skill_names(resp.json())
         assert "skill-beta" in names
         assert "skill-alpha" not in names
@@ -379,7 +388,7 @@ class TestSkillsInConfig:
         bundle_v2 = _make_bundle(config_v2)
         with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
             resp = await client.patch(
-                "/applications/my-app",
+                "/namespaces/default/applications/my-app",
                 files={"bundle": ("bundle.zip", bundle_v2, "application/zip")},
             )
         assert resp.status_code == 422
@@ -390,6 +399,6 @@ class TestSkillsInConfig:
         config = _BASE_CONFIG + "skills:\n  - skill-alpha\n"
         await _create_app(client, config)
 
-        resp = await client.get("/applications/my-app")
+        resp = await client.get("/namespaces/default/applications/my-app")
         assert resp.status_code == 200
         assert "skill-alpha" in resp.json()["config"]["skills"]

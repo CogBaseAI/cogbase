@@ -282,7 +282,7 @@ async def _run_workflow_stream(
     try:
         async with client._http.stream(
             "POST",
-            f"{client.api_base}/applications/{client.app_name}/workflows/{workflow_name}/stream",
+            f"{client.app_base}/workflows/{workflow_name}/stream",
             json={"params": params},
             timeout=600,
         ) as resp:

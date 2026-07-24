@@ -14,7 +14,14 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
-from api.dependencies import AppCacheDep, SystemResourcesDep, SystemStoreDep
+from api.app_cache import cache_key
+from api.dependencies import (
+    AccountIdDep,
+    AppCacheDep,
+    RequestScopeDep,
+    SystemResourcesDep,
+    SystemStoreDep,
+)
 from api.factory import build_app
 from api.models import (
     DeployResponse,
@@ -34,6 +41,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/generate", tags=["generate"])
 
+# Deploy creates an application, so it is addressed within a namespace (the account
+# comes from the X-Account-Id header). The stateless chat turns above need no scope.
+deploy_router = APIRouter(prefix="/namespaces/{namespace}/generate", tags=["generate"])
+
 _MAX_AGENT_CALLS = 20
 
 def _now() -> str:
@@ -50,6 +61,7 @@ async def _chat_turn_events(
     body: GenerateChatRequest,
     system_resources: SystemResourcesDep,
     *,
+    account_id: str,
     log_prefix: str,
 ):
     llm = system_resources.llm
@@ -58,7 +70,10 @@ async def _chat_turn_events(
 
     from cogbase.llms.base import ChatMessage as LLMChatMessage
 
-    logger.info("%s start text=%s, history=%d", log_prefix, body.text, len(body.history))
+    logger.info(
+        "%s start account=%s text=%s, history=%d",
+        log_prefix, account_id, body.text, len(body.history),
+    )
 
     messages: list[LLMChatMessage] = (
         [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -159,6 +174,7 @@ async def _chat_turn_events(
 
 @router.post("/chat", response_model=GenerateChatResponse)
 async def chat(
+    account_id: AccountIdDep,
     body: GenerateChatRequest,
     system_resources: SystemResourcesDep,
 ) -> GenerateChatResponse:
@@ -167,10 +183,15 @@ async def chat(
     The client maintains the full message history (role: user/assistant) and sends
     it each call. The agent loop runs entirely server-side: the LLM calls tools,
     gets results, and may call tools again — the client sees only the final response.
+
+    Account-scoped (``X-Account-Id`` header) for multi-tenancy; no namespace is
+    needed since a draft config is produced but nothing is created until deploy.
     """
     validated_config_yaml: str | None = None
     final_content: str = ""
-    async for event in _chat_turn_events(body, system_resources, log_prefix="generate/chat"):
+    async for event in _chat_turn_events(
+        body, system_resources, account_id=account_id, log_prefix="generate/chat"
+    ):
         if event["type"] == "result":
             result = event["result"]
             final_content = result["content"]
@@ -193,6 +214,7 @@ async def chat(
 
 @router.post("/chat/stream")
 async def chat_stream(
+    account_id: AccountIdDep,
     body: GenerateChatRequest,
     system_resources: SystemResourcesDep,
 ) -> StreamingResponse:
@@ -201,12 +223,16 @@ async def chat_stream(
     Token events:  ``{"token": "<text>"}``
     Final event:   ``{"result": {"content": "...", "config_yaml": "..."}}``
     Sentinel:      ``data: [DONE]``
+
+    Account-scoped (``X-Account-Id`` header) for multi-tenancy; no namespace is
+    needed since a draft config is produced but nothing is created until deploy.
     """
     async def event_stream():
         try:
             async for event in _chat_turn_events(
                 body,
                 system_resources,
+                account_id=account_id,
                 log_prefix="generate/chat/stream",
             ):
                 if event["type"] == "token":
@@ -223,8 +249,9 @@ async def chat_stream(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-@router.post("/deploy", response_model=DeployResponse, status_code=status.HTTP_201_CREATED)
+@deploy_router.post("/deploy", response_model=DeployResponse, status_code=status.HTTP_201_CREATED)
 async def deploy(
+    scope: RequestScopeDep,
     body: GenerateDeployRequest,
     system_store: SystemStoreDep,
     app_cache: AppCacheDep,
@@ -236,10 +263,21 @@ async def deploy(
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Invalid config: {exc}") from exc
 
-    if await system_store.get_app(config.name) is not None:
+    if await system_store.get_app(scope.account_id, scope.namespace_id, config.name) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Application '{config.name}' already exists",
+        )
+
+    # The namespace must be created explicitly (POST /namespaces) before it can
+    # hold applications — there is no implicit landing namespace.
+    if await system_store.get_namespace(scope.account_id, scope.namespace_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Namespace '{scope.namespace_id}' does not exist; "
+                "create it via POST /namespaces before deploying an application"
+            ),
         )
 
     stored_yaml = config.to_yaml()
@@ -247,6 +285,8 @@ async def deploy(
     app_id = new_app_id()
     record = AppRecord(
         app_id=app_id,
+        account_id=scope.account_id,
+        namespace_id=scope.namespace_id,
         name=config.name,
         config_yaml=stored_yaml,
         status="initializing",
@@ -256,8 +296,12 @@ async def deploy(
     await system_store.save_app(record)
 
     try:
-        app = await build_app(config, app_id=app_id, system=system_resources, app_status=record.status, task_store=system_store)
-        app_cache.add(config.name, app)
+        app = await build_app(
+            config, app_id=app_id, account_id=scope.account_id,
+            namespace_id=scope.namespace_id, system=system_resources,
+            app_status=record.status, task_store=system_store,
+        )
+        app_cache.add(cache_key(scope.account_id, scope.namespace_id, config.name), app)
         record = record.model_copy(update={"status": "active", "updated_at": _now()})
         logger.info("deployed app name=%s", config.name)
     except Exception as exc:
