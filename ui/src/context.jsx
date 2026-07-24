@@ -2,11 +2,15 @@ import React, { createContext, useContext, useState, useCallback, useMemo } from
 
 const AppCtx = createContext(null)
 
-// Tenancy defaults mirror the API (api/dependencies.py): a request that omits the
-// X-Account-Id header lands in account "default", and an unqualified path lands in
-// namespace "default". Both are trust-on-declaration dev knobs for now.
+// Tenancy defaults (api/dependencies.py): a request that omits the X-Account-Id
+// header lands in account "default" (a trust-on-declaration dev knob). There is no
+// server-side default *namespace* — one must be created before it can hold apps
+// (the server rejects a deploy into an unknown namespace with 404). So the working
+// namespace has no default: it starts empty (no namespace selected) and is set only
+// to a namespace the account actually has, reconciled against the live list in
+// App.jsx. An empty account shows a "create a namespace" prompt rather than a
+// phantom selection.
 const DEFAULT_ACCOUNT_ID = 'default'
-const DEFAULT_NAMESPACE = 'default'
 
 // Persist the tenant selection across reloads so a dev working in a non-default
 // account/namespace doesn't have to re-enter it every session.
@@ -41,8 +45,13 @@ export function AppProvider({ children }) {
   // The API addresses namespaces by their user-facing *name* (the {namespace} URL
   // path segment); the internal namespace_id is a server-side concept the client
   // never sends (api/dependencies.py resolve_namespace_id maps name -> id). So this
-  // holds a name, not an id.
-  const [namespaceName, setNamespaceNameState] = useState(() => persisted('cogbase.namespaceName', DEFAULT_NAMESPACE))
+  // holds a name, not an id. Empty string means "no working namespace" (a fresh
+  // account with none yet); App.jsx reconciles it against the live list.
+  const [namespaceName, setNamespaceNameState] = useState(() => persisted('cogbase.namespaceName', ''))
+  // Whether the account's namespace list has been fetched at least once, so the UI
+  // can tell "loaded, none exist" (show the create-a-namespace prompt) from "not
+  // loaded yet" (show nothing) instead of flashing an empty state on first paint.
+  const [namespacesLoaded, setNamespacesLoaded] = useState(false)
   // The selected app is a (namespace, name) pair — a name is only unique within a
   // namespace. Under the unified namespace model (docs/ui-navigation.md, milestone
   // B step 4) selecting an app snaps the working namespace to the app's own, so the
@@ -67,7 +76,9 @@ export function AppProvider({ children }) {
     setAccountIdState(next)
   }, [])
   const setNamespaceName = useCallback((v) => {
-    const next = (v || DEFAULT_NAMESPACE).trim() || DEFAULT_NAMESPACE
+    // Empty is a valid state (no working namespace on a fresh account); don't
+    // coerce it to a phantom default.
+    const next = (v || '').trim()
     persist('cogbase.namespaceName', next)
     setNamespaceNameState(next)
   }, [])
@@ -120,8 +131,9 @@ export function AppProvider({ children }) {
 
   // The account's namespaces, for the header switcher. The header drives the fetch
   // (on mount and whenever the account changes) so tab-level renders that don't
-  // mount the header stay side-effect-free. A new account may have no namespaces
-  // until an app is created, so callers merge in 'default' + the current selection.
+  // mount the header stay side-effect-free. A fresh account may have none until one
+  // is created; `namespacesLoaded` lets the UI distinguish that from "not fetched
+  // yet" so it can prompt for creation rather than flash a phantom selection.
   const refreshNamespaces = useCallback(async () => {
     try {
       const resp = await authFetch(`${apiUrl}/namespaces`)
@@ -133,8 +145,34 @@ export function AppProvider({ children }) {
       }
     } catch {
       setNamespaces([])
+    } finally {
+      setNamespacesLoaded(true)
     }
   }, [apiUrl, authFetch])
+
+  // Ensure a namespace exists so an app can be deployed into it. The server no
+  // longer auto-registers namespaces on deploy (api/routers/app_generate.py), so
+  // the free-text namespace pickers create the target on demand. Idempotent: a 409
+  // (already exists) is treated as success. Returns true once the namespace exists.
+  const ensureNamespace = useCallback(async (name) => {
+    const n = (name || '').trim()
+    if (!n) return false
+    try {
+      const resp = await authFetch(`${apiUrl}/namespaces`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: n }),
+      })
+      // 201 created, or 409 it already existed — either way it now exists.
+      if (resp.ok || resp.status === 409) {
+        await refreshNamespaces()
+        return true
+      }
+      return false
+    } catch {
+      return false
+    }
+  }, [apiUrl, authFetch, refreshNamespaces])
 
   // Apps in the selected namespace, for the App switcher. Namespace-scoped (the
   // breadcrumb's account ▸ namespace ▸ app path), unlike the Apps tab's account-wide
@@ -160,13 +198,13 @@ export function AppProvider({ children }) {
   const value = useMemo(() => ({
     apiUrl, setApiUrl,
     accountId, setAccountId, mode, bootstrap, namespaceName, setNamespaceName,
-    namespaces, refreshNamespaces,
+    namespaces, namespacesLoaded, refreshNamespaces, ensureNamespace,
     apps, appsNs, refreshApps,
     nsBase, appBase, authFetch,
     currentApp, setCurrentApp,
     demoCatalog, setDemoCatalog,
     llmConfigured, setLlmConfigured, embConfigured, setEmbConfigured,
-  }), [apiUrl, accountId, mode, bootstrap, namespaceName, namespaces, refreshNamespaces, apps, appsNs, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName])
+  }), [apiUrl, accountId, mode, bootstrap, namespaceName, namespaces, namespacesLoaded, refreshNamespaces, ensureNamespace, apps, appsNs, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName])
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
 }

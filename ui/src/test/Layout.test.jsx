@@ -71,7 +71,8 @@ describe('Layout — focus-driven sidebar', () => {
   })
 
   it('the Apps tab is scoped to the working namespace and "Use" selects within it', async () => {
-    // Persisted selection would otherwise leak between tests; start from default.
+    // Persisted selection would otherwise leak between tests; start clean so the
+    // working namespace is reconciled to the account's sole namespace ('default').
     window.localStorage.clear()
     // The Apps tab is namespace-scoped now: it lists the working namespace's apps
     // (here 'default'), so a cross-namespace app never surfaces there. "Use" selects
@@ -79,7 +80,8 @@ describe('Layout — focus-driven sidebar', () => {
     mockApi({ nsApps: [{ name: 'contracts', status: 'active' }] })
     const user = userEvent.setup()
     render(<App />)
-    expect(within(sidebar()).getByLabelText('Namespace').value).toBe('default')
+    // The working namespace is reconciled to a real one once the list loads.
+    await waitFor(() => expect(within(sidebar()).getByLabelText('Namespace').value).toBe('default'))
     await user.click(within(sidebar()).getByRole('button', { name: 'Apps' }))
     await user.click(await screen.findByRole('button', { name: 'Use' }))
     // Selected within — and staying in — the working namespace, landing on Query.
@@ -89,8 +91,11 @@ describe('Layout — focus-driven sidebar', () => {
 })
 
 // A fetch mock that reports configured providers (so Settings doesn't auto-switch)
-// and lets each test seed the namespace-scoped / account-wide app lists.
-function mockApi({ nsApps = [], acctApps = [] } = {}) {
+// and lets each test seed the account's namespaces and the namespace-scoped /
+// account-wide app lists. `namespaces` defaults to a single 'default' namespace so
+// the working-namespace switcher has a real selection (the UI has no implicit
+// default namespace — an empty list drives the create-a-namespace prompt instead).
+function mockApi({ nsApps = [], acctApps = [], namespaces = [{ name: 'default' }] } = {}) {
   global.fetch.mockImplementation((url) => {
     const u = String(url)
     const body = u.endsWith('/system/config')
@@ -99,7 +104,7 @@ function mockApi({ nsApps = [], acctApps = [] } = {}) {
         ? { applications: nsApps }
         : u.endsWith('/applications')
           ? { applications: acctApps }
-          : { namespaces: [] }
+          : { namespaces }
     return Promise.resolve({ ok: true, json: async () => body, text: async () => '' })
   })
 }
@@ -161,7 +166,7 @@ describe('Layout — hash routing', () => {
 
   it('restores state from an initial hash (deep link)', async () => {
     window.location.hash = '#/ns/legal/app/contracts/query'
-    mockApi({ nsApps: [{ name: 'contracts' }] })
+    mockApi({ namespaces: [{ name: 'legal' }], nsApps: [{ name: 'contracts' }] })
     render(<App />)
     // The application tier is restored with the app selected — its tabs show and the
     // empty-state CTA is absent — and the working namespace follows the deep link.

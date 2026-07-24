@@ -13,10 +13,14 @@ export const TAB_TIER = {
 export const DEFAULT_TAB = { account: 'namespaces', namespace: 'apps', application: 'query' }
 
 // Suggestions for a free-text namespace picker (the sidebar switcher and the Build
-// tab's deploy target): the account's namespaces, plus 'default' and whatever is
-// currently selected, de-duplicated so the active value is always offered.
+// tab's deploy target): the account's real namespaces, plus whatever is currently
+// selected — so the active value is always offered, including a not-yet-created
+// deploy target being typed (the deploy flow creates it). De-duplicated. There is
+// no implicit 'default' any more; the server has no default namespace, so offering
+// one would just point at a namespace that doesn't exist until something is
+// deployed into it.
 export function nsOptions(names, current) {
-  return [...new Set(['default', current, ...names])].filter(Boolean)
+  return [...new Set([current, ...names])].filter(Boolean)
 }
 
 // State → hash. Each tier maps onto a distinct shape so the hash is self-describing:

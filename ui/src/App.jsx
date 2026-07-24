@@ -22,7 +22,7 @@ import TaskProgressModal from './components/modals/TaskProgressModal'
 // in ./nav alongside the hash router that also consumes them.
 
 function Layout() {
-  const { apiUrl, setApiUrl, accountId, bootstrap, namespaceName, setNamespaceName, namespaces, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp } = useApp()
+  const { apiUrl, setApiUrl, accountId, bootstrap, namespaceName, setNamespaceName, namespaces, namespacesLoaded, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp } = useApp()
   const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
   const [focus, setFocus] = useState(TAB_TIER['build'])   // which tier's sub-nav shows
@@ -60,6 +60,27 @@ function Layout() {
   // Populate the namespace switcher on mount and whenever the account changes
   // (refreshNamespaces' identity tracks the account via authFetch).
   useEffect(() => { refreshNamespaces() }, [refreshNamespaces])
+
+  // Reconcile the working namespace against the account's real namespaces. The
+  // selection persists in localStorage, so a value from another account/server — or
+  // a since-deleted namespace — can survive into an account that doesn't have it,
+  // surfacing in the switcher as a phantom. Once the list has loaded: if the account
+  // has namespaces but the current one isn't among them, snap to a real one; if the
+  // account has none, clear the selection so the sidebar shows the create-a-namespace
+  // prompt instead of a phantom. Read the selection via a ref and depend only on the
+  // loaded list, so this reacts to (re)loads, not keystrokes — typing a new deploy
+  // target the deploy flow will create isn't clobbered mid-edit.
+  const nsSelRef = useRef(namespaceName)
+  nsSelRef.current = namespaceName
+  useEffect(() => {
+    if (!namespacesLoaded) return
+    const cur = nsSelRef.current
+    if (namespaces.length) {
+      if (!namespaces.some(n => n.name === cur)) setNamespaceName(namespaces[0].name)
+    } else if (cur) {
+      setNamespaceName('')
+    }
+  }, [namespaces, namespacesLoaded, setNamespaceName])
 
   // Populate the App switcher on mount and whenever the namespace/account changes
   // (refreshApps' identity tracks nsBase).
@@ -171,11 +192,23 @@ function Layout() {
               server via /whoami and shown read-only in the top bar, not here. */}
           <div className="side-switch">
             <label htmlFor="namespaceName">{t('header.namespaceLabel')}</label>
-            {/* Filtering combobox: lists the account's namespaces and substring-
-                filters them as you type, but an arbitrary namespace can still be
-                committed (e.g. to deploy into one that doesn't exist yet — deploy
-                registers it). See components/NamespaceSelect.jsx. */}
-            <NamespaceSelect id="namespaceName" value={namespaceName} options={nsSuggestions} onChange={setNamespaceName} />
+            {namespacesLoaded && namespaces.length === 0 ? (
+              /* Fresh account with no namespaces yet — prompt to create one rather
+                 than present a phantom selection. Creating a namespace here (or
+                 deploying an app, which creates its target) populates the switcher. */
+              <div className="ns-empty">
+                <p className="side-hint">{t('nav.nsNoneHint')}</p>
+                <button className="btn btn-primary btn-sm" onClick={() => goTab('namespaces')}>
+                  {t('nav.nsNoneCta')}
+                </button>
+              </div>
+            ) : (
+              /* Filtering combobox: lists the account's namespaces and substring-
+                 filters them as you type, but an arbitrary namespace can still be
+                 committed (e.g. to deploy into one that doesn't exist yet — the
+                 deploy flow creates it first). See components/NamespaceSelect.jsx. */
+              <NamespaceSelect id="namespaceName" value={namespaceName} options={nsSuggestions} onChange={setNamespaceName} />
+            )}
           </div>
 
           {navGroups.map(group => {

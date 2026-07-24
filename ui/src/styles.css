@@ -106,6 +106,12 @@ header h1 span { color: var(--accent); }
 .side-switch select { cursor: pointer; }
 .side-switch input:focus, .side-switch select:focus { outline: none; border-color: var(--accent); }
 
+/* Empty-state prompt shown in place of the namespace switcher when the account
+   has no namespaces yet (App.jsx) */
+.ns-empty { display: flex; flex-direction: column; gap: 6px; }
+.ns-empty .side-hint { margin: 0; }
+.ns-empty .btn { width: 100%; }
+
 /* Namespace filtering combobox (components/NamespaceSelect.jsx) */
 .ns-combo { position: relative; width: 100%; }
 .ns-combo > input { width: 100%; }

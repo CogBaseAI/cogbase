@@ -53,23 +53,23 @@ describe('parseHash', () => {
 })
 
 describe('nsOptions', () => {
-  it('always offers default and the current selection', () => {
-    expect(nsOptions([], 'legal')).toEqual(['default', 'legal'])
+  it('offers the current selection even when the account has no namespaces', () => {
+    expect(nsOptions([], 'legal')).toEqual(['legal'])
   })
 
-  it('prepends default and dedupes it out of the names list', () => {
-    expect(nsOptions(['default', 'legal', 'finance'], 'legal'))
-      .toEqual(['default', 'legal', 'finance'])
+  it('does not inject an implicit default namespace', () => {
+    // 'default' only appears if the account actually has it.
+    expect(nsOptions(['legal', 'finance'], 'legal'))
+      .toEqual(['legal', 'finance'])
   })
 
-  it('keeps the current selection first among the names when already listed', () => {
-    // Order is: default, current, then remaining names — deduped.
+  it('keeps the current selection first, then the remaining names — deduped', () => {
     expect(nsOptions(['finance', 'legal'], 'legal'))
-      .toEqual(['default', 'legal', 'finance'])
+      .toEqual(['legal', 'finance'])
   })
 
   it('drops falsy entries (empty current, blank names)', () => {
-    expect(nsOptions(['legal', '', null], '')).toEqual(['default', 'legal'])
-    expect(nsOptions([], '')).toEqual(['default'])
+    expect(nsOptions(['legal', '', null], '')).toEqual(['legal'])
+    expect(nsOptions([], '')).toEqual([])
   })
 })

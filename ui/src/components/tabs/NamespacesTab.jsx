@@ -155,7 +155,6 @@ export default function NamespacesTab({ active }) {
                 return (
                   <span style={{ fontWeight: activeNs ? 600 : 400 }}>
                     <code>{ns.name}</code>
-                    {ns.name === 'default' && <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 6 }}>{t('nsAdmin.isDefault')}</span>}
                     {activeNs && <span style={{ fontSize: 10, color: 'var(--accent)', marginLeft: 6 }}>{t('nsAdmin.active')}</span>}
                   </span>
                 )
@@ -173,7 +172,7 @@ export default function NamespacesTab({ active }) {
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button className="btn btn-ghost btn-sm" disabled={ns.name === namespaceName} onClick={() => setNamespaceName(ns.name)}>{t('nsAdmin.switchTo')}</button>
                   <button className="btn btn-ghost btn-sm" onClick={() => startEdit(ns)}>{t('nsAdmin.edit')}</button>
-                  <button className="btn btn-red btn-sm" disabled={ns.name === 'default'} onClick={() => remove(ns)}>{t('common.delete')}</button>
+                  <button className="btn btn-red btn-sm" onClick={() => remove(ns)}>{t('common.delete')}</button>
                 </div>
               ),
             },

@@ -4,7 +4,7 @@ import { useT } from '../../i18n'
 import { previewText, metaText, waitForTasks } from '../../utils'
 
 export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, onOpenWfModal, onSwitchTab }) {
-  const { apiUrl, appBase, nsBase, authFetch, currentApp, setCurrentApp, demoCatalog, setDemoCatalog } = useApp()
+  const { apiUrl, appBase, nsBase, namespaceName, authFetch, currentApp, setCurrentApp, demoCatalog, setDemoCatalog, ensureNamespace } = useApp()
   const { t } = useT()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -66,6 +66,14 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
   async function deployDemo(key) {
     const demo = demoCatalog.find(d => d.key === key)
     if (!demo) return
+    // A demo deploys into the working namespace; on a fresh account there isn't one
+    // yet. Prompt the user to create/select a namespace first rather than POST to a
+    // malformed path.
+    if (!namespaceName) {
+      clearSteps(key)
+      addStep(key, t('demos.needNamespace'), 'error')
+      return
+    }
     setDeploying(prev => new Set([...prev, key]))
     clearSteps(key)
 
@@ -85,6 +93,12 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
         throw new Error(t('demos.stepCheckFailErr', { status: appResp.status }))
       } else {
         updateStep(key, appStepId, t('demos.stepCreating', { name: demo.name }), 'running')
+        // The working namespace must exist before it can hold the app (the server
+        // no longer auto-registers it on deploy). Create it on demand.
+        if (!(await ensureNamespace(namespaceName))) {
+          updateStep(key, appStepId, t('demos.stepCreateFail', { msg: t('build.nsCreateFailed', { ns: namespaceName }) }), 'error')
+          throw new Error(t('build.nsCreateFailed', { ns: namespaceName }))
+        }
         const deployResp = await authFetch(`${nsBase}/generate/deploy`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

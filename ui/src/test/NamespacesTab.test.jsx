@@ -1,6 +1,6 @@
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithCtx } from './renderWithCtx'
 import NamespacesTab from '../components/tabs/NamespacesTab'
@@ -26,7 +26,7 @@ it('lists namespaces when active', async () => {
   renderWithCtx(<NamespacesTab active={true} />)
   await waitFor(() => expect(screen.getByText('legal-team')).toBeInTheDocument())
   expect(screen.getByText('Contracts')).toBeInTheDocument()
-  // The default namespace is present (shown as its id and a "default" flag).
+  // 'default' is an ordinary namespace with no special status — just listed by name.
   expect(screen.getAllByText('default').length).toBeGreaterThan(0)
 })
 
@@ -56,17 +56,18 @@ it('creates a namespace via POST and refreshes', async () => {
   ))
 })
 
-it('deletes a non-default namespace after confirm', async () => {
+it('deletes a namespace after confirm', async () => {
   const spy = mockList()
   vi.spyOn(window, 'confirm').mockReturnValue(true)
   const user = userEvent.setup()
   renderWithCtx(<NamespacesTab active={true} />)
   await waitFor(() => screen.getByText('legal-team'))
 
-  // Two Delete buttons (default is disabled); click the enabled one.
-  const delButtons = screen.getAllByRole('button', { name: /Delete/ })
-  const enabled = delButtons.find(b => !b.disabled)
-  await user.click(enabled)
+  // Delete the legal-team row specifically (every namespace, including 'default',
+  // is now deletable — no protected default).
+  const row = screen.getByText('legal-team').closest('tr')
+  const delBtn = within(row).getByRole('button', { name: /Delete/ })
+  await user.click(delBtn)
 
   await waitFor(() => expect(spy).toHaveBeenCalledWith(
     expect.stringContaining('/namespaces/legal-team'),

@@ -15,7 +15,7 @@ function stripConfigMarkers(text) {
 }
 
 export default function BuildTab({ active }) {
-  const { apiUrl, namespaceName, namespaces, authFetch, setCurrentApp, refreshApps } = useApp()
+  const { apiUrl, namespaceName, namespaces, authFetch, setCurrentApp, refreshApps, ensureNamespace } = useApp()
   const { t } = useT()
   const [msgs, setMsgs] = useState([{ role: 'sys', text: t('build.intro') }])
   const [input, setInput] = useState('')
@@ -125,8 +125,23 @@ export default function BuildTab({ active }) {
 
   async function deployApp() {
     if (!cfgYaml) return
-    const ns = (deployNs || namespaceName).trim() || namespaceName
+    const ns = (deployNs || namespaceName).trim()
+    // An app needs a namespace to live in; there's no implicit default. Prompt for
+    // a target instead of failing on an empty name.
+    if (!ns) {
+      setMsgs(prev => [...prev, { role: 'sys', text: t('build.deployNeedsNs') }])
+      setTimeout(scrollMsgs, 0)
+      return
+    }
     try {
+      // The namespace must exist before it can hold an app (the server no longer
+      // auto-registers it on deploy). Create it on demand so the free-text picker
+      // can still target a not-yet-created namespace.
+      if (!(await ensureNamespace(ns))) {
+        setMsgs(prev => [...prev, { role: 'sys', text: t('build.deployFailed', { msg: t('build.nsCreateFailed', { ns }) }) }])
+        setTimeout(scrollMsgs, 0)
+        return
+      }
       const resp = await authFetch(`${apiUrl}/namespaces/${encodeURIComponent(ns)}/generate/deploy`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
