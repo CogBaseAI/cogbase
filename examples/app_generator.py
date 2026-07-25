@@ -46,7 +46,7 @@ from examples.cogbase_client import (  # noqa: E402
 configure_logging()
 
 _API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000")
-_NAMESPACE = os.environ.get("COGBASE_NAMESPACE", "default")
+_NAMESPACE = os.environ.get("COGBASE_NAMESPACE", "demos")
 _COMMANDS = ["/preview", "/save", "/deploy", "/restart", "/q", "/quit", "/exit"]
 
 # ---------------------------------------------------------------------------

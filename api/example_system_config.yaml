@@ -6,6 +6,20 @@
 # All fields are optional.  When omitted, in-memory stores are used and
 # data is lost when the service restarts.
 
+# How the calling account is resolved.
+#   saas          -> account comes from a verified access token; requires
+#                    COGBASE_JWT_SECRET (enforced at startup). This is the
+#                    fail-secure default when this key is omitted.
+#   dev           -> account is trust-on-declaration via the X-Account-Id header
+#                    (no token needed). Use for local development and tests.
+#   single_tenant -> also trust-on-declaration for now.
+deployment_mode: dev
+
+# HMAC secret used to sign and verify access tokens. Must be identical on every
+# node. Required in saas mode (the service refuses to start without it); omit it
+# in dev mode to use an insecure built-in development secret.
+# jwt_secret: change-me-to-a-long-random-string
+
 # Store backend for the application registry (CogBase's own metadata).
 # Supports the same backends as application stores: sqlite, postgres, or memory.
 # When absent, falls back to the COGBASE_SYSTEM_DB env var (SQLite path) or

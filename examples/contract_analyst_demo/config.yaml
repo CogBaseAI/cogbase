@@ -9,6 +9,14 @@
 
 name: contract-analyst
 
+# Clause-by-clause redline review of an uploaded .docx contract. Loaded as a
+# built-in skill from the system skills_dir (see the deployment's
+# cogbase_system.yaml); referenced by id so the query runner can route a
+# "review this contract" request to it.
+skills:
+  - legal-review
+  - edit-docx
+
 vector_collections:
   - name: contract_chunks
     description: >-

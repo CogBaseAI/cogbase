@@ -20,13 +20,90 @@ class WhoAmIResponse(BaseModel):
 
     ``account_id`` is the tenant/security boundary the server resolved for this
     request; the UI adopts it rather than sourcing an account itself. ``mode`` is
-    the operator-declared deployment mode (see ``api.dependencies.DEPLOYMENT_MODE``)
+    the operator-declared deployment mode (see ``SystemConfig.deployment_mode``)
     and tells the UI whether the account is server-authoritative (read-only) or a
     ``dev`` trust-on-declaration knob it may expose as an editable field.
+
+    ``user_id`` / ``email`` / ``role`` are populated only in a managed mode with a
+    valid access token (the authenticated principal); they are null in ``dev`` and
+    when the caller is unauthenticated. ``account_id`` is likewise null when a
+    managed-mode caller presents no valid token, which the UI reads as "show the
+    login screen".
     """
 
-    account_id: str
+    account_id: str | None = None
     mode: str
+    user_id: str | None = None
+    email: str | None = None
+    role: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Auth models (first-party email/password)
+# ---------------------------------------------------------------------------
+
+
+class SignupRequest(BaseModel):
+    email: str = Field(description="Login email; normalized to lowercase.")
+    password: str = Field(min_length=8, description="At least 8 characters.")
+    invite_token: str | None = Field(
+        default=None,
+        description=(
+            "When present, join the invite's existing account as a member instead "
+            "of creating a new account. The invite's email must match."
+        ),
+    )
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str
+
+
+class InviteRequest(BaseModel):
+    email: str = Field(description="Email to invite onto the caller's account.")
+    role: Literal["owner", "member"] = Field(
+        default="member", description="Role the invitee receives on acceptance."
+    )
+
+
+class TokenResponse(BaseModel):
+    """Issued on signup and login: an access token plus a refresh token."""
+
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    account_id: str
+    user_id: str
+    email: str
+    role: str
+
+
+class AccessTokenResponse(BaseModel):
+    """Returned by /auth/refresh — a fresh access token only."""
+
+    access_token: str
+    token_type: str = "bearer"
+
+
+class LogoutResponse(BaseModel):
+    ok: bool = True
+
+
+class InviteResponse(BaseModel):
+    token: str = Field(description="Invite token to hand to the invitee (via a link).")
+    email: str
+    account_id: str
+    role: str
+    expires_at: str
 
 
 # ---------------------------------------------------------------------------

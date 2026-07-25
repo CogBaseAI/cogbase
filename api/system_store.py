@@ -146,6 +146,70 @@ SESSION_RECORDS_SCHEMA = CollectionSchema(
 )
 
 
+ACCOUNT_RECORDS_SCHEMA = CollectionSchema(
+    name="account_records",
+    description="Tenant registry: one record per account (the security boundary).",
+    primary_fields=["account_id"],
+    fields={
+        "account_id": FieldSchema(type=FieldType.STRING, nullable=False),
+        "name":       FieldSchema(type=FieldType.STRING, nullable=False),
+        "created_at": FieldSchema(type=FieldType.STRING, nullable=False),
+    },
+)
+
+
+USER_RECORDS_SCHEMA = CollectionSchema(
+    name="user_records",
+    description="User registry: one record per user, each bound to exactly one account.",
+    primary_fields=["user_id"],
+    fields={
+        "user_id":       FieldSchema(type=FieldType.STRING, nullable=False),
+        # Email is the login handle — globally unique across the deployment and
+        # indexed for the login lookup.
+        "email":         FieldSchema(type=FieldType.STRING, nullable=False, index=True, unique=True),
+        "password_hash": FieldSchema(type=FieldType.STRING, nullable=False),
+        "account_id":    FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "role":          FieldSchema(type=FieldType.STRING, nullable=False),  # "owner" | "member"
+        "created_at":    FieldSchema(type=FieldType.STRING, nullable=False),
+    },
+)
+
+
+INVITE_RECORDS_SCHEMA = CollectionSchema(
+    name="invite_records",
+    description="Pending invitations binding an email to an existing account until accepted.",
+    primary_fields=["token"],
+    fields={
+        "token":       FieldSchema(type=FieldType.STRING, nullable=False),
+        "account_id":  FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "email":       FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "role":        FieldSchema(type=FieldType.STRING, nullable=False),
+        "created_at":  FieldSchema(type=FieldType.STRING, nullable=False),
+        "expires_at":  FieldSchema(type=FieldType.STRING, nullable=False),
+        "accepted_at": FieldSchema(type=FieldType.STRING, nullable=True),  # null while pending
+    },
+)
+
+
+REFRESH_TOKEN_RECORDS_SCHEMA = CollectionSchema(
+    name="refresh_token_records",
+    description=(
+        "Refresh-token registry, keyed by the token's SHA-256 hash (the raw token "
+        "is never stored). Presence + not-revoked + not-expired authorizes minting "
+        "a new access token; deleting/revoking a row invalidates the session."
+    ),
+    primary_fields=["token_hash"],
+    fields={
+        "token_hash": FieldSchema(type=FieldType.STRING, nullable=False),
+        "user_id":    FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "account_id": FieldSchema(type=FieldType.STRING, nullable=False, index=True),
+        "created_at": FieldSchema(type=FieldType.STRING, nullable=False),
+        "expires_at": FieldSchema(type=FieldType.STRING, nullable=False),
+        "revoked_at": FieldSchema(type=FieldType.STRING, nullable=True),  # null while active
+    },
+)
+
+
 DOC_WORKFLOW_REGISTRY_SCHEMA = CollectionSchema(
     name="doc_workflow_registry",
     description="Workflow processing status per document per workflow. One record per (app, doc, workflow).",
@@ -232,6 +296,21 @@ def new_app_id() -> str:
     return f"app_{uuid.uuid4().hex}"
 
 
+def new_account_id() -> str:
+    """Generate a stable account id that is a valid store-collection prefix.
+
+    ``account_id`` is the leading segment of every scoped collection name
+    (``<account>__<namespace>__<app>__<collection>``), so like :func:`new_app_id`
+    it is prefixed with ``acct_`` to guarantee it starts with a letter.
+    """
+    return f"acct_{uuid.uuid4().hex}"
+
+
+def new_user_id() -> str:
+    """Generate a stable, opaque user id."""
+    return f"user_{uuid.uuid4().hex}"
+
+
 class AppRecord(BaseModel):
     app_id: str       # stable internal id (primary key)
     account_id: str   # tenant / security boundary
@@ -277,6 +356,40 @@ class SessionRecord(BaseModel):
     updated_at: str            # ISO-8601 UTC
 
 
+class AccountRecord(BaseModel):
+    account_id: str   # tenant / security boundary (also a store-collection prefix)
+    name: str         # display name for the org
+    created_at: str   # ISO-8601 UTC
+
+
+class UserRecord(BaseModel):
+    user_id: str
+    email: str            # login handle, unique across the deployment
+    password_hash: str    # opaque hash string (see api/auth.py); never plaintext
+    account_id: str       # the tenant this user belongs to
+    role: str             # "owner" | "member"
+    created_at: str       # ISO-8601 UTC
+
+
+class InviteRecord(BaseModel):
+    token: str
+    account_id: str
+    email: str
+    role: str             # role the invitee receives on acceptance
+    created_at: str       # ISO-8601 UTC
+    expires_at: str       # ISO-8601 UTC
+    accepted_at: str | None = None  # set once the invite is redeemed
+
+
+class RefreshTokenRecord(BaseModel):
+    token_hash: str       # SHA-256 of the raw refresh token (raw token never stored)
+    user_id: str
+    account_id: str
+    created_at: str       # ISO-8601 UTC
+    expires_at: str       # ISO-8601 UTC
+    revoked_at: str | None = None   # set on logout; a revoked token cannot refresh
+
+
 class SystemStore:
     """Thin persistence layer for application metadata.
 
@@ -300,6 +413,10 @@ class SystemStore:
         await self._store.create_collection(DOC_WORKFLOW_REGISTRY_SCHEMA)
         await self._store.create_collection(SKILL_RECORDS_SCHEMA)
         await self._store.create_collection(SESSION_RECORDS_SCHEMA)
+        await self._store.create_collection(ACCOUNT_RECORDS_SCHEMA)
+        await self._store.create_collection(USER_RECORDS_SCHEMA)
+        await self._store.create_collection(INVITE_RECORDS_SCHEMA)
+        await self._store.create_collection(REFRESH_TOKEN_RECORDS_SCHEMA)
 
     async def save_app(self, record: AppRecord) -> None:
         await self._store.save("app_records", [record.model_dump()])
@@ -402,6 +519,86 @@ class SystemStore:
                 Col("namespace_id") == namespace_id,
             ],
         )
+
+    # ------------------------------------------------------------------
+    # Auth: accounts / users / invites / refresh tokens
+    # ------------------------------------------------------------------
+
+    async def save_account(self, record: AccountRecord) -> None:
+        await self._store.save("account_records", [record.model_dump()])
+
+    async def get_account(self, account_id: str) -> AccountRecord | None:
+        rows = await self._store.query_as(
+            "account_records",
+            filters=[Col("account_id") == account_id],
+            model=AccountRecord,
+        )
+        return rows[0] if rows else None
+
+    async def save_user(self, record: UserRecord) -> None:
+        await self._store.save("user_records", [record.model_dump()])
+
+    async def get_user_by_email(self, email: str) -> UserRecord | None:
+        """Resolve a user by their (globally unique) login email.
+
+        Emails are normalized to lowercase by the auth layer before storage and
+        lookup, so callers should pass an already-normalized address.
+        """
+        rows = await self._store.query_as(
+            "user_records",
+            filters=[Col("email") == email],
+            model=UserRecord,
+        )
+        return rows[0] if rows else None
+
+    async def get_user_by_id(self, user_id: str) -> UserRecord | None:
+        rows = await self._store.query_as(
+            "user_records",
+            filters=[Col("user_id") == user_id],
+            model=UserRecord,
+        )
+        return rows[0] if rows else None
+
+    async def save_invite(self, record: InviteRecord) -> None:
+        await self._store.save("invite_records", [record.model_dump()])
+
+    async def get_invite(self, token: str) -> InviteRecord | None:
+        rows = await self._store.query_as(
+            "invite_records",
+            filters=[Col("token") == token],
+            model=InviteRecord,
+        )
+        return rows[0] if rows else None
+
+    async def mark_invite_accepted(self, token: str) -> None:
+        invite = await self.get_invite(token)
+        if invite is None:
+            return
+        record = invite.model_copy(
+            update={"accepted_at": datetime.now(timezone.utc).isoformat()}
+        )
+        await self._store.save("invite_records", [record.model_dump()])
+
+    async def save_refresh_token(self, record: RefreshTokenRecord) -> None:
+        await self._store.save("refresh_token_records", [record.model_dump()])
+
+    async def get_refresh_token(self, token_hash: str) -> RefreshTokenRecord | None:
+        rows = await self._store.query_as(
+            "refresh_token_records",
+            filters=[Col("token_hash") == token_hash],
+            model=RefreshTokenRecord,
+        )
+        return rows[0] if rows else None
+
+    async def revoke_refresh_token(self, token_hash: str) -> None:
+        """Mark a refresh token revoked (idempotent no-op if it does not exist)."""
+        existing = await self.get_refresh_token(token_hash)
+        if existing is None:
+            return
+        record = existing.model_copy(
+            update={"revoked_at": datetime.now(timezone.utc).isoformat()}
+        )
+        await self._store.save("refresh_token_records", [record.model_dump()])
 
     # ------------------------------------------------------------------
     # Session index (conversation history list)

@@ -42,7 +42,7 @@ from examples.contract_analyst_demo.contracts import CONTRACTS
 
 _APP_NAME = "contract-analyst"
 _API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000").rstrip("/")
-_NAMESPACE = os.environ.get("COGBASE_NAMESPACE", "default")
+_NAMESPACE = os.environ.get("COGBASE_NAMESPACE", "demos")
 _APP_BASE = f"{_API_BASE}/namespaces/{_NAMESPACE}/applications/{_APP_NAME}"
 _CONTRACTS_COLLECTION = "contracts"
 

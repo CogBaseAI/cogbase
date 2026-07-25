@@ -11,13 +11,19 @@ const APPS = [
 ]
 
 beforeEach(() => {
+  // A working namespace must be selected for the list to load; the tab shows a
+  // pick-a-namespace prompt otherwise (see the "no namespace" describe below).
+  window.localStorage.setItem('cogbase.namespaceName', 'default')
   vi.spyOn(global, 'fetch').mockResolvedValue({
     ok: true,
     json: async () => ({ applications: APPS }),
   })
 })
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  window.localStorage.clear()
+})
 
 it('shows loading state initially', () => {
   renderWithCtx(<AppsTab active={true} />)
@@ -47,6 +53,21 @@ it('shows error when fetch fails', async () => {
 it('does not load when inactive', () => {
   renderWithCtx(<AppsTab active={false} />)
   expect(global.fetch).not.toHaveBeenCalled()
+})
+
+describe('no namespace selected', () => {
+  beforeEach(() => { window.localStorage.setItem('cogbase.namespaceName', '') })
+
+  it('shows the pick-a-namespace prompt instead of fetching', async () => {
+    renderWithCtx(<AppsTab active={true} />)
+    await waitFor(() =>
+      expect(screen.getByText(/Select or create a namespace/)).toBeInTheDocument()
+    )
+    // No app-list fetch against the malformed /namespaces//applications path.
+    expect(global.fetch).not.toHaveBeenCalled()
+    expect(screen.queryByText('contract-analyst')).not.toBeInTheDocument()
+  })
+
 })
 
 describe('detail drawer', () => {

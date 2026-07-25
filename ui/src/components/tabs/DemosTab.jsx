@@ -4,7 +4,7 @@ import { useT } from '../../i18n'
 import { previewText, metaText, waitForTasks } from '../../utils'
 
 export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, onOpenWfModal, onSwitchTab }) {
-  const { apiUrl, appBase, nsBase, namespaceName, authFetch, currentApp, setCurrentApp, demoCatalog, setDemoCatalog, ensureNamespace } = useApp()
+  const { apiUrl, appBase, nsBase, namespaceName, authFetch, currentApp, setCurrentApp, refreshApps, demoCatalog, setDemoCatalog, ensureNamespace } = useApp()
   const { t } = useT()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -163,6 +163,10 @@ export default function DemosTab({ active, onOpenDocModal, onOpenConfigModal, on
       updateStep(key, ingestStepId, failCount > 0 ? t('demos.stepIngestedSome', { ok: okCount, total, fail: failCount }) : t('demos.stepIngested', { ok: okCount }), failCount === total ? 'error' : 'done')
 
       addStep(key, t('demos.stepReady', { title: demo.title }), 'done')
+      // Refresh the sidebar App switcher's namespace-scoped list so the just-
+      // deployed app is present before we select it — otherwise the switcher can't
+      // resolve currentApp against its (stale) options and shows nothing selected.
+      await refreshApps()
       setCurrentApp(demo.name)
       onSwitchTab('ingest')
     } catch (e) {
