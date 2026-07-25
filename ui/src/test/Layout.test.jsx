@@ -124,6 +124,9 @@ function mockWhoami({ account_id = 'default', mode = 'dev' } = {}) {
 
 describe('Layout — account bootstrap (/whoami)', () => {
   it('adopts the server-resolved account and shows it read-only in the top bar', async () => {
+    // saas mode now requires a session; seed one so the auth gate passes and the
+    // app (with its read-only account chip) renders.
+    window.localStorage.setItem('cogbase.accessToken', 'test-token')
     mockWhoami({ account_id: 'acct-saas', mode: 'saas' })
     render(<App />)
     // The resolved account surfaces as a read-only chip in the header…
@@ -133,6 +136,7 @@ describe('Layout — account bootstrap (/whoami)', () => {
   })
 
   it('reflects a real account in the document title', async () => {
+    window.localStorage.setItem('cogbase.accessToken', 'test-token')
     mockWhoami({ account_id: 'acct-saas', mode: 'saas' })
     render(<App />)
     await waitFor(() => expect(document.title).toBe('CogBase — acct-saas'))

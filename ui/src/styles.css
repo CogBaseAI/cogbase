@@ -71,6 +71,9 @@ header h1 span { color: var(--accent); }
 .acct-chip .acct-chip-label { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
 .acct-chip .acct-chip-val { font-weight: 600; }
 .acct-chip + .app-pill { margin-left: 8px; }
+.user-row { display: flex; align-items: center; gap: 8px; margin-left: 8px; }
+.user-row .user-email { font-size: 12px; color: var(--muted); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auth-loading { min-height: 100vh; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 14px; }
 .app-pill .app-pill-ns {
   font-size: 10px; color: var(--muted);
   background: var(--bg2); border-radius: 10px; padding: 1px 7px;

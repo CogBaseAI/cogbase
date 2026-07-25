@@ -68,7 +68,20 @@ export function AppProvider({ children }) {
   // declaration (the header we send is echoed back), so the UI keeps an editable
   // account field. Any other mode (saas/single_tenant/demo) means the server
   // resolves the account authoritatively, so the UI treats it as read-only.
-  const [mode, setMode] = useState('dev')
+  const [mode, setMode] = useState(() => persisted('cogbase.mode', 'dev'))
+
+  // First-party auth (saas mode). Tokens persist across reloads so a refresh
+  // doesn't bounce the user to the login screen. Persisting in localStorage is a
+  // deliberate pilot trade-off (an XSS bug could read them); a hardening step
+  // moves the refresh token to an httpOnly cookie. In dev mode these stay empty
+  // and the header path is used, so nothing here affects local development.
+  const [accessToken, setAccessTokenState] = useState(() => persisted('cogbase.accessToken', ''))
+  const [refreshToken, setRefreshTokenState] = useState(() => persisted('cogbase.refreshToken', ''))
+  const [email, setEmailState] = useState(() => persisted('cogbase.email', ''))
+  const [role, setRoleState] = useState(() => persisted('cogbase.role', ''))
+  // Whether /whoami has resolved at least once, so the gate can tell "still
+  // checking" from "checked, not signed in" and avoid flashing the login screen.
+  const [authChecked, setAuthChecked] = useState(false)
 
   const setAccountId = useCallback((v) => {
     const next = (v || DEFAULT_ACCOUNT_ID).trim() || DEFAULT_ACCOUNT_ID
@@ -81,6 +94,33 @@ export function AppProvider({ children }) {
     const next = (v || '').trim()
     persist('cogbase.namespaceName', next)
     setNamespaceNameState(next)
+  }, [])
+
+  // Persist + set the whole authenticated session in one place (login/signup), and
+  // its inverse for sign-out. Keeping tokens, account, and profile in lockstep
+  // avoids a half-cleared state where a stale token races a new account.
+  const applySession = useCallback((data) => {
+    persist('cogbase.accessToken', data.access_token || '')
+    persist('cogbase.refreshToken', data.refresh_token || '')
+    persist('cogbase.email', data.email || '')
+    persist('cogbase.role', data.role || '')
+    persist('cogbase.accountId', data.account_id || DEFAULT_ACCOUNT_ID)
+    setAccessTokenState(data.access_token || '')
+    setRefreshTokenState(data.refresh_token || '')
+    setEmailState(data.email || '')
+    setRoleState(data.role || '')
+    setAccountIdState(data.account_id || DEFAULT_ACCOUNT_ID)
+  }, [])
+
+  const clearSession = useCallback(() => {
+    persist('cogbase.accessToken', '')
+    persist('cogbase.refreshToken', '')
+    persist('cogbase.email', '')
+    persist('cogbase.role', '')
+    setAccessTokenState('')
+    setRefreshTokenState('')
+    setEmailState('')
+    setRoleState('')
   }, [])
 
   // Namespace-scoped bases. Name-addressed application routes moved under
@@ -103,12 +143,93 @@ export function AppProvider({ children }) {
     if (name && namespace) setNamespaceName(namespace)
   }, [setNamespaceName])
 
-  // Every request carries the account as the X-Account-Id header (the security
-  // boundary). authFetch injects it while leaving each call site's URL/options
-  // otherwise untouched, so streaming and multipart uploads pass straight through.
-  const authFetch = useCallback((url, opts = {}) => {
-    return fetch(url, { ...opts, headers: { 'X-Account-Id': accountId, ...(opts.headers || {}) } })
-  }, [accountId])
+  // Exchange the refresh token for a fresh access token. Returns the new token, or
+  // '' when refresh fails (expired/revoked) — in which case the session is cleared
+  // so the app falls back to the login gate. Uses raw fetch to avoid recursing
+  // through authFetch's own 401 handling.
+  const refreshAccess = useCallback(async () => {
+    if (!refreshToken) return ''
+    try {
+      const resp = await fetch(`${apiUrl}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      })
+      if (!resp.ok) { clearSession(); return '' }
+      const data = await resp.json()
+      persist('cogbase.accessToken', data.access_token || '')
+      setAccessTokenState(data.access_token || '')
+      return data.access_token || ''
+    } catch {
+      return ''
+    }
+  }, [apiUrl, refreshToken, clearSession])
+
+  // Every request carries the tenant identity. In dev mode that's the X-Account-Id
+  // header (trust-on-declaration); in saas mode it's the Bearer access token (the
+  // server derives the account from it and ignores the header). Options are left
+  // otherwise untouched so streaming and multipart uploads pass straight through.
+  // On a 401 with a refresh token available, transparently refresh once and retry —
+  // but only for requests we can safely replay (no consumable body), so an upload's
+  // FormData isn't re-sent half-read.
+  const authFetch = useCallback(async (url, opts = {}) => {
+    const headersFor = (tok) => ({
+      ...(accountId ? { 'X-Account-Id': accountId } : {}),
+      ...(tok ? { Authorization: `Bearer ${tok}` } : {}),
+      ...(opts.headers || {}),
+    })
+    let resp = await fetch(url, { ...opts, headers: headersFor(accessToken) })
+    const replayable = !opts.body || typeof opts.body === 'string'
+    if (resp.status === 401 && refreshToken && replayable) {
+      const fresh = await refreshAccess()
+      if (fresh) resp = await fetch(url, { ...opts, headers: headersFor(fresh) })
+    }
+    return resp
+  }, [accountId, accessToken, refreshToken, refreshAccess])
+
+  // Auth actions the login screen and header call. login/signup adopt the returned
+  // session; logout best-effort revokes the refresh token server-side then clears
+  // local state so the gate reappears.
+  const login = useCallback(async (emailArg, password) => {
+    const resp = await fetch(`${apiUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: emailArg, password }),
+    })
+    if (!resp.ok) {
+      const msg = await resp.json().catch(() => ({}))
+      throw new Error(msg.detail || 'Login failed')
+    }
+    applySession(await resp.json())
+  }, [apiUrl, applySession])
+
+  const signup = useCallback(async (emailArg, password, inviteToken) => {
+    const resp = await fetch(`${apiUrl}/auth/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: emailArg, password, invite_token: inviteToken || undefined }),
+    })
+    if (!resp.ok) {
+      const msg = await resp.json().catch(() => ({}))
+      // FastAPI validation errors arrive as an array under detail.
+      const detail = Array.isArray(msg.detail) ? msg.detail.map(d => d.msg).join('; ') : msg.detail
+      throw new Error(detail || 'Signup failed')
+    }
+    applySession(await resp.json())
+  }, [apiUrl, applySession])
+
+  const logout = useCallback(async () => {
+    if (refreshToken) {
+      try {
+        await fetch(`${apiUrl}/auth/logout`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        })
+      } catch { /* best effort — clear locally regardless */ }
+    }
+    clearSession()
+  }, [apiUrl, refreshToken, clearSession])
 
   // Bootstrap the calling identity from the server: GET /whoami returns the
   // account the server resolved (which we adopt) and the deployment mode (which
@@ -122,12 +243,29 @@ export function AppProvider({ children }) {
       const resp = await authFetch(`${apiUrl}/whoami`)
       if (!resp.ok) return
       const data = await resp.json()
-      if (data.mode) setMode(data.mode)
-      if (data.account_id && data.account_id !== accountId) setAccountId(data.account_id)
+      if (data.mode) { setMode(data.mode); persist('cogbase.mode', data.mode) }
+      if (data.mode === 'saas') {
+        // Server is authoritative: adopt the resolved identity, or — when the
+        // token is absent/invalid (no account_id) — clear the local session so
+        // the login gate takes over.
+        if (data.account_id) {
+          setAccountId(data.account_id)
+          persist('cogbase.email', data.email || '')
+          persist('cogbase.role', data.role || '')
+          setEmailState(data.email || '')
+          setRoleState(data.role || '')
+        } else {
+          clearSession()
+        }
+      } else if (data.account_id && data.account_id !== accountId) {
+        setAccountId(data.account_id)
+      }
     } catch {
       /* no /whoami (old server) — keep dev defaults */
+    } finally {
+      setAuthChecked(true)
     }
-  }, [apiUrl, authFetch, accountId, setAccountId])
+  }, [apiUrl, authFetch, accountId, setAccountId, clearSession])
 
   // The account's namespaces, for the header switcher. The header drives the fetch
   // (on mount and whenever the account changes) so tab-level renders that don't
@@ -204,7 +342,9 @@ export function AppProvider({ children }) {
     currentApp, setCurrentApp,
     demoCatalog, setDemoCatalog,
     llmConfigured, setLlmConfigured, embConfigured, setEmbConfigured,
-  }), [apiUrl, accountId, mode, bootstrap, namespaceName, namespaces, namespacesLoaded, refreshNamespaces, ensureNamespace, apps, appsNs, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName])
+    // auth (saas mode)
+    accessToken, email, role, authChecked, login, signup, logout,
+  }), [apiUrl, accountId, mode, bootstrap, namespaceName, namespaces, namespacesLoaded, refreshNamespaces, ensureNamespace, apps, appsNs, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName, accessToken, email, role, authChecked, login, signup, logout])
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
 }

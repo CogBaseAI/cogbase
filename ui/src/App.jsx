@@ -13,6 +13,7 @@ import QueryTab from './components/tabs/QueryTab'
 import MemoryTab from './components/tabs/MemoryTab'
 import SkillsTab from './components/tabs/SkillsTab'
 import SettingsTab from './components/tabs/SettingsTab'
+import LoginScreen from './components/LoginScreen'
 import DocModal from './components/modals/DocModal'
 import ConfigModal from './components/modals/ConfigModal'
 import WfModal from './components/modals/WfModal'
@@ -22,7 +23,7 @@ import TaskProgressModal from './components/modals/TaskProgressModal'
 // in ./nav alongside the hash router that also consumes them.
 
 function Layout() {
-  const { apiUrl, setApiUrl, accountId, bootstrap, namespaceName, setNamespaceName, namespaces, namespacesLoaded, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp } = useApp()
+  const { apiUrl, setApiUrl, accountId, mode, email, logout, namespaceName, setNamespaceName, namespaces, namespacesLoaded, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp } = useApp()
   const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
   const [focus, setFocus] = useState(TAB_TIER['build'])   // which tier's sub-nav shows
@@ -45,10 +46,6 @@ function Layout() {
     setActiveTab(DEFAULT_TAB[tier])
     if (tier === 'application') refreshApps()   // keep the App switcher current
   }
-
-  // Resolve the calling account + deployment mode from the server on mount, so
-  // the UI adopts a server-authoritative account rather than sourcing one itself.
-  useEffect(() => { bootstrap() }, [bootstrap])
 
   // Reflect the resolved account in the browser tab title so multiple accounts
   // open side by side are distinguishable. The default account is unnamed context
@@ -177,6 +174,13 @@ function Layout() {
           <span>{currentApp || t('header.noApp')}</span>
           {currentApp && <span className="app-pill-ns">{namespaceName}</span>}
         </div>
+        {/* Signed-in user + sign-out, only in the authenticated (saas) mode. */}
+        {mode === 'saas' && (
+          <div className="user-row" title={email}>
+            {email && <span className="user-email">{email}</span>}
+            <button className="btn btn-sm" onClick={logout}>Sign out</button>
+          </div>
+        )}
         <div className="lang-row" title={t('header.language')}>
           <select className="lang-select" value={lang} onChange={e => setLang(e.target.value)} aria-label={t('header.language')}>
             {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
@@ -323,6 +327,25 @@ function Layout() {
   )
 }
 
+// Auth gate: resolves the deployment mode + identity from /whoami on mount, then
+// either shows the login screen (saas mode with no valid session) or the app. In
+// dev/single_tenant/demo modes there is no gate — the app renders straight away,
+// exactly as before. Bootstrap lives here (not in Layout) so it also runs while
+// unauthenticated, before Layout ever mounts.
+function AuthGate() {
+  const { mode, accessToken, bootstrap } = useApp()
+  useEffect(() => { bootstrap() }, [bootstrap])
+
+  // Only saas mode gates. mode is seeded from the last-known value (persisted in
+  // context) and confirmed by /whoami, so a returning saas visitor sees the login
+  // screen immediately rather than a flash of the app shell. dev/single_tenant/demo
+  // render the app straight through, exactly as before.
+  if (mode === 'saas' && !accessToken) {
+    return <LoginScreen />
+  }
+  return <Layout />
+}
+
 export default function App() {
-  return <I18nProvider><AppProvider><Layout /></AppProvider></I18nProvider>
+  return <I18nProvider><AppProvider><AuthGate /></AppProvider></I18nProvider>
 }
