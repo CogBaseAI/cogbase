@@ -41,7 +41,6 @@ const translations = {
     header: {
       apiLabel: 'API',
       apiPlaceholder: 'http://localhost:8000',
-      accountLabel: 'Account',
       namespaceLabel: 'Namespace',
       namespacePlaceholder: 'Search namespaces…',
       namespaceNoMatch: 'No matching namespaces',
@@ -492,7 +491,6 @@ const translations = {
     header: {
       apiLabel: 'API',
       apiPlaceholder: 'http://localhost:8000',
-      accountLabel: '账户',
       namespaceLabel: '命名空间',
       namespacePlaceholder: '搜索命名空间…',
       namespaceNoMatch: '无匹配的命名空间',

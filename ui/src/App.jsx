@@ -162,13 +162,6 @@ function Layout() {
           <label htmlFor="apiUrl">{t('header.apiLabel')}</label>
           <input id="apiUrl" type="text" value={apiUrl} onChange={e => setApiUrl(e.target.value.replace(/\/$/, ''))} placeholder={t('header.apiPlaceholder')} />
         </div>
-        {/* Read-only tenant context: the server-resolved account (via /whoami).
-            Muted for the default (dev/single-tenant) account, highlighted once a
-            real tenant is in play. */}
-        <div className={`acct-chip ${accountId && accountId !== 'default' ? 'on' : ''}`} title={t('header.accountLabel')}>
-          <span className="acct-chip-label">{t('header.accountLabel')}</span>
-          <span className="acct-chip-val">{accountId}</span>
-        </div>
         <div className={`app-pill ${currentApp ? 'on' : ''}`} title={currentApp ? t('header.appInNamespace', { namespace: namespaceName }) : undefined}>
           <span className="dot" />
           <span>{currentApp || t('header.noApp')}</span>

@@ -123,14 +123,15 @@ function mockWhoami({ account_id = 'default', mode = 'dev' } = {}) {
 }
 
 describe('Layout — account bootstrap (/whoami)', () => {
-  it('adopts the server-resolved account and shows it read-only in the top bar', async () => {
+  it('adopts the server-resolved account without surfacing the id in the top bar', async () => {
     // saas mode now requires a session; seed one so the auth gate passes and the
-    // app (with its read-only account chip) renders.
+    // app renders. The account id is an opaque UUID, so it isn't shown in the header.
     window.localStorage.setItem('cogbase.accessToken', 'test-token')
     mockWhoami({ account_id: 'acct-saas', mode: 'saas' })
     render(<App />)
-    // The resolved account surfaces as a read-only chip in the header…
-    await waitFor(() => expect(screen.getByText('acct-saas')).toBeInTheDocument())
+    // Wait for the app to render, then confirm the account id is nowhere in the UI…
+    await waitFor(() => expect(screen.getByText('Sign out')).toBeInTheDocument())
+    expect(screen.queryByText('acct-saas')).toBeNull()
     // …and there is no editable account field anywhere — it's not a nav knob.
     expect(screen.queryByLabelText('Account')).toBeNull()
   })
