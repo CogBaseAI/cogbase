@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 import httpx
 
 API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000")
-NAMESPACE = os.environ.get("COGBASE_NAMESPACE", "default")
+NAMESPACE = os.environ.get("COGBASE_NAMESPACE", "demos")
 
 try:
     import readline as _readline
@@ -101,10 +101,27 @@ class GeneratorClient:
         """Compatibility wrapper around ``chat_stream``."""
         return await self.chat_stream(user_message)
 
+    async def _ensure_namespace(self) -> None:
+        """Create the deploy target namespace if it doesn't already exist.
+
+        There is no implicit default namespace — one must exist before it can
+        hold applications. Idempotent: 409 (already exists) counts as success.
+        """
+        resp = await self._http.post(
+            f"{self.api_base}/namespaces",
+            json={"name": self.namespace, "description": "CogBase example demos"},
+            timeout=10,
+        )
+        if resp.status_code not in (201, 409):
+            resp.raise_for_status()
+        if resp.status_code == 201:
+            print(f"Created namespace '{self.namespace}'.")
+
     async def deploy(self) -> dict:
         """Deploy the current config_yaml as a new application."""
         if not self.config_yaml:
             raise RuntimeError("No config to deploy — keep chatting until the LLM proposes one")
+        await self._ensure_namespace()
         resp = await self._http.post(
             f"{self.api_base}/namespaces/{self.namespace}/generate/deploy",
             json={"config_yaml": self.config_yaml},
@@ -197,6 +214,23 @@ class CogBaseClient:
         self.app_name = app_name
         # Drop the session handle; the next query opens a fresh session for the new app.
         self._session_id = None
+
+    async def ensure_namespace(self) -> None:
+        """Create the client's namespace if it doesn't already exist.
+
+        There is no implicit default namespace — one must exist before it can
+        hold applications. Idempotent: a 409 (already exists) is treated as
+        success, so this is safe to call on every startup.
+        """
+        resp = await self._http.post(
+            f"{self.api_base}/namespaces",
+            json={"name": self.namespace, "description": "CogBase example demos"},
+            timeout=10,
+        )
+        if resp.status_code not in (201, 409):
+            resp.raise_for_status()
+        if resp.status_code == 201:
+            print(f"Created namespace '{self.namespace}'.")
 
     async def list_apps(self) -> list[dict]:
         resp = await self._http.get(f"{self.api_base}/applications", timeout=10)
@@ -514,6 +548,7 @@ class CogBaseClient:
 
 async def cmd_startup(client: CogBaseClient, bundle: bytes) -> dict | None:
     """Get or create the app. Returns app_info, or None if creation failed."""
+    await client.ensure_namespace()
     app_info = await client.get_app()
     if app_info is None:
         print(f"Creating application '{client.app_name}'...")

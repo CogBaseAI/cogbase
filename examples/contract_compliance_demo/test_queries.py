@@ -45,7 +45,7 @@ import pytest
 
 _APP_NAME = "contract-compliance"
 _API_BASE = os.environ.get("COGBASE_API_URL", "http://localhost:8000").rstrip("/")
-_NAMESPACE = os.environ.get("COGBASE_NAMESPACE", "default")
+_NAMESPACE = os.environ.get("COGBASE_NAMESPACE", "demos")
 _APP_BASE = f"{_API_BASE}/namespaces/{_NAMESPACE}/applications/{_APP_NAME}"
 
 _CONTRACT_IDS = {"contract-001", "contract-002", "contract-003"}
