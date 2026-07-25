@@ -6,9 +6,10 @@ import os
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Header, HTTPException, Request, status
 
 from api.app_cache import AppCache
+from api.auth import InvalidToken, decode_token
 from api.system_resources import SystemResources
 from api.system_store import SystemStore
 from cogbase.skills.registry import SkillRegistry
@@ -35,7 +36,7 @@ DEFAULT_ACCOUNT_ID = "default"
 #:     account returned by /whoami as read-only.
 #: The value does not yet change server-side resolution — it is the seam that will,
 #: once an auth layer binds the account to an authenticated principal.
-DEPLOYMENT_MODE = os.environ.get("COGBASE_DEPLOYMENT_MODE", "dev")
+DEPLOYMENT_MODE = os.environ.get("COGBASE_DEPLOYMENT_MODE", "saas")
 
 
 def get_deployment_mode() -> str:
@@ -43,14 +44,51 @@ def get_deployment_mode() -> str:
     return DEPLOYMENT_MODE
 
 
+def principal_claims(authorization: str | None) -> dict | None:
+    """Return the verified access-token claims from an ``Authorization`` header.
+
+    Non-raising: returns ``None`` when the header is absent, not a Bearer token,
+    or the token fails verification/expiry. Callers that must reject an
+    unauthenticated request raise 401 themselves; ``whoami`` uses the ``None`` to
+    report "unauthenticated" without erroring.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        return decode_token(token)
+    except InvalidToken:
+        return None
+
+
 def get_account_id(
     x_account_id: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+    mode: str = Depends(get_deployment_mode),
 ) -> str:
-    """Resolve the calling tenant from the ``X-Account-Id`` header.
+    """Resolve the calling tenant, enforcing auth in a managed deployment.
 
-    Falls back to ``DEFAULT_ACCOUNT_ID`` so single-tenant callers keep working.
+    - ``saas`` mode: the account is server-authoritative — derived from a verified
+      Bearer access token (the ``X-Account-Id`` header is ignored). An absent or
+      invalid token is rejected with 401.
+    - any other mode (``dev`` and, for now, ``single_tenant`` / ``demo``): the
+      account is trust-on-declaration via the ``X-Account-Id`` header, falling back
+      to ``DEFAULT_ACCOUNT_ID``. This keeps local development header-only.
+
+    The mode comes through :func:`get_deployment_mode` (not the module constant
+    directly) so tests can override it via FastAPI dependency overrides.
+
     The account is the security boundary; the namespace is addressed in the path.
     """
+    if mode == "saas":
+        claims = principal_claims(authorization)
+        if claims is None or not claims.get("account_id"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return claims["account_id"]
     return x_account_id or DEFAULT_ACCOUNT_ID
 
 

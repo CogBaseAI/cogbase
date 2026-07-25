@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import pathlib
 import sys
 from contextlib import asynccontextmanager
@@ -27,6 +28,7 @@ from cogbase.stores import (
 from api.app_cache import AppCache, cache_key
 from api.routers.applications import router as applications_router
 from api.routers.applications import account_router as applications_account_router
+from api.routers.auth import router as auth_router
 from api.routers.app_generate import router as generate_router
 from api.routers.app_generate import deploy_router as generate_deploy_router
 from api.routers.namespaces import router as namespaces_router
@@ -240,9 +242,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Origins allowed to call the API from a browser. Defaults to "*" for local dev;
+# a real deployment sets COGBASE_ALLOWED_ORIGINS to a comma-separated allowlist
+# (e.g. "https://app.example.com"). Auth uses Bearer tokens, not cookies, so a
+# wildcard origin carries no credential-leak risk (allow_credentials stays off).
+_origins_env = os.environ.get("COGBASE_ALLOWED_ORIGINS", "*").strip()
+_allow_origins = (
+    ["*"] if _origins_env == "*"
+    else [o.strip() for o in _origins_env.split(",") if o.strip()]
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -250,11 +262,29 @@ app.add_middleware(
 app.include_router(namespaces_router)
 app.include_router(applications_router)
 app.include_router(applications_account_router)
+app.include_router(auth_router)
 app.include_router(generate_router)
 app.include_router(generate_deploy_router)
 app.include_router(skills_router)
 app.include_router(system_router)
 app.include_router(whoami_router)
+
+
+@app.get("/health", include_in_schema=False)
+async def health() -> dict:
+    """Liveness + readiness probe.
+
+    Reports ``ok`` once the system store is reachable; deployment health checks
+    and load balancers poll this. Kept dependency-light so it stays fast.
+    """
+    try:
+        store = app.state.system_store
+        await store.list_namespaces("__healthcheck__")  # cheap scoped read
+        return {"status": "ok"}
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("health check failed: %s", exc)
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="not ready")
 
 
 # For production services, common pattern is nginx in front:
