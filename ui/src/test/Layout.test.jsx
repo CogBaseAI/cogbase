@@ -149,6 +149,28 @@ describe('Layout — account bootstrap (/whoami)', () => {
     render(<App />)
     await waitFor(() => expect(document.title).toBe('CogBase'))
   })
+
+  it('hides the Settings tab in saas mode (providers come from the service config)', async () => {
+    window.localStorage.setItem('cogbase.accessToken', 'test-token')
+    mockWhoami({ account_id: 'acct-saas', mode: 'saas' })
+    const user = userEvent.setup()
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Sign out')).toBeInTheDocument())
+    await user.click(within(sidebar()).getByRole('button', { name: 'Account' }))
+    const nav = within(sidebar())
+    // The other account-tier items stay, but Settings is gone.
+    expect(nav.getByRole('button', { name: 'Namespaces' })).toBeInTheDocument()
+    expect(nav.getByRole('button', { name: 'Skills' })).toBeInTheDocument()
+    expect(nav.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the Settings tab in dev mode', async () => {
+    mockWhoami({ account_id: 'default', mode: 'dev' })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(within(sidebar()).getByRole('button', { name: 'Account' }))
+    expect(within(sidebar()).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+  })
 })
 
 // A ReadableStream-ish body for the Build chat SSE: emits one framed event per

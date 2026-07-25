@@ -47,6 +47,13 @@ function Layout() {
     if (tier === 'application') refreshApps()   // keep the App switcher current
   }
 
+  // In saas mode the Settings tab is hidden (providers come from the service
+  // config). A stale #settings hash could still land there, so bounce it to the
+  // account tier's default tab once mode resolves.
+  useEffect(() => {
+    if (mode === 'saas' && activeTab === 'settings') goTab(DEFAULT_TAB['account'])
+  }, [mode, activeTab])
+
   // Reflect the resolved account in the browser tab title so multiple accounts
   // open side by side are distinguishable. The default account is unnamed context
   // (dev/single-tenant), so it falls back to the bare brand.
@@ -136,10 +143,13 @@ function Layout() {
   // selected application. Each group header focuses its tier; only the focused
   // tier's items are shown, so out-of-scope actions stay hidden rather than empty
   // (docs/ui-navigation.md, milestone B).
+  // In saas mode the LLM/embedding providers come from the service config; an
+  // account can't configure its own, so the Settings tab is hidden.
+  const accountTabs = mode === 'saas' ? ['namespaces', 'skills'] : ['namespaces', 'skills', 'settings']
   const navGroups = [
     { tier: 'namespace',   label: t('nav.groupWorkspace'),   tabs: ['build', 'apps', 'demos'] },
     { tier: 'application', label: t('nav.groupApplication'), tabs: ['ingest', 'data', 'query', 'memory'] },
-    { tier: 'account',     label: t('nav.groupAccount'),     tabs: ['namespaces', 'skills', 'settings'] },
+    { tier: 'account',     label: t('nav.groupAccount'),     tabs: accountTabs },
   ]
 
   // The application tier needs a selected app; until one is picked, its panels are
