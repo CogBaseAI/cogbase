@@ -13,7 +13,7 @@ const APPS = [
 beforeEach(() => {
   // A working namespace must be selected for the list to load; the tab shows a
   // pick-a-namespace prompt otherwise (see the "no namespace" describe below).
-  window.localStorage.setItem('cogbase.namespaceName', 'default')
+  window.localStorage.setItem('cogbase.ns.default', 'default')
   vi.spyOn(global, 'fetch').mockResolvedValue({
     ok: true,
     json: async () => ({ applications: APPS }),
@@ -56,7 +56,7 @@ it('does not load when inactive', () => {
 })
 
 describe('no namespace selected', () => {
-  beforeEach(() => { window.localStorage.setItem('cogbase.namespaceName', '') })
+  beforeEach(() => { window.localStorage.setItem('cogbase.ns.default', '') })
 
   it('shows the pick-a-namespace prompt instead of fetching', async () => {
     renderWithCtx(<AppsTab active={true} />)

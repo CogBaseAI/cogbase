@@ -89,6 +89,44 @@ describe('AuthGate — saas gating', () => {
     await waitFor(() => expect(sidebar()).not.toBeNull())
     expect(onLoginScreen()).toBeNull()
   })
+
+  it('restores the account\'s last-used namespace + app on sign-in', async () => {
+    window.localStorage.setItem('cogbase.mode', 'saas')
+    // The account's remembered selection from a prior session, keyed by the account
+    // it belongs to. Signing in should land the user back on this namespace + app.
+    window.localStorage.setItem('cogbase.ns.acct-9', 'alpha')
+    window.localStorage.setItem('cogbase.app.acct-9', 'proj-x')
+
+    const login = vi.fn(() =>
+      Promise.resolve({ ok: true, status: 200,
+        json: async () => ({ access_token: 'new-token', account_id: 'acct-9', email: 'user@corp.com' }),
+        text: async () => '' }))
+    // A fetch router that reports the remembered namespace + app as real, so the
+    // App.jsx reconciliation keeps the restored selection rather than dropping it.
+    vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
+      const u = String(url)
+      const ok = (body) => Promise.resolve({ ok: true, status: 200, json: async () => body, text: async () => '' })
+      if (u.endsWith('/whoami')) return ok({ mode: 'saas', account_id: 'acct-9', email: 'user@corp.com' })
+      if (u.endsWith('/auth/login')) return login(opts)
+      if (u.endsWith('/namespaces')) return ok({ namespaces: [{ name: 'alpha' }] })
+      if (u.endsWith('/namespaces/alpha/applications')) return ok({ applications: [{ name: 'proj-x' }] })
+      return ok({ applications: [], namespaces: [], skills: [] })
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await waitFor(() => expect(onLoginScreen()).toBeInTheDocument())
+
+    await user.type(screen.getByLabelText('Email'), 'user@corp.com')
+    await user.type(screen.getByLabelText('Password'), 'hunter2!!')
+    await user.click(document.querySelector('button.btn-primary'))
+
+    // Once signed in, the header's app pill reflects the restored (namespace, app)
+    // pair — proof the account's last-used selection was rehydrated on login.
+    await waitFor(() => expect(sidebar()).not.toBeNull())
+    const pill = document.querySelector('.app-pill.on')
+    await waitFor(() => expect(pill?.textContent).toContain('proj-x'))
+    expect(pill.querySelector('.app-pill-ns')?.textContent).toBe('alpha')
+  })
 })
 
 describe('LoginScreen — form behavior', () => {

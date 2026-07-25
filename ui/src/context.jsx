@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useMemo } from 'react'
+import React, { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect } from 'react'
 
 const AppCtx = createContext(null)
 
@@ -32,6 +32,15 @@ function persist(key, value) {
   }
 }
 
+// The remembered "last used" namespace + app are keyed by account. Namespace and
+// app names are only unique within an account, so on a browser shared by several
+// accounts (saas, multiple logins) one account's selection must never seed
+// another's — that would land a returning user in a same-named-but-wrong workspace.
+// So we don't persist a single global selection; we persist one per account and
+// restore it whenever the active account resolves (login / account switch).
+const nsKey = (account) => `cogbase.ns.${account}`
+const appKey = (account) => `cogbase.app.${account}`
+
 export function AppProvider({ children }) {
   // Default to the origin the UI was served from so it works whether run
   // locally or on a remote node. When running the vite dev server (port 5173),
@@ -41,13 +50,19 @@ export function AppProvider({ children }) {
       ? window.location.origin
       : 'http://localhost:8000'
   const [apiUrl, setApiUrl] = useState(defaultApiUrl)
-  const [accountId, setAccountIdState] = useState(() => persisted('cogbase.accountId', DEFAULT_ACCOUNT_ID))
+  const initialAccount = persisted('cogbase.accountId', DEFAULT_ACCOUNT_ID)
+  const [accountId, setAccountIdState] = useState(initialAccount)
+  // The persist helpers below write under the *current* account's key. Hold the
+  // account in a ref so those callbacks stay identity-stable (they don't need to
+  // re-create when the account changes) while still targeting the right key.
+  const accountIdRef = useRef(accountId)
+  accountIdRef.current = accountId
   // The API addresses namespaces by their user-facing *name* (the {namespace} URL
   // path segment); the internal namespace_id is a server-side concept the client
   // never sends (api/dependencies.py resolve_namespace_id maps name -> id). So this
   // holds a name, not an id. Empty string means "no working namespace" (a fresh
   // account with none yet); App.jsx reconciles it against the live list.
-  const [namespaceName, setNamespaceNameState] = useState(() => persisted('cogbase.namespaceName', ''))
+  const [namespaceName, setNamespaceNameState] = useState(() => persisted(nsKey(initialAccount), ''))
   // Whether the account's namespace list has been fetched at least once, so the UI
   // can tell "loaded, none exist" (show the create-a-namespace prompt) from "not
   // loaded yet" (show nothing) instead of flashing an empty state on first paint.
@@ -57,7 +72,7 @@ export function AppProvider({ children }) {
   // B step 4) selecting an app snaps the working namespace to the app's own, so the
   // app always lives in `namespaceName`; there is no longer a separate "app
   // namespace" to track. currentApp is the bare name for display and addressing.
-  const [currentApp, setCurrentAppState] = useState('')
+  const [currentApp, setCurrentAppState] = useState(() => persisted(appKey(initialAccount), ''))
   const [namespaces, setNamespaces] = useState([])
   const [apps, setApps] = useState([])   // apps in the selected namespace, for the App switcher
   const [appsNs, setAppsNs] = useState(null)  // which namespace `apps` was loaded for
@@ -92,7 +107,7 @@ export function AppProvider({ children }) {
     // Empty is a valid state (no working namespace on a fresh account); don't
     // coerce it to a phantom default.
     const next = (v || '').trim()
-    persist('cogbase.namespaceName', next)
+    persist(nsKey(accountIdRef.current), next)
     setNamespaceNameState(next)
   }, [])
 
@@ -139,9 +154,27 @@ export function AppProvider({ children }) {
   // (e.g. a fresh deploy into the current namespace) keep the working namespace.
   // Clearing the selection (empty name) leaves the namespace untouched.
   const setCurrentApp = useCallback((name, namespace) => {
-    setCurrentAppState(name || '')
-    if (name && namespace) setNamespaceName(namespace)
+    const next = name || ''
+    persist(appKey(accountIdRef.current), next)
+    setCurrentAppState(next)
+    if (next && namespace) setNamespaceName(namespace)
   }, [setNamespaceName])
+
+  // Restore the account's last-used namespace + app whenever the active account
+  // resolves to a *different* one — the login/signup handoff, an account switch, or
+  // /whoami adopting the server-resolved account. This is what lands a returning
+  // user back where they left off. Uses the raw state setters (not the persisting
+  // wrappers) so restoring doesn't rewrite what it just read. The initial mount is
+  // skipped: state is already seeded from `initialAccount` above, and App.jsx's hash
+  // router may deep-link a different view on first paint. App.jsx then reconciles the
+  // restored values against the account's live namespace/app lists, dropping any that
+  // no longer exist.
+  const acctMountedRef = useRef(false)
+  useEffect(() => {
+    if (!acctMountedRef.current) { acctMountedRef.current = true; return }
+    setNamespaceNameState(persisted(nsKey(accountId), ''))
+    setCurrentAppState(persisted(appKey(accountId), ''))
+  }, [accountId])
 
   // Exchange the refresh token for a fresh access token. Returns the new token, or
   // '' when refresh fails (expired/revoked) — in which case the session is cleared

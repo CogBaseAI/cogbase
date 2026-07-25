@@ -44,7 +44,7 @@ function installFetchRouter() {
 }
 
 beforeEach(() => {
-  window.localStorage.setItem('cogbase.namespaceName', 'default')
+  window.localStorage.setItem('cogbase.ns.default', 'default')
 })
 
 afterEach(() => {
@@ -73,7 +73,7 @@ it('refreshes the namespace app list after deploying a demo', async () => {
 })
 
 it('refuses to deploy with no namespace selected', async () => {
-  window.localStorage.setItem('cogbase.namespaceName', '')
+  window.localStorage.setItem('cogbase.ns.default', '')
   installFetchRouter()
   const onSwitchTab = vi.fn()
   const user = userEvent.setup()
