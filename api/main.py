@@ -16,6 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from cogbase.config.config import AppConfig
+from api.auth import require_configured_jwt_secret, set_jwt_secret
+from api.dependencies import set_deployment_mode
 from api.factory import build_app
 from cogbase.embeddings import build_embedding
 from cogbase.llms import build_llm
@@ -66,7 +68,15 @@ async def _close_store(store: object) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Load system config from file / env vars / defaults.
     system_cfg = SystemConfig.load()
-    logger.info("system_config loaded system_db=%s", system_cfg.system_db)
+    logger.info("system_config loaded system_db=%s mode=%s",
+                system_cfg.system_db, system_cfg.deployment_mode)
+
+    # Apply the operator-declared mode and signing secret, then refuse to boot a
+    # managed deployment on the forgeable dev secret — in saas mode the access
+    # token is the tenant boundary.
+    set_deployment_mode(system_cfg.deployment_mode)
+    set_jwt_secret(system_cfg.jwt_secret)
+    require_configured_jwt_secret(system_cfg.deployment_mode)
 
     system_db_store = build_structured_store(system_cfg.system_db)
     system_store = SystemStore(store=system_db_store)

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel
@@ -54,11 +54,24 @@ class SystemConfig(BaseModel):
         log_store:        Default append-only log store backing the episodic
                           memory NDJSON log.  When ``None``, episodic logging
                           runs without a durable backend.
+        deployment_mode:  How this instance resolves the calling account.
+                          ``saas`` is server-authoritative — the account comes
+                          from a verified access token and a real ``jwt_secret``
+                          is mandatory (enforced at startup).  ``dev`` (the
+                          default) / ``single_tenant`` are trust-on-declaration
+                          via the ``X-Account-Id`` header. Production configs set
+                          ``saas`` explicitly.
+        jwt_secret:       HMAC secret used to sign and verify access tokens. Must
+                          be identical on every node. Required in ``saas`` mode
+                          (enforced at startup); when ``None`` an insecure built-in
+                          development secret is used with a warning.
     """
 
     system_db: StructuredStoreConfig = StructuredStoreConfig(
         type="sqlite", path="./cogbase_system.db"
     )
+    deployment_mode: Literal["dev", "saas", "single_tenant"] = "dev"
+    jwt_secret: str | None = None
     structured_store: StructuredStoreConfig | None = None
     vector_store: VectorStoreConfig | None = None
     document_store: DocumentStoreConfig | None = None

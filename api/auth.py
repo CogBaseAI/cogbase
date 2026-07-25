@@ -13,8 +13,8 @@ library so the security boundary carries no third-party runtime dependency:
   usable token.
 
 The account is derived from the *verified* access-token claims, replacing the
-trust-on-declaration ``X-Account-Id`` header once ``COGBASE_DEPLOYMENT_MODE`` is
-a managed mode (see ``api/dependencies.py``).
+trust-on-declaration ``X-Account-Id`` header once ``SystemConfig.deployment_mode``
+is a managed mode (see ``api/dependencies.py``).
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 import secrets
 import time
 
@@ -47,29 +46,68 @@ _SCRYPT_MAXMEM = 128 * _SCRYPT_N * _SCRYPT_R * 2  # headroom over the ~16 MiB ne
 _DEV_SECRET = "cogbase-dev-insecure-secret-change-me"
 _warned_dev_secret = False
 
+#: The operator-set HMAC signing secret, applied at startup from
+#: ``SystemConfig.jwt_secret`` via :func:`set_jwt_secret`. ``None`` means none was
+#: configured, and :func:`get_jwt_secret` falls back to the forgeable dev secret.
+_jwt_secret: str | None = None
+
 
 class InvalidToken(Exception):
     """Raised when an access token is malformed, tampered with, or expired."""
 
 
+def set_jwt_secret(secret: str | None) -> None:
+    """Apply the signing secret resolved from system config (called at startup)."""
+    global _jwt_secret
+    _jwt_secret = secret or None
+
+
+def jwt_secret_is_configured() -> bool:
+    """Whether an operator-set signing secret is present.
+
+    ``False`` means :func:`get_jwt_secret` would fall back to the built-in dev
+    secret. Startup uses this to refuse to boot a managed deployment on the
+    forgeable dev secret (see :func:`require_configured_jwt_secret`).
+    """
+    return _jwt_secret is not None
+
+
+def require_configured_jwt_secret(mode: str) -> None:
+    """Fail fast if a managed deployment lacks a real signing secret.
+
+    In ``saas`` mode the calling account is derived from a token this server
+    signs with the configured secret. Falling back to the shared, public
+    ``_DEV_SECRET`` would let anyone forge a token for any account, so a managed
+    deployment must not start without an operator-set secret. Dev / single-tenant
+    modes are trust-on-declaration and unaffected.
+    """
+    if mode == "saas" and not jwt_secret_is_configured():
+        raise RuntimeError(
+            "jwt_secret must be set in saas mode: access tokens are the tenant "
+            "boundary and the built-in development secret is public and forgeable. "
+            "Set jwt_secret in the system config (identically on every node) before "
+            "starting."
+        )
+
+
 def get_jwt_secret() -> str:
-    """Return the HMAC signing secret from ``COGBASE_JWT_SECRET``.
+    """Return the HMAC signing secret configured via ``SystemConfig.jwt_secret``.
 
     Falls back to a fixed, insecure development secret (with a warning) so local
-    dev and tests work out of the box. Production deployments MUST set the env
-    var — the deploy runbook does.
+    dev and tests work out of the box. Managed deployments MUST set ``jwt_secret``
+    in the system config — :func:`require_configured_jwt_secret` enforces this at
+    startup.
     """
     global _warned_dev_secret
-    secret = os.environ.get("COGBASE_JWT_SECRET")
-    if not secret:
+    if _jwt_secret is None:
         if not _warned_dev_secret:
             logger.warning(
-                "COGBASE_JWT_SECRET is not set — using an insecure development secret. "
-                "Set COGBASE_JWT_SECRET in any real deployment."
+                "jwt_secret is not set — using an insecure development secret. "
+                "Set jwt_secret in the system config for any real deployment."
             )
             _warned_dev_secret = True
         return _DEV_SECRET
-    return secret
+    return _jwt_secret
 
 
 # ---------------------------------------------------------------------------

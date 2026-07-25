@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -26,22 +25,38 @@ from cogbase.skills.store import SkillBundleStore
 #: account and never address a namespace.
 DEFAULT_ACCOUNT_ID = "default"
 
-#: How this instance resolves the calling account, set by the operator at deploy
-#: time via ``COGBASE_DEPLOYMENT_MODE``. It is advisory metadata the UI reads from
+#: How this instance resolves the calling account, set by the operator through
+#: ``SystemConfig.deployment_mode`` (the system YAML) and applied at startup via
+#: :func:`set_deployment_mode`. Also advisory metadata the UI reads from
 #: ``GET /whoami`` to decide whether to expose an account switcher:
-#:   - ``dev`` (default): account is trust-on-declaration via the X-Account-Id
-#:     header, so the UI keeps an editable account field.
-#:   - ``saas`` / ``single_tenant`` / ``demo``: the account is server-authoritative
-#:     (derived from the host/session or fixed at deploy), so the UI treats the
-#:     account returned by /whoami as read-only.
-#: The value does not yet change server-side resolution — it is the seam that will,
-#: once an auth layer binds the account to an authenticated principal.
-DEPLOYMENT_MODE = os.environ.get("COGBASE_DEPLOYMENT_MODE", "saas")
+#:   - ``dev``: account is trust-on-declaration via the X-Account-Id header, so
+#:     the UI keeps an editable account field.
+#:   - ``saas`` / ``single_tenant``: the account is server-authoritative
+#:     (derived from a verified access token), so the UI treats the account
+#:     returned by /whoami as read-only.
+#:
+#: This module-level value is only the *pre-startup* fallback — the value before
+#: ``lifespan`` has run, i.e. bare-ASGI unit tests that drive the app without
+#: booting it. It is intentionally the permissive ``dev`` so those paths need no
+#: token. Any real deployment boots through ``lifespan``, which calls
+#: :func:`set_deployment_mode` with the config value (fail-secure ``saas`` when
+#: the YAML omits the key).
+_deployment_mode = "dev"
+
+
+def set_deployment_mode(mode: str) -> None:
+    """Apply the operator-declared deployment mode resolved from system config.
+
+    Called once from ``lifespan`` at startup. Overrides the pre-startup ``dev``
+    fallback with the configured mode for the lifetime of the process.
+    """
+    global _deployment_mode
+    _deployment_mode = mode
 
 
 def get_deployment_mode() -> str:
-    """Return the operator-declared deployment mode (see :data:`DEPLOYMENT_MODE`)."""
-    return DEPLOYMENT_MODE
+    """Return the active deployment mode (see :data:`_deployment_mode`)."""
+    return _deployment_mode
 
 
 def principal_claims(authorization: str | None) -> dict | None:
@@ -71,7 +86,7 @@ def get_account_id(
     - ``saas`` mode: the account is server-authoritative — derived from a verified
       Bearer access token (the ``X-Account-Id`` header is ignored). An absent or
       invalid token is rejected with 401.
-    - any other mode (``dev`` and, for now, ``single_tenant`` / ``demo``): the
+    - any other mode (``dev`` and, for now, ``single_tenant``): the
       account is trust-on-declaration via the ``X-Account-Id`` header, falling back
       to ``DEFAULT_ACCOUNT_ID``. This keeps local development header-only.
 
