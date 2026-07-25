@@ -32,7 +32,13 @@ export default function AppsTab({ active, onSwitchTab }) {
 
   // Reload when shown and whenever the working namespace changes — the list is
   // namespace-scoped, so a namespace switch must re-fetch (appBase tracks it).
-  useEffect(() => { if (active) loadApps() }, [active, namespaceName])
+  // With no namespace selected, appBase points at a malformed /namespaces//…
+  // path that 404s, so skip the fetch and show the pick-a-namespace prompt.
+  useEffect(() => {
+    if (!active) return
+    if (namespaceName) loadApps()
+    else { setApps([]); setError(null) }
+  }, [active, namespaceName])
 
   async function viewApp(a) {
     // The list response already carries the full resolved config, but fetch
@@ -67,10 +73,11 @@ export default function AppsTab({ active, onSwitchTab }) {
         <h2>{t('apps.title')}</h2>
         <button className="btn btn-ghost" onClick={loadApps}>{t('common.refresh')}</button>
       </div>
-      {!apps && !error && <div className="empty"><p><span className="spinning">⟳</span> {t('common.loading')}</p></div>}
-      {error && <div className="empty"><p style={{ color: 'var(--red)' }}>{t('common.failed', { msg: error })}</p></div>}
-      {apps && apps.length === 0 && <div className="empty"><div className="ei">📭</div><p>{t('apps.empty')}</p></div>}
-      {apps && apps.length > 0 && (
+      {!namespaceName && <div className="empty"><div className="ei">🗂️</div><p>{t('nav.nsSelectPrompt')}</p></div>}
+      {namespaceName && !apps && !error && <div className="empty"><p><span className="spinning">⟳</span> {t('common.loading')}</p></div>}
+      {namespaceName && error && <div className="empty"><p style={{ color: 'var(--red)' }}>{t('common.failed', { msg: error })}</p></div>}
+      {namespaceName && apps && apps.length === 0 && <div className="empty"><div className="ei">📭</div><p>{t('apps.empty')}</p></div>}
+      {namespaceName && apps && apps.length > 0 && (
         <DataTable
           rows={apps}
           rowKey={a => a.name}

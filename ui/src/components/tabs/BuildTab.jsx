@@ -152,11 +152,15 @@ export default function BuildTab({ active }) {
         setMsgs(prev => [...prev, { role: 'sys', text: t('build.deployFailed', { msg: data.detail || resp.statusText }) }])
       } else if (data.status === 'active') {
         setMsgs(prev => [...prev, { role: 'sys', text: t('build.deployLive', { name: data.name }) }])
+        // A same-namespace deploy leaves nsBase unchanged, so nothing auto-refreshes
+        // the App switcher's list. Pull it in *before* selecting the app: otherwise
+        // App.jsx's reconcile effect sees a selection that's absent from the stale
+        // list (appsNs still matches the namespace) and clears it. A cross-namespace
+        // deploy instead switches namespaceName below, which App.jsx reacts to by
+        // refreshing, and its reconcile stays guarded while appsNs lags.
+        if (ns === namespaceName) await refreshApps()
         // Selecting the deployed app snaps the working namespace to its target.
         setCurrentApp(data.name, ns)
-        // A same-namespace deploy leaves nsBase unchanged, so the App switcher's
-        // list won't auto-refresh — pull it in so the new app shows up there.
-        refreshApps()
       } else {
         setMsgs(prev => [...prev, { role: 'sys', text: t('build.deployStatus', { status: data.status + (data.error ? ' — ' + data.error : '') }) }])
       }

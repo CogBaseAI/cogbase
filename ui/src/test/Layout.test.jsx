@@ -150,6 +150,57 @@ describe('Layout — account bootstrap (/whoami)', () => {
   })
 })
 
+// A ReadableStream-ish body for the Build chat SSE: emits one framed event per
+// chunk so streamSSE() parses it exactly as it would a real /generate/chat/stream.
+function sseBody(events) {
+  const enc = new TextEncoder()
+  const chunks = events.map(e => enc.encode(`data: ${JSON.stringify(e)}\n`))
+  let i = 0
+  return { getReader: () => ({ read: async () => (i < chunks.length ? { done: false, value: chunks[i++] } : { done: true }) }) }
+}
+
+describe('Layout — deploy from Build refreshes the App switcher', () => {
+  it('keeps the just-deployed app selected instead of letting the reconcile effect clear it', async () => {
+    // The namespace-scoped app list is empty until the deploy lands, then includes
+    // the new app — the exact setup where App.jsx's reconcile effect would clear a
+    // freshly-selected app if BuildTab selected it before refreshing the list.
+    let deployed = false
+    global.fetch.mockImplementation((url, opts = {}) => {
+      const u = String(url)
+      const method = (opts.method || 'GET').toUpperCase()
+      let body
+      if (u.endsWith('/system/config')) body = { llm: { provider: 'openai' }, embedding: { provider: 'openai' } }
+      else if (u.endsWith('/generate/chat/stream')) return Promise.resolve({ ok: true, body: sseBody([{ result: { config_yaml: 'name: contracts' } }]) })
+      else if (u.endsWith('/generate/deploy')) { deployed = true; body = { name: 'contracts', status: 'active' } }
+      else if (u.endsWith('/namespaces') && method === 'POST') body = {}
+      else if (u.endsWith('/namespaces')) body = { namespaces: [{ name: 'default' }] }
+      else if (u.includes('/namespaces/') && u.endsWith('/applications')) body = { applications: deployed ? [{ name: 'contracts', status: 'active' }] : [] }
+      else body = { applications: [] }
+      return Promise.resolve({ ok: true, status: method === 'POST' ? 201 : 200, json: async () => body, text: async () => '' })
+    })
+
+    const user = userEvent.setup()
+    render(<App />)
+    // Working namespace reconciles to the account's sole namespace.
+    await waitFor(() => expect(within(sidebar()).getByLabelText('Namespace').value).toBe('default'))
+
+    // Drive the Build chat to produce a deployable config, then deploy.
+    const buildInput = screen.getByPlaceholderText('Describe your app…')
+    await user.type(buildInput, 'a contracts app')
+    // QueryTab is also mounted, so scope Send to the Build chat input.
+    await user.click(within(buildInput.closest('.chat-input')).getByRole('button', { name: 'Send' }))
+    const deploy = await screen.findByRole('button', { name: '▲ Deploy App' })
+    await waitFor(() => expect(deploy).toBeEnabled())
+    await user.click(deploy)
+
+    // Focus the application tier; the deployed app must be the selected option —
+    // the reconcile effect must not have wiped it because the list was refreshed first.
+    await user.click(within(sidebar()).getByRole('button', { name: 'Application' }))
+    await waitFor(() => expect(within(sidebar()).getByLabelText('App').value).toBe('contracts'))
+    expect(screen.queryByRole('button', { name: 'Go to Apps' })).not.toBeInTheDocument()
+  })
+})
+
 describe('Layout — hash routing', () => {
   it('mirrors the default view into the hash on mount', async () => {
     mockApi()

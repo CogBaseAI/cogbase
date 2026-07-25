@@ -70,6 +70,7 @@ const translations = {
       appTierEmptyCta: 'Go to Apps',
       nsNoneHint: 'No namespaces yet. Create one to deploy an app into it.',
       nsNoneCta: '+ Create namespace',
+      nsSelectPrompt: 'Select or create a namespace in the sidebar to see its apps.',
     },
     build: {
       intro: "Describe the app you want to build — documents, facts to extract, kinds of questions you'll ask. The AI will guide you through schema design and produce a deployable config.",
@@ -520,6 +521,7 @@ const translations = {
       appTierEmptyCta: '前往应用',
       nsNoneHint: '尚无命名空间。请先创建一个以部署应用。',
       nsNoneCta: '+ 创建命名空间',
+      nsSelectPrompt: '请在侧边栏选择或创建一个命名空间以查看其应用。',
     },
     build: {
       intro: '描述你想构建的应用 — 文档类型、需要提取的事实、你会提出的问题类型。AI 将引导你完成模式设计并生成可部署的配置。',
