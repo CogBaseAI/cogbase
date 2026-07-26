@@ -157,7 +157,7 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 .panel.active { display: flex; }
 
 /* ── Chat layout ── */
-.chat-layout { display: flex; flex: 1; overflow: hidden; }
+.chat-layout { display: flex; flex: 1; overflow: hidden; position: relative; }
 .chat-col { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
 
 /* ── Chat history sidebar ── */
@@ -261,10 +261,38 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 .msg.user .msg-body  { background: var(--accent); color: #fff; border-bottom-right-radius: 3px; }
 .msg.bot  .msg-body  { background: var(--bg3); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
 .msg.sys  .msg-body  { background: transparent; border: 1px solid var(--border); color: var(--muted); font-size: 12px; text-align: center; }
-/* An answer whose references can fill the pane; the selected one is accented. */
-.msg.selectable { cursor: pointer; }
-.msg.selectable:hover .msg-body { border-color: var(--accent); }
-.msg.ref-selected .msg-body { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+/* Per-answer Sources: an inline trigger under a bot turn that opens a floating
+   slide-over (below) rather than expanding in place. */
+.msg-sources { align-self: flex-start; }
+.msg-sources-toggle {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: none; border: none; cursor: pointer;
+  padding: 2px 2px; font-size: 11px; font-weight: 600;
+  color: var(--muted); border-radius: 6px;
+  transition: color .12s;
+}
+.msg-sources-toggle:hover { color: var(--accent); }
+.msg-sources.open .msg-sources-toggle { color: var(--accent); }
+.msg-sources-toggle .chevron { transition: transform .15s; }
+.msg-sources.open .msg-sources-toggle .chevron { transform: rotate(90deg); }
+
+/* Floating Sources panel: a right-anchored slide-over that overlays the chat
+   (and the docx panel) on demand, dismissable via ✕ / Esc / outside-click. */
+.sources-panel {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: 360px; max-width: 85%;
+  z-index: 20;
+  background: var(--bg2);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, .18);
+  display: flex; flex-direction: column;
+  animation: sources-slide-in .16s ease-out;
+}
+@keyframes sources-slide-in {
+  from { transform: translateX(100%); opacity: .4; }
+  to   { transform: translateX(0); opacity: 1; }
+}
 
 /* ── Markdown-rendered bot answers ── */
 .md { white-space: normal; }

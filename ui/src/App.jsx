@@ -230,7 +230,7 @@ function Layout() {
                   <div className="side-switch nested">
                     <label htmlFor="appSelect">{t('nav.appLabel')}</label>
                     <select id="appSelect" value={appSelectValue} onChange={e => setCurrentApp(e.target.value)}>
-                      <option value="">{t('nav.appPlaceholder')}</option>
+                      <option value="" disabled hidden>{t('nav.appPlaceholder')}</option>
                       {apps.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
                     </select>
                     {apps.length === 0 && <div className="side-hint">{t('nav.appNoneInNs')}</div>}

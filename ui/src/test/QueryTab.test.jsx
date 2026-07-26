@@ -340,7 +340,7 @@ it('opens a past chat, loads its transcript, and resumes it on the next question
   expect(startSessionCalls(fetchSpy)).toHaveLength(0)
 })
 
-it('restores the references pane from a past chat transcript', async () => {
+it('surfaces a past answer’s sources in the floating panel', async () => {
   mockFetch({
     sessions: SESSIONS_FIXTURE,
     transcript: { messages: [
@@ -364,12 +364,16 @@ it('restores the references pane from a past chat transcript', async () => {
   await user.click(screen.getByText('What is the term?'))
   await waitFor(() => expect(screen.getByText('old answer')).toBeInTheDocument())
 
-  // The assistant turn's references are surfaced in the pane, not left empty.
+  // Closed by default (2 cited items: one record + one chunk); clicking the
+  // trigger opens the floating panel with that turn's evidence.
+  expect(screen.queryByText('net 30 payment terms')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Sources (2)' }))
+  expect(screen.getByRole('dialog', { name: 'Sources (2)' })).toBeInTheDocument()
   expect(screen.getByText('net 30 payment terms')).toBeInTheDocument()
   expect(screen.getByText(/NDA/)).toBeInTheDocument()
 })
 
-it('switches the references pane to the clicked answer in a multi-turn chat', async () => {
+it('swaps the floating panel to the clicked answer in a multi-turn chat', async () => {
   mockFetch({
     sessions: SESSIONS_FIXTURE,
     transcript: { messages: [
@@ -399,15 +403,24 @@ it('switches the references pane to the clicked answer in a multi-turn chat', as
   renderQueryTab()
   await waitFor(() => expect(screen.getByText('What is the term?')).toBeInTheDocument())
   await user.click(screen.getByText('What is the term?'))
+  await waitFor(() => expect(screen.getByText('second answer')).toBeInTheDocument())
 
-  // Loads defaulting to the latest answer's references.
-  await waitFor(() => expect(screen.getByText('evidence for the second answer')).toBeInTheDocument())
-  expect(screen.queryByText('evidence for the first answer')).not.toBeInTheDocument()
+  // Both answers carry a "Sources (1)" trigger; no panel is open yet.
+  const toggles = screen.getAllByRole('button', { name: 'Sources (1)' })
+  expect(toggles).toHaveLength(2)
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
-  // Clicking the earlier answer re-points the pane at that turn's evidence.
-  await user.click(screen.getByText('first answer'))
-  await waitFor(() => expect(screen.getByText('evidence for the first answer')).toBeInTheDocument())
+  // Opening one shows only its own turn's evidence.
+  await user.click(toggles[0])
+  expect(screen.getByText('evidence for the first answer')).toBeInTheDocument()
   expect(screen.queryByText('evidence for the second answer')).not.toBeInTheDocument()
+
+  // The panel is a single overlay: opening the other swaps its contents rather
+  // than stacking a second panel.
+  await user.click(toggles[1])
+  expect(screen.getByText('evidence for the second answer')).toBeInTheDocument()
+  expect(screen.queryByText('evidence for the first answer')).not.toBeInTheDocument()
+  expect(screen.getAllByRole('dialog')).toHaveLength(1)
 })
 
 // DELETE /sessions/{id} calls only.
@@ -494,43 +507,96 @@ it('resets the chat view and drops the handle when deleting the active session',
   expect(startSessionCalls(fetchSpy)).toHaveLength(2)
 })
 
-it('hides the references pane on a fresh chat and shows it after the first exchange', async () => {
-  mockFetch()
+// An answer that cites one passage, so its inline Sources drawer renders.
+const CITED_ANSWER = {
+  result: {
+    answer: 'Hello there',
+    references: { structured_records: [], chunks: [{ chunk_id: 'c-1', doc_id: 'd-1', text: 'the cited passage' }] },
+  },
+}
+
+it('shows no sources drawer until an answer arrives with citations', async () => {
+  mockFetch({ streamEvents: [CITED_ANSWER] })
   const user = userEvent.setup()
   renderQueryTab()
   await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
 
-  // No turns yet: the pane (and its collapse toggle) is not rendered.
-  expect(screen.queryByText('References')).not.toBeInTheDocument()
-  expect(screen.queryByRole('button', { name: 'Hide references panel' })).not.toBeInTheDocument()
+  // No turns yet: no drawer anywhere.
+  expect(screen.queryByRole('button', { name: /Sources/ })).not.toBeInTheDocument()
 
   await ask(user, 'What is the term?')
   await waitFor(() => expect(screen.getByText('Hello there')).toBeInTheDocument())
 
-  // After the exchange the pane appears with its collapse toggle.
-  expect(screen.getByText('References')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Hide references panel' })).toBeInTheDocument()
+  // After the exchange the answer carries a collapsed Sources drawer.
+  expect(screen.getByRole('button', { name: 'Sources (1)' })).toBeInTheDocument()
 })
 
-it('collapses the references pane to a rail and restores it', async () => {
+it('does not render a sources drawer for an answer with no citations', async () => {
+  // The default stream answer cites nothing (empty chunks + records).
   mockFetch()
   const user = userEvent.setup()
   renderQueryTab()
   await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
   await ask(user, 'What is the term?')
-  await waitFor(() => expect(screen.getByText('References')).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByText('Hello there')).toBeInTheDocument())
 
-  // Collapse: the pane header is gone, but the reopen toggle remains (minimized,
-  // not fully hidden).
-  await user.click(screen.getByRole('button', { name: 'Hide references panel' }))
-  expect(screen.queryByText('References')).not.toBeInTheDocument()
-  const reopen = screen.getByRole('button', { name: 'Show references panel' })
-  expect(reopen).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /Sources/ })).not.toBeInTheDocument()
+})
 
-  // Restore from the rail.
-  await user.click(reopen)
-  expect(screen.getByText('References')).toBeInTheDocument()
-  expect(screen.queryByRole('button', { name: 'Show references panel' })).not.toBeInTheDocument()
+// Open the floating Sources panel for a freshly streamed, cited answer.
+async function openSourcesPanel(user) {
+  await ask(user, 'What is the term?')
+  const toggle = await screen.findByRole('button', { name: 'Sources (1)' })
+  expect(screen.queryByText('the cited passage')).not.toBeInTheDocument()
+  await user.click(toggle)
+  expect(screen.getByText('the cited passage')).toBeInTheDocument()
+  return toggle
+}
+
+it('opens the floating panel and closes it by re-clicking the trigger', async () => {
+  mockFetch({ streamEvents: [CITED_ANSWER] })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+  const toggle = await openSourcesPanel(user)
+
+  // Re-clicking the same trigger closes the panel.
+  await user.click(toggle)
+  expect(screen.queryByText('the cited passage')).not.toBeInTheDocument()
+})
+
+it('closes the floating sources panel from its ✕ button', async () => {
+  mockFetch({ streamEvents: [CITED_ANSWER] })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+  await openSourcesPanel(user)
+
+  await user.click(screen.getByRole('button', { name: 'Close' }))
+  expect(screen.queryByText('the cited passage')).not.toBeInTheDocument()
+})
+
+it('closes the floating sources panel on Escape', async () => {
+  mockFetch({ streamEvents: [CITED_ANSWER] })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+  await openSourcesPanel(user)
+
+  await user.keyboard('{Escape}')
+  expect(screen.queryByText('the cited passage')).not.toBeInTheDocument()
+})
+
+it('closes the floating sources panel on an outside click', async () => {
+  mockFetch({ streamEvents: [CITED_ANSWER] })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+  await openSourcesPanel(user)
+
+  // A mousedown outside the panel dismisses it.
+  await user.click(document.body)
+  expect(screen.queryByText('the cited passage')).not.toBeInTheDocument()
 })
 
 it('collapses the chats sidebar to a rail and restores it', async () => {
@@ -600,22 +666,6 @@ it('shows no document panel when the answer has no .docx artifact', async () => 
   expect(screen.queryByRole('button', { name: 'Show document panel' })).not.toBeInTheDocument()
 })
 
-it('auto-collapses the references pane when a document artifact appears', async () => {
-  mockFetch({ streamEvents: [DOCX_ANSWER] })
-  const user = userEvent.setup()
-  renderQueryTab()
-  await ask(user, 'redline the accepted changes')
-  await waitFor(() => expect(screen.getByText('msa-redline.docx')).toBeInTheDocument())
-
-  // The wide docx claims the room: the references pane collapses to its rail
-  // toggle instead of showing its header.
-  expect(screen.queryByText('References')).not.toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Show references panel' })).toBeInTheDocument()
-
-  // The user can bring it back from the rail.
-  await user.click(screen.getByRole('button', { name: 'Show references panel' }))
-  expect(screen.getByText('References')).toBeInTheDocument()
-})
 
 // ---------------------------------------------------------------------------
 // Document panel resizing (drag handle + persisted width)

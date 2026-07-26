@@ -15,13 +15,10 @@ export default function QueryTab({ active }) {
   const [msgs, setMsgs] = useState([])
   const [input, setInput] = useState('')
   const [querying, setQuerying] = useState(false)
-  // Index into `msgs` of the answer whose references fill the pane. Each bot
-  // answer carries its own `refs`, so clicking a past answer re-points the pane
-  // at that turn's evidence; -1 shows the empty state.
-  const [selectedRefIdx, setSelectedRefIdx] = useState(-1)
-  // User's manual hide of the references pane. Independent of `hasChat` below,
-  // which hides the pane for a fresh chat that has no turns to cite yet.
-  const [refsHidden, setRefsHidden] = useState(false)
+  // Index into `msgs` of the answer whose Sources panel is open; -1 = closed.
+  // Only one panel is open at a time, so a single floating overlay serves all
+  // turns.
+  const [sourcesIdx, setSourcesIdx] = useState(-1)
   // User's manual collapse of the chats sidebar.
   const [chatsHidden, setChatsHidden] = useState(false)
   // Document panel: renders the latest .docx artifact a bot answer produced
@@ -45,13 +42,10 @@ export default function QueryTab({ active }) {
   const currentDoc = latestDocxArtifact(msgs, apiUrl, currentApp)
   const prevDocIdRef = useRef(null)
   // Auto-reveal the panel when a new document appears (e.g. a refined redline).
-  // Also auto-hide the references pane so the wide docx gets the room; the user
-  // can bring references back via its min-rail toggle.
   useEffect(() => {
     const id = currentDoc?.id || null
     if (id && id !== prevDocIdRef.current) {
       setDocHidden(false)
-      setRefsHidden(true)
     }
     prevDocIdRef.current = id
   }, [currentDoc?.id])
@@ -61,11 +55,11 @@ export default function QueryTab({ active }) {
       const prevApp = prevAppRef.current
       prevAppRef.current = currentApp
       closeSession(prevApp)
-      // Drop the previous app's chat, retrieved references, and session pointer
-      // so nothing lingers across the switch. The new app's empty state (intro
-      // banner + starter chips) renders from the cleared log.
-      setSelectedRefIdx(-1)
+      // Drop the previous app's chat and session pointer so nothing lingers
+      // across the switch. The new app's empty state (intro banner + starter
+      // chips) renders from the cleared log.
       setActiveSid(null)
+      setSourcesIdx(-1)
       setMsgs([])
     }
   }, [currentApp])
@@ -99,8 +93,8 @@ export default function QueryTab({ active }) {
       if (!resp.ok) return
       const data = await resp.json()
       const rawMsgs = data.messages || []
-      // Carry each assistant turn's references onto its message so clicking any
-      // past answer re-points the pane at that turn's evidence.
+      // Carry each assistant turn's references onto its message so its inline
+      // Sources drawer can show that turn's evidence.
       const loaded = rawMsgs.map(m => ({
         role: m.role === 'assistant' ? 'bot' : 'user',
         text: m.content,
@@ -108,12 +102,7 @@ export default function QueryTab({ active }) {
       }))
       sessionIdRef.current = sid
       setActiveSid(sid)
-      // Default the pane to the latest answer, matching a live turn's behavior.
-      let lastBot = -1
-      for (let i = loaded.length - 1; i >= 0; i--) {
-        if (loaded[i].role === 'bot') { lastBot = i; break }
-      }
-      setSelectedRefIdx(lastBot)
+      setSourcesIdx(-1)
       setMsgs(loaded.length ? loaded : [{ role: 'sys', text: t('query.emptySession') }])
       setTimeout(scrollMsgs, 0)
     } catch {}
@@ -134,7 +123,7 @@ export default function QueryTab({ active }) {
     if (sid === sessionIdRef.current) {
       sessionIdRef.current = null
       setActiveSid(null)
-      setSelectedRefIdx(-1)
+      setSourcesIdx(-1)
       setMsgs([])
     }
     loadSessions()
@@ -199,11 +188,7 @@ export default function QueryTab({ active }) {
 
     const userMsg = { role: 'user', text }
     const botMsg = { role: 'bot', text: t('query.thinking'), thinking: true }
-    // The bot answer stays at this fixed index for the whole turn (token updates
-    // replace the last message in place), so the final result can attach its
-    // references there and select it.
-    let botIdx = -1
-    setMsgs(prev => { botIdx = prev.length + 1; return [...prev, userMsg, botMsg] })
+    setMsgs(prev => [...prev, userMsg, botMsg])
     setTimeout(scrollMsgs, 0)
 
     let answer = ''
@@ -239,9 +224,8 @@ export default function QueryTab({ active }) {
             answer = d.result.answer
           }
           // Replace the streamed placeholder with the final answer, carrying its
-          // references, then point the pane at this turn.
+          // references onto the message for its inline Sources drawer.
           setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: answer, mono: mono || undefined, refs }])
-          setSelectedRefIdx(botIdx)
         } else if (d.error) {
           setMsgs(prev => [...prev.slice(0, -1), { role: 'bot', text: t('common.error', { msg: d.error }), error: true }])
         }
@@ -263,20 +247,13 @@ export default function QueryTab({ active }) {
   function newChat() {
     closeSession(currentApp)
     setActiveSid(null)
-    setSelectedRefIdx(-1)
+    setSourcesIdx(-1)
     setMsgs([])
     loadSessions()
   }
 
-  // The pane reflects the selected answer's references (live turns auto-select
-  // the newest; a loaded transcript defaults to its latest answer).
-  const selectedRefs = msgs[selectedRefIdx]?.refs || {}
-  const chunks = selectedRefs.chunks || []
-  const structuredRecords = selectedRefs.structured_records || []
-  const totalRefs = chunks.length + structuredRecords.length
-  // A fresh chat (only system notices, no user/bot turns) has nothing to cite,
-  // so the references pane stays hidden until the first exchange. Once there is
-  // a chat, the user can still hide the pane manually.
+  // A fresh chat (only system notices, no user/bot turns) has nothing yet; used
+  // to gate the starter chips.
   const hasChat = msgs.some(m => m.role === 'user' || m.role === 'bot')
   // Config-driven starter prompts for the current app (from config.yaml, carried
   // on the app list payload). Shown in the empty state to teach a new user what
@@ -288,7 +265,6 @@ export default function QueryTab({ active }) {
   // an answer); the example chips are a starter shown only until the first turn.
   const showIntro = hasApp && !!queryIntro
   const showStarter = hasApp && !hasChat && exampleQueries.length > 0
-  const showRefsPane = hasChat && !refsHidden
 
   return (
     <>
@@ -357,15 +333,8 @@ export default function QueryTab({ active }) {
                 </div>
               </div>
             )}
-            {msgs.map((m, i) => {
-              const selectable = m.role === 'bot' && !!m.refs
-              return (
-              <div
-                key={i}
-                className={`msg ${m.role}${selectable ? ' selectable' : ''}${selectable && i === selectedRefIdx ? ' ref-selected' : ''}`}
-                onClick={selectable ? () => setSelectedRefIdx(i) : undefined}
-                title={selectable ? t('query.showRefs') : undefined}
-              >
+            {msgs.map((m, i) => (
+              <div key={i} className={`msg ${m.role}`}>
                 {m.role === 'user' && <div className="msg-who">{t('query.you')}</div>}
                 {m.role === 'bot' && <div className="msg-who">{t('query.bot')}</div>}
                 <div className="msg-body" style={{
@@ -377,14 +346,21 @@ export default function QueryTab({ active }) {
                     ? <div className="md"><ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents(t)}>{resolveArtifactLinks(m.text, apiUrl, currentApp)}</ReactMarkdown></div>
                     : m.text}
                 </div>
+                {m.role === 'bot' && m.refs && (
+                  <SourcesToggle
+                    refs={m.refs}
+                    open={sourcesIdx === i}
+                    onToggle={() => setSourcesIdx(sourcesIdx === i ? -1 : i)}
+                    t={t}
+                  />
+                )}
                 {(m.role === 'user' || m.role === 'bot') && !m.thinking && !m.error && !m.muted && (
                   <div className="msg-actions">
                     <CopyButton text={m.text} title={t('query.copy')} copiedTitle={t('query.copied')} />
                   </div>
                 )}
               </div>
-              )
-            })}
+            ))}
           </div>
           <div className="chat-input">
             <textarea
@@ -400,37 +376,6 @@ export default function QueryTab({ active }) {
             <button className="btn btn-primary" disabled={querying || !hasApp} onClick={sendQuery}>{t('common.send')}</button>
           </div>
         </div>
-        {hasChat && refsHidden && (
-          <div className="chat-aside-min">
-            <button className="aside-toggle" title={t('query.showRefsPanel')} aria-label={t('query.showRefsPanel')} onClick={() => setRefsHidden(false)}><PanelIcon /></button>
-          </div>
-        )}
-        {showRefsPane && (
-        <div className="chat-aside">
-          <div className="aside-hd">
-            <button className="aside-toggle" title={t('query.hideRefsPanel')} aria-label={t('query.hideRefsPanel')} onClick={() => setRefsHidden(true)}><PanelIcon /></button>
-            <h3 style={{ flex: 1 }}>{t('query.references')}</h3>
-            <span style={{ fontSize: 11, color: 'var(--muted)' }}>{totalRefs ? (totalRefs !== 1 ? t('query.refs', { n: totalRefs }) : t('query.ref', { n: totalRefs })) : '—'}</span>
-          </div>
-          <div className="aside-body">
-            {!totalRefs && <div style={{ padding: '30px 10px', textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>{t('query.refsEmpty')}</div>}
-            {structuredRecords.length > 0 && (
-              <>
-                <div className="ref-section-hd">{t('query.structuredRecords', { n: structuredRecords.length })}</div>
-                {structuredRecords.map((rec, i) => (
-                  <div key={i} className="ref-card"><pre className="ref-code">{JSON.stringify(rec, null, 2)}</pre></div>
-                ))}
-              </>
-            )}
-            {chunks.length > 0 && (
-              <>
-                <div className="ref-section-hd">{t('query.passages', { n: chunks.length })}</div>
-                {chunks.map((ch, i) => <RefChunk key={i} chunk={ch} t={t} />)}
-              </>
-            )}
-          </div>
-        </div>
-        )}
         {currentDoc && docHidden && (
           <div className="chat-aside-min">
             <button className="aside-toggle" title={t('query.showDoc')} aria-label={t('query.showDoc')} onClick={() => setDocHidden(false)}><DocIcon /></button>
@@ -438,6 +383,9 @@ export default function QueryTab({ active }) {
         )}
         {currentDoc && !docHidden && (
           <DocPanel doc={currentDoc} t={t} onHide={() => setDocHidden(true)} />
+        )}
+        {sourcesIdx >= 0 && msgs[sourcesIdx]?.refs && (
+          <SourcesPanel refs={msgs[sourcesIdx].refs} t={t} onClose={() => setSourcesIdx(-1)} />
         )}
       </div>
     </>
@@ -699,6 +647,97 @@ function DownloadLink({ href, children, t }) {
     <a href={href} onClick={onClick} title={t('query.download')} aria-busy={busy || undefined}>
       {children}
     </a>
+  )
+}
+
+// The inline trigger under a bot turn. Clicking it opens (or, when already this
+// turn's, closes) the floating Sources panel; the caret rotates while its panel
+// is open. Renders nothing when the turn cited nothing.
+function SourcesToggle({ refs, open, onToggle, t }) {
+  const chunks = refs.chunks || []
+  const structuredRecords = refs.structured_records || []
+  const total = chunks.length + structuredRecords.length
+  if (!total) return null
+  return (
+    <div className={`msg-sources${open ? ' open' : ''}`}>
+      <button className="msg-sources-toggle" onClick={onToggle} aria-expanded={open}>
+        <ChevronIcon />
+        {t('query.sources', { n: total })}
+      </button>
+    </div>
+  )
+}
+
+// Per-answer citations shown in a right-anchored slide-over that floats over the
+// chat (and the docx panel) on demand — matching the ChatGPT/Claude pattern
+// rather than a standing column. Dismisses via its ✕, Escape, or a click
+// outside the panel.
+function SourcesPanel({ refs, t, onClose }) {
+  const panelRef = useRef(null)
+  const chunks = refs.chunks || []
+  const structuredRecords = refs.structured_records || []
+  const total = chunks.length + structuredRecords.length
+
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose() }
+    // Close on an outside mousedown, but leave the Sources triggers alone: their
+    // own onClick owns toggling/swapping, and acting here too would race it
+    // (close-then-reopen).
+    function onDown(e) {
+      if (panelRef.current && !panelRef.current.contains(e.target) && !e.target.closest('.msg-sources-toggle')) onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    // Defer the outside-click listener a tick so the click that opened the panel
+    // (which lands outside it) doesn't immediately close it again.
+    const id = setTimeout(() => window.addEventListener('mousedown', onDown), 0)
+    return () => {
+      clearTimeout(id)
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('mousedown', onDown)
+    }
+  }, [onClose])
+
+  return (
+    <div className="sources-panel" ref={panelRef} role="dialog" aria-label={t('query.sources', { n: total })}>
+      <div className="aside-hd">
+        <h3 style={{ flex: 1 }}>{t('query.sources', { n: total })}</h3>
+        <button className="aside-toggle" title={t('query.close')} aria-label={t('query.close')} onClick={onClose}><CloseIcon /></button>
+      </div>
+      <div className="aside-body">
+        {structuredRecords.length > 0 && (
+          <>
+            <div className="ref-section-hd">{t('query.structuredRecords', { n: structuredRecords.length })}</div>
+            {structuredRecords.map((rec, i) => (
+              <div key={i} className="ref-card"><pre className="ref-code">{JSON.stringify(rec, null, 2)}</pre></div>
+            ))}
+          </>
+        )}
+        {chunks.length > 0 && (
+          <>
+            <div className="ref-section-hd">{t('query.passages', { n: chunks.length })}</div>
+            {chunks.map((ch, i) => <RefChunk key={i} chunk={ch} t={t} />)}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Disclosure caret for the Sources trigger; rotates when its panel is open (CSS).
+function ChevronIcon() {
+  return (
+    <svg className="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9 18l6-6-6-6" />
+    </svg>
+  )
+}
+
+// ✕ glyph for the Sources panel's close control.
+function CloseIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M18 6 6 18" /><path d="M6 6l12 12" />
+    </svg>
   )
 }
 
