@@ -60,10 +60,16 @@ function mockFetch({
   streamEvents = [{ result: { answer: 'Hello there', references: { chunks: [], structured_records: [] } } }],
   sessions = [],
   transcript = { messages: [] },
+  apps = [],
 } = {}) {
   return vi.spyOn(global, 'fetch').mockImplementation((url, opts = {}) => {
     const u = String(url)
     const method = (opts.method || 'GET').toUpperCase()
+    // App list the context's refreshApps() loads; carries each app's config,
+    // from which the Query tab reads example_queries for its starter panel.
+    if (u.endsWith('/applications') && method === 'GET') {
+      return Promise.resolve({ ok: true, json: async () => ({ applications: apps }) })
+    }
     if (u.includes('/sessions/') && u.endsWith('/close')) {
       return Promise.resolve({ ok: true, json: async () => ({ session_id: sessionId, distillation: 'enqueued' }) })
     }
@@ -737,6 +743,72 @@ const flushTimers = () => new Promise(r => setTimeout(r, 0))
 async function pushToken(ctrl, event) {
   await act(async () => { ctrl.push(event); await flushTimers() })
 }
+
+// ---------------------------------------------------------------------------
+// Empty-state starter panel (config-driven example_queries / query_intro)
+// ---------------------------------------------------------------------------
+
+// Select the app *and* load the context app list (refreshApps), so QueryTab can
+// read the app's config.example_queries — unlike SetApp, which only selects.
+function SeedApp({ name }) {
+  const { setCurrentApp, refreshApps } = useApp()
+  useEffect(() => { setCurrentApp(name); refreshApps() }, [name, setCurrentApp, refreshApps])
+  return null
+}
+
+function renderWithConfig(config, appName = 'contract-analyst') {
+  mockFetch({ apps: [{ name: appName, config }] })
+  render(
+    <I18nProvider>
+      <AppProvider>
+        <SeedApp name={appName} />
+        <QueryTab active={true} />
+      </AppProvider>
+    </I18nProvider>
+  )
+}
+
+it('shows the intro and example-query chips in the empty state', async () => {
+  renderWithConfig({
+    query_intro: 'Ask across the portfolio, or have a contract reviewed.',
+    example_queries: [
+      'which contracts expire before 2026-01-01?',
+      'review the saas-002 contract for the customer',
+    ],
+  })
+
+  await waitFor(() =>
+    expect(screen.getByText('Ask across the portfolio, or have a contract reviewed.')).toBeInTheDocument()
+  )
+  expect(screen.getByRole('button', { name: 'which contracts expire before 2026-01-01?' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'review the saas-002 contract for the customer' })).toBeInTheDocument()
+})
+
+it('runs a chip as a query when clicked and hides the starter panel afterward', async () => {
+  renderWithConfig({ example_queries: ['which contracts expire before 2026-01-01?'] })
+  const user = userEvent.setup()
+
+  const chip = await screen.findByRole('button', { name: 'which contracts expire before 2026-01-01?' })
+  await user.click(chip)
+
+  // The chip text was sent as the query, and the answer streamed back.
+  await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(
+    expect.stringMatching(/\/query\/stream$/), expect.anything()
+  ))
+  const streamCall = global.fetch.mock.calls.find(([u]) => String(u).endsWith('/query/stream'))
+  expect(JSON.parse(streamCall[1].body).text).toBe('which contracts expire before 2026-01-01?')
+  await waitFor(() => expect(screen.getByText('Hello there')).toBeInTheDocument())
+
+  // Once the chat has a turn, the starter chip is gone.
+  expect(screen.queryByRole('button', { name: 'which contracts expire before 2026-01-01?' })).not.toBeInTheDocument()
+})
+
+it('shows no starter panel when the app config has no intro or example queries', async () => {
+  renderWithConfig({})
+  // The app is selected (no "no app" warning), but nothing to prompt with.
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+  expect(document.querySelector('.query-starter')).toBeNull()
+})
 
 it('sticks the message pane to the bottom as tokens stream in', async () => {
   const ctrl = controllableStream()

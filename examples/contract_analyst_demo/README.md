@@ -2,6 +2,8 @@
 
 Ask natural-language questions across a portfolio of legal contracts: find which agreements expire before a given date, compare termination rights across vendors, surface contracts with unusual liability caps, or retrieve the verbatim clause text for any obligation. Structured lookups (e.g. "list all contracts governed by New York law") return exact records; open-ended questions stream a synthesized answer with citations.
 
+Beyond Q&A, the demo can **review a contract clause by clause and mark it up**. Ask it to "review the saas-002 contract for the customer" and it analyzes every clause through the party (or compliance) lens you choose, then hands back a **tracked-changes redline `.docx`** — each suggested change reviewable in Word. Accept, reject, or refine the suggestions in conversation ("accept clauses 1 and 6, reject 3, soften 5") and it produces the **final clean `.docx`** with your decisions baked in. This is powered by the bundled `legal-review` and `edit-docx` skills.
+
 The demo ships with a portfolio of **thirty contract fixtures** for a single fictional company (Meridian Analytics Inc.), spanning the document types an SMB or enterprise legal team actually juggles — SaaS subscriptions, NDAs, employment and contractor agreements, a separation/release, office and equipment leases, master consulting/services agreements and a SOW, a master services agreement, vendor supply and marketing agreements, a standalone DPA, a perpetual license, a reseller agreement, an evaluation agreement, a master purchase agreement, and three amendments. They live as plain text in `contracts.py`, and the demo also accepts any plain-text contract you provide.
 
 The corpus is engineered with **planted cross-document tensions** so the hero queries below — the cross-document reasoning that plain chunk-and-retrieve RAG cannot do — land hard: two vendors each appear on agreements whose payment terms conflict, three amendments flip clauses in their originals, and there are deliberate liability-cap, notice-period, and expiry outliers. See the module docstring in `contracts.py` for the full catalogue.
@@ -44,8 +46,11 @@ Any other input is sent as a query to the running application. Answers stream ba
 On first run the demo uploads a ZIP bundle to `POST /applications` that configures:
 
 - **Pipeline steps**:
-  1. `chunk-embed-upsert` → `document_chunks` vector collection
+  1. `chunk-embed-upsert` → `contract_chunks` vector collection
   2. `extract-structured` → `contracts` structured collection
+- **Skills** (referenced by id; loaded from the deployment's system skills registry):
+  - `legal-review` — clause-by-clause risk review of an uploaded `.docx`, producing a tracked-changes redline and a final clean contract
+  - `edit-docx` — applies a set of edits to a `.docx` and returns a tracked-changes redline (used by `legal-review` to project its suggestions)
 
 The bundle contains three files:
 
@@ -119,6 +124,16 @@ Verbatim text copied from the contract. `null` when the clause is absent.
 | `key_terms` | `list[str]` | Significant defined terms, unusual provisions, or contract-type-specific clauses. `[]` if none. |
 | `special_conditions` | `list[str]` | Verbatim text of conditions precedent, carve-outs, or custom provisions. `[]` if none. |
 
+## Contract review
+
+The `contracts` collection answers questions *about* the portfolio; the `legal-review` skill goes further and **marks a single contract up**. A review runs against a `.docx` already in the app (any of the ingested fixtures, or a `.docx` you upload) and proceeds in three stages:
+
+1. **Pick the lens.** For a two-sided agreement the skill asks which party the review represents and the posture — `dominant`, `neutral`, or `disadvantaged` — which sets how aggressive the suggested language is. For a one-sided document (e.g. an assessment reviewed against cited law) it uses a compliance lens instead and checks each clause against the governing law.
+2. **Analyze and redline.** It segments the contract into clauses, judges each one through that lens (a risk level with rationale, an optional suggested change, and any cross-clause contradictions), and returns a **tracked-changes redline `.docx`** — every suggestion shows up as a Word insertion/deletion you can accept or reject.
+3. **Finalize.** Tell it which suggestions to accept, reject, or reword and it produces the **final clean `.docx`** with only the accepted changes applied — no tracked-change markup. Follow-ups ("update the redline", "soften clause 5") refine the same review rather than starting over.
+
+The suggestions are stored in a durable `review.json` so refinements across turns stay consistent; the redline and final documents are always regenerated projections of it. Review is `.docx`-only and covers body paragraphs (not tables, headers, or footers); a `replace` swaps a whole paragraph rather than a word-level diff. The analysis is decision support, not legal advice.
+
 ## Example queries
 
 ```
@@ -138,6 +153,17 @@ Cross-document hero queries (exploit the planted tensions):
 > list every agreement that expires before March 1, 2026, regardless of contract type
 > merge the amendment into the original saas-001 contract and give me the updated document
 ```
+
+Clause-by-clause review (produces a marked-up `.docx`):
+
+```
+> review the saas-002 contract on behalf of the customer, disadvantaged position
+> mark up the msa-001 master services agreement for the provider
+> accept clauses 1 and 6, reject clause 3, soften clause 5 — then give me the final contract
+> update the redline: also flag the auto-renewal clause
+```
+
+The first review returns a tracked-changes redline `.docx`; once you weigh in on the suggestions it returns the final clean `.docx` with the accepted changes applied. The document panel in the UI auto-reveals the latest `.docx` so you can open the redline directly in Word.
 
 ## Project structure
 

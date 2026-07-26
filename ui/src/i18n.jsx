@@ -262,6 +262,7 @@ const translations = {
     },
     query: {
       intro: 'Select an app, then start asking questions in natural language.',
+      tryAsking: 'Try asking',
       connected: 'Connected to "{app}".',
       refreshed: 'Session refreshed.',
       thinking: 'Thinking…',
@@ -712,6 +713,7 @@ const translations = {
     },
     query: {
       intro: '选择一个应用，然后用自然语言开始提问。',
+      tryAsking: '试试这样问',
       connected: '已连接到 "{app}"。',
       refreshed: '会话已刷新。',
       thinking: '思考中…',

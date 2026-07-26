@@ -733,6 +733,22 @@ class AppConfig(ConfigPromptMixin, BaseModel):
         default=None,
         description="System prompt used by the query runner when answering user questions. Replaces the default 'You are a helpful assistant.' base prompt.",
     )
+    query_intro: str | None = Field(
+        default=None,
+        description=(
+            "Short one-line message shown above the starter prompts in the Query "
+            "UI's empty state, orienting a new user to what this app can do."
+        ),
+    )
+    example_queries: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Example questions shown as clickable starter prompts in the Query UI's "
+            "empty state. Clicking one runs it. Populate with the representative "
+            "questions a user would ask this app — including any that exercise its "
+            "skills (e.g. 'review the saas-002 contract for the customer')."
+        ),
+    )
     skills: list[str] = Field(
         default_factory=list,
         description="Ids of system-wide skills to load (see GET /skills). Referenced by id so a skill rename does not break the app.",

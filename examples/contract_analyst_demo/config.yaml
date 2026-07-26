@@ -9,6 +9,17 @@
 
 name: contract-analyst
 
+# Starter prompts shown in the Query tab's empty state. The first two are
+# cross-document reasoning; the third exercises the legal-review skill (redline).
+query_intro: >-
+  Ask across the contract portfolio, or have a single contract reviewed clause
+  by clause and returned as a tracked-changes redline.
+example_queries:
+  - review the saas-002 contract on behalf of the customer, disadvantaged position
+  - which contracts expire before 2026-01-01?
+  - we have multiple agreements with TechVault Solutions — do their payment terms conflict?
+  - which agreements have unlimited liability or no stated liability cap?
+
 # Clause-by-clause redline review of an uploaded .docx contract. Loaded as a
 # built-in skill from the system skills_dir (see the deployment's
 # cogbase_system.yaml); referenced by id so the query runner can route a

@@ -833,6 +833,14 @@ tr:hover td { background: var(--bg3); }
   font-size: 11px; color: var(--text);
 }
 
+.chip-btn { cursor: pointer; text-align: left; transition: background .12s, border-color .12s; }
+.chip-btn:hover:not(:disabled) { background: var(--bg2); border-color: var(--accent); }
+.chip-btn:disabled { opacity: .5; cursor: default; }
+
+.query-starter { margin: auto 0; padding: 8px 4px; max-width: 620px; }
+.query-starter-intro { font-size: 13px; color: var(--text); margin-bottom: 12px; line-height: 1.5; }
+.query-starter-label { font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+
 .field-label { font-size: 12px; font-weight: 500; color: var(--muted); margin-bottom: 5px; display: block; }
 .field-textarea {
   width: 100%; background: var(--bg3); border: 1px solid var(--border);

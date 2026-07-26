@@ -6,7 +6,7 @@ import { useT } from '../../i18n'
 import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks, latestDocxArtifact, artifactLabel, filenameFromContentDisposition } from '../../utils'
 
 export default function QueryTab({ active }) {
-  const { apiUrl, appBase, authFetch, currentApp } = useApp()
+  const { apiUrl, appBase, authFetch, currentApp, apps } = useApp()
   const { t } = useT()
   const [msgs, setMsgs] = useState([{ role: 'sys', text: t('query.intro') }])
   const [input, setInput] = useState('')
@@ -186,9 +186,9 @@ export default function QueryTab({ active }) {
     el.style.height = Math.min(el.scrollHeight, 110) + 'px'
   }
 
-  async function sendQuery() {
+  async function sendQuery(override) {
     if (querying || !currentApp) return
-    const text = input.trim()
+    const text = (typeof override === 'string' ? override : input).trim()
     if (!text) return
     setInput('')
     if (textareaRef.current) textareaRef.current.style.height = ''
@@ -275,6 +275,13 @@ export default function QueryTab({ active }) {
   // so the references pane stays hidden until the first exchange. Once there is
   // a chat, the user can still hide the pane manually.
   const hasChat = msgs.some(m => m.role === 'user' || m.role === 'bot')
+  // Config-driven starter prompts for the current app (from config.yaml, carried
+  // on the app list payload). Shown in the empty state to teach a new user what
+  // this app can do; clicking one runs it.
+  const appConfig = apps.find(a => a.name === currentApp)?.config
+  const exampleQueries = (appConfig?.example_queries || []).filter(q => typeof q === 'string' && q.trim())
+  const queryIntro = appConfig?.query_intro
+  const showStarter = hasApp && !hasChat && (exampleQueries.length > 0 || !!queryIntro)
   const showRefsPane = hasChat && !refsHidden
 
   return (
@@ -325,6 +332,26 @@ export default function QueryTab({ active }) {
         )}
         <div className="chat-col">
           <div className="msgs" ref={msgsRef} onScroll={onMsgsScroll}>
+            {showStarter && (
+              <div className="query-starter">
+                {queryIntro && <div className="query-starter-intro">{queryIntro}</div>}
+                {exampleQueries.length > 0 && (
+                  <>
+                    <div className="query-starter-label">{t('query.tryAsking')}</div>
+                    <div className="chips">
+                      {exampleQueries.map((q, i) => (
+                        <button
+                          key={i}
+                          className="chip chip-btn"
+                          disabled={querying}
+                          onClick={() => sendQuery(q)}
+                        >{q}</button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             {msgs.map((m, i) => {
               const selectable = m.role === 'bot' && !!m.refs
               return (

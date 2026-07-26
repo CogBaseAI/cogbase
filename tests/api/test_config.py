@@ -288,6 +288,49 @@ class TestAppConfig:
         assert "Answer directly." in cfg.query_prompt
         assert "One sentence only." in cfg.query_prompt
 
+    def test_example_queries_and_intro_default_empty(self):
+        cfg = AppConfig.from_yaml(_MINIMAL_YAML)
+        assert cfg.example_queries == []
+        assert cfg.query_intro is None
+
+    def test_example_queries_and_intro_parse(self):
+        yaml_text = textwrap.dedent("""\
+            name: qa-app
+            llm:
+              model: gpt-4o-mini
+              api_key: sk-test
+            query_intro: Ask across the portfolio, or have a contract reviewed.
+            example_queries:
+              - which contracts expire before 2026-01-01?
+              - review the saas-002 contract for the customer
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert cfg.query_intro == "Ask across the portfolio, or have a contract reviewed."
+        assert cfg.example_queries == [
+            "which contracts expire before 2026-01-01?",
+            "review the saas-002 contract for the customer",
+        ]
+
+    def test_example_queries_round_trip_through_to_yaml(self):
+        # The server stores config.to_yaml() and hands the parsed dict to the UI,
+        # so both new fields must survive a YAML round-trip.
+        import yaml as _yaml
+
+        cfg = AppConfig(
+            name="qa-app",
+            query_intro="Intro line.",
+            example_queries=["q one", "q two"],
+        )
+        parsed = _yaml.safe_load(cfg.to_yaml())
+        assert parsed["query_intro"] == "Intro line."
+        assert parsed["example_queries"] == ["q one", "q two"]
+
+    def test_example_queries_surface_to_app_generator_schema(self):
+        # Neither field is prompt_skip, so the app generator can populate both.
+        props = AppConfig.model_json_schema()["properties"]
+        assert "example_queries" in props
+        assert "query_intro" in props
+
     def test_from_yaml_non_mapping_raises(self):
         with pytest.raises(ValueError, match="mapping"):
             AppConfig.from_yaml("- item1\n- item2\n")
