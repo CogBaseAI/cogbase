@@ -39,8 +39,6 @@ const translations = {
       error: 'Error: {msg}',
     },
     header: {
-      apiLabel: 'API',
-      apiPlaceholder: 'http://localhost:8000',
       namespaceLabel: 'Namespace',
       namespacePlaceholder: 'Search namespaces…',
       namespaceNoMatch: 'No matching namespaces',
@@ -485,8 +483,6 @@ const translations = {
       error: '错误：{msg}',
     },
     header: {
-      apiLabel: 'API',
-      apiPlaceholder: 'http://localhost:8000',
       namespaceLabel: '命名空间',
       namespacePlaceholder: '搜索命名空间…',
       namespaceNoMatch: '无匹配的命名空间',

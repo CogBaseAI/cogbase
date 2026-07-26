@@ -23,7 +23,7 @@ import TaskProgressModal from './components/modals/TaskProgressModal'
 // in ./nav alongside the hash router that also consumes them.
 
 function Layout() {
-  const { apiUrl, setApiUrl, accountId, mode, email, logout, namespaceName, setNamespaceName, namespaces, namespacesLoaded, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp } = useApp()
+  const { accountId, mode, email, logout, namespaceName, setNamespaceName, namespaces, namespacesLoaded, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp } = useApp()
   const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
   const [focus, setFocus] = useState(TAB_TIER['build'])   // which tier's sub-nav shows
@@ -165,13 +165,10 @@ function Layout() {
 
   return (
     <>
-      {/* Top bar: brand + environment (API url) + language */}
+      {/* Top bar: brand + app pill + language. The API base is auto-resolved from
+          the serving origin (see context.jsx), so it's not surfaced here. */}
       <header>
         <h1>⚡ Cog<span>Base</span></h1>
-        <div className="api-row">
-          <label htmlFor="apiUrl">{t('header.apiLabel')}</label>
-          <input id="apiUrl" type="text" value={apiUrl} onChange={e => setApiUrl(e.target.value.replace(/\/$/, ''))} placeholder={t('header.apiPlaceholder')} />
-        </div>
         <div className={`app-pill ${currentApp ? 'on' : ''}`} title={currentApp ? t('header.appInNamespace', { namespace: namespaceName }) : undefined}>
           <span className="dot" />
           <span>{currentApp || t('header.noApp')}</span>
