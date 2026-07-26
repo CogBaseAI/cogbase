@@ -837,9 +837,22 @@ tr:hover td { background: var(--bg3); }
 .chip-btn:hover:not(:disabled) { background: var(--bg2); border-color: var(--accent); }
 .chip-btn:disabled { opacity: .5; cursor: default; }
 
-.query-starter { margin: auto 0; padding: 8px 4px; max-width: 620px; }
+.query-starter { padding: 8px 4px; max-width: 620px; }
 .query-starter-intro { font-size: 13px; color: var(--text); margin-bottom: 12px; line-height: 1.5; }
 .query-starter-label { font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+/* Persistent one-liner describing the app, pinned above the conversation so it
+   stays visible during and after an answer (unlike the starter, which clears
+   once the first turn arrives). */
+.query-intro-banner {
+  flex: none;
+  padding: 8px 20px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+.query-empty { margin: auto 0; padding: 8px 4px; max-width: 500px; align-self: center; text-align: center; font-size: 13px; color: var(--muted); line-height: 1.5; }
 
 .field-label { font-size: 12px; font-weight: 500; color: var(--muted); margin-bottom: 5px; display: block; }
 .field-textarea {

@@ -810,6 +810,47 @@ it('shows no starter panel when the app config has no intro or example queries',
   expect(document.querySelector('.query-starter')).toBeNull()
 })
 
+it('shows the "select an app" prompt only while no app is selected', async () => {
+  mockFetch()
+  // No SetApp/SeedApp -> no current app.
+  render(
+    <I18nProvider>
+      <AppProvider>
+        <QueryTab active={true} />
+      </AppProvider>
+    </I18nProvider>
+  )
+  // The empty-state prompt (and the no-app warning) guide the user to pick an app.
+  expect(screen.getByText(/Select an app, then start asking/)).toBeInTheDocument()
+  expect(screen.getByText(/No app selected/)).toBeInTheDocument()
+})
+
+it('drops the "select an app" prompt once an app is selected', async () => {
+  renderWithConfig({})
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+  // The prompt is a no-app empty state, not a lingering chat message.
+  expect(screen.queryByText(/Select an app, then start asking/)).not.toBeInTheDocument()
+})
+
+it('keeps the intro banner visible after a turn while the starter chips clear', async () => {
+  renderWithConfig({
+    query_intro: 'Ask across the portfolio, or have a contract reviewed.',
+    example_queries: ['which contracts expire before 2026-01-01?'],
+  })
+  const user = userEvent.setup()
+
+  // Before any turn: intro + starter chip both show.
+  const chip = await screen.findByRole('button', { name: 'which contracts expire before 2026-01-01?' })
+  expect(screen.getByText('Ask across the portfolio, or have a contract reviewed.')).toBeInTheDocument()
+
+  await user.click(chip)
+  await waitFor(() => expect(screen.getByText('Hello there')).toBeInTheDocument())
+
+  // The intro banner persists during/after the answer; the starter chip is gone.
+  expect(screen.getByText('Ask across the portfolio, or have a contract reviewed.')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'which contracts expire before 2026-01-01?' })).not.toBeInTheDocument()
+})
+
 it('sticks the message pane to the bottom as tokens stream in', async () => {
   const ctrl = controllableStream()
   mockFetchStreaming(ctrl.resp)

@@ -8,7 +8,11 @@ import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks, latestDocxArtifa
 export default function QueryTab({ active }) {
   const { apiUrl, appBase, authFetch, currentApp, apps } = useApp()
   const { t } = useT()
-  const [msgs, setMsgs] = useState([{ role: 'sys', text: t('query.intro') }])
+  // Chat log holds only real user/bot turns (plus the rare opened-empty-session
+  // notice). The "select an app" prompt and app-intro live outside the log as
+  // empty-state / banner, so they never linger as stale messages once a chat
+  // starts.
+  const [msgs, setMsgs] = useState([])
   const [input, setInput] = useState('')
   const [querying, setQuerying] = useState(false)
   // Index into `msgs` of the answer whose references fill the pane. Each bot
@@ -57,13 +61,12 @@ export default function QueryTab({ active }) {
       const prevApp = prevAppRef.current
       prevAppRef.current = currentApp
       closeSession(prevApp)
-      // Drop the previous app's retrieved references + session pointer so they
-      // don't linger across the switch.
+      // Drop the previous app's chat, retrieved references, and session pointer
+      // so nothing lingers across the switch. The new app's empty state (intro
+      // banner + starter chips) renders from the cleared log.
       setSelectedRefIdx(-1)
       setActiveSid(null)
-      if (currentApp) {
-        setMsgs(prev => [...prev, { role: 'sys', text: t('query.connected', { app: currentApp }) }])
-      }
+      setMsgs([])
     }
   }, [currentApp])
 
@@ -132,7 +135,7 @@ export default function QueryTab({ active }) {
       sessionIdRef.current = null
       setActiveSid(null)
       setSelectedRefIdx(-1)
-      setMsgs([{ role: 'sys', text: t('query.refreshed') + (currentApp ? ' ' + t('query.connected', { app: currentApp }) : '') }])
+      setMsgs([])
     }
     loadSessions()
   }
@@ -261,7 +264,7 @@ export default function QueryTab({ active }) {
     closeSession(currentApp)
     setActiveSid(null)
     setSelectedRefIdx(-1)
-    setMsgs([{ role: 'sys', text: t('query.refreshed') + (currentApp ? ' ' + t('query.connected', { app: currentApp }) : '') }])
+    setMsgs([])
     loadSessions()
   }
 
@@ -280,8 +283,11 @@ export default function QueryTab({ active }) {
   // this app can do; clicking one runs it.
   const appConfig = apps.find(a => a.name === currentApp)?.config
   const exampleQueries = (appConfig?.example_queries || []).filter(q => typeof q === 'string' && q.trim())
-  const queryIntro = appConfig?.query_intro
-  const showStarter = hasApp && !hasChat && (exampleQueries.length > 0 || !!queryIntro)
+  const queryIntro = typeof appConfig?.query_intro === 'string' ? appConfig.query_intro.trim() : ''
+  // The intro banner persists above the conversation (visible during and after
+  // an answer); the example chips are a starter shown only until the first turn.
+  const showIntro = hasApp && !!queryIntro
+  const showStarter = hasApp && !hasChat && exampleQueries.length > 0
   const showRefsPane = hasChat && !refsHidden
 
   return (
@@ -331,25 +337,24 @@ export default function QueryTab({ active }) {
         </div>
         )}
         <div className="chat-col">
+          {showIntro && <div className="query-intro-banner">{queryIntro}</div>}
           <div className="msgs" ref={msgsRef} onScroll={onMsgsScroll}>
+            {!hasApp && !hasChat && (
+              <div className="query-empty">{t('query.intro')}</div>
+            )}
             {showStarter && (
               <div className="query-starter">
-                {queryIntro && <div className="query-starter-intro">{queryIntro}</div>}
-                {exampleQueries.length > 0 && (
-                  <>
-                    <div className="query-starter-label">{t('query.tryAsking')}</div>
-                    <div className="chips">
-                      {exampleQueries.map((q, i) => (
-                        <button
-                          key={i}
-                          className="chip chip-btn"
-                          disabled={querying}
-                          onClick={() => sendQuery(q)}
-                        >{q}</button>
-                      ))}
-                    </div>
-                  </>
-                )}
+                <div className="query-starter-label">{t('query.tryAsking')}</div>
+                <div className="chips">
+                  {exampleQueries.map((q, i) => (
+                    <button
+                      key={i}
+                      className="chip chip-btn"
+                      disabled={querying}
+                      onClick={() => sendQuery(q)}
+                    >{q}</button>
+                  ))}
+                </div>
               </div>
             )}
             {msgs.map((m, i) => {
