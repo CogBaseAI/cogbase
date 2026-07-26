@@ -23,7 +23,7 @@ import TaskProgressModal from './components/modals/TaskProgressModal'
 // in ./nav alongside the hash router that also consumes them.
 
 function Layout() {
-  const { accountId, mode, email, logout, namespaceName, setNamespaceName, namespaces, namespacesLoaded, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp } = useApp()
+  const { accountId, mode, email, logout, namespaceName, setNamespaceName, namespaces, namespacesLoaded, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp, autoSelectApp, setAutoSelectApp } = useApp()
   const { t, lang, setLang } = useT()
   const [activeTab, setActiveTab] = useState('build')
   const [focus, setFocus] = useState(TAB_TIER['build'])   // which tier's sub-nav shows
@@ -101,6 +101,33 @@ function Layout() {
       setCurrentApp('')
     }
   }, [appsNs, apps, currentApp, namespaceName, setCurrentApp])
+
+  // First landing after a brand-new-account signup: the server seeded a starter
+  // workspace (legal-team namespace + contract-analyst app; api/provisioning.py). The
+  // namespace auto-selects via the reconcile above; this adopts the provisioned app and
+  // drops the owner on Ingest — the seeded app has no documents yet, so uploading is the
+  // one thing to do next (rather than the pick-an-app empty state or the Build tab).
+  // One-shot: raised only by the signup path (context.jsx) and consumed the moment the
+  // seeded app loads, so a normal namespace switch never auto-picks an app or hijacks
+  // navigation — that keeps the deliberate pick-an-app empty state for everyone else.
+  useEffect(() => {
+    if (!autoSelectApp || !namespaceName || appsNs !== namespaceName) return
+    // Consume the flag only once the resolved namespace's apps have actually
+    // arrived (apps.length) — otherwise the transient empty default-namespace
+    // window would clear it before the seeded workspace loads. If provisioning
+    // yielded no app, it simply lingers until one appears, then adopts it.
+    if (apps.length) {
+      // Navigate by making the URL authoritative rather than an imperative goTab:
+      // the namespace just resolved, and the hashchange it queued is still in flight.
+      // An imperative focus change would be reverted when that stale event fires and
+      // re-applies the namespace-tier route. Setting the hash (the router's supported
+      // external-change path, same as back/forward) makes onHash apply the app
+      // selection + Ingest focus atomically, and any stale event reads the live URL.
+      const target = apps.some(a => a.name === currentApp) ? currentApp : apps[0].name
+      window.location.hash = buildHash({ focus: 'application', namespaceName, currentApp: target, activeTab: 'ingest' })
+      setAutoSelectApp(false)
+    }
+  }, [autoSelectApp, appsNs, namespaceName, apps, currentApp, setAutoSelectApp])
 
   // ── Hash routing (docs/ui-navigation.md, milestone B step 5) ──
   // A pure mirror of the (focus, namespace, app, tab) tuple onto location.hash, so

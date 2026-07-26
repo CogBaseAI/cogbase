@@ -1,6 +1,6 @@
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from '../App'
 import LoginScreen from '../components/LoginScreen'
@@ -88,6 +88,54 @@ describe('AuthGate — saas gating', () => {
     expect(login).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(sidebar()).not.toBeNull())
     expect(onLoginScreen()).toBeNull()
+  })
+
+  it('auto-selects the seeded namespace + app after a brand-new-account signup', async () => {
+    window.localStorage.setItem('cogbase.mode', 'saas')
+    // A fresh signup mints a new account with no remembered selection. The server
+    // seeds a starter workspace (api/provisioning.py); the UI should land the owner
+    // in it without a manual pick.
+    const signup = vi.fn(() =>
+      Promise.resolve({ ok: true, status: 200,
+        json: async () => ({ access_token: 'new-token', account_id: 'acct-new', email: 'owner@corp.com' }),
+        text: async () => '' }))
+    vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
+      const u = String(url)
+      const ok = (body) => Promise.resolve({ ok: true, status: 200, json: async () => body, text: async () => '' })
+      if (u.endsWith('/whoami')) return ok({ mode: 'saas', account_id: 'acct-new', email: 'owner@corp.com' })
+      if (u.endsWith('/auth/signup')) return signup(opts)
+      if (u.endsWith('/namespaces')) return ok({ namespaces: [{ name: 'legal-team' }] })
+      if (u.endsWith('/namespaces/legal-team/applications')) return ok({ applications: [{ name: 'contract-analyst' }] })
+      // saas mode configures LLM/embedding providers at the service level, so
+      // /system/config reports them configured — otherwise SettingsTab yanks the
+      // user to Settings, which would (correctly) preempt the Ingest landing.
+      if (u.endsWith('/system/config')) return ok({ llm: { provider: 'openai' }, embedding: { provider: 'openai' } })
+      return ok({ applications: [], namespaces: [], skills: [] })
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await waitFor(() => expect(onLoginScreen()).toBeInTheDocument())
+
+    // Switch to the sign-up tab, then create the account.
+    await user.click(screen.getByRole('button', { name: 'Create account' }))
+    await user.type(screen.getByLabelText('Email'), 'owner@corp.com')
+    await user.type(screen.getByLabelText('Password'), 'hunter2!!')
+    await user.click(document.querySelector('button.btn-primary'))
+
+    expect(signup).toHaveBeenCalledTimes(1)
+    // The header's app pill reflects the seeded (namespace, app) pair — proof the
+    // provisioned workspace was auto-selected, no manual pick required.
+    await waitFor(() => expect(sidebar()).not.toBeNull())
+    // Re-query inside waitFor: the pill only gains `.on` once the async cascade
+    // (namespaces → reconcile → apps → auto-select) resolves, after the sidebar paints.
+    await waitFor(() => expect(document.querySelector('.app-pill.on')?.textContent).toContain('contract-analyst'))
+    expect(document.querySelector('.app-pill.on .app-pill-ns')?.textContent).toBe('legal-team')
+    // The seeded app has no documents, so the owner is dropped on Ingest to upload:
+    // the application tier is focused and its Ingest tab is the active side-nav item.
+    await waitFor(() => {
+      const ingestNav = within(sidebar()).queryByRole('button', { name: 'Ingest' })
+      expect(ingestNav?.className).toContain('active')
+    })
   })
 
   it('restores the account\'s last-used namespace + app on sign-in', async () => {

@@ -97,6 +97,12 @@ export function AppProvider({ children }) {
   // Whether /whoami has resolved at least once, so the gate can tell "still
   // checking" from "checked, not signed in" and avoid flashing the login screen.
   const [authChecked, setAuthChecked] = useState(false)
+  // One-shot flag raised by a brand-new-account signup. A fresh account is seeded
+  // server-side with a starter workspace (a legal-team namespace + contract-analyst
+  // app; see api/provisioning.py). The namespace auto-selects via App.jsx's reconcile,
+  // and this tells App.jsx to also adopt the provisioned app once its namespace's apps
+  // load, so the owner lands in the app instead of the pick-an-app empty state.
+  const [autoSelectApp, setAutoSelectApp] = useState(false)
 
   const setAccountId = useCallback((v) => {
     const next = (v || DEFAULT_ACCOUNT_ID).trim() || DEFAULT_ACCOUNT_ID
@@ -249,6 +255,10 @@ export function AppProvider({ children }) {
       throw new Error(detail || 'Signup failed')
     }
     applySession(await resp.json())
+    // Only a no-invite signup mints a fresh account (an invitee joins an existing
+    // one and gets no provisioning), so only that path seeds the starter workspace.
+    // Raise the one-shot so App.jsx auto-selects the provisioned contract-analyst app.
+    if (!inviteToken) setAutoSelectApp(true)
   }, [apiUrl, applySession])
 
   const logout = useCallback(async () => {
@@ -377,7 +387,8 @@ export function AppProvider({ children }) {
     llmConfigured, setLlmConfigured, embConfigured, setEmbConfigured,
     // auth (saas mode)
     accessToken, email, role, authChecked, login, signup, logout,
-  }), [apiUrl, accountId, mode, bootstrap, namespaceName, namespaces, namespacesLoaded, refreshNamespaces, ensureNamespace, apps, appsNs, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName, accessToken, email, role, authChecked, login, signup, logout])
+    autoSelectApp, setAutoSelectApp,
+  }), [apiUrl, accountId, mode, bootstrap, namespaceName, namespaces, namespacesLoaded, refreshNamespaces, ensureNamespace, apps, appsNs, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName, accessToken, email, role, authChecked, login, signup, logout, autoSelectApp])
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
 }
