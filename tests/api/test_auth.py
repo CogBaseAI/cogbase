@@ -82,6 +82,47 @@ class TestSignupLogin:
         assert resp.status_code == 409
 
     @pytest.mark.asyncio
+    async def test_signup_provisions_default_workspace(self, ctx):
+        """A fresh account lands with a legal-team namespace + contract-analyst app."""
+        auth = (await ctx["client"].post(
+            "/auth/signup", json={"email": "founder@acme.co", "password": "hunter2hunter"}
+        )).json()
+        # dev mode resolves the account from X-Account-Id, so address the freshly
+        # minted account explicitly.
+        headers = {"X-Account-Id": auth["account_id"]}
+
+        namespaces = (await ctx["client"].get("/namespaces", headers=headers)).json()
+        assert {n["name"] for n in namespaces["namespaces"]} == {"legal-team"}
+
+        apps = (await ctx["client"].get(
+            "/namespaces/legal-team/applications", headers=headers
+        )).json()
+        assert [a["name"] for a in apps["applications"]] == ["contract-analyst"]
+
+    @pytest.mark.asyncio
+    async def test_invited_member_does_not_reprovision(self, ctx):
+        """Joining via invite adds no second starter workspace to the account."""
+        owner = (await ctx["client"].post(
+            "/auth/signup", json={"email": "owner@team.co", "password": "hunter2hunter"}
+        )).json()
+        invite = (await ctx["client"].post(
+            "/auth/invite",
+            json={"email": "member@team.co", "role": "member"},
+            headers=_bearer(owner["access_token"]),
+        )).json()
+        member = (await ctx["client"].post(
+            "/auth/signup",
+            json={"email": "member@team.co", "password": "hunter2hunter", "invite_token": invite["token"]},
+        )).json()
+        assert member["account_id"] == owner["account_id"]
+
+        namespaces = (await ctx["client"].get(
+            "/namespaces", headers={"X-Account-Id": owner["account_id"]}
+        )).json()
+        # Still exactly one legal-team namespace — the invite path skips provisioning.
+        assert [n["name"] for n in namespaces["namespaces"]] == ["legal-team"]
+
+    @pytest.mark.asyncio
     async def test_short_password_rejected(self, ctx):
         resp = await ctx["client"].post(
             "/auth/signup", json={"email": "x@acme.co", "password": "short"}
@@ -268,18 +309,19 @@ class TestSaasEnforcement:
             "/namespaces", json={"name": "beta"}, headers=_bearer(b["access_token"])
         )).status_code == 201
 
-        # A sees only its own namespace; B's is invisible — and a forged header
-        # cannot override the token-derived account.
+        # A sees only its own namespaces (its own + the default starter
+        # workspace); B's are invisible — and a forged header cannot override the
+        # token-derived account.
         a_list = await client.get(
             "/namespaces",
             headers={**_bearer(a["access_token"]), "X-Account-Id": b["account_id"]},
         )
         assert a_list.status_code == 200
         names = {n["name"] for n in a_list.json()["namespaces"]}
-        assert names == {"alpha"}
+        assert names == {"alpha", "legal-team"}
 
         b_list = await client.get("/namespaces", headers=_bearer(b["access_token"]))
-        assert {n["name"] for n in b_list.json()["namespaces"]} == {"beta"}
+        assert {n["name"] for n in b_list.json()["namespaces"]} == {"beta", "legal-team"}
 
     @pytest.mark.asyncio
     async def test_dev_mode_stays_header_only(self, ctx):

@@ -9,6 +9,11 @@ Account model: the first user to sign up without an invite mints a new account a
 becomes its ``owner``; teammates join an existing account by redeeming an invite
 token (``POST /auth/invite`` → the invitee signs up with that token). This backs
 the invite-only pilot while keeping open signup one config flip away.
+
+A freshly-minted account is seeded with a default starter workspace — a
+``legal-team`` namespace holding a ``contract-analyst`` application (no documents
+ingested) — so the owner lands on something usable. See
+``api/provisioning.py``. Provisioning is best-effort and never fails the signup.
 """
 
 from __future__ import annotations
@@ -31,7 +36,8 @@ from api.auth import (
     hash_refresh_token,
     verify_password,
 )
-from api.dependencies import SystemStoreDep
+from api.dependencies import AppCacheDep, SystemResourcesDep, SystemStoreDep
+from api.provisioning import provision_default_workspace
 from api.models import (
     AccessTokenResponse,
     InviteRequest,
@@ -138,7 +144,12 @@ async def get_current_principal(
 
 
 @router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def signup(body: SignupRequest, system_store: SystemStoreDep) -> TokenResponse:
+async def signup(
+    body: SignupRequest,
+    system_store: SystemStoreDep,
+    app_cache: AppCacheDep,
+    system_resources: SystemResourcesDep,
+) -> TokenResponse:
     """Create a user. Without an invite, mint a new account and become its owner."""
     email = _normalize_email(body.email)
     if not _EMAIL_RE.match(email):
@@ -192,6 +203,15 @@ async def signup(body: SignupRequest, system_store: SystemStoreDep) -> TokenResp
     await system_store.save_user(user)
     if body.invite_token:
         await system_store.mark_invite_accepted(body.invite_token)
+    else:
+        # Fresh account: seed a starter workspace (legal-team namespace +
+        # contract-analyst app). Best-effort — never fails the signup.
+        await provision_default_workspace(
+            account_id,
+            system_store=system_store,
+            app_cache=app_cache,
+            system_resources=system_resources,
+        )
     logger.info("user signed up user_id=%s account=%s role=%s", user.user_id, account_id, role)
     return await _issue_tokens(system_store, user)
 
