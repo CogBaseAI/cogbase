@@ -163,6 +163,23 @@ class ApplicationListResponse(BaseModel):
     total: int
 
 
+class AppConfigPatchRequest(BaseModel):
+    """Light, allowlisted edit to a running app's presentation/behavior fields.
+
+    Unlike the ZIP-bundle ``PATCH /{app_name}`` (which tears the app down and
+    rebuilds it), these fields never require re-wiring pipelines or schemas:
+    ``query_intro`` / ``example_queries`` are UI-only, and ``query_prompt`` is
+    read fresh per query, so the change is applied in place with no restart.
+
+    Only fields that are explicitly set are applied — omitting a field leaves
+    it unchanged; passing ``null`` clears it.
+    """
+
+    query_prompt: str | None = None
+    query_intro: str | None = None
+    example_queries: list[str] | None = None
+
+
 # ---------------------------------------------------------------------------
 # Doc registry models
 # ---------------------------------------------------------------------------

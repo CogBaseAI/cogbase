@@ -489,6 +489,76 @@ class TestUpdateApplication:
         assert "boom" in data["error"]
 
 
+class TestUpdateApplicationConfig:
+    """Light JSON PATCH of query_prompt / query_intro / example_queries."""
+
+    @pytest.mark.asyncio
+    async def test_patch_ui_fields_no_rebuild(self, client):
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
+            await client.post(
+                "/namespaces/default/applications",
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
+            )
+
+        # No build_app patch here: a successful call proves the light path never
+        # touches the rebuild path.
+        resp = await client.patch(
+            "/namespaces/default/applications/my-contract-analyzer/config",
+            json={
+                "query_intro": "跨合同组合提问。",
+                "example_queries": ["哪些合同在 2026-01-01 前到期？"],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "active"
+        assert data["config"]["query_intro"] == "跨合同组合提问。"
+        assert data["config"]["example_queries"] == ["哪些合同在 2026-01-01 前到期？"]
+
+    @pytest.mark.asyncio
+    async def test_patch_query_prompt_updates_live_instance(self, app_overrides):
+        client = app_overrides["client"]
+        live = _mock_app_instance()
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=live):
+            await client.post(
+                "/namespaces/default/applications",
+                files={"bundle": ("bundle.zip", _VALID_BUNDLE, "application/zip")},
+            )
+
+        resp = await client.patch(
+            "/namespaces/default/applications/my-contract-analyzer/config",
+            json={"query_prompt": "You are a contract lawyer."},
+        )
+        assert resp.status_code == 200
+        live.set_query_prompt.assert_called_once_with("You are a contract lawyer.")
+
+    @pytest.mark.asyncio
+    async def test_patch_omitted_fields_unchanged(self, client):
+        seed_yaml = _VALID_CONFIG_YAML + b"query_intro: original intro\n"
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
+            await client.post(
+                "/namespaces/default/applications",
+                files={"bundle": ("bundle.zip", _make_bundle(seed_yaml), "application/zip")},
+            )
+
+        resp = await client.patch(
+            "/namespaces/default/applications/my-contract-analyzer/config",
+            json={"example_queries": ["one"]},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["config"]["query_intro"] == "original intro"
+        assert data["config"]["example_queries"] == ["one"]
+
+    @pytest.mark.asyncio
+    async def test_patch_nonexistent_returns_404(self, client):
+        resp = await client.patch(
+            "/namespaces/default/applications/ghost/config",
+            json={"query_intro": "x"},
+        )
+        assert resp.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # DELETE /applications/{app_name}
 # ---------------------------------------------------------------------------

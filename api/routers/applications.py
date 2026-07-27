@@ -35,6 +35,7 @@ from api.models import (
     AddMemoryRequest,
     AddMemoryResponse,
     AddSkillRequest,
+    AppConfigPatchRequest,
     AppSkillRef,
     AnswerReferences,
     AppSkillsResponse,
@@ -463,6 +464,56 @@ async def update_application(
         )
 
     await system_store.save_app(updated)
+    return _to_response(updated)
+
+
+@router.patch("/{app_name}/config", response_model=ApplicationResponse)
+async def update_application_config(
+    app_name: str,
+    patch: AppConfigPatchRequest,
+    scope: RequestScopeDep,
+    system_store: SystemStoreDep,
+    app_cache: AppCacheDep,
+) -> ApplicationResponse:
+    """Light, in-place edit of an app's presentation/behavior fields.
+
+    Unlike ``PATCH /{app_name}`` (full bundle replace + rebuild), this touches
+    only ``query_prompt`` / ``query_intro`` / ``example_queries`` — none of
+    which require re-wiring pipelines or schemas — so the app is never torn
+    down or moved out of ``active``.  Only fields explicitly present in the
+    request body are applied.
+    """
+    record = await system_store.get_app(scope.account_id, scope.namespace_id, app_name)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Application '{app_name}' not found")
+
+    changes = patch.model_dump(exclude_unset=True)
+    if not changes:
+        return _to_response(record)
+
+    data = yaml.safe_load(record.config_yaml) or {}
+    data.update(changes)
+
+    # Re-validate the merged config so a bad edit is rejected before it is
+    # persisted, and re-serialize through the canonical writer.
+    try:
+        config = AppConfig.model_validate(data)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid config: {exc}") from exc
+
+    updated = record.model_copy(
+        update={"config_yaml": config.to_yaml(), "updated_at": _now()}
+    )
+    await system_store.save_app(updated)
+
+    # query_prompt is read fresh per query, so update the live instance in
+    # place; query_intro / example_queries are UI-only and need no live change.
+    if "query_prompt" in changes:
+        app = app_cache.get(cache_key(scope.account_id, scope.namespace_id, app_name))
+        if app is not None:
+            app.set_query_prompt(config.query_prompt)
+
+    logger.info("Application '%s' config patched (%s)", app_name, ", ".join(changes))
     return _to_response(updated)
 
 

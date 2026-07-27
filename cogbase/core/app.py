@@ -407,6 +407,14 @@ class CogBaseApp:
                 "app.doc_workflow.upsert_failed workflow=%s doc_id=%s", wf_name, doc_id
             )
 
+    def set_query_prompt(self, prompt: str | None) -> None:
+        """Update the app-level query system prompt in place.
+
+        Read fresh on every ``query_stream`` call, so mutating the attribute is
+        enough for the next query to pick it up — no rebuild required.
+        """
+        self._query_prompt = prompt
+
     async def query_stream(
         self,
         text: str,
