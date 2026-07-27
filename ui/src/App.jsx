@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { AppProvider, useApp } from './context'
 import { TAB_TIER, DEFAULT_TAB, buildHash, parseHash, nsOptions } from './nav'
 import { I18nProvider, useT, LANGUAGES } from './i18n'
+import { syncProvisionedAppLanguage } from './provisionedApps'
 import BuildTab from './components/tabs/BuildTab'
 import AppsTab from './components/tabs/AppsTab'
 import NamespacesTab from './components/tabs/NamespacesTab'
@@ -23,8 +24,17 @@ import TaskProgressModal from './components/modals/TaskProgressModal'
 // in ./nav alongside the hash router that also consumes them.
 
 function Layout() {
-  const { accountId, mode, email, logout, namespaceName, setNamespaceName, namespaces, namespacesLoaded, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp, autoSelectApp, setAutoSelectApp } = useApp()
+  const { accountId, mode, email, logout, namespaceName, setNamespaceName, namespaces, namespacesLoaded, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp, autoSelectApp, setAutoSelectApp, apiUrl, authFetch } = useApp()
   const { t, lang, setLang } = useT()
+
+  // Keep the auto-provisioned contract-analyst's Query starter panel (query_intro
+  // / example_queries) in the active UI language. App config stays single-language;
+  // this re-localizes just those UI-only fields via the light config PATCH, and is
+  // a no-op for any other or user-customized app. Runs on language change and when
+  // the app list (re)loads.
+  useEffect(() => {
+    syncProvisionedAppLanguage({ apps, lang, apiUrl, authFetch, refreshApps })
+  }, [lang, apps, apiUrl, authFetch, refreshApps])
   const [activeTab, setActiveTab] = useState('build')
   const [focus, setFocus] = useState(TAB_TIER['build'])   // which tier's sub-nav shows
   const [docModal, setDocModal] = useState(null)        // null | doc object

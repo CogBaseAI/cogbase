@@ -9,16 +9,19 @@
 
 name: contract-analyst
 
-# Starter prompts shown in the Query tab's empty state. The first two are
-# cross-document reasoning; the third exercises the legal-review skill (redline).
+# Starter prompts shown in the Query tab's empty state. Kept generic so they read
+# naturally on a freshly provisioned app before any documents are uploaded (the
+# provisioner seeds this app empty — see api/provisioning.py): the first exercises
+# the legal-review skill (redline), the rest are cross-document reasoning. Keep
+# these in sync with the `en` preset in ui/src/provisionedApps.js.
 query_intro: >-
   Ask across the contract portfolio, or have a single contract reviewed clause
   by clause and returned as a tracked-changes redline.
 example_queries:
-  - review the saas-002 contract on behalf of the customer, disadvantaged position
-  - which contracts expire before 2026-01-01?
-  - we have multiple agreements with TechVault Solutions — do their payment terms conflict?
+  - review an uploaded contract
+  - which of my contracts expire in the next 90 days?
   - which agreements have unlimited liability or no stated liability cap?
+  - flag any auto-renewal or unusual termination clauses across my contracts
 
 # Clause-by-clause redline review of an uploaded .docx contract. Loaded as a
 # built-in skill from the system skills_dir (see the deployment's
