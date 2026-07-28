@@ -143,6 +143,66 @@ it('starts a session on the first question and threads session_id into the query
   await waitFor(() => expect(screen.getByText('Hello there')).toBeInTheDocument())
 })
 
+it('auto-sends a pendingQuery with send:true, then reports it consumed', async () => {
+  const fetchSpy = mockFetch({
+    streamEvents: [{ result: { answer: 'Reviewed.', references: { chunks: [], structured_records: [] } } }],
+  })
+  const onPendingConsumed = vi.fn()
+  const review = 'Review the contract "MSA_Acme.pdf" — summarize the key terms.'
+  render(
+    <I18nProvider>
+      <AppProvider>
+        <SetApp name="contract-analyst" />
+        <QueryTab active={true} pendingQuery={{ text: review, send: true }} onPendingConsumed={onPendingConsumed} />
+      </AppProvider>
+    </I18nProvider>
+  )
+
+  // Fired exactly once as a real query, with the handed-off text.
+  await waitFor(() => {
+    const streamCall = fetchSpy.mock.calls.find(([u]) => String(u).endsWith('/query/stream'))
+    expect(streamCall).toBeTruthy()
+    expect(JSON.parse(streamCall[1].body).text).toBe(review)
+  })
+  expect(onPendingConsumed).toHaveBeenCalledTimes(1)
+  await waitFor(() => expect(screen.getByText('Reviewed.')).toBeInTheDocument())
+})
+
+it('prefills the input for a send:false pendingQuery without sending', async () => {
+  const fetchSpy = mockFetch()
+  const onPendingConsumed = vi.fn()
+  const review = 'Review the contract "Acme_MSA.pdf" — summarize the key terms.'
+  render(
+    <I18nProvider>
+      <AppProvider>
+        <SetApp name="contract-analyst" />
+        <QueryTab active={true} pendingQuery={{ text: review, send: false }} onPendingConsumed={onPendingConsumed} />
+      </AppProvider>
+    </I18nProvider>
+  )
+
+  // The composer is seeded with the review text for the user to edit/send.
+  await waitFor(() => expect(screen.getByPlaceholderText(/Ask a question/).value).toBe(review))
+  expect(onPendingConsumed).toHaveBeenCalledTimes(1)
+  // Nothing was sent — the user drives send after choosing which contract.
+  expect(fetchSpy.mock.calls.some(([u]) => String(u).endsWith('/query/stream'))).toBe(false)
+})
+
+it('does not consume a pendingQuery while the tab is inactive', async () => {
+  const fetchSpy = mockFetch()
+  render(
+    <I18nProvider>
+      <AppProvider>
+        <SetApp name="contract-analyst" />
+        <QueryTab active={false} pendingQuery={{ text: 'Review something', send: true }} onPendingConsumed={() => {}} />
+      </AppProvider>
+    </I18nProvider>
+  )
+  // Give effects a chance to run, then assert no query stream was opened.
+  await waitFor(() => expect(fetchSpy).toHaveBeenCalled())
+  expect(fetchSpy.mock.calls.some(([u]) => String(u).endsWith('/query/stream'))).toBe(false)
+})
+
 it('renders a markdown table answer as an HTML table', async () => {
   const table = '| Name | Term |\n| --- | --- |\n| Acme | 12 months |\n| Globex | 24 months |'
   mockFetch({ streamEvents: [{ result: { answer: table, references: { chunks: [], structured_records: [] } } }] })

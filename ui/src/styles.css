@@ -886,6 +886,21 @@ tr:hover td { background: var(--bg3); }
   padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 12px;
 }
 
+/* ── Post-upload review CTA ── */
+.review-cta {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 22px; padding: 16px 18px;
+  border: 1px solid rgba(52,211,153,.35); border-radius: 10px;
+  background: rgba(52,211,153,.06);
+  animation: reviewCtaIn .28s ease;
+}
+@keyframes reviewCtaIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.review-cta-body { min-width: 200px; flex: 1; }
+.review-cta-title { font-size: 14px; font-weight: 600; }
+.review-cta-hint { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.review-cta-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+
 /* ── Ingest doc list ── */
 .ingest-docs-hd {
   display: flex; align-items: center; justify-content: space-between;

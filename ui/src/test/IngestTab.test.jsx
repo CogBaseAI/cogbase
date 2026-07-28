@@ -13,12 +13,12 @@ function SetApp({ name }) {
   return null
 }
 
-function Harness({ appName, active = true, onDocsChanged = () => {} }) {
+function Harness({ appName, active = true, onDocsChanged = () => {}, onStartQuery = () => {} }) {
   return (
     <I18nProvider>
       <AppProvider>
         <SetApp name={appName} />
-        <IngestTab active={active} refreshKey={0} onOpenTaskProgress={() => {}} onOpenWfModal={() => {}} onDocsChanged={onDocsChanged} />
+        <IngestTab active={active} refreshKey={0} onOpenTaskProgress={() => {}} onOpenWfModal={() => {}} onDocsChanged={onDocsChanged} onStartQuery={onStartQuery} />
       </AppProvider>
     </I18nProvider>
   )
@@ -245,6 +245,101 @@ it('downloads the original file using the source filename', async () => {
   expect(clickSpy).toHaveBeenCalledTimes(1)
   expect(URL.createObjectURL).toHaveBeenCalledTimes(1)
   expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fake')
+})
+
+// Routes the full upload → poll → docs cycle so the post-upload review CTA can
+// appear. `filenames` drives how many files (and thus tasks) the upload yields;
+// `taskStatus` lets a test drive a failed ingest (no CTA). Each file gets a
+// task tN → doc docN, all resolving to `taskStatus`.
+function mockFetchUpload(taskStatus = 'done', count = 1) {
+  const taskIds = Array.from({ length: count }, (_, i) => `t${i + 1}`)
+  vi.spyOn(global, 'fetch').mockImplementation((url) => {
+    const u = String(url)
+    if (u.endsWith('/upload_documents')) {
+      return Promise.resolve({ ok: true, json: async () => ({ task_ids: taskIds }) })
+    }
+    const m = u.match(/\/tasks\/t(\d+)$/)
+    if (m) {
+      const tid = `t${m[1]}`
+      return Promise.resolve({ ok: true, json: async () => ({ task_id: tid, doc_id: `doc-${m[1]}`, status: taskStatus, error: taskStatus === 'failed' ? 'boom' : undefined }) })
+    }
+    if (u.endsWith('/docs')) {
+      return Promise.resolve({ ok: true, json: async () => ({ docs: [] }) })
+    }
+    if (u.endsWith('/workflows')) {
+      return Promise.resolve({ ok: true, json: async () => ({ workflows: [] }) })
+    }
+    return Promise.resolve({ ok: true, json: async () => ({}) })
+  })
+}
+
+async function uploadFiles(container, filenames) {
+  const fileInput = container.querySelector('input[type=file]')
+  const files = filenames.map(name => new File(['contract bytes'], name, { type: 'application/pdf' }))
+  await userEvent.upload(fileInput, files)
+  await userEvent.click(screen.getByText('▲ Upload & Ingest'))
+}
+
+it('auto-sends a filename-scoped review when a single contract is uploaded', async () => {
+  mockFetchUpload('done', 1)
+  const onStartQuery = vi.fn()
+
+  const { container } = render(<Harness appName="app1" onStartQuery={onStartQuery} />)
+  await uploadFiles(container, ['MSA_Acme.pdf'])
+
+  const reviewBtn = await screen.findByText('⚖ Review "MSA_Acme.pdf"', {}, { timeout: 4000 })
+  await userEvent.click(reviewBtn)
+
+  expect(onStartQuery).toHaveBeenCalledTimes(1)
+  const [query, send] = onStartQuery.mock.calls[0]
+  expect(query).toContain('MSA_Acme.pdf')
+  expect(send).toBe(true) // single → auto-send
+  // One-shot: the card is dismissed once the review is launched.
+  expect(screen.queryByText('⚖ Review "MSA_Acme.pdf"')).not.toBeInTheDocument()
+})
+
+it('prefills the first contract (no auto-send) when multiple are uploaded', async () => {
+  mockFetchUpload('done', 2)
+  const onStartQuery = vi.fn()
+
+  const { container } = render(<Harness appName="app1" onStartQuery={onStartQuery} />)
+  await uploadFiles(container, ['Acme_MSA.pdf', 'Globex_NDA.pdf'])
+
+  // A single "Review a contract" button, not one-per-file.
+  const reviewBtn = await screen.findByText('⚖ Review a contract', {}, { timeout: 4000 })
+  await userEvent.click(reviewBtn)
+
+  expect(onStartQuery).toHaveBeenCalledTimes(1)
+  const [query, send] = onStartQuery.mock.calls[0]
+  expect(query).toContain('Acme_MSA.pdf') // scoped to the first, one at a time
+  expect(query).not.toContain('Globex_NDA.pdf')
+  expect(send).toBe(false) // multiple → prefill only, user picks then sends
+})
+
+it('the CTA "Ask a question" jumps to Query without seeding a query', async () => {
+  mockFetchUpload('done', 1)
+  const onStartQuery = vi.fn()
+
+  const { container } = render(<Harness appName="app1" onStartQuery={onStartQuery} />)
+  await uploadFiles(container, ['MSA_Acme.pdf'])
+
+  const askBtn = await screen.findByText('💬 Ask a question', {}, { timeout: 4000 })
+  await userEvent.click(askBtn)
+
+  expect(onStartQuery).toHaveBeenCalledWith(null)
+})
+
+it('does not offer a review CTA when the ingest fails', async () => {
+  mockFetchUpload('failed', 1)
+  const onStartQuery = vi.fn()
+
+  const { container } = render(<Harness appName="app1" onStartQuery={onStartQuery} />)
+  await uploadFiles(container, ['MSA_Acme.pdf'])
+
+  // The failed-task row confirms the upload cycle finished; no CTA should show.
+  await screen.findByText('doc-1', {}, { timeout: 4000 })
+  expect(screen.queryByText(/Review/)).not.toBeInTheDocument()
+  expect(onStartQuery).not.toHaveBeenCalled()
 })
 
 it('alerts when the original download fails', async () => {

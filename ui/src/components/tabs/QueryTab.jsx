@@ -5,7 +5,7 @@ import { useApp } from '../../context'
 import { useT } from '../../i18n'
 import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks, latestDocxArtifact, artifactLabel, filenameFromContentDisposition } from '../../utils'
 
-export default function QueryTab({ active }) {
+export default function QueryTab({ active, pendingQuery, onPendingConsumed }) {
   const { apiUrl, appBase, authFetch, currentApp, apps } = useApp()
   const { t } = useT()
   // Chat log holds only real user/bot turns (plus the rare opened-empty-session
@@ -251,6 +251,33 @@ export default function QueryTab({ active }) {
     setMsgs([])
     loadSessions()
   }
+
+  // Consume a query handed off from the Ingest tab's post-upload CTA: once this
+  // tab is active and an app is selected, either auto-send it (single-doc review)
+  // or just prefill the input so the user can pick which contract, then send
+  // (multi-doc review). Fires exactly once — the parent clears it on consume.
+  useEffect(() => {
+    if (!active || !pendingQuery || !currentApp) return
+    const { text, send } = pendingQuery
+    if (send) {
+      if (querying) return // wait for the in-flight answer; harmless to defer
+      onPendingConsumed?.()
+      sendQuery(text)
+    } else {
+      onPendingConsumed?.()
+      setInput(text)
+      // Focus and size the box, cursor at the end, so editing which contract to
+      // review is a keystroke away.
+      setTimeout(() => {
+        const el = textareaRef.current
+        if (!el) return
+        el.focus()
+        autoResize(el)
+        const n = el.value.length
+        el.setSelectionRange(n, n)
+      }, 0)
+    }
+  }, [active, pendingQuery, currentApp])
 
   // A fresh chat (only system notices, no user/bot turns) has nothing yet; used
   // to gate the starter chips.

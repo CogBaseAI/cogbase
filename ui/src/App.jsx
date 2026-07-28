@@ -44,6 +44,19 @@ function Layout() {
   const [ingestRefreshKey, setIngestRefreshKey] = useState(0)
   const [dataRefreshKey, setDataRefreshKey] = useState(0)
   const [wfCompleteCollection, setWfCompleteCollection] = useState(null)
+  // A query the Ingest tab's post-upload CTA hands off to the Query tab: jump to
+  // Query and either auto-send it or just prefill the input. Shape: null (plain
+  // navigate) | { text, send }. QueryTab clears it once consumed.
+  const [pendingQuery, setPendingQuery] = useState(null)
+
+  // Navigate to the Query tab, optionally seeding a query. `send` true auto-sends
+  // it (single-doc review); false just prefills the input so the user can pick
+  // which contract, then send (multi-doc review). `text` null/empty just switches
+  // tab (the plain "Ask a question" action).
+  function startQuery(text, send = true) {
+    setPendingQuery(text && text.trim() ? { text: text.trim(), send } : null)
+    goTab('query')
+  }
 
   // Two navigation actions keep focus and activeTab in lockstep: selecting a tab
   // snaps focus to its tier; focusing a tier lands on that tier's default tab.
@@ -321,6 +334,7 @@ function Layout() {
             onOpenTaskProgress={setTaskProgress}
             onOpenWfModal={setWfModal}
             onDocsChanged={() => setDataRefreshKey(k => k + 1)}
+            onStartQuery={startQuery}
           />
         </div>
         <div className={`panel ${activeTab === 'data' && !showEmpty ? 'active' : ''}`}>
@@ -333,7 +347,11 @@ function Layout() {
           />
         </div>
         <div className={`panel ${activeTab === 'query' && !showEmpty ? 'active' : ''}`}>
-          <QueryTab active={activeTab === 'query' && !showEmpty} />
+          <QueryTab
+            active={activeTab === 'query' && !showEmpty}
+            pendingQuery={pendingQuery}
+            onPendingConsumed={() => setPendingQuery(null)}
+          />
         </div>
         <div className={`panel ${activeTab === 'memory' && !showEmpty ? 'active' : ''}`}>
           <MemoryTab active={activeTab === 'memory' && !showEmpty} />

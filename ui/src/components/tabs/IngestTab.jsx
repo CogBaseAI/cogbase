@@ -10,7 +10,7 @@ function metaString(doc) {
   return Object.keys(meta).length ? Object.entries(meta).map(([k, v]) => `${k}: ${v}`).join(', ') : ''
 }
 
-export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOpenWfModal, onDocsChanged }) {
+export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOpenWfModal, onDocsChanged, onStartQuery }) {
   const { appBase, authFetch, currentApp, namespaceName } = useApp()
   const { t } = useT()
   const [pickedFiles, setPickedFiles] = useState([])
@@ -18,6 +18,9 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
   const [uploading, setUploading] = useState(false)
   const [uploadLog, setUploadLog] = useState(null) // null | [{status, docId, error}]
   const [uploadErr, setUploadErr] = useState(null)
+  // Docs from the latest successful upload, offered for one-click review in the
+  // post-upload CTA. [{docId, filename}]; empty hides the card.
+  const [reviewables, setReviewables] = useState([])
   const [docs, setDocs] = useState(null)
   const [wfMaps, setWfMaps] = useState({}) // {wfName -> {docId -> wfStatus}}
   const [wfNames, setWfNames] = useState([])
@@ -73,6 +76,7 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
     setAnyPendingWf(false)
     setUploadLog(null)
     setUploadErr(null)
+    setReviewables([])
   }, [currentApp, namespaceName])
 
   // namespaceName is a dep so switching namespaces re-fetches even when the app
@@ -93,6 +97,11 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
     setUploading(true)
     setUploadLog(null)
     setUploadErr(null)
+    setReviewables([])
+    // Snapshot filenames now, in upload order, so we can pair them with tasks
+    // (waitForTasks preserves task_ids order, which matches the append order) —
+    // pickedFiles is cleared before the review CTA reads them.
+    const names = pickedFiles.map(f => f.name)
     try {
       const form = new FormData()
       pickedFiles.forEach(f => form.append('files', f))
@@ -103,6 +112,10 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
       setUploadLog([{ status: 'processing' }])
       const tasks = await waitForTasks(appBase, currentApp, uploadBody.task_ids, { fetchFn: authFetch, timeout: 300000 })
       setUploadLog(tasks.map(t => ({ status: t.status, docId: t.doc_id || t.task_id, error: t.error })))
+      setReviewables(tasks
+        .map((task, i) => ({ status: task.status, docId: task.doc_id, filename: names[i] || task.doc_id }))
+        .filter(r => r.status === 'done' && r.docId)
+        .map(({ docId, filename }) => ({ docId, filename })))
       setPickedFiles([])
       if (fileInputRef.current) fileInputRef.current.value = ''
       loadIngestDocs()
@@ -112,6 +125,18 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
     } finally {
       setUploading(false)
     }
+  }
+
+  // Hand a review query to the Query tab, always scoped to a single contract so
+  // the answer (and any redline) is about one document at a time. A lone upload
+  // auto-sends; a batch prefills the first contract's query without sending, so
+  // the user can pick which one to review, then send. One-shot: clear the card.
+  function startReview() {
+    if (!reviewables.length) return
+    const single = reviewables.length === 1
+    const query = t('ingest.reviewQueryOne', { name: reviewables[0].filename })
+    setReviewables([])
+    onStartQuery?.(query, single)
   }
 
   const ACTIVE_WF = new Set(['pending', 'running'])
@@ -226,6 +251,31 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
                 {task.status !== 'done' && <span style={{ color: 'var(--red)' }}>{task.error || t('ingest.unknownError')}</span>}
               </div>
             ))}
+          </div>
+        )}
+
+        {reviewables.length > 0 && (
+          <div className="review-cta show">
+            <div className="review-cta-body">
+              <div className="review-cta-title">
+                {reviewables.length === 1
+                  ? t('ingest.reviewCtaTitle')
+                  : t('ingest.reviewCtaTitleMany', { count: reviewables.length })}
+              </div>
+              <div className="review-cta-hint">
+                {reviewables.length === 1 ? t('ingest.reviewCtaHint') : t('ingest.reviewCtaHintMany')}
+              </div>
+            </div>
+            <div className="review-cta-actions">
+              <button className="btn btn-green" onClick={startReview}>
+                {reviewables.length === 1
+                  ? t('ingest.reviewBtnOne', { name: reviewables[0].filename })
+                  : t('ingest.reviewBtnMany')}
+              </button>
+              <button className="btn btn-ghost" onClick={() => { setReviewables([]); onStartQuery?.(null) }}>
+                {t('ingest.askBtn')}
+              </button>
+            </div>
           </div>
         )}
 
