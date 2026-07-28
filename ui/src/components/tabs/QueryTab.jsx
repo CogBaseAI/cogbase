@@ -255,16 +255,17 @@ export default function QueryTab({ active, pendingQuery, onPendingConsumed }) {
   // Consume a query handed off from the Ingest tab's post-upload CTA: once this
   // tab is active and an app is selected, either auto-send it (single-doc review)
   // or just prefill the input so the user can pick which contract, then send
-  // (multi-doc review). Fires exactly once — the parent clears it on consume.
+  // (multi-doc review). Always in a fresh chat — a review shouldn't thread onto
+  // whatever conversation was open. Fires once — the parent clears it on consume.
   useEffect(() => {
     if (!active || !pendingQuery || !currentApp) return
     const { text, send } = pendingQuery
+    if (send && querying) return // wait for the in-flight answer; harmless to defer
+    onPendingConsumed?.()
+    newChat() // close the current session, clear the view, start clean
     if (send) {
-      if (querying) return // wait for the in-flight answer; harmless to defer
-      onPendingConsumed?.()
       sendQuery(text)
     } else {
-      onPendingConsumed?.()
       setInput(text)
       // Focus and size the box, cursor at the end, so editing which contract to
       // review is a keystroke away.

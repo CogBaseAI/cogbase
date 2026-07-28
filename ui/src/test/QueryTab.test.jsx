@@ -188,6 +188,33 @@ it('prefills the input for a send:false pendingQuery without sending', async () 
   expect(fetchSpy.mock.calls.some(([u]) => String(u).endsWith('/query/stream'))).toBe(false)
 })
 
+it('opens a fresh chat (closing the current session) when consuming a review handoff', async () => {
+  const fetchSpy = mockFetch()
+  const user = userEvent.setup()
+  const tree = pending => (
+    <I18nProvider>
+      <AppProvider>
+        <SetApp name="contract-analyst" />
+        <QueryTab active={true} pendingQuery={pending} onPendingConsumed={() => {}} />
+      </AppProvider>
+    </I18nProvider>
+  )
+  const { rerender } = render(tree(null))
+  await waitFor(() => expect(screen.queryByText(/No app selected/)).not.toBeInTheDocument())
+
+  // Open a chat first so there's a live session to close.
+  await ask(user, 'first question')
+  await waitFor(() => expect(screen.getByText('Hello there')).toBeInTheDocument())
+
+  // Hand off a review: it must start clean, closing the prior session (sess-1).
+  rerender(tree({ text: 'Review the contract "X.pdf"', send: true }))
+
+  await waitFor(() => expect(
+    fetchSpy.mock.calls.some(([u, o]) =>
+      String(u).includes('/sessions/sess-1/close') && (o?.method || '').toUpperCase() === 'POST')
+  ).toBe(true))
+})
+
 it('does not consume a pendingQuery while the tab is inactive', async () => {
   const fetchSpy = mockFetch()
   render(
