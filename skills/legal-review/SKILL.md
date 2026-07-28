@@ -261,8 +261,12 @@ corrupting the file:
    the user is still weighing options and asks to see the effect first, you can regenerate a
    redline of the accepted-only suggestions instead (drop `--all`, keep tracked changes).
 
-When the review is complete, `delete_artifact` the review file (and any stale redline
-previews) to clean up the working state.
+Do **not** `delete_artifact` a redline, final docx, or review file once you've handed its
+link to the user: those links live on in the chat history, and a later turn's cleanup would
+leave the earlier message pointing at a file that no longer downloads. Every artifact you
+save is retained for the life of the session and swept automatically when the session is
+deleted, so there is no working state to tidy up by hand — leave prior redline previews and
+review backups in place.
 
 ## Helper reference
 

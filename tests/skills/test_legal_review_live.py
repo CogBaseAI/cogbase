@@ -37,6 +37,7 @@ import glob
 import importlib.util
 import json
 import os
+import re
 from io import BytesIO
 from pathlib import Path
 from xml.sax.saxutils import escape
@@ -129,15 +130,18 @@ def _chdir(path: Path):
         os.chdir(prev)
 
 
-async def _run_turn(runner: QueryRunner, query: str, history: list[dict]) -> QueryResult:
+async def _run_turn(
+    runner: QueryRunner, query: str, history: list[dict], session_id: str | None = None
+) -> QueryResult:
     """Drive one agent turn to completion, returning its final QueryResult.
 
     The runner streams ``str`` tokens then yields a final ``QueryResult``; memory
     is off in this test, so we thread continuity by passing prior turns as
-    ``history``.
+    ``history``. ``session_id`` scopes the artifact index and scratch workdir when
+    a test needs the session-association / cleanup behavior.
     """
     result: QueryResult | None = None
-    async for item in runner.run(query, history=history):
+    async for item in runner.run(query, history=history, session_id=session_id):
         if not isinstance(item, str):
             result = item
     assert result is not None, "runner produced no final QueryResult"
@@ -146,6 +150,17 @@ async def _run_turn(runner: QueryRunner, query: str, history: list[dict]) -> Que
 
 def _generated(docstore_root: Path, pattern: str) -> list[str]:
     return sorted(glob.glob(str(docstore_root / APP_ID / "generated" / pattern)))
+
+
+# Artifact ids embedded in the download links the runner puts in an answer, e.g.
+# ``/applications/{app}/documents/{artifact_id}/download``. These are the exact
+# files a user can click on when they revisit the chat, so "the redline in the
+# history still downloads" == "this id still exists under generated/".
+_DL_RE = re.compile(rf"/applications/{re.escape(APP_ID)}/documents/([^/)\s]+)/download")
+
+
+def _linked_artifact_ids(answer: str) -> list[str]:
+    return _DL_RE.findall(answer)
 
 
 def _document_xml(path: str) -> str:
@@ -282,3 +297,82 @@ async def test_review_contract_produces_applicable_review(tmp_path):
     assert verdict_by_id.get(accept_id) == "accepted"
     for reject_id in reject_ids:
         assert verdict_by_id.get(reject_id) == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_referenced_redline_is_a_store_artifact_and_survives_until_session_delete(tmp_path):
+    """A redline linked in an intermediate turn is a durable document-store
+    artifact tied to the session — reachable when the chat is revisited, not
+    pruned by a later 'finalize' turn, and swept only on session delete.
+
+    This is the end-to-end guard for the two-part fix: the runner indexes every
+    ``save_artifact`` to the session (so the middle redline is retained and later
+    cleaned up), and the skill no longer ``delete_artifact``s files it has already
+    handed to the user.
+    """
+    docstore_root = tmp_path / "docstore"
+    store = LocalFSDocumentStore(str(docstore_root))
+    await _seed_document(store, DOC_ID, CONTRACT_PARAS)
+
+    skill = load_skill_dir(_SKILL_DIR, skill_id="legal-review")
+    assert skill is not None and skill.site_packages
+    runner = QueryRunner(
+        APP_ID,
+        _llm,
+        RetrievalResources(document_store=store),
+        MemoryTiers(),
+        skills=[skill],
+        max_calls=30,
+    )
+    session_id = "sess-redline-1"
+
+    # --- Turn 1: produce and hand back a tracked-changes redline ------------
+    q1 = (
+        f"Review the contract with doc_id '{DOC_ID}' for the Client (Beta Client LLC) "
+        "from a disadvantaged position — both are confirmed, do not ask again. Produce the "
+        "tracked-changes redline of all suggestions and give me its download link."
+    )
+    with _chdir(tmp_path):
+        r1 = await _run_turn(runner, q1, history=[], session_id=session_id)
+
+    linked = _linked_artifact_ids(r1.answer)
+    assert linked, "turn-1 answer linked no downloadable artifact"
+    # Every file linked in this (middle) answer is really in the document store,
+    # under generated/ — a link that resolved only against the local workdir would
+    # not download. And at least one is the redline .docx, not just the review json.
+    for aid in linked:
+        assert await store.exists(APP_ID, f"generated/{aid}"), f"{aid} linked but absent from doc store"
+    assert any(aid.endswith(".docx") for aid in linked), "no redline .docx was linked in turn 1"
+
+    # The linked artifacts are recorded in the session's index (so they are swept
+    # on delete — and only then).
+    index = json.loads(
+        (await store.load_bytes(APP_ID, f"generated/_sessions/{session_id}.json")).decode("utf-8")
+    )
+    assert set(linked) <= set(index)
+
+    # --- Turn 2: finalize — the 'review complete' turn -----------------------
+    q2 = (
+        "Accept clause 1's suggestion, reject the rest, finalize the review, and give me "
+        "the final clean docx."
+    )
+    history = [
+        {"role": "user", "content": q1},
+        {"role": "assistant", "content": r1.answer},
+    ]
+    with _chdir(tmp_path):
+        await _run_turn(runner, q2, history=history, session_id=session_id)
+
+    # The turn-1 redline links STILL resolve: nothing referenced in the chat
+    # history was deleted mid-session by the finalize turn.
+    for aid in linked:
+        assert await store.exists(APP_ID, f"generated/{aid}"), (
+            f"artifact {aid} linked in turn 1 was deleted before session end — dead link in history"
+        )
+
+    # --- Session delete sweeps every saved artifact and the index -----------
+    await runner.cleanup_session(session_id)
+    for aid in linked:
+        assert not await store.exists(APP_ID, f"generated/{aid}")
+    with pytest.raises(KeyError):
+        await store.load_bytes(APP_ID, f"generated/_sessions/{session_id}.json")
