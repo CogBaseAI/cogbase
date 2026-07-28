@@ -106,11 +106,19 @@ function Layout() {
   // so the application tier falls back to its empty state instead of querying a
   // phantom app. Gated on appsNs === namespaceName so a deep-linked app isn't
   // wiped before its namespace list arrives.
+  //
+  // Suspended while a fresh-signup auto-select is pending: a stale application-tier
+  // hash can survive into the seeded workspace (a prior session's deep link — the
+  // login gate doesn't clear the URL), making currentApp a phantom the moment the
+  // seeded namespace's apps load. Clearing it here would race the auto-select below,
+  // which itself replaces that phantom with the seeded app. Let the one-shot own the
+  // decision until it's consumed.
   useEffect(() => {
+    if (autoSelectApp) return
     if (appsNs === namespaceName && currentApp && !apps.some(a => a.name === currentApp)) {
       setCurrentApp('')
     }
-  }, [appsNs, apps, currentApp, namespaceName, setCurrentApp])
+  }, [autoSelectApp, appsNs, apps, currentApp, namespaceName, setCurrentApp])
 
   // First landing after a brand-new-account signup: the server seeded a starter
   // workspace (legal-team namespace + contract-analyst app; api/provisioning.py). The
@@ -127,17 +135,24 @@ function Layout() {
     // window would clear it before the seeded workspace loads. If provisioning
     // yielded no app, it simply lingers until one appears, then adopts it.
     if (apps.length) {
-      // Navigate by making the URL authoritative rather than an imperative goTab:
-      // the namespace just resolved, and the hashchange it queued is still in flight.
-      // An imperative focus change would be reverted when that stale event fires and
-      // re-applies the namespace-tier route. Setting the hash (the router's supported
-      // external-change path, same as back/forward) makes onHash apply the app
-      // selection + Ingest focus atomically, and any stale event reads the live URL.
+      // Adopt the seeded app on Ingest. Set the whole (app, focus, tab) tuple
+      // imperatively AND mirror it into the hash in one shot: the imperative state
+      // is what keeps currentApp a real selection (not the stale phantom the URL may
+      // have deep-linked), so the reconcile above never clears it out from under us —
+      // the failure mode when this relied on the hash round-trip alone, which left
+      // currentApp stale until an async hashchange applied and let the reconcile +
+      // hash-writer strand the owner on the pick-an-app empty state. Writing the hash
+      // here too keeps the URL authoritative, so any stale in-flight hashchange (e.g.
+      // the namespace-tier route queued when the namespace resolved) reads the live
+      // app route rather than reverting the selection.
       const target = apps.some(a => a.name === currentApp) ? currentApp : apps[0].name
+      setCurrentApp(target, namespaceName)
+      setFocus('application')
+      setActiveTab('ingest')
       window.location.hash = buildHash({ focus: 'application', namespaceName, currentApp: target, activeTab: 'ingest' })
       setAutoSelectApp(false)
     }
-  }, [autoSelectApp, appsNs, namespaceName, apps, currentApp, setAutoSelectApp])
+  }, [autoSelectApp, appsNs, namespaceName, apps, currentApp, setCurrentApp, setAutoSelectApp])
 
   // ── Hash routing (docs/ui-navigation.md, milestone B step 5) ──
   // A pure mirror of the (focus, namespace, app, tab) tuple onto location.hash, so

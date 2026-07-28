@@ -138,6 +138,47 @@ describe('AuthGate — saas gating', () => {
     })
   })
 
+  it('auto-selects the seeded app even when a stale application-tier hash survives', async () => {
+    window.localStorage.setItem('cogbase.mode', 'saas')
+    // A prior session left an application-tier route in the URL (deep-link / a
+    // previous account testing loop). The login gate doesn't clear it, so it's live
+    // when the seeded workspace mounts. The stale app ('old-app') isn't in the new
+    // account's namespace, so the reconcile drops it — the auto-select must still win
+    // and land the owner on the seeded contract-analyst, not the pick-an-app state.
+    window.location.hash = '#/ns/legal-team/app/old-app/query'
+
+    const signup = vi.fn(() =>
+      Promise.resolve({ ok: true, status: 200,
+        json: async () => ({ access_token: 'new-token', account_id: 'acct-new', email: 'owner@corp.com' }),
+        text: async () => '' }))
+    vi.spyOn(global, 'fetch').mockImplementation((url, opts) => {
+      const u = String(url)
+      const ok = (body) => Promise.resolve({ ok: true, status: 200, json: async () => body, text: async () => '' })
+      if (u.endsWith('/whoami')) return ok({ mode: 'saas', account_id: 'acct-new', email: 'owner@corp.com' })
+      if (u.endsWith('/auth/signup')) return signup(opts)
+      if (u.endsWith('/namespaces')) return ok({ namespaces: [{ name: 'legal-team' }] })
+      if (u.endsWith('/namespaces/legal-team/applications')) return ok({ applications: [{ name: 'contract-analyst' }] })
+      if (u.endsWith('/system/config')) return ok({ llm: { provider: 'openai' }, embedding: { provider: 'openai' } })
+      return ok({ applications: [], namespaces: [], skills: [] })
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await waitFor(() => expect(onLoginScreen()).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'Create account' }))
+    await user.type(screen.getByLabelText('Email'), 'owner@corp.com')
+    await user.type(screen.getByLabelText('Password'), 'hunter2!!')
+    await user.click(document.querySelector('button.btn-primary'))
+
+    expect(signup).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(sidebar()).not.toBeNull())
+    await waitFor(() => expect(document.querySelector('.app-pill.on')?.textContent).toContain('contract-analyst'))
+    await waitFor(() => {
+      const ingestNav = within(sidebar()).queryByRole('button', { name: 'Ingest' })
+      expect(ingestNav?.className).toContain('active')
+    })
+  })
+
   it('restores the account\'s last-used namespace + app on sign-in', async () => {
     window.localStorage.setItem('cogbase.mode', 'saas')
     // The account's remembered selection from a prior session, keyed by the account
