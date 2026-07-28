@@ -1,3 +1,6 @@
+deployment_mode: saas
+jwt_secret: change-me-to-a-long-random-string
+
 system_db:
   type: sqlite
   path: /data/cogbase_system.db

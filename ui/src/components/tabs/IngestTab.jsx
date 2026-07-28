@@ -229,10 +229,14 @@ export default function IngestTab({ active, refreshKey, onOpenTaskProgress, onOp
           ))}
         </div>
 
-        <div style={{ marginTop: 18 }}>
-          <label className="field-label">{t('ingest.metaLabel')}</label>
-          <textarea className="field-textarea" rows={2} value={metaInput} onChange={e => setMetaInput(e.target.value)} placeholder='{"doc_type": "contract"}' />
-        </div>
+        {/* Metadata input hidden for now — early customers won't use it. The
+            metaInput state stays at its '{}' default so uploads send empty metadata. */}
+        {false && (
+          <div style={{ marginTop: 18 }}>
+            <label className="field-label">{t('ingest.metaLabel')}</label>
+            <textarea className="field-textarea" rows={2} value={metaInput} onChange={e => setMetaInput(e.target.value)} placeholder='{"doc_type": "contract"}' />
+          </div>
+        )}
 
         <div style={{ marginTop: 14 }}>
           <button className="btn btn-green" disabled={!hasApp || !pickedFiles.length || uploading} onClick={uploadFiles}>
