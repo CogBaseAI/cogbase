@@ -178,6 +178,101 @@ async def test_save_artifact_store_without_binary_support(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# session ↔ artifact association + cleanup_session
+# ---------------------------------------------------------------------------
+
+
+async def _index_ids(store, app_id, session_id) -> list[str]:
+    import json
+
+    key = f"generated/_sessions/{session_id}.json"
+    return json.loads((await store.load_bytes(app_id, key)).decode("utf-8"))
+
+
+@pytest.mark.asyncio
+async def test_save_artifact_records_session_index(tmp_path):
+    store = LocalFSDocumentStore(str(tmp_path))
+    runner = _runner(store)
+    src = tmp_path / "redline.docx"
+    src.write_bytes(b"x")
+
+    a1, _ = await runner._run_save_artifact({"path": str(src)}, "sess-1")
+    a2, _ = await runner._run_save_artifact({"path": str(src)}, "sess-1")
+
+    assert await _index_ids(store, "app1", "sess-1") == [a1.artifact_id, a2.artifact_id]
+
+
+@pytest.mark.asyncio
+async def test_save_artifact_without_session_leaves_no_index(tmp_path):
+    store = LocalFSDocumentStore(str(tmp_path))
+    runner = _runner(store)
+    src = tmp_path / "redline.docx"
+    src.write_bytes(b"x")
+
+    await runner._run_save_artifact({"path": str(src)})  # stateless — no session
+
+    assert not (tmp_path / "app1" / "generated" / "_sessions").exists()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_session_deletes_indexed_artifacts_and_index(tmp_path):
+    store = LocalFSDocumentStore(str(tmp_path))
+    runner = _runner(store)
+    src = tmp_path / "redline.docx"
+    src.write_bytes(b"x")
+    a1, _ = await runner._run_save_artifact({"path": str(src)}, "sess-1")
+    a2, _ = await runner._run_save_artifact({"path": str(src)}, "sess-1")
+
+    await runner.cleanup_session("sess-1")
+
+    for aid in (a1.artifact_id, a2.artifact_id):
+        assert not await store.exists("app1", f"generated/{aid}")
+    with pytest.raises(KeyError):
+        await store.load_bytes("app1", "generated/_sessions/sess-1.json")
+
+
+@pytest.mark.asyncio
+async def test_cleanup_session_spares_other_sessions(tmp_path):
+    store = LocalFSDocumentStore(str(tmp_path))
+    runner = _runner(store)
+    src = tmp_path / "redline.docx"
+    src.write_bytes(b"x")
+    keep, _ = await runner._run_save_artifact({"path": str(src)}, "sess-keep")
+    drop, _ = await runner._run_save_artifact({"path": str(src)}, "sess-drop")
+
+    await runner.cleanup_session("sess-drop")
+
+    assert not await store.exists("app1", f"generated/{drop.artifact_id}")
+    assert await store.exists("app1", f"generated/{keep.artifact_id}")
+
+
+@pytest.mark.asyncio
+async def test_cleanup_session_removes_local_workdir(tmp_path):
+    store = LocalFSDocumentStore(str(tmp_path))
+    work_root = str(tmp_path / "work")
+    runner = QueryRunner(
+        "app1",
+        MagicMock(),
+        RetrievalResources(document_store=store),
+        MemoryTiers(),
+        work_root=work_root,
+    )
+    workdir = runner._session_workdir("sess-1")
+    open(os.path.join(workdir, "review.json"), "w").write("{}")
+    assert os.path.exists(workdir)
+
+    await runner.cleanup_session("sess-1")
+
+    assert not os.path.exists(workdir)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_session_idempotent_when_nothing_saved(tmp_path):
+    runner = _runner(LocalFSDocumentStore(str(tmp_path)))
+    await runner.cleanup_session("never-seen")  # must not raise
+
+
+# ---------------------------------------------------------------------------
 # fetch_artifact
 # ---------------------------------------------------------------------------
 

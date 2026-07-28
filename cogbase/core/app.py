@@ -625,12 +625,15 @@ class CogBaseApp:
         cache), this erases the durable record — the whole episodic log for the
         session is removed.  The system-store history-index row is deleted
         separately by the caller.  Distilled long-term memory already extracted
-        from the session is left intact.
+        from the session is left intact.  Artifacts the session's turns persisted
+        via ``save_artifact`` and its local scratch dir are swept too, so a
+        deleted session leaves nothing behind in the document store or on disk.
         """
         if self._short_term is not None:
             await self._short_term.end_session(session_id)
         if self._episodic is not None:
             await self._episodic.delete(session_id=session_id)
+        await self._runner.cleanup_session(session_id)
 
     async def get_session_transcript(self, session_id: str) -> list["MemoryMessage"]:
         """Return a session's conversation as an ordered list of turns.

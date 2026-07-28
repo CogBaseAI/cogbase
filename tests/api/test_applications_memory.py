@@ -76,10 +76,14 @@ def _streaming_llm(answers: list[str], captured: list[list]) -> MagicMock:
 
 def _real_app(name: str, mem: ShortTermMemory, episodic: EpisodicMemory, llm: MagicMock) -> CogBaseApp:
     """A real CogBaseApp whose QueryRunner is wired to *mem* (no skills, no stores)."""
+    # Async doc store so cleanup_session (run on session delete) can await it;
+    # load_bytes raises KeyError to model an empty artifact index (nothing saved).
+    doc_store = AsyncMock()
+    doc_store.load_bytes.side_effect = KeyError
     runner = QueryRunner(
         app_id=name,
         llm=llm,
-        resources=RetrievalResources(document_store=MagicMock()),
+        resources=RetrievalResources(document_store=doc_store),
         memory=MemoryTiers(short_term=mem, episodic=episodic),
     )
     return CogBaseApp(

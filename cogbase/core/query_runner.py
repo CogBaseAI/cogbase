@@ -53,6 +53,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -1221,7 +1222,7 @@ class QueryRunner:
                     if looked_up:
                         memory_blocks[block_id] = looked_up
                 elif name == "save_artifact":
-                    artifact, tool_output = await self._run_save_artifact(inputs)
+                    artifact, tool_output = await self._run_save_artifact(inputs, session_id)
                     if artifact is not None:
                         saved_artifacts.append(artifact)
                 else:
@@ -1459,15 +1460,59 @@ class QueryRunner:
         """
         return f"/applications/{self._app_id}/documents/{artifact_id}/download"
 
-    async def _run_save_artifact(self, inputs: dict) -> tuple[ArtifactRef | None, str]:
+    def _session_index_key(self, session_id: str) -> str:
+        """Doc-store key of the per-session artifact index.
+
+        A sidecar JSON list of the ``artifact_id``s a session produced, living
+        alongside the artifacts themselves under ``generated/``. It ties saved
+        artifacts to the session that created them so :meth:`cleanup_session` can
+        cascade-delete them when the session is deleted. Session ids are
+        sanitized the same way as the local workdir bucket (see
+        :meth:`_session_workdir`), and the ``_sessions/`` segment can't collide
+        with an ``artifact_id`` (those never contain a slash).
+        """
+        sess = re.sub(r"[^\w.-]", "_", session_id)
+        return f"generated/_sessions/{sess}.json"
+
+    async def _index_session_artifact(self, session_id: str, artifact_id: str) -> None:
+        """Append *artifact_id* to the session's artifact index (read-modify-write).
+
+        Best-effort: a failed index write must not fail the save the user is
+        waiting on — the artifact is still stored and downloadable, it just won't
+        be swept on session delete. Turns for one session are sequential, so the
+        naive read-modify-write is not racing itself.
+        """
+        key = self._session_index_key(session_id)
+        try:
+            raw = await self._document_store.load_bytes(self._app_id, key)
+            ids = json.loads(raw.decode("utf-8"))
+            if not isinstance(ids, list):
+                ids = []
+        except (KeyError, NotImplementedError, ValueError):
+            ids = []
+        if artifact_id not in ids:
+            ids.append(artifact_id)
+        try:
+            await self._document_store.save_bytes(
+                self._app_id, key, json.dumps(ids).encode("utf-8")
+            )
+        except NotImplementedError:
+            pass
+
+    async def _run_save_artifact(
+        self, inputs: dict, session_id: str | None = None
+    ) -> tuple[ArtifactRef | None, str]:
         """Persist a skill-produced file to the document store for later download.
 
         Stores under ``generated/{artifact_id}`` (``artifact_id`` keeps the
         original extension), which the ``GET .../documents/{artifact_id}/download``
-        endpoint serves verbatim.  Returns the ``ArtifactRef`` (so the runner can
-        append its markdown link to the final answer) and the tool output, which
-        carries that same ready-to-use link for the model to reproduce.  Returns
-        ``(None, <error>)`` on any failure.
+        endpoint serves verbatim.  When *session_id* is set the artifact is also
+        recorded in the session's index so it is cascade-deleted with the session
+        (see :meth:`cleanup_session`); a stateless query leaves no index entry.
+        Returns the ``ArtifactRef`` (so the runner can append its markdown link to
+        the final answer) and the tool output, which carries that same
+        ready-to-use link for the model to reproduce.  Returns ``(None, <error>)``
+        on any failure.
         """
         if self._document_store is None or self._app_id is None:
             return None, "save_artifact is unavailable (no document store configured)"
@@ -1487,6 +1532,9 @@ class QueryRunner:
         except NotImplementedError:
             return None, "save_artifact error: the document store does not support binary artifacts"
 
+        if session_id:
+            await self._index_session_artifact(session_id, artifact_id)
+
         artifact = ArtifactRef(
             artifact_id=artifact_id,
             filename=filename,
@@ -1497,6 +1545,41 @@ class QueryRunner:
             f"Saved artifact '{artifact_id}' ({len(data)} bytes). "
             f"Include this download link in your answer: {artifact.markdown_link}"
         )
+
+    async def cleanup_session(self, session_id: str) -> None:
+        """Delete a session's saved artifacts and local scratch dir.
+
+        Called when a session is permanently deleted. Removes every artifact the
+        session recorded in its index (``generated/{artifact_id}``), drops the
+        index itself, and rmtree's the local ``<work_root>/<app_id>/<session_id>``
+        working dir. Idempotent and best-effort: missing keys/dirs are treated as
+        already-clean. Artifacts from stateless (no-session) queries were never
+        indexed and are not swept here.
+        """
+        if self._document_store is not None and self._app_id is not None:
+            key = self._session_index_key(session_id)
+            try:
+                raw = await self._document_store.load_bytes(self._app_id, key)
+                ids = json.loads(raw.decode("utf-8"))
+            except (KeyError, NotImplementedError, ValueError):
+                ids = []
+            for artifact_id in ids if isinstance(ids, list) else []:
+                try:
+                    await self._document_store.delete(self._app_id, f"generated/{artifact_id}")
+                except (KeyError, NotImplementedError):
+                    pass
+            try:
+                await self._document_store.delete(self._app_id, key)
+            except (KeyError, NotImplementedError):
+                pass
+
+        workdir = os.path.join(
+            self._work_root,
+            re.sub(r"[^\w.-]", "_", self._app_id or "app"),
+            re.sub(r"[^\w.-]", "_", session_id),
+        )
+        await asyncio.to_thread(shutil.rmtree, workdir, ignore_errors=True)
+        logger.info("[runner] cleanup_session session=%s", session_id)
 
     def _materialize(
         self, data: bytes, workdir: str | None, *, subdir: str | None, name: str, suffix: str
