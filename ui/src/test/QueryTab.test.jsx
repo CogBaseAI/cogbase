@@ -686,24 +686,6 @@ it('closes the floating sources panel on an outside click', async () => {
   expect(screen.queryByText('the cited passage')).not.toBeInTheDocument()
 })
 
-it('collapses the chats sidebar to a rail and restores it', async () => {
-  mockFetch({ sessions: SESSIONS_FIXTURE })
-  const user = userEvent.setup()
-  renderQueryTab()
-  await waitFor(() => expect(screen.getByText('Chats')).toBeInTheDocument())
-
-  // Collapse: the "Chats" header and history rows are gone, reopen toggle remains.
-  await user.click(screen.getByRole('button', { name: 'Hide chats panel' }))
-  expect(screen.queryByText('Chats')).not.toBeInTheDocument()
-  const reopen = screen.getByRole('button', { name: 'Show chats panel' })
-  expect(reopen).toBeInTheDocument()
-
-  // Restore from the rail.
-  await user.click(reopen)
-  expect(screen.getByText('Chats')).toBeInTheDocument()
-  expect(screen.queryByRole('button', { name: 'Show chats panel' })).not.toBeInTheDocument()
-})
-
 // ---------------------------------------------------------------------------
 // Document panel (renders the latest .docx artifact an answer produces)
 // ---------------------------------------------------------------------------

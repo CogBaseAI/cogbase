@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
 import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks, latestDocxArtifact, artifactLabel, filenameFromContentDisposition } from '../../utils'
 
-export default function QueryTab({ active, pendingQuery, onPendingConsumed }) {
+export default function QueryTab({ active, pendingQuery, onPendingConsumed, navSlot }) {
   const { apiUrl, appBase, authFetch, currentApp, apps } = useApp()
   const { t } = useT()
   // Chat log holds only real user/bot turns (plus the rare opened-empty-session
@@ -19,8 +20,6 @@ export default function QueryTab({ active, pendingQuery, onPendingConsumed }) {
   // Only one panel is open at a time, so a single floating overlay serves all
   // turns.
   const [sourcesIdx, setSourcesIdx] = useState(-1)
-  // User's manual collapse of the chats sidebar.
-  const [chatsHidden, setChatsHidden] = useState(false)
   // Document panel: renders the latest .docx artifact a bot answer produced
   // (redline etc.). Opens automatically when a new document appears; the user can
   // hide it. `docHidden` is the manual hide; the panel only exists when a doc does.
@@ -294,52 +293,56 @@ export default function QueryTab({ active, pendingQuery, onPendingConsumed }) {
   const showIntro = hasApp && !!queryIntro
   const showStarter = hasApp && !hasChat && exampleQueries.length > 0
 
+  // The chats list. It lives in the app sidebar's lower (contextual) slot — this
+  // tab renders it there via a portal when a slot is provided (see App.jsx), and
+  // inline as a fallback otherwise (e.g. standalone tests). Hiding is now the
+  // sidebar-level control, so there's no per-tab collapse toggle here.
+  const chatHistory = (
+    <div className="chat-history">
+      <div className="aside-hd">
+        <h3 style={{ flex: 1 }}>{t('query.chats')}</h3>
+        <button className="btn btn-ghost btn-sm" disabled={!hasApp} onClick={newChat}>{t('query.newChat')}</button>
+      </div>
+      <div className="chat-history-body">
+        {!sessions.length && (
+          <div style={{ padding: '24px 12px', textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
+            {t('query.noChats')}
+          </div>
+        )}
+        {sessions.map(s => (
+          <div
+            key={s.session_id}
+            className={`chat-history-item${s.session_id === activeSid ? ' active' : ''}`}
+            onClick={() => openSession(s.session_id)}
+            title={s.title || t('query.untitledChat')}
+          >
+            <div className="chat-history-title">{s.title || t('query.untitledChat')}</div>
+            <div className="chat-history-meta">
+              <span>{fmtRelTime(s.updated_at)}</span>
+              <span>{s.message_count !== 1 ? t('query.msgs', { n: s.message_count }) : t('query.msg', { n: s.message_count })}</span>
+            </div>
+            <button
+              className="chat-history-del"
+              title={t('query.deleteChat')}
+              aria-label={t('query.deleteChat')}
+              disabled={querying}
+              onClick={e => deleteSession(s.session_id, e)}
+            >×</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+
   return (
     <>
       {!hasApp && <div className="warn-bar show">{t('common.noAppWarn')}</div>}
+      {/* Portal the chats list into the sidebar's contextual slot, but only while
+          this tab is active — the panel stays mounted when hidden, so an
+          unconditional portal would stack the chats onto whatever the active tab
+          shows there. Inline (no slot) is the standalone-test fallback. */}
+      {navSlot ? (active && createPortal(chatHistory, navSlot)) : chatHistory}
       <div className="chat-layout">
-        {chatsHidden && (
-          <div className="chat-aside-min chat-aside-min-left">
-            <button className="aside-toggle" title={t('query.showChats')} aria-label={t('query.showChats')} onClick={() => setChatsHidden(false)}><PanelIcon /></button>
-          </div>
-        )}
-        {!chatsHidden && (
-        <div className="chat-history">
-          <div className="aside-hd">
-            <h3 style={{ flex: 1 }}>{t('query.chats')}</h3>
-            <button className="btn btn-ghost btn-sm" disabled={!hasApp} onClick={newChat}>{t('query.newChat')}</button>
-            <button className="aside-toggle" title={t('query.hideChats')} aria-label={t('query.hideChats')} onClick={() => setChatsHidden(true)}><PanelIcon /></button>
-          </div>
-          <div className="chat-history-body">
-            {!sessions.length && (
-              <div style={{ padding: '24px 12px', textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
-                {t('query.noChats')}
-              </div>
-            )}
-            {sessions.map(s => (
-              <div
-                key={s.session_id}
-                className={`chat-history-item${s.session_id === activeSid ? ' active' : ''}`}
-                onClick={() => openSession(s.session_id)}
-                title={s.title || t('query.untitledChat')}
-              >
-                <div className="chat-history-title">{s.title || t('query.untitledChat')}</div>
-                <div className="chat-history-meta">
-                  <span>{fmtRelTime(s.updated_at)}</span>
-                  <span>{s.message_count !== 1 ? t('query.msgs', { n: s.message_count }) : t('query.msg', { n: s.message_count })}</span>
-                </div>
-                <button
-                  className="chat-history-del"
-                  title={t('query.deleteChat')}
-                  aria-label={t('query.deleteChat')}
-                  disabled={querying}
-                  onClick={e => deleteSession(s.session_id, e)}
-                >×</button>
-              </div>
-            ))}
-          </div>
-        </div>
-        )}
         <div className="chat-col">
           {showIntro && <div className="query-intro-banner">{queryIntro}</div>}
           <div className="msgs" ref={msgsRef} onScroll={onMsgsScroll}>

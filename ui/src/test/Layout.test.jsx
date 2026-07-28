@@ -70,6 +70,47 @@ describe('Layout — focus-driven sidebar', () => {
     expect(within(sidebar()).getByRole('button', { name: 'Query' })).toBeInTheDocument()
   })
 
+  it('hides the sidebar to a rail and restores it', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    expect(sidebar()).not.toHaveClass('collapsed')
+    expect(document.querySelector('.sidebar-rail')).not.toBeInTheDocument()
+    // Hide: the sidebar collapses (kept mounted so its portal slot survives) and
+    // the rail with the show toggle appears.
+    await user.click(screen.getByRole('button', { name: 'Hide sidebar' }))
+    expect(sidebar()).toHaveClass('collapsed')
+    const show = screen.getByRole('button', { name: 'Show sidebar' })
+    expect(document.querySelector('.sidebar-rail')).toBeInTheDocument()
+    // Restore from the rail.
+    await user.click(show)
+    expect(sidebar()).not.toHaveClass('collapsed')
+    expect(document.querySelector('.sidebar-rail')).not.toBeInTheDocument()
+  })
+
+  it('shows the contextual list in the sidebar only for the active app tab', async () => {
+    global.fetch.mockResolvedValue({ ok: true, json: async () => ({ applications: [{ name: 'contracts' }], structured: ['clauses'] }), text: async () => '' })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(within(sidebar()).getByRole('button', { name: 'Application' }))
+    await within(sidebar()).findByRole('option', { name: 'contracts' })
+    await user.selectOptions(within(sidebar()).getByLabelText('App'), 'contracts')
+
+    // Query → chats appear (portaled into the sidebar slot, not <main>); no collections.
+    await user.click(within(sidebar()).getByRole('button', { name: 'Query' }))
+    expect(within(sidebar()).getByText('Chats')).toBeInTheDocument()
+    expect(within(sidebar()).queryByText('Collections')).not.toBeInTheDocument()
+
+    // Data → the slot swaps to collections; chats are gone.
+    await user.click(within(sidebar()).getByRole('button', { name: 'Data' }))
+    expect(within(sidebar()).getByText('Collections')).toBeInTheDocument()
+    expect(within(sidebar()).queryByText('Chats')).not.toBeInTheDocument()
+
+    // A tab with no list (Memory) → the slot is empty again.
+    await user.click(within(sidebar()).getByRole('button', { name: 'Memory' }))
+    expect(within(sidebar()).queryByText('Chats')).not.toBeInTheDocument()
+    expect(within(sidebar()).queryByText('Collections')).not.toBeInTheDocument()
+  })
+
   it('the Apps tab is scoped to the working namespace and "Use" selects within it', async () => {
     // Persisted selection would otherwise leak between tests; start clean so the
     // working namespace is reconciled to the account's sole namespace ('default').

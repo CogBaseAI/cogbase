@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
 import { copyText } from '../../utils'
 
-export default function DataTab({ active, refreshKey, onOpenWfModal, wfCompleteCollection, onWfCompleteHandled }) {
+export default function DataTab({ active, refreshKey, onOpenWfModal, wfCompleteCollection, onWfCompleteHandled, navSlot }) {
   const { appBase, authFetch, currentApp, demoCatalog, namespaceName } = useApp()
   const { t } = useT()
   const [collections, setCollections] = useState([])
@@ -266,27 +267,37 @@ export default function DataTab({ active, refreshKey, onOpenWfModal, wfCompleteC
     return <td className={isObj ? 'obj-val' : ''} style={style} title={str}>{str}</td>
   }
 
+  // The collections list. Like the Query tab's chats list, it lives in the app
+  // sidebar's lower (contextual) slot — rendered there via a portal when a slot is
+  // provided (see App.jsx), or inline as a fallback otherwise (e.g. standalone tests).
+  const collectionsList = (
+    <div className="data-sidebar">
+      <div className="data-sidebar-hd">
+        <h3>{t('data.collections')}</h3>
+        <button className="btn btn-ghost btn-sm" onClick={loadCollections} title={t('data.refresh')}>⟳</button>
+      </div>
+      <div className="coll-list">
+        {!hasApp && <div className="empty" style={{ padding: '30px 10px' }}><p>{t('data.selectApp')}</p></div>}
+        {collError && <div style={{ color: 'var(--red)', padding: 10, fontSize: 12 }}>{collError}</div>}
+        {collections.map(name => (
+          <div key={name} className={`coll-item${name === activeCollection ? ' active' : ''}`} onClick={() => selectCollection(name)}>
+            <span className="coll-dot" />
+            {name}
+            {wfSaveColls.has(name) && <span className="coll-wf-badge">{t('data.workflowBadge')}</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+
   return (
     <>
       {!hasApp && <div className="warn-bar show">{t('common.noAppWarn')}</div>}
+      {/* Portal the collections list into the sidebar's contextual slot, but only
+          while this tab is active (the panel stays mounted when hidden). Inline (no
+          slot) is the standalone-test fallback. */}
+      {navSlot ? (active && createPortal(collectionsList, navSlot)) : collectionsList}
       <div className="data-layout">
-        <div className="data-sidebar">
-          <div className="data-sidebar-hd">
-            <h3>{t('data.collections')}</h3>
-            <button className="btn btn-ghost btn-sm" onClick={loadCollections} title={t('data.refresh')}>⟳</button>
-          </div>
-          <div className="coll-list">
-            {!hasApp && <div className="empty" style={{ padding: '30px 10px' }}><p>{t('data.selectApp')}</p></div>}
-            {collError && <div style={{ color: 'var(--red)', padding: 10, fontSize: 12 }}>{collError}</div>}
-            {collections.map(name => (
-              <div key={name} className={`coll-item${name === activeCollection ? ' active' : ''}`} onClick={() => selectCollection(name)}>
-                <span className="coll-dot" />
-                {name}
-                {wfSaveColls.has(name) && <span className="coll-wf-badge">{t('data.workflowBadge')}</span>}
-              </div>
-            ))}
-          </div>
-        </div>
         <div className="data-main">
           <div className="data-main-hd">
             <h3 style={{ color: activeCollection ? '' : 'var(--muted)' }}>{activeCollection || t('data.noCollection')}</h3>

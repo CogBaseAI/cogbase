@@ -37,6 +37,15 @@ function Layout() {
   }, [lang, apps, apiUrl, authFetch, refreshApps])
   const [activeTab, setActiveTab] = useState('build')
   const [focus, setFocus] = useState(TAB_TIER['build'])   // which tier's sub-nav shows
+  // Sidebar collapse: hiding drops it to a thin rail with a show toggle. Replaces
+  // the old per-tab chats collapse (the chats/collections lists now live in the
+  // sidebar's lower slot, so one control hides the whole thing — the ChatGPT/Claude
+  // pattern).
+  const [navHidden, setNavHidden] = useState(false)
+  // The DOM node of the sidebar's lower contextual slot. The application-tier tabs
+  // portal their secondary list into it (Query → chats, Data → collections). Held
+  // in state (via a callback ref) so the tabs re-render once it mounts.
+  const [navSlot, setNavSlot] = useState(null)
   const [docModal, setDocModal] = useState(null)        // null | doc object
   const [configModal, setConfigModal] = useState(null)  // null | { demo }
   const [wfModal, setWfModal] = useState(null)          // null | { appName, workflowName, paramKey, label, values, desc, allDone, fromIngest }
@@ -254,8 +263,22 @@ function Layout() {
       </header>
 
       <div className="shell">
-        {/* Focus-driven sidebar nav */}
-        <aside className="sidebar">
+        {/* Collapsed to a thin rail: a single toggle restores the sidebar. Mirrors
+            the collapsed-panel rail pattern used for the chat/doc panels. */}
+        {navHidden && (
+          <div className="sidebar-rail">
+            <button className="aside-toggle" title={t('nav.show')} aria-label={t('nav.show')} onClick={() => setNavHidden(false)}><NavPanelIcon /></button>
+          </div>
+        )}
+        {/* Focus-driven sidebar nav. Kept mounted even when hidden (collapsed via
+            CSS) so the nav-secondary portal slot below never detaches — otherwise a
+            hide would strand the ported chats/collections list. */}
+        <aside className={`sidebar${navHidden ? ' collapsed' : ''}`}>
+          {/* Hide control: collapses the whole sidebar (nav + contextual list) to
+              the rail above. */}
+          <div className="sidebar-hd">
+            <button className="aside-toggle" title={t('nav.hide')} aria-label={t('nav.hide')} onClick={() => setNavHidden(true)}><NavPanelIcon /></button>
+          </div>
           {/* Namespace switcher scopes every tier below. The account is the
               tenant/security boundary, not a nav dimension — it's resolved by the
               server via /whoami and shown read-only in the top bar, not here. */}
@@ -306,6 +329,11 @@ function Layout() {
               </div>
             )
           })}
+
+          {/* Contextual list slot: the application-tier tabs portal their secondary
+              list here — Query its chats, Data its collections. Empty (and invisible)
+              for tabs without one. Scrolls on its own so the nav above stays put. */}
+          <div className="nav-secondary" ref={setNavSlot} />
         </aside>
 
         <main>
@@ -344,6 +372,7 @@ function Layout() {
             onOpenWfModal={setWfModal}
             wfCompleteCollection={wfCompleteCollection}
             onWfCompleteHandled={() => setWfCompleteCollection(null)}
+            navSlot={navSlot}
           />
         </div>
         <div className={`panel ${activeTab === 'query' && !showEmpty ? 'active' : ''}`}>
@@ -351,6 +380,7 @@ function Layout() {
             active={activeTab === 'query' && !showEmpty}
             pendingQuery={pendingQuery}
             onPendingConsumed={() => setPendingQuery(null)}
+            navSlot={navSlot}
           />
         </div>
         <div className={`panel ${activeTab === 'memory' && !showEmpty ? 'active' : ''}`}>
@@ -394,6 +424,17 @@ function Layout() {
         onDone={() => setIngestRefreshKey(k => k + 1)}
       />
     </>
+  )
+}
+
+// Sidebar-collapse glyph, matching the framed-rectangle-with-divided-column icon
+// ChatGPT/Claude use for the same control (and the panel toggles elsewhere in the UI).
+function NavPanelIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+      <line x1="9" y1="3" x2="9" y2="21" />
+    </svg>
   )
 }
 
