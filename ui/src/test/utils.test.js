@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fmtBytes, fmtRelTime, previewText, metaText, schemaTypeStr, simplifyExtractionSchemas, streamSSE, waitForTasks, resolveArtifactLinks, artifactLabel, latestDocxArtifact, filenameFromContentDisposition } from '../utils'
+import { fmtBytes, fmtRelTime, previewText, metaText, schemaTypeStr, simplifyExtractionSchemas, streamSSE, waitForTasks, resolveArtifactLinks, artifactLabel, latestDocxArtifact, docxArtifactsInText, filenameFromContentDisposition } from '../utils'
 
 describe('fmtBytes', () => {
   it('formats bytes', () => expect(fmtBytes(512)).toBe('512 B'))
@@ -247,6 +247,36 @@ describe('latestDocxArtifact', () => {
 
   it('returns null when there are no messages', () => {
     expect(latestDocxArtifact([], api, 'app1')).toBeNull()
+  })
+})
+
+describe('docxArtifactsInText', () => {
+  const api = 'http://localhost:8000'
+
+  it('returns every distinct .docx in one answer, in order, as {id,url}', () => {
+    const text = 'redline [r](/applications/app1/documents/r__1.docx/download) and '
+      + 'final [f](/applications/app1/documents/f__2.docx/download)'
+    const docs = docxArtifactsInText(text, api, 'app1')
+    expect(docs.map(d => d.id)).toEqual(['r__1.docx', 'f__2.docx'])
+    expect(docs[0].url).toBe(`${api}/applications/app1/documents/r__1.docx/download`)
+  })
+
+  it('dedupes an artifact linked and re-mentioned in the same answer', () => {
+    const text = 'here /applications/app1/documents/r__1.docx/download '
+      + 'again /applications/app1/documents/r__1.docx/download'
+    expect(docxArtifactsInText(text, api, 'app1').map(d => d.id)).toEqual(['r__1.docx'])
+  })
+
+  it('resolves the <app_name> placeholder and ignores non-.docx artifacts', () => {
+    const text = '`/applications/<app_name>/documents/x__9.docx/download` '
+      + 'and /applications/app1/documents/review__1.json/download'
+    const docs = docxArtifactsInText(text, api, 'contract-analyst')
+    expect(docs).toHaveLength(1)
+    expect(docs[0].url).toBe(`${api}/applications/contract-analyst/documents/x__9.docx/download`)
+  })
+
+  it('returns an empty array for text with no artifacts', () => {
+    expect(docxArtifactsInText('just prose', api, 'app1')).toEqual([])
   })
 })
 

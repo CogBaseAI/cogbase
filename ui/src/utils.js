@@ -95,6 +95,29 @@ export function latestDocxArtifact(msgs, apiUrl, appName) {
   return null
 }
 
+// Every distinct .docx artifact referenced in a single answer's text, in order
+// of appearance, as { id, url } (absolute against apiUrl). Backs the per-answer
+// "view document" chips: clicking one loads that specific redline/final into the
+// document panel, independent of the panel's default (which tracks the newest
+// doc across the whole conversation). Dedupes by artifact id so an answer that
+// both links and re-mentions the same file yields one chip.
+export function docxArtifactsInText(text, apiUrl, appName) {
+  const base = String(apiUrl || '').replace(/\/$/, '')
+  const out = []
+  const seen = new Set()
+  let match
+  DOCX_ARTIFACT_RE.lastIndex = 0
+  while ((match = DOCX_ARTIFACT_RE.exec(text || '')) !== null) {
+    const rawName = match[1]
+    const name = rawName === '<app_name>' ? appName : decodeURIComponent(rawName)
+    const id = match[2]
+    if (seen.has(id)) continue
+    seen.add(id)
+    out.push({ id, url: `${base}/applications/${encodeURIComponent(name || rawName)}/documents/${id}/download` })
+  }
+  return out
+}
+
 // Human-facing filename for a generated artifact id:
 // `saas-001-amended__06467960.docx` -> `saas-001-amended.docx` (drop the short
 // hex hash save_artifact appends to disambiguate).

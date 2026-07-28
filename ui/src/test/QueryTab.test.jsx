@@ -460,6 +460,43 @@ it('surfaces a past answer’s sources in the floating panel', async () => {
   expect(screen.getByText(/NDA/)).toBeInTheDocument()
 })
 
+it('loads a past answer’s own doc into the panel when its view chip is clicked', async () => {
+  // A revisited two-turn chat: an earlier redline, then a later final. The panel
+  // defaults to the newest doc, but each answer offers a chip for its own doc.
+  mockFetch({
+    sessions: SESSIONS_FIXTURE,
+    transcript: { messages: [
+      { role: 'user', content: 'redline it' },
+      {
+        role: 'assistant',
+        content: 'Redline ready: [msa-redline__aaa111.docx](/applications/contract-analyst/documents/msa-redline__aaa111.docx/download)',
+        references: {},
+      },
+      { role: 'user', content: 'finalize' },
+      {
+        role: 'assistant',
+        content: 'Final ready: [msa-final__bbb222.docx](/applications/contract-analyst/documents/msa-final__bbb222.docx/download)',
+        references: {},
+      },
+    ] },
+  })
+  const user = userEvent.setup()
+  renderQueryTab()
+  await waitFor(() => expect(screen.getByText('What is the term?')).toBeInTheDocument())
+
+  await user.click(screen.getByText('What is the term?'))
+  await waitFor(() => expect(screen.getByText('finalize')).toBeInTheDocument())
+
+  // On open the panel shows the conversation's newest doc (the final).
+  await waitFor(() => expect(document.querySelector('.chat-doc-title')).toHaveTextContent('msa-final.docx'))
+
+  // Click the earlier answer's "view document" chip (its label is the redline's
+  // filename; the panel title currently reads the final, so this text is the
+  // chip alone) -> the panel swaps to that specific earlier doc.
+  await user.click(screen.getByText('msa-redline.docx'))
+  await waitFor(() => expect(document.querySelector('.chat-doc-title')).toHaveTextContent('msa-redline.docx'))
+})
+
 it('swaps the floating panel to the clicked answer in a multi-turn chat', async () => {
   mockFetch({
     sessions: SESSIONS_FIXTURE,
@@ -704,8 +741,9 @@ it('opens the document panel when an answer produces a .docx artifact', async ()
   await ask(user, 'redline the accepted changes')
 
   // The panel header shows the human-facing filename (hash stripped), and the
-  // docx renderer is invoked with the fetched blob.
-  await waitFor(() => expect(screen.getByText('msa-redline.docx')).toBeInTheDocument())
+  // docx renderer is invoked with the fetched blob. Scope to the panel title:
+  // the answer's "view document" chip carries the same filename text.
+  await waitFor(() => expect(document.querySelector('.chat-doc-title')).toHaveTextContent('msa-redline.docx'))
   await waitFor(() => expect(renderAsyncMock).toHaveBeenCalled())
 })
 
@@ -714,14 +752,14 @@ it('hides and reopens the document panel from its rail', async () => {
   const user = userEvent.setup()
   renderQueryTab()
   await ask(user, 'redline it')
-  await waitFor(() => expect(screen.getByText('msa-redline.docx')).toBeInTheDocument())
+  await waitFor(() => expect(document.querySelector('.chat-doc-title')).toHaveTextContent('msa-redline.docx'))
 
   await user.click(screen.getByRole('button', { name: 'Hide document panel' }))
-  expect(screen.queryByText('msa-redline.docx')).not.toBeInTheDocument()
+  expect(document.querySelector('.chat-doc-title')).not.toBeInTheDocument()
 
   const reopen = screen.getByRole('button', { name: 'Show document panel' })
   await user.click(reopen)
-  expect(screen.getByText('msa-redline.docx')).toBeInTheDocument()
+  expect(document.querySelector('.chat-doc-title')).toHaveTextContent('msa-redline.docx')
 })
 
 it('shows no document panel when the answer has no .docx artifact', async () => {
@@ -745,7 +783,7 @@ const DOC_WIDTH_KEY = 'cogbase.docPanelWidth'
 async function openDocPanel(user) {
   renderQueryTab()
   await ask(user, 'redline it')
-  await waitFor(() => expect(screen.getByText('msa-redline.docx')).toBeInTheDocument())
+  await waitFor(() => expect(document.querySelector('.chat-doc-title')).toHaveTextContent('msa-redline.docx'))
   return document.querySelector('.chat-doc-panel')
 }
 

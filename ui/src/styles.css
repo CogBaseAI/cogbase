@@ -293,6 +293,21 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 .msg-sources-toggle .chevron { transition: transform .15s; }
 .msg-sources.open .msg-sources-toggle .chevron { transform: rotate(90deg); }
 
+/* Per-answer "view document" chips: click to load that answer's redline/final
+   into the doc panel. Sits under the answer, above the copy actions. */
+.msg-doc-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.msg-doc-chip {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 260px;
+  padding: 3px 9px; font-size: 11px; font-weight: 600; cursor: pointer;
+  color: var(--muted); background: var(--surface-2, rgba(127,127,127,.08));
+  border: 1px solid var(--border); border-radius: 999px;
+  transition: color .12s, border-color .12s, background .12s;
+}
+.msg-doc-chip:hover { color: var(--accent); border-color: var(--accent); }
+.msg-doc-chip.active { color: var(--accent); border-color: var(--accent); }
+.msg-doc-chip svg { flex: none; }
+.msg-doc-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Floating Sources panel: a right-anchored slide-over that overlays the chat
    (and the docx panel) on demand, dismissable via ✕ / Esc / outside-click. */
 .sources-panel {

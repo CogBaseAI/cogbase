@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
-import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks, latestDocxArtifact, artifactLabel, filenameFromContentDisposition } from '../../utils'
+import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks, latestDocxArtifact, docxArtifactsInText, artifactLabel, filenameFromContentDisposition } from '../../utils'
 
 export default function QueryTab({ active, pendingQuery, onPendingConsumed, navSlot }) {
   const { apiUrl, appBase, authFetch, currentApp, apps } = useApp()
@@ -24,6 +24,12 @@ export default function QueryTab({ active, pendingQuery, onPendingConsumed, navS
   // (redline etc.). Opens automatically when a new document appears; the user can
   // hide it. `docHidden` is the manual hide; the panel only exists when a doc does.
   const [docHidden, setDocHidden] = useState(false)
+  // A doc the user explicitly picked by clicking an answer's "view document"
+  // chip. Overrides the default `currentDoc` (newest doc in the conversation) so
+  // a past answer's specific redline/final can be reopened. Reset whenever the
+  // newest doc changes (see the reveal effect) — a fresh redline or a different
+  // session should win over a stale hand-pick.
+  const [selectedDoc, setSelectedDoc] = useState(null)
   const [sessions, setSessions] = useState([])
   const [activeSid, setActiveSid] = useState(null)
   const msgsRef = useRef(null)
@@ -37,14 +43,19 @@ export default function QueryTab({ active, pendingQuery, onPendingConsumed, navS
   const hasApp = !!currentApp
   const prevAppRef = useRef(currentApp)
 
-  // The most recent .docx artifact produced anywhere in this conversation.
+  // The most recent .docx artifact produced anywhere in this conversation, and
+  // the doc the panel actually renders (a hand-picked answer's doc wins).
   const currentDoc = latestDocxArtifact(msgs, apiUrl, currentApp)
+  const panelDoc = selectedDoc || currentDoc
   const prevDocIdRef = useRef(null)
-  // Auto-reveal the panel when a new document appears (e.g. a refined redline).
+  // React when the newest doc changes: a fresh redline streamed in, a different
+  // session was opened, or the view cleared. Drop any hand-picked selection so
+  // the newest doc wins, and reveal the panel for a freshly produced doc.
   useEffect(() => {
     const id = currentDoc?.id || null
-    if (id && id !== prevDocIdRef.current) {
-      setDocHidden(false)
+    if (id !== prevDocIdRef.current) {
+      setSelectedDoc(null)
+      if (id) setDocHidden(false)
     }
     prevDocIdRef.current = id
   }, [currentDoc?.id])
@@ -385,6 +396,29 @@ export default function QueryTab({ active, pendingQuery, onPendingConsumed, navS
                     t={t}
                   />
                 )}
+                {m.role === 'bot' && !m.thinking && (() => {
+                  // Each .docx (redline/final) this answer references gets a chip
+                  // that loads that specific doc into the panel — so reopening a
+                  // past chat and clicking an earlier answer shows its own doc,
+                  // not just the conversation's newest one.
+                  const docs = docxArtifactsInText(m.text, apiUrl, currentApp)
+                  if (!docs.length) return null
+                  return (
+                    <div className="msg-doc-chips">
+                      {docs.map(d => {
+                        const label = artifactLabel(d.id)
+                        return (
+                          <button
+                            key={d.id}
+                            className={`msg-doc-chip${panelDoc?.id === d.id && !docHidden ? ' active' : ''}`}
+                            title={t('query.viewDoc', { name: label })}
+                            onClick={() => { setSelectedDoc(d); setDocHidden(false) }}
+                          ><DocIcon /><span className="msg-doc-chip-name">{label}</span></button>
+                        )
+                      })}
+                    </div>
+                  )
+                })()}
                 {(m.role === 'user' || m.role === 'bot') && !m.thinking && !m.error && !m.muted && (
                   <div className="msg-actions">
                     <CopyButton text={m.text} title={t('query.copy')} copiedTitle={t('query.copied')} />
@@ -407,13 +441,13 @@ export default function QueryTab({ active, pendingQuery, onPendingConsumed, navS
             <button className="btn btn-primary" disabled={querying || !hasApp} onClick={sendQuery}>{t('common.send')}</button>
           </div>
         </div>
-        {currentDoc && docHidden && (
+        {panelDoc && docHidden && (
           <div className="chat-aside-min">
             <button className="aside-toggle" title={t('query.showDoc')} aria-label={t('query.showDoc')} onClick={() => setDocHidden(false)}><DocIcon /></button>
           </div>
         )}
-        {currentDoc && !docHidden && (
-          <DocPanel doc={currentDoc} t={t} onHide={() => setDocHidden(true)} />
+        {panelDoc && !docHidden && (
+          <DocPanel doc={panelDoc} t={t} onHide={() => setDocHidden(true)} />
         )}
         {sourcesIdx >= 0 && msgs[sourcesIdx]?.refs && (
           <SourcesPanel refs={msgs[sourcesIdx].refs} t={t} onClose={() => setSourcesIdx(-1)} />
