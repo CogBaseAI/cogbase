@@ -234,6 +234,81 @@ def test_build_system_prompt_includes_metadata():
 
 
 # ---------------------------------------------------------------------------
+# build_system_prompt() — account profile
+# ---------------------------------------------------------------------------
+
+_PROFILE = "# Company Profile\n\n## How we want outputs\n**House style:** terse"
+
+
+def test_build_system_prompt_includes_account_profile():
+    runner = _make_runner("test", MagicMock(), _doc_store(), account_profile=_PROFILE)
+    prompt = runner.build_system_prompt("base")
+    assert "Customer profile (account-level context)" in prompt
+    assert "**House style:** terse" in prompt
+
+
+def test_build_system_prompt_omits_profile_block_when_absent():
+    runner = _make_runner("test", MagicMock(), _doc_store())
+    prompt = runner.build_system_prompt("base")
+    assert "Customer profile" not in prompt
+
+
+def test_build_system_prompt_treats_blank_profile_as_absent():
+    runner = _make_runner("test", MagicMock(), _doc_store(), account_profile="  \n\n ")
+    assert "Customer profile" not in runner.build_system_prompt("base")
+
+
+def test_account_profile_block_is_not_citable():
+    """No citation id: nothing resolves one, unlike a memory block's records."""
+    runner = _make_runner("test", MagicMock(), _doc_store(), account_profile=_PROFILE)
+    prompt = runner.build_system_prompt("base")
+    assert "Cite [" not in prompt
+    assert "profile-1" not in prompt
+
+
+def test_account_profile_sits_between_base_prompt_and_retrieval_prompt():
+    from cogbase.stores import CollectionSchema, FieldSchema, FieldType
+
+    schema = CollectionSchema(
+        name="contracts",
+        description="Contract records.",
+        primary_fields=["doc_id"],
+        fields={"doc_id": FieldSchema(type=FieldType.STRING)},
+    )
+    runner = _make_runner(
+        "test",
+        MagicMock(),
+        _doc_store(),
+        structured_schemas=[schema],
+        account_profile=_PROFILE,
+    )
+    prompt = runner.build_system_prompt("BASE_PROMPT_MARKER")
+    assert (
+        prompt.index("BASE_PROMPT_MARKER")
+        < prompt.index("Customer profile (account-level context)")
+        < prompt.index(runner._retrieval_system_prompt)
+    )
+
+
+def test_account_profile_precedes_skill_section():
+    runner = _make_runner("test", MagicMock(), _doc_store(), account_profile=_PROFILE)
+    prompt = runner.build_system_prompt("base", _make_skill("weather"))
+    assert prompt.index("Customer profile") < prompt.index("Active Skill: weather")
+
+
+def test_set_account_profile_hot_patches_the_block():
+    runner = _make_runner("test", MagicMock(), _doc_store(), account_profile=_PROFILE)
+
+    runner.set_account_profile("# Company Profile\n\n**House style:** detailed")
+    prompt = runner.build_system_prompt("base")
+    assert "**House style:** detailed" in prompt
+    assert "terse" not in prompt
+
+    runner.set_account_profile(None)
+    assert "Customer profile" not in runner.build_system_prompt("base")
+
+
+# ---------------------------------------------------------------------------
 # run() — skill mode, happy paths
 # ---------------------------------------------------------------------------
 
