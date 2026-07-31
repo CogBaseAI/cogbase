@@ -69,6 +69,27 @@ class TestAppCache:
         assert cache.get("app-2") is not None
         assert len(self._all_names(cache)) == 1
 
+    def test_apps_for_account_spans_namespaces(self):
+        cache = AppCache()
+        a, b, other = object(), object(), object()
+        cache.add("acct-1/ns-a/alpha", a)
+        cache.add("acct-1/ns-b/beta", b)
+        cache.add("acct-2/ns-a/gamma", other)
+        assert set(map(id, cache.apps_for_account("acct-1"))) == {id(a), id(b)}
+
+    def test_apps_for_account_prefix_is_exact(self):
+        """``acct-1`` must not match ``acct-10`` — the separator is part of the key."""
+        cache = AppCache()
+        mine, lookalike = object(), object()
+        cache.add("acct-1/ns/a", mine)
+        cache.add("acct-10/ns/a", lookalike)
+        assert cache.apps_for_account("acct-1") == [mine]
+
+    def test_apps_for_account_unknown_is_empty(self):
+        cache = AppCache()
+        cache.add("acct-1/ns/a", object())
+        assert cache.apps_for_account("ghost") == []
+
     def test_lru_evicts_oldest_when_full(self):
         cache = AppCache(maxsize=2)
         a, b, c = object(), object(), object()

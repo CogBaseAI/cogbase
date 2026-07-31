@@ -659,6 +659,39 @@ class DeployResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Company profile models
+# ---------------------------------------------------------------------------
+
+
+class CompanyProfileResponse(BaseModel):
+    """The account's company profile, or the fact that it has none yet.
+
+    ``exists: false`` with a null ``markdown`` is the cold-start answer — the UI
+    reads "should I offer onboarding?" as data rather than having to treat a 404
+    as a normal state.
+    """
+
+    markdown: str | None = None
+    exists: bool
+    updated_at: str | None = None
+    updated_by: str | None = None
+    #: "interview" when written by the generator chat, "manual" when edited
+    #: through ``PUT /profile``. Null for a profile whose body predates its index
+    #: row (e.g. written directly to the document store).
+    source: str | None = None
+
+
+class UpdateCompanyProfileRequest(BaseModel):
+    markdown: str = Field(
+        description=(
+            "The full company-profile markdown, replacing any previous version. "
+            "Stable org-wide context — who you are, jurisdictions, regulators, "
+            "risk appetite, house style — injected into every app's system prompt."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # System config models
 # ---------------------------------------------------------------------------
 

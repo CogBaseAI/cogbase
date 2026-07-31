@@ -177,6 +177,13 @@ Skills (system-wide registry, uploadable; account-scoped via `X-Account-Id`, sha
   materialized into a local cache dir for execution; a fresh node syncs skills from the store on startup.
   See `cogbase/skills/store.py` (`SkillBundleStore`) and the `skill_records` index in `api/system_store.py`.
 
+Company profile (account-scoped, no namespace segment — the profile is shared by every namespace and app):
+- `GET /profile` — the account's company-profile markdown; `200` with `exists: false` when it has none (cold start is a state, not a 404)
+- `PUT /profile` — replace it; refuses bodies over `MAX_PROFILE_BYTES` with 413
+- `DELETE /profile` — remove it
+- Body lives in the system document store (`cogbase/core/profile.py`), edit metadata in the `profile_records` index; a write hot-patches
+  the account's cached app instances (`CogBaseApp.set_account_profile`) instead of evicting them. See `docs/preference-profiles.md`.
+
 System:
 - `POST /system/config` — configure LLM and embedding providers at runtime (no restart required)
 

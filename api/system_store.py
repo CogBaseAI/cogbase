@@ -120,6 +120,25 @@ SKILL_RECORDS_SCHEMA = CollectionSchema(
 )
 
 
+PROFILE_RECORDS_SCHEMA = CollectionSchema(
+    name="profile_records",
+    description=(
+        "Company-profile index: one record per account holding the edit metadata "
+        "for the account's company-profile document. The markdown body itself "
+        "lives in the document store (see cogbase/core/profile.py) — this table "
+        "only answers 'who changed it, when, and how'."
+    ),
+    # One profile per account, so the account is the whole key.
+    primary_fields=["account_id"],
+    fields={
+        "account_id": FieldSchema(type=FieldType.STRING, nullable=False),
+        "updated_at": FieldSchema(type=FieldType.STRING, nullable=False),
+        "updated_by": FieldSchema(type=FieldType.STRING, nullable=True),  # user id/email when authenticated
+        "source":     FieldSchema(type=FieldType.STRING, nullable=False),  # "interview" | "manual"
+    },
+)
+
+
 SESSION_RECORDS_SCHEMA = CollectionSchema(
     name="session_records",
     description=(
@@ -344,6 +363,13 @@ class SkillRecord(BaseModel):
     updated_at: str   # ISO-8601 UTC
 
 
+class ProfileRecord(BaseModel):
+    account_id: str
+    updated_at: str            # ISO-8601 UTC
+    updated_by: str | None = None  # authenticated principal, when there is one
+    source: str                # "interview" (generator chat) | "manual" (PUT /profile)
+
+
 class SessionRecord(BaseModel):
     session_id: str
     account_id: str
@@ -412,6 +438,7 @@ class SystemStore:
         await self._store.create_collection(TASKS_SCHEMA)
         await self._store.create_collection(DOC_WORKFLOW_REGISTRY_SCHEMA)
         await self._store.create_collection(SKILL_RECORDS_SCHEMA)
+        await self._store.create_collection(PROFILE_RECORDS_SCHEMA)
         await self._store.create_collection(SESSION_RECORDS_SCHEMA)
         await self._store.create_collection(ACCOUNT_RECORDS_SCHEMA)
         await self._store.create_collection(USER_RECORDS_SCHEMA)
@@ -720,6 +747,46 @@ class SystemStore:
 
     async def delete_skill(self, skill_id: str) -> None:
         await self._store.delete_records("skill_records", filters=[Col("skill_id") == skill_id])
+
+    # ------------------------------------------------------------------
+    # Company-profile index
+    # ------------------------------------------------------------------
+
+    async def save_profile_record(
+        self,
+        account_id: str,
+        *,
+        source: str,
+        updated_by: str | None = None,
+    ) -> ProfileRecord:
+        """Stamp the account's profile edit metadata, replacing any previous row.
+
+        The document store holds only content, so ``updated_at`` needs a home;
+        this mirrors ``skill_records``, which indexes bundles whose bytes live in
+        the document store. Returns the record it wrote so the caller can answer
+        with it without a read-back.
+        """
+        record = ProfileRecord(
+            account_id=account_id,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+            updated_by=updated_by,
+            source=source,
+        )
+        await self._store.save("profile_records", [record.model_dump()])
+        return record
+
+    async def get_profile_record(self, account_id: str) -> ProfileRecord | None:
+        rows = await self._store.query_as(
+            "profile_records",
+            filters=[Col("account_id") == account_id],
+            model=ProfileRecord,
+        )
+        return rows[0] if rows else None
+
+    async def delete_profile_record(self, account_id: str) -> None:
+        await self._store.delete_records(
+            "profile_records", filters=[Col("account_id") == account_id]
+        )
 
     # ------------------------------------------------------------------
     # Doc registry

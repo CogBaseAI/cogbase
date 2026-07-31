@@ -415,6 +415,14 @@ class CogBaseApp:
         """
         self._query_prompt = prompt
 
+    def set_account_profile(self, markdown: str | None) -> None:
+        """Update the account company profile the runner injects, in place.
+
+        Lets an edit to the account-scoped profile reach a cached live instance
+        without a rebuild (see ``cogbase.core.profile``).
+        """
+        self._runner.set_account_profile(markdown)
+
     async def query_stream(
         self,
         text: str,

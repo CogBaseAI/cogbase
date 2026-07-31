@@ -28,6 +28,7 @@ from cogbase.stores import (
     build_vector_store as _build_vector_store,
 )
 from cogbase.core.app import CogBaseApp
+from cogbase.core.profile import AccountProfileStore
 from cogbase.core.query_runner import MemoryTiers, QueryRunner, RetrievalResources
 from cogbase.memory import Distiller, EpisodicMemory, LongTermMemory, ShortTermMemory
 from cogbase.stores.schema import FieldSchema, FieldType
@@ -136,6 +137,25 @@ async def build_app(
         if config.document_store
         else (sys.document_store.with_scope(app_scope) if sys.document_store else None)
     )
+
+    # Account company profile: stable org-wide framing context, injected into every
+    # system prompt this app's runner builds (docs/preference-profiles.md).  Read
+    # from the *system* document store, not the app-scoped ``document_store`` above
+    # — the profile is shared by every namespace and app in the account, so it lives
+    # outside the app partition.
+    #
+    # Best-effort by design: build_app runs on startup provisioning and on every
+    # app-cache miss, so a document-store hiccup here must degrade to "no profile"
+    # rather than fail app construction for the whole account.
+    account_profile: str | None = None
+    if sys.document_store is not None:
+        try:
+            account_profile = await AccountProfileStore(sys.document_store).load(account_id)
+        except Exception:
+            logger.warning(
+                "account profile load failed account=%s app=%s", account_id, config.name,
+                exc_info=True,
+            )
 
     # --- Vector collections ---
     # Collect routing match keys per collection so they're always stored on chunks,
@@ -351,6 +371,7 @@ async def build_app(
         memory=MemoryTiers(short_term=short_term, episodic=episodic, long_term=long_term),
         skills=skills or None,
         enable_memory_lookup=config.memory.enable_memory_lookup,
+        account_profile=account_profile,
     )
 
     # --- Workflows ---
@@ -380,13 +401,15 @@ async def build_app(
         )
 
     logger.info(
-        "build app=%s, pipelines=%d routing=%s, workflows=%d vector_collections=%d structured_collections=%d",
+        "build app=%s, pipelines=%d routing=%s, workflows=%d vector_collections=%d "
+        "structured_collections=%d account_profile=%s",
         config.name,
         len(config.pipelines),
         config.pipeline_routing,
         len(config.workflows),
         len(config.vector_collections),
         len(config.structured_collections),
+        account_profile is not None,
     )
     return CogBaseApp(
         config.name,

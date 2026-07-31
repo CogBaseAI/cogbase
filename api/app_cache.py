@@ -42,6 +42,23 @@ class AppCache:
         with self.lock:
             self._cache.pop(key, None)
 
+    def apps_for_account(self, account_id: str) -> list[Any]:
+        """Return every live instance the cache holds for one account.
+
+        Keys are ``account/namespace/name`` (:func:`cache_key`), so an exact
+        prefix match selects an account's apps across all its namespaces. Used to
+        push an account-scoped change (e.g. an edited company profile) into
+        already-built instances instead of dropping them and paying a rebuild.
+
+        Snapshots under the lock and reads through ``get`` so an entry expiring
+        mid-iteration is skipped rather than raising.
+        """
+        prefix = f"{account_id}/"
+        with self.lock:
+            keys = [k for k in list(self._cache.keys()) if k.startswith(prefix)]
+            apps = [self._cache.get(k) for k in keys]
+        return [app for app in apps if app is not None]
+
     def clear(self) -> None:
         with self.lock:
             self._cache.clear()
