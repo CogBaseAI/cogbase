@@ -14,7 +14,6 @@ from unittest.mock import MagicMock
 import pytest
 import yaml
 
-from api.dependencies import RequestScope
 from api.models import ChatMessage, GenerateChatRequest
 from api.routers.app_generate import chat
 from cogbase.core.app_generator import _collect_save_targets
@@ -24,7 +23,7 @@ from tests.live_setup import make_llm, make_embedding
 logger = logging.getLogger(__name__)
 
 # Stateless generate turns are account-scoped (no namespace until deploy).
-_SCOPE = RequestScope(account_id="default", namespace_id="default")
+_ACCOUNT_ID = "default"
 
 _llm = make_llm()
 _embedder = make_embedding()
@@ -45,6 +44,12 @@ def llm():
 @pytest.fixture(scope="module")
 def embedder():
     return _embedder
+
+
+@pytest.fixture
+def resources(llm):
+    """System resources for a stateless generate turn — the LLM is all it needs."""
+    return MagicMock(llm=llm)
 
 
 _MAX_ROUNDS = 8  # initial turn + up to 7 confirmations
@@ -101,16 +106,16 @@ _CONTRACT_CONVERSATION: list[dict] = [
 
 
 class TestChatEndpointLive:
-    async def test_chat_returns_text_for_open_question(self, llm):
+    async def test_chat_returns_text_for_open_question(self, llm, resources):
         body = GenerateChatRequest(
             text="What CogBase pipeline step type produces structured records?",
             history=[],
         )
-        response = await chat(_SCOPE, body, MagicMock(llm=llm))
+        response = await chat(_ACCOUNT_ID, body, resources)
         assert response.content
         assert response.config_yaml is None
 
-    async def test_chat_generates_validated_config_yaml(self, llm):
+    async def test_chat_generates_validated_config_yaml(self, llm, resources):
         history = [ChatMessage(**m) for m in _CONTRACT_CONVERSATION[:-1]]
         body = GenerateChatRequest(
             text=(
@@ -119,7 +124,7 @@ class TestChatEndpointLive:
             ),
             history=history,
         )
-        response = await chat(_SCOPE, body, MagicMock(llm=llm))
+        response = await chat(_ACCOUNT_ID, body, resources)
 
         assert response.config_yaml, (
             "expected the agent loop to call propose_app_config and return a "
@@ -129,7 +134,7 @@ class TestChatEndpointLive:
         assert config.name
         assert config.pipelines
 
-    async def test_full_conversation_contract_app_from_scratch(self, llm):
+    async def test_full_conversation_contract_app_from_scratch(self, llm, resources):
         """Multi-turn conversation for a contract analysis app.
 
         Turn 1 asks the model to propose fields; turn 2 confirms and requests
@@ -156,9 +161,9 @@ class TestChatEndpointLive:
                 text = _confirm_text(round_num)
 
             response = await chat(
-                _SCOPE,
+                _ACCOUNT_ID,
                 GenerateChatRequest(text=text, history=history),
-                MagicMock(llm=llm),
+                resources,
             )
             logger.info("round %d content=%s", round_num, response.content)
             logger.info("round %d config_yaml=%s", round_num, response.config_yaml)
@@ -205,7 +210,7 @@ class TestChatEndpointLive:
             user_fields = [k for k in props if k != "doc_id"]
             assert user_fields, f"no user-defined fields found in {sc['name']!r}"
 
-    async def test_full_conversation_workflow_app_from_scratch(self, llm):
+    async def test_full_conversation_workflow_app_from_scratch(self, llm, resources):
         """Multi-turn conversation for an app that requires a workflow.
 
         Turn 1 describes a clause-level compliance app with an explicit workflow
@@ -226,9 +231,9 @@ class TestChatEndpointLive:
 
         for round_num in range(_MAX_ROUNDS):
             response = await chat(
-                _SCOPE,
+                _ACCOUNT_ID,
                 GenerateChatRequest(text=text, history=history),
-                MagicMock(llm=llm),
+                resources,
             )
             logger.info("round %d content=%s", round_num, response.content)
             logger.info("round %d config_yaml=%s", round_num, response.config_yaml)
@@ -289,7 +294,7 @@ class TestContractComplianceEndToEndLive:
     workflow for contract-001, and verifies queries against live findings.
     """
 
-    async def test_ingest_workflow_and_query(self, llm, embedder):
+    async def test_ingest_workflow_and_query(self, llm, embedder, resources):
         from api.factory import build_app
         from api.system_resources import SystemResources
         from cogbase.core.models import Document
@@ -379,9 +384,9 @@ IN WITNESS WHEREOF, the parties have executed this Agreement as of the Effective
 
         for round_num in range(_MAX_ROUNDS):
             response = await chat(
-                _SCOPE,
+                _ACCOUNT_ID,
                 GenerateChatRequest(text=text, history=history),
-                MagicMock(llm=llm),
+                resources,
             )
             logger.info("round %d content=%s", round_num, response.content)
             logger.info("round %d config_yaml=%s", round_num, response.config_yaml)
@@ -573,7 +578,7 @@ class TestContractAnalystEndToEndLive:
     and that queries over the ingested data return correct answers.
     """
 
-    async def test_ingest_and_query(self, llm, embedder):
+    async def test_ingest_and_query(self, llm, embedder, resources):
         from api.factory import build_app
         from api.system_resources import SystemResources
         from cogbase.core.models import Document
@@ -666,9 +671,9 @@ This Agreement is governed by the laws of the State of Texas.
 
         for round_num in range(_MAX_ROUNDS):
             response = await chat(
-                _SCOPE,
+                _ACCOUNT_ID,
                 GenerateChatRequest(text=text, history=history),
-                MagicMock(llm=llm),
+                resources,
             )
             logger.info("round %d content=%s", round_num, response.content)
             logger.info("round %d config_yaml=%s", round_num, response.config_yaml)
