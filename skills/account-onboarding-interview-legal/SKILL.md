@@ -54,40 +54,70 @@ your settings" — say "tell me how your team works".
   infer the company from context, and do not invent a plausible-sounding answer to
   round out the document.
 
-## Two paths — offer them on the first turn
+## Running order — don't offer a menu, just start
 
-> **2 minutes** gets me who you are, your industry, where you operate, how
-> cautious you want me to be, and who's reading the output — enough to make every
-> app in your account sound like it was built for you.
-> **10 minutes** adds your regulators, escalation rules, practice setting, and
-> governing-law preferences — the things that change what gets flagged and how
-> hard.
->
-> Quick or full? You can always add the rest later.
+**Never open by asking whether they want the quick version or the full one.**
+They can't price a choice between two sets of questions they haven't seen, and
+both answers are bad — "quick" licenses them to leave before the questions that
+matter, "full" is a commitment nobody makes to a stranger. Open with question 1.
 
-**Quick path** — questions 1, 2, 3, 7, 9. Save and close.
-**Full path** — all ten, plus the legal layer.
+The questions are ordered by how much they change an app's output, so that
+**stopping at any point leaves something usable**:
+
+1. **Core** — general questions 1 and 2, then the legal fork, then legal-layer
+   questions 1 and 2 if they do legal work, then general 3 and 4.
+2. **Once the core set is answered, say so**, once:
+   > That's enough to change what every app in your account flags. Another few
+   > minutes gets your escalation rules, regulators, and governing-law
+   > preferences — worth it, but you can stop here and add them any time.
+3. **The rest** — general 5, 6, 7 and the remaining legal-layer questions.
+
+Say that *after* the core answers are in, never before. An offramp offered before
+you've collected anything is just the menu again; offered after, it's a courtesy —
+and by then they can judge whether the rest is worth it, because they've seen what
+the questions are like.
+
+Don't build this around a save point, and don't announce saving as a milestone.
+The user has a Save button, and every way out of this conversation spends a turn
+asking you to save first, so an interview abandoned after question 4 keeps its
+four answers without you doing anything about it. Saving is still yours to do
+when they say they're done (see the Saving section below the script) — it just
+isn't a step in the interview, and the user doesn't need a progress report on it.
 
 ## The questions
 
-1. Who are you / what does your org do? One sentence: what you make or sell, to
-   whom, how. A link to your site or about page works too.
-2. Industry / sector.
-3. What documents does your work run on, and what decisions do they drive? For a
+**1-4 are core** — ask them first. 5-7 come after, only if the user is still with
+you.
+
+1. Who are you / what does your org do, and in what industry? One sentence: what
+   you make or sell, to whom, how. A link to your site or about page works too.
+2. What documents does your work run on, and what decisions do they drive? For a
    legal team: which agreements (MSAs, DPAs, NDAs, employment, leases), arriving
    from where, and what has to happen to them. What should never be missed in
    one? A sample document beats a description. *(Their answer here is the most
    useful thing in the whole interview — spend a follow-up here rather than
    pressing a question that isn't landing.)*
-4. Size — team and org.
-5. Jurisdictions / regions you operate in.
-6. Regulators / compliance regimes that apply.
-7. Risk appetite — conservative / balanced / aggressive. Frame it concretely:
-   "flag everything and let you triage, or only the things that would actually
-   change your mind?"
-8. House style — output tone (terse vs. detailed, formal vs. plain).
-9. User expertise — expert/professional vs. non-expert.
-10. Escalation / final authority — who decides, or "I decide".
+3. Risk appetite — conservative / balanced / aggressive. Never ask it with the
+   bare labels; frame it concretely: "flag everything and let you triage, or only
+   the things that would actually change your mind?"
+4. Who reads the output — expert/professional or non-expert. (The legal layer
+   sharpens this into a specific role; don't ask it twice.)
+5. Always-escalate triggers — the org-wide hard stops that go to a human
+   regardless of dollar value, plus the deal size below which something is routine
+   enough to skim. Typical hard stops: unlimited liability, IP assignment to the
+   counterparty, anything on a never-accept list. *(The most valuable of the
+   non-core questions — ask it first once the core set is in.)*
+6. Regulators / compliance regimes that apply — GDPR, HIPAA, EU AI Act, FTC §5,
+   state AI law, or sector regulators specific to them. Ask this **once**; it
+   covers the legal layer too.
+7. Jurisdictions / regions you operate in — unless their governing-law answer
+   below already tells you.
+
+Deliberately **not** asked: team/org size, house style, and who holds final
+sign-off by name. None of them change what a review finds — size is inert, house
+style is the reviewing app's call, and a named approver does nothing until
+something routes to them. If the user volunteers any of it, record it; don't
+spend a turn on it.
 
 ## The legal layer
 
@@ -96,38 +126,44 @@ negotiating, or managing contracts and other legal documents. If not, skip this
 section entirely and do not mention it again. It is a large layer and it is
 irrelevant to a customer ingesting research papers or support tickets.
 
-If they do:
+If they do, in this order — the first two are **core** and carry most of the
+value in the whole interview:
 
-1. **Practice setting** — solo / small firm / midsize-large firm / in-house /
-   government-legal-aid-clinic. This shapes escalation: solo and small firms get
-   "when do you call in outside counsel", everyone else gets an approval chain.
-   If their practice doesn't fit the boxes, ask them to describe it in their own
-   words and record that instead — a profile built from a forced fit is worse than
-   a sparse one built from what's true.
-2. **Role** — lawyer or legal professional · non-lawyer with attorney access ·
-   non-lawyer without regular attorney access. Ask it directly, because it decides
-   whether outputs carry an attorney-work-product header or a not-legal-advice
-   header. If the answer is non-lawyer, say once (and don't repeat it later): the
-   apps will frame outputs as research for attorney review rather than verdicts,
-   and will pause before steps with legal consequences.
-3. **Which side** — do they mostly sell (their paper, they're the vendor), mostly
-   buy (counterparty paper, they're the customer), or both? Nearly every position
-   below reads differently by side.
-4. **Governing law** — preferred / acceptable / never.
-5. **Regulators that matter** — GDPR, HIPAA, EU AI Act, FTC §5, state AI law, or
-   sector regulators specific to them.
-6. **Automatic-escalation triggers** — the org-wide hard stops that escalate
-   regardless of dollar value. Typical answers: unlimited liability, IP assignment
-   to the counterparty, anything on a never-accept list.
-7. **The one thing** — if a document has exactly one problem that makes them
-   refuse to sign, what is it? This is the highest-signal answer in the whole
-   interview; it becomes the first thing every review checks.
-8. **Where executed documents live** — CLM, Drive, SharePoint, or scattered.
+1. **Which side** — do they mostly sell (their paper, they're the vendor), mostly
+   buy (counterparty paper, they're the customer), or both? The highest-leverage
+   answer in the interview: a liability cap, an indemnity, an auto-renewal, a
+   unilateral amendment right each reads as protection on one side and exposure on
+   the other. Without it every review hedges both directions on every clause.
+2. **The one thing** — if a document has exactly one problem that makes them
+   refuse to sign, what is it? It becomes the first thing every review checks.
+3. **Role** — lawyer or legal professional · non-lawyer with attorney access ·
+   non-lawyer without regular attorney access. This is question 4 above made
+   specific, not a second question — if they've already told you they're a
+   non-expert, just pin down which of the three. It decides whether outputs carry
+   an attorney-work-product header or a not-legal-advice header. If the answer is
+   non-lawyer, say once (and don't repeat it later): the apps will frame outputs
+   as research for attorney review rather than verdicts, and will pause before
+   steps with legal consequences.
+4. **Governing law** — preferred / acceptable / never. Cheap and every contract
+   has the clause, so it turns into a pass/fail check rather than a description.
+5. **Practice setting** *(ask last, and only if they're still with you)* — solo /
+   small firm / midsize-large
+   firm / in-house / government-legal-aid-clinic. This shapes escalation: solo
+   and small firms get "when do you call in outside counsel",
+   everyone else gets an approval chain. If their practice doesn't fit the boxes,
+   ask them to describe it in their own words and record that instead — a profile
+   built from a forced fit is worse than a sparse one built from what's true.
 
-Playbook positions (liability caps, indemnity structures, DPA terms) are *not*
-account-level — they belong to the app that reviews contracts, and are collected
-when that app is built. Don't ask for them here; if the user volunteers a
-playbook, say you'll use it when they set up their contract review app.
+Don't ask where executed documents live. Nothing reads a CLM or SharePoint yet —
+documents arrive by upload — so the answer changes no output. Ask it again when
+there is a connector to point at.
+
+Playbook *positions* (an acceptable liability cap, an indemnity structure, DPA
+terms) are *not* account-level — they belong to the app that reviews contracts,
+and are collected when that app is built. Don't ask for them here; if the user
+volunteers a playbook, say you'll use it when they set up their contract review
+app. "The one thing" is not a position: it is the single deal-breaker that holds
+across every app and every matter, which is why it belongs here.
 
 ## The profile template
 
@@ -148,7 +184,7 @@ everywhere.*
 
 ## Who we are
 [One sentence: what the org makes/sells, to whom, how.] Industry: [sector].
-Size: [team / org]. Operating in: [jurisdictions].
+Operating in: [jurisdictions].
 
 ## What we work on
 **Documents:** [the kinds of documents this account runs on, and how they arrive]
@@ -157,24 +193,22 @@ Size: [team / org]. Operating in: [jurisdictions].
 
 ## How we want outputs
 **Risk appetite:** [conservative / balanced / aggressive]
-**House style:** [terse / detailed; formal / plain]  *(apps may override)*
-**User expertise:** [expert / non-expert]
+**Who reads them:** [expert / non-expert]
 
 ## Regulators & compliance
 [GDPR, HIPAA, EU AI Act, FTC §5, state AI law, sector regulators, …]
 
 ## Escalation
-**Final authority:** [name / role, or "I decide"]
 **Always goes to a human:** [the situations that escalate regardless of how
 routine they look]
+**Routine below:** [the deal size or scope not worth a close read]
 
 ## Legal practice
-**Practice setting:** [solo / small firm / midsize-large / in-house / gov-legal-aid-clinic]
-**Role:** [lawyer | non-lawyer with attorney access | non-lawyer without]
 **Which side:** [mostly sell / mostly buy / both]
-**Governing law:** preferred [ … ] · acceptable [ … ] · never [ … ]
 **Never sign without fixing:** [the one thing]
-**Executed docs live in:** [CLM / Drive / SharePoint + path]
+**Role:** [lawyer | non-lawyer with attorney access | non-lawyer without]
+**Governing law:** preferred [ … ] · acceptable [ … ] · never [ … ]
+**Practice setting:** [solo / small firm / midsize-large / in-house / gov-legal-aid-clinic]
 ```
 
 If something they told you matters and none of these sections holds it, add a
@@ -189,8 +223,9 @@ goes in the profile?" A wrong fact here propagates into every future answer.
 
 ## Closing
 
-After saving, show a short summary of what you heard — not the whole document —
-and ask what you got wrong. Then tell them:
+When the interview ends — they stop, they decline, or you run out of questions —
+show a short summary of what you heard, not the whole document, and ask what you
+got wrong. Then tell them:
 
 - It's editable any time in Settings, in plain English.
 - Every app in their account reads it from now on, including the ones already

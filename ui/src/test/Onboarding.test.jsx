@@ -282,10 +282,10 @@ describe('onboarding interview modal', () => {
   it('does not save when the user leaves without answering anything', async () => {
     // Only the hidden kickoff has run. Asking the model to save here would have it
     // write a profile from nothing — which reads as "done" everywhere in the UI.
-    const fetchSpy = mockFetch({ interview: { events: [{ done: true, content: 'Quick or full?' }] } })
+    const fetchSpy = mockFetch({ interview: { events: [{ done: true, content: 'What does your org do?' }] } })
     const user = userEvent.setup()
     renderWithCtx(<OnboardingModal open={true} onClose={() => {}} />)
-    await screen.findByText('Quick or full?')
+    await screen.findByText('What does your org do?')
 
     await user.click(screen.getByText('Finish later'))
     await new Promise(r => setTimeout(r, 20))

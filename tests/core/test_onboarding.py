@@ -211,7 +211,7 @@ class TestShippedSkill:
     def test_the_prompt_built_from_it_is_a_complete_interview(self):
         prompt = build_interview_system_prompt(self._shipped_script())
 
-        assert "Quick or full?" in prompt             # the questions
+        assert "## The questions" in prompt           # the questions
         assert "# Company Profile" in prompt          # the document shape
         assert SAVE_COMPANY_PROFILE_TOOL_NAME in prompt  # the plumbing
 

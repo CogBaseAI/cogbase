@@ -115,11 +115,12 @@ full updated document — it replaces the previous version rather than appending
 #: A re-run has two quite different reasons behind it, and the interview cannot
 #: know which one it is looking at until it reads what is saved. *Something
 #: changed* is the obvious one. *The profile was never finished* is now the common
-#: one: the quick path deliberately answers five of ten questions, and leaving
-#: mid-interview saves whatever has been collected — so a partial profile is the
-#: designed outcome of a first run, not a failure of one. Asking "what changed?"
-#: about a document with four empty sections is the wrong opening question, so the
-#: model is told to work out which case it is in and let the user pick.
+#: one: the script has no fixed finish line — it asks in descending order of value
+#: and the user leaves when they've had enough, at which point the UI's exit save
+#: writes whatever was collected. So a first run ending early is the designed
+#: outcome, not a failure. Asking "what changed?" about a document with four empty
+#: sections is the wrong opening question, so the model is told to work out which
+#: case it is in and let the user pick.
 _RERUN_PROMPT = """\
 
 ## This account already has a profile
@@ -128,8 +129,8 @@ It is below. This is a **re-run**, so do not start from scratch.
 
 First read it against the template and questions in the script above, and work out \
 what is *missing* — sections that were dropped, and lines carrying no real answer. \
-A partial profile is normal here: the quick path covers only some of the questions, \
-and an interview the user left early saves what it had. So open by telling them in a \
+A partial profile is normal here: the interview has no fixed finish line, so one the \
+user left early saved exactly what it had at that point. So open by telling them in a \
 line or two what you already have and what is still blank, then offer the choice:
 
 - **finish it** — you ask only the questions the profile has no answer for, in the \

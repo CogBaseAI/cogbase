@@ -116,7 +116,16 @@ export default function OnboardingModal({ open, onClose }) {
     setCloseError(false)
     setRerun(!!profile?.exists)
     startTurn(KICKOFF, { hidden: true })
+    // The first question is already streaming when the modal appears; put the
+    // caret in the box now so answering it costs no click either.
+    setTimeout(() => textareaRef.current?.focus(), 0)
   }, [open])
+
+  // Give the keyboard back when a failed closing save re-enables the box — the
+  // one place `disabled` still blurs it.
+  useEffect(() => {
+    if (open && !closing) textareaRef.current?.focus()
+  }, [closing])
 
   // Every turn goes through here so `inflightRef` always names the one streaming
   // now. Only `finishLater` reads it; everything else just wants `send`.
@@ -303,6 +312,10 @@ export default function OnboardingModal({ open, onClose }) {
             onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
+                // Enter during a streaming turn is held, not dropped: the
+                // endpoint is strictly turn-taking, so the text stays in the box
+                // (and the button stays disabled) until the answer lands.
+                if (busy || closing) return
                 const text = input.trim()
                 if (!text) return
                 setInput('')
@@ -311,7 +324,12 @@ export default function OnboardingModal({ open, onClose }) {
               }
             }}
             onChange={e => { setInput(e.target.value); autoResize(e.target) }}
-            disabled={busy || closing}
+            // Enabled while the answer streams, so the user can start typing the
+            // next one straight away. Disabling it here would blur it, and a box
+            // that has to be clicked again after every turn makes an interview
+            // feel like a form. Only the closing save takes the keyboard away,
+            // because by then the modal is on its way out.
+            disabled={closing}
           />
           <button
             className="btn btn-primary"
