@@ -34,7 +34,7 @@ from api.main import app
 from api.app_cache import AppCache
 from api.system_store import NamespaceRecord, SystemStore
 from cogbase.skills.registry import SkillRegistry
-from cogbase.skills.skill import Skill
+from cogbase.skills.skill import ONBOARDING_SURFACE, Skill
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 
 
@@ -50,6 +50,16 @@ def _make_skill(name: str, description: str = "A test skill", skill_id: str | No
         id=skill_id or name,
         metadata={},
     )
+
+
+def _make_platform_skill(name: str = "onboarding-interview") -> Skill:
+    """A builtin serving a non-application surface — the onboarding interview is the
+    live example. Only ``skills_dir`` can produce one; uploads are always
+    application skills."""
+    skill = _make_skill(name, description="An interview script")
+    skill.builtin = True
+    skill.surface = ONBOARDING_SURFACE
+    return skill
 
 
 def _make_registry(*skill_ids: str) -> SkillRegistry:
@@ -170,6 +180,38 @@ class TestListSkills:
         assert body["total"] == 0
         assert body["skills"] == []
 
+    @pytest.mark.asyncio
+    async def test_platform_surface_skills_are_hidden_by_default(self, client, registry):
+        """The Skills tab lists what an app can be assigned. The onboarding
+        interview is a builtin no app can use, so listing it would only invite
+        the mistake the assignment guard then refuses."""
+        registry.register(_make_platform_skill(), account_id=None)
+
+        names = _skill_names((await client.get("/skills")).json())
+
+        assert names == {"skill-alpha", "skill-beta"}
+
+    @pytest.mark.asyncio
+    async def test_surface_all_includes_them(self, client, registry):
+        registry.register(_make_platform_skill(), account_id=None)
+
+        body = (await client.get("/skills?surface=all")).json()
+
+        assert "onboarding-interview" in _skill_names(body)
+
+    @pytest.mark.asyncio
+    async def test_a_specific_surface_can_be_requested(self, client, registry):
+        registry.register(_make_platform_skill(), account_id=None)
+
+        body = (await client.get(f"/skills?surface={ONBOARDING_SURFACE}")).json()
+
+        assert _skill_names(body) == {"onboarding-interview"}
+
+    @pytest.mark.asyncio
+    async def test_surface_is_reported_on_each_skill(self, client):
+        by_name = {s["name"]: s for s in (await client.get("/skills")).json()["skills"]}
+        assert by_name["skill-alpha"]["surface"] == "application"
+
 
 # ---------------------------------------------------------------------------
 # GET /applications/{name}/skills
@@ -240,6 +282,36 @@ class TestAddApplicationSkill:
 
         resp = await client.get("/namespaces/default/applications/my-app/skills")
         assert "skill-alpha" in _skill_names(resp.json())
+
+    @pytest.mark.asyncio
+    async def test_a_platform_surface_skill_cannot_be_assigned(self, client, registry):
+        """The onboarding interview is 200 lines of interview script; assigning it
+        would hand that to the query runner's skill selector as a candidate tool."""
+        registry.register(_make_platform_skill(), account_id=None)
+        await _create_app(client)
+
+        resp = await client.post(
+            "/namespaces/default/applications/my-app/skills",
+            json={"skill_name": "onboarding-interview"},
+        )
+
+        assert resp.status_code == 422
+        assert ONBOARDING_SURFACE in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_a_platform_surface_skill_is_refused_in_config_yaml(self, client, registry):
+        """The other door into config.skills — bundle upload — is guarded too."""
+        registry.register(_make_platform_skill(), account_id=None)
+
+        bundle = _make_bundle(_BASE_CONFIG + "skills:\n  - onboarding-interview\n")
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
+            resp = await client.post(
+                "/namespaces/default/applications",
+                files={"bundle": ("app.zip", bundle, "application/zip")},
+            )
+
+        assert resp.status_code == 422
+        assert "onboarding-interview" in resp.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_adding_multiple_skills(self, client):

@@ -11,6 +11,7 @@ from api.app_cache import AppCache
 from api.auth import InvalidToken, decode_token
 from api.system_resources import SystemResources
 from api.system_store import SystemStore
+from cogbase.core.profile import AccountProfileStore
 from cogbase.skills.registry import SkillRegistry
 from cogbase.skills.store import SkillBundleStore
 
@@ -183,6 +184,27 @@ def get_skill_bundle_store(request: Request) -> SkillBundleStore:
     return store  # type: ignore[no-any-return]
 
 
+def get_account_profile_store(
+    resources: Annotated[SystemResources, Depends(get_system_resources)],
+) -> AccountProfileStore:
+    """Provide the account company-profile store over the *system* document store.
+
+    The profile is account-scoped — shared by every namespace and app — so it is
+    read and written through the unscoped system store, which
+    :class:`AccountProfileStore` narrows per call. A deployment without a system
+    document store cannot hold profiles at all, so the route is 503 rather than
+    silently profile-less (the read path in ``build_app`` degrades quietly; this
+    write path must not).
+    """
+    store = resources.document_store
+    if store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Company profiles require a system document store; none is configured.",
+        )
+    return AccountProfileStore(store)
+
+
 AccountIdDep = Annotated[str, Depends(get_account_id)]
 RequestScopeDep = Annotated[RequestScope, Depends(get_request_scope)]
 SystemStoreDep = Annotated[SystemStore, Depends(get_system_store)]
@@ -190,3 +212,4 @@ AppCacheDep = Annotated[AppCache, Depends(get_app_cache)]
 SystemResourcesDep = Annotated[SystemResources, Depends(get_system_resources)]
 SkillRegistryDep = Annotated[SkillRegistry, Depends(get_skill_registry)]
 SkillBundleStoreDep = Annotated[SkillBundleStore, Depends(get_skill_bundle_store)]
+AccountProfileStoreDep = Annotated[AccountProfileStore, Depends(get_account_profile_store)]

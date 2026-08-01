@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 
 from api.dependencies import (
     AccountIdDep,
@@ -32,7 +32,7 @@ from api.models import (
 )
 from api.system_store import SkillRecord
 from cogbase.config.config import AppConfig
-from cogbase.skills.skill import load_skill_dir
+from cogbase.skills.skill import APPLICATION_SURFACE, load_skill_dir
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +104,7 @@ def _to_response(skill) -> SkillResponse:
         metadata=skill.metadata,
         source_path=str(skill.source_path) if skill.source_path else None,
         builtin=skill.builtin,
+        surface=skill.surface,
     )
 
 
@@ -210,10 +211,27 @@ async def replace_skill(
 
 @router.get("", response_model=SkillListResponse)
 async def list_skills(
-    account_id: AccountIdDep, skill_registry: SkillRegistryDep
+    account_id: AccountIdDep,
+    skill_registry: SkillRegistryDep,
+    surface: str = Query(
+        APPLICATION_SURFACE,
+        description=(
+            "Filter by surface. Defaults to 'application' — the skills assignable "
+            "to an app, which is what the Skills tab shows. Pass 'all' to include "
+            "platform surfaces (e.g. 'account-onboarding'), or a specific surface."
+        ),
+    ),
 ) -> SkillListResponse:
-    """Return the skills available to the calling account (its own + global builtins)."""
-    items = [_to_response(s) for s in skill_registry.all_skills(account_id)]
+    """Return the skills available to the calling account (its own + global builtins).
+
+    Filtered to application skills by default: a platform-surface skill such as the
+    onboarding interview is a builtin that no app can be assigned, so listing it
+    among assignable skills would only invite that mistake.
+    """
+    skills = skill_registry.all_skills(account_id)
+    if surface != "all":
+        skills = [s for s in skills if s.surface == surface]
+    items = [_to_response(s) for s in skills]
     return SkillListResponse(skills=items, total=len(items))
 
 

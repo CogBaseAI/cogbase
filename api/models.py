@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from api.system_store import DocWorkflowStatus, TaskStatus
+from cogbase.skills.skill import APPLICATION_SURFACE
 
 
 # ---------------------------------------------------------------------------
@@ -536,6 +537,9 @@ class SkillResponse(BaseModel):
     metadata: dict[str, Any] = {}
     source_path: str | None = None
     builtin: bool = False
+    # "application" (assignable to an app) or a platform surface such as
+    # "account-onboarding". Uploaded skills are always "application".
+    surface: str = APPLICATION_SURFACE
 
 
 class SkillListResponse(BaseModel):
@@ -656,6 +660,58 @@ class DeployResponse(BaseModel):
     name: str
     status: str
     error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Company profile models
+# ---------------------------------------------------------------------------
+
+
+class CompanyProfileResponse(BaseModel):
+    """The account's company profile, or the fact that it has none yet.
+
+    ``exists: false`` with a null ``markdown`` is the cold-start answer — the UI
+    reads "should I offer onboarding?" as data rather than having to treat a 404
+    as a normal state.
+    """
+
+    markdown: str | None = None
+    exists: bool
+    updated_at: str | None = None
+    updated_by: str | None = None
+    #: "interview" when written by the generator chat, "manual" when edited
+    #: through ``PUT /profile``. Null for a profile whose body predates its index
+    #: row (e.g. written directly to the document store).
+    source: str | None = None
+
+
+class UpdateCompanyProfileRequest(BaseModel):
+    markdown: str = Field(
+        description=(
+            "The full company-profile markdown, replacing any previous version. "
+            "Stable org-wide context — who you are, jurisdictions, regulators, "
+            "risk appetite, house style — injected into every app's system prompt."
+        ),
+    )
+
+
+class InterviewChatRequest(BaseModel):
+    """One turn of the onboarding interview. Stateless: the client holds history."""
+
+    text: str
+    history: list[ChatMessage] = []
+
+
+class InterviewChatResponse(BaseModel):
+    """The interview's reply, plus whether this turn wrote the profile.
+
+    ``profile_saved`` is what lets the UI dismiss the onboarding card and refresh
+    the Settings view without polling ``GET /profile`` after every turn.
+    """
+
+    content: str
+    profile_saved: bool = False
+    markdown: str | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -24,8 +24,10 @@ logger = logging.getLogger(__name__)
 # Tool definitions
 # ---------------------------------------------------------------------------
 
+PROPOSE_APP_CONFIG_TOOL_NAME = "propose_app_config"
+
 _PROPOSE_APP_CONFIG_TOOL: ToolDefinition = {
-    "name": "propose_app_config",
+    "name": PROPOSE_APP_CONFIG_TOOL_NAME,
     "description": (
         "Generate and validate the complete app config from the confirmed field list and "
         "workflow design. Call this once the user has confirmed all fields (and any workflow "

@@ -34,6 +34,7 @@ from api.routers.auth import router as auth_router
 from api.routers.app_generate import router as generate_router
 from api.routers.app_generate import deploy_router as generate_deploy_router
 from api.routers.namespaces import router as namespaces_router
+from api.routers.profile import router as profile_router
 from api.routers.skills import router as skills_router
 from api.routers.system import router as system_router
 from api.routers.whoami import router as whoami_router
@@ -275,6 +276,7 @@ app.include_router(applications_account_router)
 app.include_router(auth_router)
 app.include_router(generate_router)
 app.include_router(generate_deploy_router)
+app.include_router(profile_router)
 app.include_router(skills_router)
 app.include_router(system_router)
 app.include_router(whoami_router)

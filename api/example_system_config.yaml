@@ -68,6 +68,13 @@ log_store:
   # prefix: app-logs            # optional
   # region: us-west-2           # optional
 
+# Built-in ("default") skills shipped with CogBase, loaded on startup as
+# read-only skills and surfaced in the UI Skills tab. Required for the account
+# onboarding interview: its script *is* a skill
+# (skills/account-onboarding-interview-legal), so POST /profile/interview/chat
+# returns 503 when no skills_dir is configured. Point it at the repo's skills/.
+skills_dir: ./skills
+
 llm:
   provider: openai           # "openai" | "openai-compatible"
   model: gpt-5.4-mini

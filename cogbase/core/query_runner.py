@@ -654,6 +654,30 @@ def _format_memory_block(title: str, block_id: str, memories: list[LongTermRecor
     )
 
 
+def _format_profile_block(markdown: str) -> str:
+    """Render the account's company profile as a system-prompt block.
+
+    Unlike a memory block this is *not* citable.  A citation id exists so
+    ``_cited_block_memories`` can resolve it back to the records behind the block
+    and surface them on the QueryResult; the profile has no records behind it, so
+    an id here would dangle in the answer with nothing to resolve to.  What it
+    keeps from the memory blocks is the provenance labelling: the profile is
+    customer-asserted framing context, never evidence for a factual claim.
+
+    See docs/preference-profiles.md — the profile is injected unconditionally
+    (small, stable, always relevant to framing) rather than recalled.
+    """
+    return (
+        "## Customer profile (account-level context)\n"
+        "Stable context this customer supplied about their organization. Use it to "
+        "frame every answer — tone, level of detail, jurisdictions, risk appetite, "
+        "and who you are writing for. It is customer-asserted background, NOT "
+        "document evidence: never cite it as the source of a factual claim, and "
+        "prefer the documents when it conflicts with what they say.\n"
+        f"{markdown.strip()}"
+    )
+
+
 def _cited_block_memories(
     memory_blocks: dict[str, list[LongTermRecord]], cited_ids: set[str]
 ) -> list[LongTermRecord]:
@@ -751,6 +775,11 @@ class QueryRunner:
                                      long-term memory tier is present. Defaults False; set
                                      True to opt into on-demand memory recall. Memory
                                      injected into context applies regardless.
+        account_profile:             The account's company-profile markdown, read once at
+                                     build time and held for the life of the runner (see
+                                     ``cogbase.core.profile``). Injected into every system
+                                     prompt as framing context — unconditionally, unlike
+                                     long-term recall. None when the account has no profile.
     """
 
     def __init__(
@@ -769,6 +798,7 @@ class QueryRunner:
         context_token_budget: int | None = None,
         enable_memory_lookup: bool = False,
         work_root: str | None = None,
+        account_profile: str | None = None,
     ) -> None:
         self._app_id = app_id
         # Tenant attribution stamped onto episodic events via ``bind_app`` so the
@@ -794,6 +824,7 @@ class QueryRunner:
         self._retrieval_system_prompt = _build_retrieval_prompt(
             resources.structured_schemas, resources.vector_schemas
         )
+        self.set_account_profile(account_profile)
         self._skills: list = skills or []
         self._system_tools: dict[str, SystemTool] = {t.name: t for t in (system_tools or [])}
         self._max_calls = max_calls
@@ -889,9 +920,33 @@ class QueryRunner:
         logger.error("[runner] router returned unknown skill '%s', ignoring", chosen)
         return None
 
+    def set_account_profile(self, markdown: str | None) -> None:
+        """Replace the account profile, re-rendering its prompt block.
+
+        Formatted once here rather than per turn — the profile is stable, so the
+        block it produces is a fixed prefix of every system prompt this runner
+        builds (and a good prompt-cache candidate).  Exposed as a setter so an
+        edit to the profile can hot-patch a live app instance instead of waiting
+        for the app cache to expire and rebuild it.
+        """
+        self._account_profile = markdown
+        self._account_profile_block = (
+            _format_profile_block(markdown) if markdown and markdown.strip() else None
+        )
+
     def build_system_prompt(self, base_prompt: str, skill=None, workdir: str | None = None) -> str:
-        """Merge base_prompt, retrieval schema info, and (optionally) skill instructions."""
+        """Merge base_prompt, account profile, retrieval schema info, and (optionally)
+        skill instructions.
+
+        Order is deliberate: the app's own instructions lead, the account profile
+        frames them, and the skill section — the only part that changes per turn,
+        via the workdir listing — lands last so everything before it stays a
+        stable, cacheable prefix.
+        """
         parts = [base_prompt]
+
+        if self._account_profile_block:
+            parts.append(self._account_profile_block)
 
         if self._tool_defs:
             parts.append(self._retrieval_system_prompt)

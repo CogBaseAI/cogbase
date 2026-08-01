@@ -1132,3 +1132,136 @@ class TestBuildAppMemoryConfig:
             )
 
         assert "memory_lookup" in [t["name"] for t in app._runner._tool_defs]
+
+
+# ---------------------------------------------------------------------------
+# build_app — account company profile wiring
+# ---------------------------------------------------------------------------
+
+_PROFILE_MD = "# Company Profile\n\n**House style:** terse"
+
+
+async def _write_profile(doc_store, account_id: str, markdown: str = _PROFILE_MD) -> None:
+    from cogbase.core.profile import AccountProfileStore
+    await AccountProfileStore(doc_store).save(account_id, markdown)
+
+
+class TestBuildAppAccountProfile:
+    @patch("api.factory._build_llm")
+    async def test_profile_injected_into_runner_prompt(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        doc_store = InMemoryDocumentStore()
+        await _write_profile(doc_store, "acme")
+        cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
+
+        app = await build_app(
+            cfg,
+            system=SystemResources(
+                structured_store=InMemoryStructuredStore(), document_store=doc_store
+            ),
+            app_id=cfg.name, account_id="acme", namespace_id="legal",
+            app_status="initializing", task_store=_mock_task_store(),
+        )
+
+        assert "**House style:** terse" in app._runner.build_system_prompt("base")
+
+    @patch("api.factory._build_llm")
+    async def test_no_profile_leaves_prompt_unchanged(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
+
+        app = await build_app(
+            cfg,
+            system=SystemResources(
+                structured_store=InMemoryStructuredStore(), document_store=InMemoryDocumentStore()
+            ),
+            app_id=cfg.name, account_id="acme",
+            app_status="initializing", task_store=_mock_task_store(),
+        )
+
+        assert "Customer profile" not in app._runner.build_system_prompt("base")
+
+    @patch("api.factory._build_llm")
+    async def test_another_accounts_profile_is_not_read(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        doc_store = InMemoryDocumentStore()
+        await _write_profile(doc_store, "globex")
+        cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
+
+        app = await build_app(
+            cfg,
+            system=SystemResources(
+                structured_store=InMemoryStructuredStore(), document_store=doc_store
+            ),
+            app_id=cfg.name, account_id="acme",
+            app_status="initializing", task_store=_mock_task_store(),
+        )
+
+        assert "Customer profile" not in app._runner.build_system_prompt("base")
+
+    @patch("api.factory._build_llm")
+    async def test_profile_read_from_system_store_not_the_apps_own(self, mock_build_llm, tmp_path):
+        """An app declaring its own document_store still gets the account profile.
+
+        The profile lives outside the app partition, so it is always read from the
+        system store — the app-level store only holds that app's documents.
+        """
+        mock_build_llm.return_value = _mock_llm()
+        system_doc_store = InMemoryDocumentStore()
+        await _write_profile(system_doc_store, "acme")
+        cfg = AppConfig.from_yaml(
+            _EXTRACT_ONLY_CONFIG_YAML
+            + f"document_store:\n  type: local\n  path: {tmp_path / 'docs'}\n"
+        )
+
+        app = await build_app(
+            cfg,
+            system=SystemResources(
+                structured_store=InMemoryStructuredStore(), document_store=system_doc_store
+            ),
+            app_id=cfg.name, account_id="acme",
+            app_status="initializing", task_store=_mock_task_store(),
+        )
+
+        assert isinstance(app.document_store, LocalFSDocumentStore)
+        assert "**House style:** terse" in app._runner.build_system_prompt("base")
+
+    @patch("api.factory._build_llm")
+    async def test_profile_read_failure_does_not_fail_the_build(self, mock_build_llm):
+        """build_app runs on startup provisioning and every cache miss: degrade, don't raise."""
+        mock_build_llm.return_value = _mock_llm()
+
+        class BrokenDocStore(InMemoryDocumentStore):
+            async def load(self, collection: str, doc_id: str) -> str:
+                raise RuntimeError("document store unreachable")
+
+        cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
+        app = await build_app(
+            cfg,
+            system=SystemResources(
+                structured_store=InMemoryStructuredStore(), document_store=BrokenDocStore()
+            ),
+            app_id=cfg.name, account_id="acme",
+            app_status="initializing", task_store=_mock_task_store(),
+        )
+
+        assert "Customer profile" not in app._runner.build_system_prompt("base")
+
+    @patch("api.factory._build_llm")
+    async def test_set_account_profile_hot_patches_a_live_app(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_EXTRACT_ONLY_CONFIG_YAML)
+        app = await build_app(
+            cfg,
+            system=SystemResources(
+                structured_store=InMemoryStructuredStore(), document_store=InMemoryDocumentStore()
+            ),
+            app_id=cfg.name, account_id="acme",
+            app_status="initializing", task_store=_mock_task_store(),
+        )
+
+        app.set_account_profile(_PROFILE_MD)
+        assert "**House style:** terse" in app._runner.build_system_prompt("base")
+
+        app.set_account_profile(None)
+        assert "Customer profile" not in app._runner.build_system_prompt("base")

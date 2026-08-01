@@ -33,6 +33,7 @@ from api.system_store import AppRecord, new_app_id
 from cogbase.config.config import AppConfig
 from cogbase.core.app_generator import (
     GENERATOR_TOOLS,
+    PROPOSE_APP_CONFIG_TOOL_NAME,
     SYSTEM_PROMPT,
     propose_app_config,
 )
@@ -116,12 +117,24 @@ async def _chat_turn_events(
                 }],
             })
 
-            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": "Running..."})
+            tool_message = {"role": "tool", "tool_call_id": tc["id"], "content": "Running..."}
+            messages.append(tool_message)
 
             try:
                 args = json.loads(tc.get("arguments") or "{}")
             except (json.JSONDecodeError, ValueError):
                 args = {}
+
+            # Dispatch by name rather than assuming the only tool: a hallucinated
+            # name must come back as a tool error, not silently generate a config.
+            if tc["name"] != PROPOSE_APP_CONFIG_TOOL_NAME:
+                logger.warning("%s unknown tool=%s", log_prefix, tc["name"])
+                tool_message["content"] = (
+                    f"Unknown tool '{tc['name']}'. The only tool available here is "
+                    f"{PROPOSE_APP_CONFIG_TOOL_NAME}."
+                )
+                continue
+
             needs_workflow = bool(args.get("needs_workflow", False))
 
             generation_context = ""

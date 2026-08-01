@@ -40,6 +40,11 @@ function persist(key, value) {
 // restore it whenever the active account resolves (login / account switch).
 const nsKey = (account) => `cogbase.ns.${account}`
 const appKey = (account) => `cogbase.app.${account}`
+// "Not now" on the onboarding card. Per-account for the same reason as the two
+// above, and persisted so a deferral survives a reload — the card is a nudge, and
+// a nudge that comes back on every refresh is a modal with extra steps. Settings
+// keeps the standing "complete your profile" prompt regardless.
+const onbKey = (account) => `cogbase.onboardingDismissed.${account}`
 
 export function AppProvider({ children }) {
   // Default to the origin the UI was served from so it works whether run
@@ -103,6 +108,19 @@ export function AppProvider({ children }) {
   // and this tells App.jsx to also adopt the provisioned app once its namespace's apps
   // load, so the owner lands in the app instead of the pick-an-app empty state.
   const [autoSelectApp, setAutoSelectApp] = useState(false)
+
+  // The account's company profile (GET /profile), account-scoped like the account
+  // itself — one document shared by every namespace and app. Three states, and the
+  // UI branches on all three:
+  //   null + !profileLoaded → not fetched yet (render nothing)
+  //   null + profileLoaded  → the fetch failed or the deployment can't hold profiles
+  //                           (503, no document store) — "unknown", never onboard
+  //   { exists: false }     → known cold start, the one case that offers onboarding
+  const [profile, setProfile] = useState(null)
+  const [profileLoaded, setProfileLoaded] = useState(false)
+  const [onboardingDismissed, setOnboardingDismissedState] = useState(
+    () => persisted(onbKey(initialAccount), '') === '1'
+  )
 
   const setAccountId = useCallback((v) => {
     const next = (v || DEFAULT_ACCOUNT_ID).trim() || DEFAULT_ACCOUNT_ID
@@ -180,6 +198,13 @@ export function AppProvider({ children }) {
     if (!acctMountedRef.current) { acctMountedRef.current = true; return }
     setNamespaceNameState(persisted(nsKey(accountId), ''))
     setCurrentAppState(persisted(appKey(accountId), ''))
+    // The profile belongs to the account that was signed in, so drop it back to
+    // "not fetched" rather than letting the previous account's answer decide
+    // whether this one gets onboarded. refreshProfile re-runs on its own (its
+    // identity tracks authFetch, which tracks the account).
+    setProfile(null)
+    setProfileLoaded(false)
+    setOnboardingDismissedState(persisted(onbKey(accountId), '') === '1')
   }, [accountId])
 
   // Exchange the refresh token for a fresh access token. Returns the new token, or
@@ -376,6 +401,74 @@ export function AppProvider({ children }) {
     }
   }, [nsBase, authFetch, namespaceName])
 
+  // ── Company profile (account-scoped; api/routers/profile.py) ──
+  // Driven by the mounted Layout, like refreshNamespaces, so tab-level renders
+  // stay side-effect-free. A non-200 (503 on a deployment with no document store,
+  // or any transport failure) resolves to "unknown", which reads as *not* a cold
+  // start — better to skip an onboarding prompt than to offer one that 503s the
+  // moment it is opened.
+  const refreshProfile = useCallback(async () => {
+    try {
+      const resp = await authFetch(`${apiUrl}/profile`)
+      setProfile(resp.ok ? await resp.json() : null)
+    } catch {
+      setProfile(null)
+    } finally {
+      setProfileLoaded(true)
+    }
+  }, [apiUrl, authFetch])
+
+  // Replace the profile. Returns { ok } or { ok: false, error } so the caller can
+  // render the failure inline (413 over the size cap is the expected one).
+  const saveProfile = useCallback(async (markdown) => {
+    try {
+      const resp = await authFetch(`${apiUrl}/profile`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ markdown }),
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok) {
+        const detail = Array.isArray(data.detail) ? data.detail.map(d => d.msg).join('; ') : data.detail
+        return { ok: false, error: detail || `HTTP ${resp.status}` }
+      }
+      setProfile(data)
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  }, [apiUrl, authFetch])
+
+  const deleteProfile = useCallback(async () => {
+    try {
+      const resp = await authFetch(`${apiUrl}/profile`, { method: 'DELETE' })
+      if (!resp.ok && resp.status !== 204) return { ok: false, error: `HTTP ${resp.status}` }
+      setProfile({ markdown: null, exists: false, updated_at: null, updated_by: null, source: null })
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  }, [apiUrl, authFetch])
+
+  // The interview writes the profile server-side (its save_company_profile tool),
+  // so the client adopts the markdown it reports rather than re-reading it — the
+  // turn already carries the authoritative text.
+  const adoptSavedProfile = useCallback((markdown) => {
+    setProfile(prev => ({
+      ...(prev || {}),
+      markdown,
+      exists: true,
+      source: 'interview',
+      updated_at: new Date().toISOString(),
+    }))
+    setProfileLoaded(true)
+  }, [])
+
+  const dismissOnboarding = useCallback(() => {
+    persist(onbKey(accountIdRef.current), '1')
+    setOnboardingDismissedState(true)
+  }, [])
+
   const value = useMemo(() => ({
     apiUrl, setApiUrl,
     accountId, setAccountId, mode, bootstrap, namespaceName, setNamespaceName,
@@ -388,7 +481,10 @@ export function AppProvider({ children }) {
     // auth (saas mode)
     accessToken, email, role, authChecked, login, signup, logout,
     autoSelectApp, setAutoSelectApp,
-  }), [apiUrl, accountId, mode, bootstrap, namespaceName, namespaces, namespacesLoaded, refreshNamespaces, ensureNamespace, apps, appsNs, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName, accessToken, email, role, authChecked, login, signup, logout, autoSelectApp])
+    // company profile
+    profile, profileLoaded, refreshProfile, saveProfile, deleteProfile, adoptSavedProfile,
+    onboardingDismissed, dismissOnboarding,
+  }), [apiUrl, accountId, mode, bootstrap, namespaceName, namespaces, namespacesLoaded, refreshNamespaces, ensureNamespace, apps, appsNs, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName, accessToken, email, role, authChecked, login, signup, logout, autoSelectApp, profile, profileLoaded, refreshProfile, saveProfile, deleteProfile, adoptSavedProfile, onboardingDismissed, dismissOnboarding])
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
 }

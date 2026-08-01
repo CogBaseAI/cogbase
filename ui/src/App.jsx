@@ -16,6 +16,7 @@ import SkillsTab from './components/tabs/SkillsTab'
 import SettingsTab from './components/tabs/SettingsTab'
 import LoginScreen from './components/LoginScreen'
 import DocModal from './components/modals/DocModal'
+import OnboardingModal from './components/modals/OnboardingModal'
 import ConfigModal from './components/modals/ConfigModal'
 import WfModal from './components/modals/WfModal'
 import TaskProgressModal from './components/modals/TaskProgressModal'
@@ -24,7 +25,7 @@ import TaskProgressModal from './components/modals/TaskProgressModal'
 // in ./nav alongside the hash router that also consumes them.
 
 function Layout() {
-  const { accountId, mode, email, logout, namespaceName, setNamespaceName, namespaces, namespacesLoaded, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp, autoSelectApp, setAutoSelectApp, apiUrl, authFetch } = useApp()
+  const { accountId, mode, email, logout, namespaceName, setNamespaceName, namespaces, namespacesLoaded, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp, autoSelectApp, setAutoSelectApp, apiUrl, authFetch, refreshProfile } = useApp()
   const { t, lang, setLang } = useT()
 
   // Keep the auto-provisioned contract-analyst's Query starter panel (query_intro
@@ -57,6 +58,10 @@ function Layout() {
   // Query and either auto-send it or just prefill the input. Shape: null (plain
   // navigate) | { text, send }. QueryTab clears it once consumed.
   const [pendingQuery, setPendingQuery] = useState(null)
+  // The onboarding interview. Opened from two distant places — the Query tab's
+  // post-answer card and the Settings profile card — so it lives here with the
+  // other modals rather than being duplicated in each tab.
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
 
   // Navigate to the Query tab, optionally seeding a query. `send` true auto-sends
   // it (single-doc review); false just prefills the input so the user can pick
@@ -79,13 +84,6 @@ function Layout() {
     if (tier === 'application') refreshApps()   // keep the App switcher current
   }
 
-  // In saas mode the Settings tab is hidden (providers come from the service
-  // config). A stale #settings hash could still land there, so bounce it to the
-  // account tier's default tab once mode resolves.
-  useEffect(() => {
-    if (mode === 'saas' && activeTab === 'settings') goTab(DEFAULT_TAB['account'])
-  }, [mode, activeTab])
-
   // Reflect the resolved account in the browser tab title so multiple accounts
   // open side by side are distinguishable. The default account is unnamed context
   // (dev/single-tenant), so it falls back to the bare brand.
@@ -96,6 +94,11 @@ function Layout() {
   // Populate the namespace switcher on mount and whenever the account changes
   // (refreshNamespaces' identity tracks the account via authFetch).
   useEffect(() => { refreshNamespaces() }, [refreshNamespaces])
+
+  // Read the account's company profile on mount and whenever the account changes.
+  // Two surfaces branch on the answer: the Query tab's onboarding card (offered
+  // only on a known cold start) and the Settings profile editor.
+  useEffect(() => { refreshProfile() }, [refreshProfile])
 
   // Reconcile the working namespace against the account's real namespaces. The
   // selection persists in localStorage, so a value from another account/server — or
@@ -217,9 +220,11 @@ function Layout() {
   // selected application. Each group header focuses its tier; only the focused
   // tier's items are shown, so out-of-scope actions stay hidden rather than empty
   // (docs/ui-navigation.md, milestone B).
-  // In saas mode the LLM/embedding providers come from the service config; an
-  // account can't configure its own, so the Settings tab is hidden.
-  const accountTabs = mode === 'saas' ? ['namespaces', 'skills'] : ['namespaces', 'skills', 'settings']
+  // Settings is the account-scoped surface, and the company profile is
+  // account-scoped, so the tab shows in every mode. What varies is its contents:
+  // in saas the LLM/embedding providers come from the service config and the tab
+  // carries the profile alone (see SettingsTab).
+  const accountTabs = ['namespaces', 'skills', 'settings']
   const navGroups = [
     { tier: 'namespace',   label: t('nav.groupWorkspace'),   tabs: ['build', 'apps', 'demos'] },
     { tier: 'application', label: t('nav.groupApplication'), tabs: ['ingest', 'data', 'query', 'memory'] },
@@ -381,6 +386,7 @@ function Layout() {
             pendingQuery={pendingQuery}
             onPendingConsumed={() => setPendingQuery(null)}
             navSlot={navSlot}
+            onOpenOnboarding={() => setOnboardingOpen(true)}
           />
         </div>
         <div className={`panel ${activeTab === 'memory' && !showEmpty ? 'active' : ''}`}>
@@ -400,7 +406,11 @@ function Layout() {
           <SkillsTab active={activeTab === 'skills'} />
         </div>
         <div className={`panel ${activeTab === 'settings' ? 'active' : ''}`}>
-          <SettingsTab active={activeTab === 'settings'} onAutoSwitch={() => goTab('settings')} />
+          <SettingsTab
+            active={activeTab === 'settings'}
+            onAutoSwitch={() => goTab('settings')}
+            onOpenOnboarding={() => setOnboardingOpen(true)}
+          />
         </div>
         </main>
       </div>
@@ -423,6 +433,7 @@ function Layout() {
         onClose={() => setTaskProgress(null)}
         onDone={() => setIngestRefreshKey(k => k + 1)}
       />
+      <OnboardingModal open={onboardingOpen} onClose={() => setOnboardingOpen(false)} />
     </>
   )
 }

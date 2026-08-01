@@ -6,8 +6,8 @@ import { useApp } from '../../context'
 import { useT } from '../../i18n'
 import { streamSSE, copyText, fmtRelTime, resolveArtifactLinks, latestDocxArtifact, docxArtifactsInText, artifactLabel, filenameFromContentDisposition } from '../../utils'
 
-export default function QueryTab({ active, pendingQuery, onPendingConsumed, navSlot }) {
-  const { apiUrl, appBase, authFetch, currentApp, apps } = useApp()
+export default function QueryTab({ active, pendingQuery, onPendingConsumed, navSlot, onOpenOnboarding }) {
+  const { apiUrl, appBase, authFetch, currentApp, apps, profile, onboardingDismissed, dismissOnboarding } = useApp()
   const { t } = useT()
   // Chat log holds only real user/bot turns (plus the rare opened-empty-session
   // notice). The "select an app" prompt and app-intro live outside the log as
@@ -304,6 +304,21 @@ export default function QueryTab({ active, pendingQuery, onPendingConsumed, navS
   const showIntro = hasApp && !!queryIntro
   const showStarter = hasApp && !hasChat && exampleQueries.length > 0
 
+  // Onboarding lands here, under the first real answer, rather than in front of
+  // the workspace at signup: a fresh account is auto-provisioned with a working
+  // app (api/provisioning.py), so the user arrives on Ingest, uploads a contract,
+  // and reviews it. Asking for company context *after* that first answer means the
+  // ask trades on value already delivered, and it never competes with the Ingest
+  // tab's review CTA, which is the one thing we want clicked first.
+  //
+  // `profile` is null while unknown (not fetched, or a deployment that can't hold
+  // profiles), so the card needs an explicit `exists === false` — a cold start we
+  // are sure about. Dismissal persists per account; Settings keeps a standing
+  // prompt either way.
+  const answered = msgs.some(m => m.role === 'bot' && !m.thinking && !m.error)
+  const showOnboardCta = hasApp && !querying && answered &&
+    profile != null && profile.exists === false && !onboardingDismissed
+
   // The chats list. It lives in the app sidebar's lower (contextual) slot — this
   // tab renders it there via a portal when a slot is provided (see App.jsx), and
   // inline as a fallback otherwise (e.g. standalone tests). Hiding is now the
@@ -426,6 +441,22 @@ export default function QueryTab({ active, pendingQuery, onPendingConsumed, navS
                 )}
               </div>
             ))}
+            {showOnboardCta && (
+              <div className="onboard-cta show">
+                <div className="onboard-cta-body">
+                  <div className="onboard-cta-title">{t('onboard.ctaTitle')}</div>
+                  <div className="onboard-cta-hint">{t('onboard.ctaHint')}</div>
+                </div>
+                <div className="onboard-cta-actions">
+                  <button className="btn btn-primary btn-sm" onClick={() => onOpenOnboarding?.()}>
+                    {t('onboard.ctaBtn')}
+                  </button>
+                  <button className="btn btn-ghost btn-sm" onClick={dismissOnboarding}>
+                    {t('onboard.ctaLater')}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           <div className="chat-input">
             <textarea

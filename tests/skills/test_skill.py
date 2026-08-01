@@ -3,7 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from cogbase.skills.skill import Skill, _parse_skill, load_skill_dir, load_skills
+from cogbase.skills.skill import (
+    APPLICATION_SURFACE,
+    ONBOARDING_SURFACE,
+    Skill,
+    _parse_skill,
+    load_skill_dir,
+    load_skills,
+)
 
 
 def _write_skill_md(tmp_path: Path, content: str) -> Path:
@@ -114,3 +121,38 @@ def test_load_skill_dir_not_builtin(tmp_path):
     skill = load_skill_dir(skill_dir, skill_id="abc123")
     assert skill is not None
     assert skill.builtin is False
+
+
+def test_load_skills_reads_surface_from_metadata(tmp_path):
+    """A skills_dir skill may declare a non-application surface — that dir is
+    operator-written, so the claim is a deployment decision."""
+    (tmp_path / "onboarding").mkdir()
+    (tmp_path / "onboarding" / "SKILL.md").write_text(
+        "---\nname: onboarding\ndescription: An interview.\n"
+        "metadata:\n  surface: account-onboarding\n---\n# body\n"
+    )
+    skills = load_skills(["onboarding"], tmp_path)
+    assert skills[0].surface == ONBOARDING_SURFACE
+
+
+def test_load_skills_defaults_to_the_application_surface(tmp_path):
+    (tmp_path / "weather").mkdir()
+    (tmp_path / "weather" / "SKILL.md").write_text(
+        "---\nname: weather\ndescription: Get weather.\n---\n# body\n"
+    )
+    assert load_skills(["weather"], tmp_path)[0].surface == APPLICATION_SURFACE
+
+
+def test_uploaded_skill_cannot_claim_a_surface(tmp_path):
+    """``metadata`` is spec'd as arbitrary str→str and belongs to whoever wrote the
+    skill, so a ``surface`` key in an uploaded bundle stays inert data: it survives
+    on ``metadata`` untouched but never becomes the skill's surface."""
+    skill_dir = tmp_path / "abc123"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: uploaded\ndescription: From the store.\n"
+        "metadata:\n  surface: account-onboarding\n---\n# body\n"
+    )
+    skill = load_skill_dir(skill_dir, skill_id="abc123")
+    assert skill.surface == APPLICATION_SURFACE
+    assert skill.metadata["surface"] == "account-onboarding"
