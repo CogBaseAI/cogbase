@@ -79,6 +79,12 @@ to a document in the app or is meant inline, ask before proceeding.
    need to hand-strip formatting. Prefer a short, distinctive mid-sentence snippet over
    a whole paragraph. Preserve the intent of the changes exactly; never invent content.
 
+   `new_text` is the **full replacement paragraph**, but the helper word-diffs it
+   against the original and marks up only what actually differs. So keep the wording you
+   aren't changing **character-for-character identical** to the base — copy it, don't
+   paraphrase. Rewording an untouched half of a sentence turns a two-word redline into a
+   sentence-wide one for no reason.
+
 2. **Fetch the base file.** Call `fetch_document` with the `base_doc_id` to materialize
    the raw `.docx` to a local path (`read_document` only returns text — you need the
    binary to preserve formatting).
@@ -94,14 +100,17 @@ to a document in the app or is meant inline, ask before proceeding.
 
    Optionally pass `--author "Name"` to set the reviewer name recorded on each tracked
    change (defaults to `edit-docx`). It records the edits at the run level as Word
-   tracked changes — a `replace` strikes the old text and inserts the new; a `delete`
-   strikes the paragraph; `insert_after`/`append` add a tracked-insertion paragraph —
-   preserving fonts/styles/numbering, and prints a JSON report: a `matched` flag per
-   operation and an `unmatched` count.
+   tracked changes — a `replace` strikes just the words that changed and inserts their
+   replacements in place; a `delete` strikes the paragraph; `insert_after`/`append` add a
+   tracked-insertion paragraph — preserving fonts/styles/numbering, and prints a JSON
+   report: a `matched` flag per operation, the `granularity` of each tracked `replace`,
+   and an `unmatched` count.
 
 4. **Check the report.** If any operation is `unmatched`, its anchor wasn't found —
    usually the change referenced text the base doesn't contain. Do not silently drop
-   these; call them out to the user.
+   these; call them out to the user. A `replace` reported as `"granularity":
+   "paragraph"` was struck whole because its paragraph holds a tab, a line break, or a
+   hyperlink; that's a valid redline, just a coarser one — no action needed.
 
 5. **Save and return.** Call `save_artifact` with the path to `redlined.docx` and a
    descriptive `filename` (e.g. `<document-name>-redline.docx`). It returns a
@@ -134,8 +143,21 @@ The helper walks paragraphs and records each edit as Word tracked changes
 (`<w:ins>`/`<w:del>`) at the run level, so the output is a lawyer-reviewable redline:
 opening it in Word shows every insertion and deletion, each attributable to an author
 and individually acceptable or rejectable. It does not touch tables, headers, or
-footers — edits to text inside those aren't redlined. A `replace` strikes the whole
-matched paragraph's text and inserts the replacement as one block rather than computing
-a minimal intra-sentence word diff, so the redline is change-accurate but coarser-grained
-than a character-level diff tool.
+footers — edits to text inside those aren't redlined.
+
+A `replace` is word-diffed against the original paragraph, so only the changed words are
+struck and their replacements inserted in place — "within ~~30~~45 days", not a struck
+sentence followed by a near-identical one. Unchanged wording stays live text and keeps
+its own run formatting (a bold phrase spanning an edit stays bold on both sides).
+Chinese and other unspaced scripts diff per character, so a 三 → 两 edit marks up one
+character. Two caveats:
+
+- The diff granularity is a word (or a CJK character), not a character within a Latin
+  word — changing "twelve" to "twenty" strikes the whole word.
+- A paragraph whose text isn't plain runs — it contains a tab, a line break, or a
+  hyperlink — falls back to a whole-paragraph strike-and-reinsert, reported as
+  `"granularity": "paragraph"`. Pass `--whole-paragraph` to force that mode everywhere.
+
+Either way the markup is exact: accepting every change in Word yields precisely
+`new_text`, rejecting every change restores the original.
 </content>

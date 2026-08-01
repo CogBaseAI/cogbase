@@ -134,6 +134,13 @@ If the base id, or which lens fits, is unclear, ask before proceeding.
      (party lens); or to bring the clause into compliance with the cited law/standard
      (compliance lens). Never invent obligations the parties didn't discuss; keep clause
      intent intact.
+   - **`new_text` is the whole revised paragraph, but change as little of it as
+     possible.** The redline is a word-level diff against the original, so only what you
+     actually alter gets struck and re-inserted. Copy the wording you are *not* changing
+     verbatim from `clauses.json` — same words, same punctuation, same order. Paraphrasing
+     an untouched clause, resequencing its sentences, or "tidying" its style buries a
+     30-days→45-days change in a sentence-wide strikeout and makes the lawyer re-read
+     text you never meant to touch. Edit the clause; don't rewrite it.
    - For the compliance lens, `meta` carries `governing_law` (the cited law/standard) and
      omits `representative_party`/`review_position` — both are optional downstream.
 
@@ -187,7 +194,11 @@ python <edit-docx base directory>/apply_operations.py \
 ```
 
 `save_artifact` the `redline.docx` (e.g. `<contract-name>-redline.docx`) and include the
-download link, noting it is a tracked-changes redline reviewable in Word.
+download link, noting it is a tracked-changes redline reviewable in Word. Each suggestion
+appears as a word-level markup — only the altered words are struck and replaced, so the
+lawyer sees exactly what moved. If the report shows a `replace` at `"granularity":
+"paragraph"`, that clause's paragraph carries a tab, line break, or hyperlink and was
+struck whole; it's still a valid redline, so don't retry it.
 
 **After the user accepts/rejects — the final clean docx.** Drop `--all` so `to-edit-ops`
 includes only clauses whose `verdict` is `accepted`, and pass `--clean` so the accepted
@@ -288,5 +299,9 @@ review backups in place.
 Segmentation splits on headings and section numbers (`ARTICLE`/`SECTION`, `4`, `4.2`,
 roman numerals) and ALL-CAPS title lines; unusual numbering may under-segment, though
 anchors still resolve at the paragraph level. Redlining inherits `edit-docx`'s scope —
-body paragraphs only, not tables/headers/footers, and a `replace` swaps a whole paragraph
-rather than a word-level diff. The analysis is decision support, not legal advice.
+body paragraphs only, not tables/headers/footers. A `replace` is marked up as a word-level
+diff (a CJK character in unspaced scripts), except in paragraphs containing a tab, line
+break, or hyperlink, which fall back to a whole-paragraph strike. How tight the redline
+reads is therefore mostly on the analysis: a suggestion that rewords untouched sentences
+diffs wide no matter what the differ does. The analysis is decision support, not legal
+advice.
