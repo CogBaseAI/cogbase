@@ -81,6 +81,24 @@ class TestBuildInterviewSystemPrompt:
         assert "re-run" in prompt
         assert "{PROFILE}" not in prompt
 
+    def test_a_rerun_offers_to_finish_a_partial_profile_not_just_revise_one(self):
+        """A partial profile is the designed outcome of a first run, not a failure.
+
+        The quick path answers five of ten questions, and leaving early saves what
+        was collected — so "what changed?" is the wrong opening question for a
+        document that was never finished. The re-run has to read what is saved and
+        let the user pick which kind of re-run this is.
+        """
+        prompt = build_interview_system_prompt(
+            SKILL_BODY, existing_profile="# Us\n\nWe do widgets."
+        )
+
+        assert "missing" in prompt
+        assert "finish it" in prompt
+        assert "update it" in prompt
+        # And it must not manufacture gaps in a profile that has none.
+        assert "do not invent gaps" in prompt
+
     @pytest.mark.parametrize("blank", ["", "   \n  "])
     def test_blank_existing_profile_is_treated_as_absent(self, blank):
         assert "BEGIN CURRENT PROFILE" not in build_interview_system_prompt(

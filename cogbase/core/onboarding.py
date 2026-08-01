@@ -111,13 +111,35 @@ full updated document — it replaces the previous version rather than appending
 #: Appended when the account already has a profile, which makes a re-run ("my
 #: playbook changed", the Settings re-run button) the same code path as a first
 #: run rather than a second mode to maintain.
+#:
+#: A re-run has two quite different reasons behind it, and the interview cannot
+#: know which one it is looking at until it reads what is saved. *Something
+#: changed* is the obvious one. *The profile was never finished* is now the common
+#: one: the quick path deliberately answers five of ten questions, and leaving
+#: mid-interview saves whatever has been collected — so a partial profile is the
+#: designed outcome of a first run, not a failure of one. Asking "what changed?"
+#: about a document with four empty sections is the wrong opening question, so the
+#: model is told to work out which case it is in and let the user pick.
 _RERUN_PROMPT = """\
 
 ## This account already has a profile
 
-It is below. This is a **re-run**, so do not start from scratch: show the user what \
-you already have, ask what changed, and only ask about the parts they want to \
-revise. When you save, pass the full updated document — the old one is replaced.
+It is below. This is a **re-run**, so do not start from scratch.
+
+First read it against the template and questions in the script above, and work out \
+what is *missing* — sections that were dropped, and lines carrying no real answer. \
+A partial profile is normal here: the quick path covers only some of the questions, \
+and an interview the user left early saves what it had. So open by telling them in a \
+line or two what you already have and what is still blank, then offer the choice:
+
+- **finish it** — you ask only the questions the profile has no answer for, in the \
+script's order, and leave everything already answered alone.
+- **update it** — they say what changed, and you touch only that.
+
+If nothing is missing, do not invent gaps to have something to offer: say it looks \
+complete and ask what changed. Either way, ask only what the chosen path needs, and \
+when you save, pass the full updated document — the old one is replaced, so anything \
+you leave out is deleted.
 
 --- BEGIN CURRENT PROFILE ---
 {PROFILE}
