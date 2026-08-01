@@ -36,9 +36,9 @@ const FINAL_SAVE =
 // that, and hiding it would leave the model's "saved!" reply answering nothing.
 const SAVE_NOW = 'Save what you have so far.'
 
-// The onboarding interview, on its own surface (docs/preference-profiles-plan.md
-// Phase 5). Stateless like the Build chat: this component owns the message
-// history and posts it back each turn.
+// The onboarding interview, on its own surface (docs/preference-profiles.md).
+// Stateless like the Build chat: this component owns the message history and
+// posts it back each turn.
 //
 // It is a modal rather than a tab because it is an interruption of work already in
 // progress — the user is mid-flow in Query or Settings and returns there when it
