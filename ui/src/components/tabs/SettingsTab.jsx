@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useApp } from '../../context'
 import { useT } from '../../i18n'
+import { fmtRelTime } from '../../utils'
 
 const LLM_DEFAULTS = {
   openai: { model: 'gpt-5.4', mini_model: 'gpt-5.4-mini', base_url: 'https://api.openai.com/v1' },
@@ -11,9 +12,15 @@ const EMB_DEFAULTS = {
   'openai-compatible': { model: '', dimensions: '', base_url: '' },
 }
 
-export default function SettingsTab({ active, onAutoSwitch }) {
-  const { apiUrl, authFetch, llmConfigured, embConfigured, setLlmConfigured, setEmbConfigured } = useApp()
+export default function SettingsTab({ active, onAutoSwitch, onOpenOnboarding }) {
+  const { apiUrl, authFetch, mode, llmConfigured, embConfigured, setLlmConfigured, setEmbConfigured } = useApp()
   const { t } = useT()
+  // In saas mode the LLM/embedding providers come from the service config and an
+  // account cannot set its own — so this tab is the *account* settings surface
+  // there, carrying only the company profile. The provider sections (and their
+  // "not configured" warning, and the auto-switch that drags a dev user here) are
+  // for deployments where an account owns its providers.
+  const showProviders = mode !== 'saas'
 
   const [llm, setLlm] = useState({ provider: 'openai', model: 'gpt-5.4', mini_model: 'gpt-5.4-mini', base_url: 'https://api.openai.com/v1', api_key: '' })
   const [emb, setEmb] = useState({ provider: 'openai', model: 'text-embedding-3-small', dimensions: '1536', base_url: 'https://api.openai.com/v1', api_key: '' })
@@ -34,10 +41,10 @@ export default function SettingsTab({ active, onAutoSwitch }) {
     } catch {}
   }
 
-  useEffect(() => { if (active) loadConfig() }, [active])
+  useEffect(() => { if (active && showProviders) loadConfig() }, [active, showProviders])
 
   // Load on first mount regardless of active for auto-switch
-  useEffect(() => { loadConfig() }, [])
+  useEffect(() => { if (showProviders) loadConfig() }, [showProviders])
 
   async function saveConfig(which) {
     const setMsg = which === 'llm' ? setLlmMsg : setEmbMsg
@@ -84,9 +91,11 @@ export default function SettingsTab({ active, onAutoSwitch }) {
 
   return (
     <>
-      {warnMsg && <div className="warn-bar show">{warnMsg}</div>}
+      {showProviders && warnMsg && <div className="warn-bar show">{warnMsg}</div>}
       <div className="page" style={{ overflowY: 'auto' }}>
         <div style={{ maxWidth: 680, margin: '0 auto', padding: 24 }}>
+          <CompanyProfileCard active={active} onOpenOnboarding={onOpenOnboarding} />
+          {showProviders && (<>
           <div className="settings-section">
             <h3>{t('settings.llmTitle')}</h3>
             <p className="sub">{t('settings.llmSub')}</p>
@@ -129,8 +138,117 @@ export default function SettingsTab({ active, onAutoSwitch }) {
               <span className={`settings-msg${embMsg.cls ? ' ' + embMsg.cls : ''}`}>{embMsg.text}</span>
             </div>
           </div>
+          </>)}
         </div>
       </div>
     </>
+  )
+}
+
+// The account's company profile: stable org-wide context (who you are,
+// jurisdictions, risk appetite, house style) injected into every app's system
+// prompt. Settings is its home because the profile is account-scoped and this is
+// the account-scoped surface — and it resolves the design doc's "which editing
+// surface?" question in favour of both: edit the prose here, or re-run the
+// interview that wrote it.
+function CompanyProfileCard({ active, onOpenOnboarding }) {
+  const { profile, profileLoaded, refreshProfile, saveProfile, deleteProfile } = useApp()
+  const { t } = useT()
+  const [text, setText] = useState('')
+  const [dirty, setDirty] = useState(false)
+  const [msg, setMsg] = useState({ text: '', cls: '' })
+  const [saving, setSaving] = useState(false)
+
+  // Adopt the server's copy whenever it changes — the first load, a save, or the
+  // interview writing one mid-session — but never over unsaved edits.
+  useEffect(() => {
+    if (!dirty) setText(profile?.markdown || '')
+  }, [profile?.markdown, profile?.updated_at, dirty])
+
+  // Refresh on entry so a profile written by the interview in another tab (or on
+  // another device) shows up without a reload.
+  useEffect(() => { if (active) refreshProfile() }, [active, refreshProfile])
+
+  async function save() {
+    setSaving(true)
+    setMsg({ text: t('settings.saving'), cls: '' })
+    const { ok, error } = await saveProfile(text)
+    setSaving(false)
+    if (!ok) { setMsg({ text: t('common.failed', { msg: error }), cls: 'err' }); return }
+    setDirty(false)
+    setMsg({ text: t('settings.saved'), cls: 'ok' })
+    setTimeout(() => setMsg({ text: '', cls: '' }), 3000)
+  }
+
+  async function remove() {
+    if (!window.confirm(t('settings.profileConfirmDelete'))) return
+    const { ok, error } = await deleteProfile()
+    if (!ok) { setMsg({ text: t('common.failed', { msg: error }), cls: 'err' }); return }
+    setDirty(false)
+    setText('')
+    setMsg({ text: '', cls: '' })
+  }
+
+  const exists = !!profile?.exists
+  // A deployment with no document store cannot hold a profile at all (the routes
+  // 503), which resolves here as "loaded, but unknown". Say so rather than
+  // offering an editor whose Save can only fail.
+  const unavailable = profileLoaded && profile == null
+
+  return (
+    <div className="settings-section">
+      <h3>{t('settings.profileTitle')}</h3>
+      <p className="sub">{t('settings.profileSub')}</p>
+
+      {unavailable ? (
+        <p className="settings-msg">{t('settings.profileUnavailable')}</p>
+      ) : (
+        <>
+          {!exists && (
+            <div className="profile-nudge">
+              <div>
+                <div className="profile-nudge-title">{t('settings.profileNudgeTitle')}</div>
+                <div className="profile-nudge-hint">{t('settings.profileNudgeHint')}</div>
+              </div>
+              <button className="btn btn-primary btn-sm" onClick={() => onOpenOnboarding?.()}>
+                {t('settings.profileStartInterview')}
+              </button>
+            </div>
+          )}
+          <textarea
+            className="field-textarea profile-textarea"
+            value={text}
+            rows={14}
+            placeholder={t('settings.profilePlaceholder')}
+            onChange={e => { setText(e.target.value); setDirty(true) }}
+          />
+          <div className="settings-actions">
+            <button className="btn btn-primary btn-sm" disabled={saving || !dirty} onClick={save}>
+              {t('settings.profileSave')}
+            </button>
+            <button className="btn btn-ghost btn-sm" disabled={!dirty} onClick={() => { setDirty(false); setText(profile?.markdown || '') }}>
+              {t('settings.profileReset')}
+            </button>
+            {exists && (
+              <button className="btn btn-ghost btn-sm" onClick={() => onOpenOnboarding?.()}>
+                {t('settings.profileRerun')}
+              </button>
+            )}
+            {exists && (
+              <button className="btn btn-red btn-sm" onClick={remove}>{t('common.delete')}</button>
+            )}
+            <span className={`settings-msg${msg.cls ? ' ' + msg.cls : ''}`}>{msg.text}</span>
+          </div>
+          {exists && profile?.updated_at && (
+            <p className="profile-meta">
+              {t('settings.profileUpdated', {
+                when: fmtRelTime(profile.updated_at),
+                source: profile.source === 'interview' ? t('settings.profileSourceInterview') : t('settings.profileSourceManual'),
+              })}
+            </p>
+          )}
+        </>
+      )}
+    </div>
   )
 }

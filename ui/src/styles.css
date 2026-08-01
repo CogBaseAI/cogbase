@@ -941,6 +941,66 @@ tr:hover td { background: var(--bg3); }
 .review-cta-hint { font-size: 12px; color: var(--muted); margin-top: 3px; }
 .review-cta-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
+/* ── Onboarding: post-answer card in the Query tab ── */
+/* Deliberately quieter than the green review CTA it must never compete with:
+   accent-tinted, inline in the message flow, and always dismissable. */
+.onboard-cta {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  flex-wrap: wrap;
+  align-self: stretch; max-width: 860px;
+  margin: 6px 0 2px; padding: 14px 16px;
+  border: 1px solid rgba(99,102,241,.35); border-radius: 10px;
+  background: rgba(99,102,241,.06);
+  animation: reviewCtaIn .28s ease;
+}
+.onboard-cta-body { min-width: 220px; flex: 1; }
+.onboard-cta-title { font-size: 13px; font-weight: 600; }
+.onboard-cta-hint { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+.onboard-cta-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* ── Onboarding interview modal ── */
+.onboard-modal {
+  position: fixed; inset: 0; z-index: 1000; display: none;
+  align-items: center; justify-content: center;
+  background: rgba(8,11,22,.78); backdrop-filter: blur(8px); padding: 24px;
+}
+.onboard-modal.show { display: flex; }
+.onboard-modal-panel {
+  width: min(720px, 100%); height: min(640px, 100%);
+  display: flex; flex-direction: column;
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 16px; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,.45);
+}
+.onboard-modal-hd {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--border);
+}
+.onboard-modal-hd h3 { font-size: 16px; font-weight: 600; }
+.onboard-modal-sub { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
+.onboard-modal-panel .msgs { flex: 1; min-height: 0; }
+.onboard-modal-ft {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 0 14px 12px;
+}
+.onboard-saved {
+  padding: 8px 18px; font-size: 12px;
+  color: var(--green); background: rgba(52,211,153,.08);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Settings: company profile ── */
+.profile-nudge {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 14px; padding: 12px 14px;
+  border: 1px solid rgba(99,102,241,.35); border-radius: 10px;
+  background: rgba(99,102,241,.06);
+}
+.profile-nudge-title { font-size: 13px; font-weight: 600; }
+.profile-nudge-hint { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.profile-textarea { font-size: 12px; line-height: 1.55; min-height: 220px; }
+.profile-meta { font-size: 11px; color: var(--muted); margin-top: 10px; }
+
 /* ── Ingest doc list ── */
 .ingest-docs-hd {
   display: flex; align-items: center; justify-content: space-between;

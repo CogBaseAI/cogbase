@@ -191,26 +191,29 @@ describe('Layout — account bootstrap (/whoami)', () => {
     await waitFor(() => expect(document.title).toBe('CogBase'))
   })
 
-  it('hides the Settings tab in saas mode (providers come from the service config)', async () => {
+  it('keeps the Settings tab in saas mode but drops the provider sections', async () => {
     window.localStorage.setItem('cogbase.accessToken', 'test-token')
     mockWhoami({ account_id: 'acct-saas', mode: 'saas' })
     const user = userEvent.setup()
     render(<App />)
     await waitFor(() => expect(screen.getByText('Sign out')).toBeInTheDocument())
     await user.click(within(sidebar()).getByRole('button', { name: 'Account' }))
-    const nav = within(sidebar())
-    // The other account-tier items stay, but Settings is gone.
-    expect(nav.getByRole('button', { name: 'Namespaces' })).toBeInTheDocument()
-    expect(nav.getByRole('button', { name: 'Skills' })).toBeInTheDocument()
-    expect(nav.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
+    await user.click(within(sidebar()).getByRole('button', { name: 'Settings' }))
+    // The account-scoped company profile lives here in every mode; the providers
+    // come from the service config in saas, so an account can't set its own.
+    expect(screen.getByRole('heading', { name: 'Company profile' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'LLM Provider' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Embedding Provider' })).not.toBeInTheDocument()
   })
 
-  it('keeps the Settings tab in dev mode', async () => {
+  it('keeps both the profile and the provider sections in dev mode', async () => {
     mockWhoami({ account_id: 'default', mode: 'dev' })
     const user = userEvent.setup()
     render(<App />)
     await user.click(within(sidebar()).getByRole('button', { name: 'Account' }))
-    expect(within(sidebar()).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+    await user.click(within(sidebar()).getByRole('button', { name: 'Settings' }))
+    expect(screen.getByRole('heading', { name: 'Company profile' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'LLM Provider' })).toBeInTheDocument()
   })
 })
 
