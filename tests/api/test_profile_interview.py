@@ -35,7 +35,7 @@ from cogbase.core.onboarding import (
 )
 from cogbase.core.profile import MAX_PROFILE_BYTES, AccountProfileStore
 from cogbase.skills.registry import SkillRegistry
-from cogbase.skills.skill import Skill
+from cogbase.skills.skill import ONBOARDING_SURFACE, Skill
 from cogbase.stores.document.memory import InMemoryDocumentStore
 from cogbase.stores.structured.memory import InMemoryStructuredStore
 
@@ -48,7 +48,13 @@ SCRIPT_MD = "# Interview\n\nAsk who they are, then save the profile.\n"
 
 def _interview_skill(markdown: str = SCRIPT_MD, *, skill_id: str = "builtin") -> Skill:
     return Skill(
-        name=INTERVIEW_SKILL_NAME, description="d", raw_markdown=markdown, id=skill_id
+        name=INTERVIEW_SKILL_NAME,
+        description="d",
+        raw_markdown=markdown,
+        id=skill_id,
+        # As skills_dir would: a builtin on the onboarding surface.
+        builtin=True,
+        surface=ONBOARDING_SURFACE,
     )
 
 

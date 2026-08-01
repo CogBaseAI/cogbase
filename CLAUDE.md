@@ -171,8 +171,15 @@ Workflows:
 Skills (system-wide registry, uploadable; account-scoped via `X-Account-Id`, shared across namespaces, addressed by account-unique `skill_name`):
 - `POST /skills` — upload a skill ZIP bundle (SKILL.md + scripts/assets); assigns a stable UUID
 - `PUT /skills/{skill_name}` — replace a skill's bundle, keeping its id (and so all app references)
-- `GET /skills` / `GET /skills/{skill_name}` — list / fetch skills
+- `GET /skills` / `GET /skills/{skill_name}` — list / fetch skills. The list is filtered to `surface=application`
+  by default (`?surface=all` or a specific surface to widen it).
 - `DELETE /skills/{skill_name}` — remove a skill from the document store, local cache, and registry
+- **Surfaces.** `Skill.surface` says which surface consumes a skill: `application` (the default — assignable to an
+  app, offered to the query runner's skill selector) or a platform surface such as `account-onboarding`. It is a
+  property of the *load path*, not of the bundle: only `load_skills` (i.e. `skills_dir`, operator-written) reads
+  `metadata.surface`, so an uploaded skill is always an application skill and a tenant's `metadata` stays arbitrary
+  str→str as the spec promises. Non-application skills are hidden from the default listing and refused by both
+  doors into `config.skills` (`POST /{app}/skills` and bundle upload) with 422.
 - Bundles persist in the system document store (the shared, multi-node source of truth) and are
   materialized into a local cache dir for execution; a fresh node syncs skills from the store on startup.
   See `cogbase/skills/store.py` (`SkillBundleStore`) and the `skill_records` index in `api/system_store.py`.
@@ -188,8 +195,13 @@ Company profile (account-scoped, no namespace segment — the profile is shared 
   namespace and app (`api/provisioning.py`), so the user who most needs onboarding may never open the Build tab.
 - The interview **is** its script, and the script is a skill: `skills/account-onboarding-interview-legal/SKILL.md` holds the questions
   *and* the company-profile template they fill in. It is resolved **by name** from the skill registry (`INTERVIEW_SKILL_NAME`, overridable
-  with `COGBASE_INTERVIEW_SKILL`), so it is a versioned, uploadable markdown document a non-engineer can edit. It is not routed through
+  with `COGBASE_INTERVIEW_SKILL`), so it is a versioned markdown document a non-engineer can edit. It is not routed through
   the query runner's skill selector — the interview needs the markdown, not the execution sandbox.
+- It lives in `skills/` like any other skill (one loader, one cache, one `GET /skills/{name}/content` viewer) and is kept out of the
+  application surface by `metadata.surface: account-onboarding`, not by a separate directory. A deployment writing its own interview
+  drops a dir under `skills_dir` and points `COGBASE_INTERVIEW_SKILL` at it. The script must be a **builtin**: an uploaded skill is
+  owned by one account, so honouring one would resolve for that account and 503 every other. Declaring the surface is advisory — a
+  builtin that omits it still runs the interview (with a warning); it is just also listed and assignable as an application skill.
 - `cogbase/core/onboarding.py` keeps only the plumbing: the `save_company_profile` tool, today's date, the re-run block, and the frame
   binding them. There is **no** default script and no profile template in code — with no skill registered the interview routes 503 rather
   than improvising one. A second vertical is a second SKILL.md under its own name, never a branch in the module.

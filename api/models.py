@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from api.system_store import DocWorkflowStatus, TaskStatus
+from cogbase.skills.skill import APPLICATION_SURFACE
 
 
 # ---------------------------------------------------------------------------
@@ -536,6 +537,9 @@ class SkillResponse(BaseModel):
     metadata: dict[str, Any] = {}
     source_path: str | None = None
     builtin: bool = False
+    # "application" (assignable to an app) or a platform surface such as
+    # "account-onboarding". Uploaded skills are always "application".
+    surface: str = APPLICATION_SURFACE
 
 
 class SkillListResponse(BaseModel):

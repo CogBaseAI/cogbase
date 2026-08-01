@@ -80,6 +80,7 @@ from api.system_store import (
     AppRecord, DocRecord, DocWorkflowRecord, DocWorkflowStatus,
     SystemStore, TaskRecord, TaskStatus, new_app_id,
 )
+from cogbase.skills.skill import APPLICATION_SURFACE
 from cogbase.stores.filters import Filter, Op
 from api.task_runner import DEFAULT_TASK_CONCURRENCY, run_distill_task, run_ingest_task
 
@@ -245,17 +246,29 @@ def _to_filter(fr: FilterRequest) -> Filter:
 
 
 def _validate_skills(skill_ids: list[str], skill_registry) -> None:
-    """Raise HTTP 422 if any skill id is not in the registry."""
+    """Raise HTTP 422 if a skill id is unknown or is not an application skill."""
     unknown = []
+    wrong_surface = []
     for skill_id in skill_ids:
         try:
-            skill_registry.get(skill_id)
+            skill = skill_registry.get(skill_id)
         except KeyError:
             unknown.append(skill_id)
+            continue
+        if skill.surface != APPLICATION_SURFACE:
+            wrong_surface.append(f"{skill.name} ({skill.surface})")
     if unknown:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Unknown skill id(s): {', '.join(unknown)}. Run GET /skills to see available skills.",
+        )
+    if wrong_surface:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Not application skill(s): {', '.join(wrong_surface)}. These serve a "
+                "platform surface and cannot be assigned to an application."
+            ),
         )
 
 
@@ -1223,6 +1236,15 @@ async def add_application_skill(
         raise HTTPException(
             status_code=404,
             detail=f"Skill '{body.skill_name}' not found in the system skill registry",
+        )
+
+    if skill.surface != APPLICATION_SURFACE:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Skill '{skill.name}' serves the '{skill.surface}' surface and cannot "
+                "be assigned to an application."
+            ),
         )
 
     skill_id = skill.id

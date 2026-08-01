@@ -19,13 +19,30 @@ from cogbase.core.onboarding import (
     resolve_interview_script,
 )
 from cogbase.skills.registry import SkillRegistry
-from cogbase.skills.skill import Skill
+from cogbase.skills.skill import APPLICATION_SURFACE, ONBOARDING_SURFACE, Skill
 
 SKILL_BODY = "# Custom interview\n\nAsk about their fleet of submarines.\n"
 
 
-def _skill(markdown: str, *, name: str = INTERVIEW_SKILL_NAME, skill_id: str = "s1") -> Skill:
-    return Skill(name=name, description="d", raw_markdown=markdown, id=skill_id)
+def _skill(
+    markdown: str,
+    *,
+    name: str = INTERVIEW_SKILL_NAME,
+    skill_id: str = "s1",
+    builtin: bool = True,
+    surface: str = ONBOARDING_SURFACE,
+) -> Skill:
+    """An interview skill as ``skills_dir`` would register one: a builtin on the
+    onboarding surface. Both defaults are overridable — the resolver's rules about
+    them are what several tests below are checking."""
+    return Skill(
+        name=name,
+        description="d",
+        raw_markdown=markdown,
+        id=skill_id,
+        builtin=builtin,
+        surface=surface,
+    )
 
 
 class TestBuildInterviewSystemPrompt:
@@ -130,6 +147,25 @@ class TestResolveInterviewScript:
         registry.get_by_name.side_effect = RuntimeError("registry down")
 
         assert resolve_interview_script(registry, "acme") is None
+
+    def test_an_uploaded_skill_is_not_used_as_the_script(self):
+        """Trust comes from the load path: only skills_dir (operator-written) may
+        supply the script. An uploaded skill is owned by one account, so honouring
+        one would put a tenant's markdown in an account-level system prompt — and
+        would leave every *other* account with no interview at all."""
+        registry = SkillRegistry()
+        registry.register(_skill(SKILL_BODY, builtin=False), account_id="acme")
+
+        assert resolve_interview_script(registry, "acme") is None
+
+    def test_a_builtin_without_the_surface_still_works(self):
+        """A self-hoster who writes their own interview and forgets the metadata
+        line gets a working interview (plus a log line), not a silent 503. The
+        surface governs listing and assignment, not trust."""
+        registry = SkillRegistry()
+        registry.register(_skill(SKILL_BODY, surface=APPLICATION_SURFACE))
+
+        assert "fleet of submarines" in resolve_interview_script(registry, "acme")
 
     def test_another_vertical_is_another_name(self):
         """The seam for a second vertical: a skill under its own name."""

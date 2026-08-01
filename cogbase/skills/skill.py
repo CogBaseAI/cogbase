@@ -24,6 +24,16 @@ _SKILL_VENVS_DIR = os.path.abspath(
 
 _SAFE_PKG_RE = re.compile(r"^[a-zA-Z0-9_\-\.\[\]>=<!~,\s]+$")
 
+#: The default surface: a skill an application can be assigned, offered to the
+#: query runner's skill selector. Everything else is a platform surface consumed
+#: by one specific resolver (see ``APPLICATION_SURFACE`` uses in the API layer).
+APPLICATION_SURFACE = "application"
+
+#: The account onboarding interview (``cogbase/core/onboarding.py``). Marks a
+#: script that is resolved by name for the interview conversation and must not be
+#: listed as, or assigned like, an application skill.
+ONBOARDING_SURFACE = "account-onboarding"
+
 
 @dataclass
 class Skill:
@@ -37,6 +47,12 @@ class Skill:
     source_path: Path | None = None
     site_packages: str | None = None  # venv site-packages injected into PYTHONPATH
     builtin: bool = False             # loaded from skills_dir; read-only (cannot be updated/deleted via API)
+    # Which surface consumes this skill. Deliberately *not* parsed from an
+    # uploaded bundle's metadata: ``metadata`` is spec'd as arbitrary str→str and
+    # belongs to whoever wrote the skill, so a tenant's ``surface`` key stays
+    # theirs and stays inert. Only ``load_skills`` (skills_dir, operator-written)
+    # promotes it to a real surface — see the assignment in that function.
+    surface: str = APPLICATION_SURFACE
 
 
 def _parse_skill(path: Path, skill_id: str | None = None) -> Skill | None:
@@ -122,6 +138,11 @@ def load_skills(skill_names: list[str], skills_dir: str | Path) -> list[Skill]:
         skill = _load_skill_cached(file_path)
         if skill:
             skill.builtin = True
+            # A non-default surface is granted here and nowhere else: this is the
+            # operator-written load path, so declaring "not an application skill"
+            # is a deployment decision, not something an uploaded bundle can claim.
+            declared = skill.metadata.get("surface")
+            skill.surface = declared if isinstance(declared, str) and declared else APPLICATION_SURFACE
             skill.site_packages = ensure_skill_deps(skill)
             skills.append(skill)
             logger.info("[skills] loaded '%s' from %s", skill.name, file_path)

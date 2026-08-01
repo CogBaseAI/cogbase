@@ -40,6 +40,7 @@ import re
 from datetime import date
 
 from cogbase.llms.base import ToolDefinition
+from cogbase.skills.skill import ONBOARDING_SURFACE
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,13 @@ def resolve_interview_script(
     skill, or an empty one. The caller surfaces that as a 503 rather than
     substituting a generic script, because a made-up interview would ask the wrong
     customer the wrong questions and save the answers forever.
+
+    The script must be a ``skills_dir`` **builtin**, i.e. operator-written. An
+    uploaded skill is owned by one account, so pointing ``COGBASE_INTERVIEW_SKILL``
+    at one would resolve for that account and leave every other account without an
+    interview; refusing it turns that into a startup-visible misconfiguration
+    instead of a per-account mystery, and keeps one tenant's markdown out of
+    another's account-level system prompt.
     """
     if registry is None:
         return None
@@ -178,6 +186,25 @@ def resolve_interview_script(
     except Exception:
         logger.warning("interview skill lookup failed name=%s", name, exc_info=True)
         return None
+
+    if not getattr(skill, "builtin", False):
+        logger.warning(
+            "interview skill '%s' is an uploaded skill, not a skills_dir builtin — "
+            "refusing to use it as the interview script",
+            name,
+        )
+        return None
+
+    # Advisory only: the surface governs listing and app assignment, not trust, so a
+    # deployment that writes its own interview and forgets the metadata line still
+    # gets a working interview — plus a log line telling it how to tidy up.
+    if getattr(skill, "surface", None) != ONBOARDING_SURFACE:
+        logger.warning(
+            "interview skill '%s' does not declare 'metadata.surface: %s' — it works, "
+            "but it will also be listed and assignable as an application skill",
+            name,
+            ONBOARDING_SURFACE,
+        )
 
     script = _strip_front_matter(skill.raw_markdown or "")
     if not script:
