@@ -691,6 +691,25 @@ class UpdateCompanyProfileRequest(BaseModel):
     )
 
 
+class InterviewChatRequest(BaseModel):
+    """One turn of the onboarding interview. Stateless: the client holds history."""
+
+    text: str
+    history: list[ChatMessage] = []
+
+
+class InterviewChatResponse(BaseModel):
+    """The interview's reply, plus whether this turn wrote the profile.
+
+    ``profile_saved`` is what lets the UI dismiss the onboarding card and refresh
+    the Settings view without polling ``GET /profile`` after every turn.
+    """
+
+    content: str
+    profile_saved: bool = False
+    markdown: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # System config models
 # ---------------------------------------------------------------------------

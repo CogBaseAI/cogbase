@@ -181,6 +181,18 @@ Company profile (account-scoped, no namespace segment — the profile is shared 
 - `GET /profile` — the account's company-profile markdown; `200` with `exists: false` when it has none (cold start is a state, not a 404)
 - `PUT /profile` — replace it; refuses bodies over `MAX_PROFILE_BYTES` with 413
 - `DELETE /profile` — remove it
+- `POST /profile/interview/chat` and `/profile/interview/chat/stream` (SSE) — the onboarding interview that writes the profile.
+  Stateless and account-scoped like the generator chat (the client holds history); one tool, `save_company_profile`; the response's
+  `profile_saved` tells the UI to dismiss the onboarding card. An existing profile makes the turn a re-run over what is saved.
+- The interview has its own surface rather than living in the generator chat because a new account is auto-provisioned with a working
+  namespace and app (`api/provisioning.py`), so the user who most needs onboarding may never open the Build tab.
+- The interview **is** its script, and the script is a skill: `skills/account-onboarding-interview-legal/SKILL.md` holds the questions
+  *and* the company-profile template they fill in. It is resolved **by name** from the skill registry (`INTERVIEW_SKILL_NAME`, overridable
+  with `COGBASE_INTERVIEW_SKILL`), so it is a versioned, uploadable markdown document a non-engineer can edit. It is not routed through
+  the query runner's skill selector — the interview needs the markdown, not the execution sandbox.
+- `cogbase/core/onboarding.py` keeps only the plumbing: the `save_company_profile` tool, today's date, the re-run block, and the frame
+  binding them. There is **no** default script and no profile template in code — with no skill registered the interview routes 503 rather
+  than improvising one. A second vertical is a second SKILL.md under its own name, never a branch in the module.
 - Body lives in the system document store (`cogbase/core/profile.py`), edit metadata in the `profile_records` index; a write hot-patches
   the account's cached app instances (`CogBaseApp.set_account_profile`) instead of evicting them. See `docs/preference-profiles.md`.
 

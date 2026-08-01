@@ -6,10 +6,9 @@ derivable from their documents, and none of it should be re-collected per app �
 it lives *outside* every app partition, as one markdown document per account (see
 docs/preference-profiles.md).
 
-The body is prose, not YAML: a document the user reads and edits in plain English.
-Two consumers read it — the app generator, to skip re-asking account questions and
-to shape the generated config, and the query runner, which injects it
-unconditionally as framing context.
+The body is prose, not YAML: a document the user reads and edits.
+The query runner is the consumer: ``api/factory.py`` reads the profile at app
+build time and the runner injects it unconditionally as framing context.
 
 Storage is the system document store, viewed through
 ``AppScope(account_id=account_id)``.  Dropping ``namespace_id`` and ``app_id`` from
@@ -74,8 +73,8 @@ class AccountProfileStore:
 
         Raises ``ValueError`` when the body exceeds ``MAX_PROFILE_BYTES``.  The
         check lives here, at the durable boundary, so both writers — the API's
-        edit endpoint and the generator's interview tool — are held to it; the API
-        translates the error into its own status code.
+        edit endpoint and the onboarding interview's tool — are held to it; the
+        API translates the error into its own status code.
         """
         size = len(markdown.encode("utf-8"))
         if size > MAX_PROFILE_BYTES:
