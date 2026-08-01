@@ -268,10 +268,10 @@ describe('onboarding interview modal', () => {
     await waitFor(() => expect(interviewCalls(fetchSpy)).toHaveLength(2))
 
     await user.click(screen.getByText('Finish later'))
-    // The modal goes immediately — the save is not something the user waits on.
-    expect(onClose).toHaveBeenCalled()
-
     await waitFor(() => expect(interviewCalls(fetchSpy)).toHaveLength(3))
+    // Only once the save has landed — closing first would drop the user back on a
+    // profile card that says nothing was saved, then rewrite it under them.
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
     const body = JSON.parse(interviewCalls(fetchSpy)[2][1].body)
     expect(body.text).toMatch(/save what you have/i)
     // Everything answered so far has to ride along, or there is nothing to save.
@@ -309,6 +309,36 @@ describe('onboarding interview modal', () => {
     expect(interviewCalls(fetchSpy)).toHaveLength(2)
   })
 
+  it('keeps the user in the interview when the closing save fails, instead of losing it quietly', async () => {
+    let n = 0
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation((url) => {
+      if (!String(url).endsWith('/profile/interview/chat/stream')) {
+        return Promise.resolve({ ok: true, json: async () => ({ markdown: null, exists: false }), text: async () => '' })
+      }
+      n += 1
+      // The closing turn is the one that fails.
+      if (n === 3) return Promise.reject(new Error('network down'))
+      return Promise.resolve(sseResponse([{ done: true, content: 'Where do you operate?' }]))
+    })
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    renderWithCtx(<OnboardingModal open={true} onClose={onClose} />)
+    await screen.findByText('Where do you operate?')
+
+    await user.type(screen.getByPlaceholderText(/Type your answer/), 'EU and UK')
+    await user.click(screen.getByText('Send'))
+    await waitFor(() => expect(interviewCalls(fetchSpy)).toHaveLength(2))
+
+    await user.click(screen.getByText('Finish later'))
+    // Closing here would drop the answers with nobody the wiser.
+    await waitFor(() => expect(screen.getByText(/Couldn't save your answers/)).toBeInTheDocument())
+    expect(onClose).not.toHaveBeenCalled()
+    // Save is the retry; leaving is now a deliberate choice with the cost stated.
+    expect(screen.getByText('Save')).not.toBeDisabled()
+    await user.click(screen.getByText('Close anyway'))
+    expect(onClose).toHaveBeenCalled()
+  })
+
   it('waits for a turn still streaming, so the answer typed just before leaving is saved', async () => {
     // The expensive moment: the user answers, then closes while the model is still
     // replying. That answer is only in the in-flight request, not yet in history.
@@ -333,6 +363,8 @@ describe('onboarding interview modal', () => {
     await user.click(screen.getByText('Finish later'))
     // Nothing is sent while that turn is unresolved — a save now would omit it.
     expect(interviewCalls(fetchSpy)).toHaveLength(2)
+    // And the wait is visible: the modal is still up, saying what it is doing.
+    expect(screen.getByText('Saving your answers…')).toBeInTheDocument()
 
     gate.release()
     await waitFor(() => expect(interviewCalls(fetchSpy)).toHaveLength(3))

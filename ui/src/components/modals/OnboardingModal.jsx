@@ -61,8 +61,8 @@ export default function OnboardingModal({ open, onClose }) {
   // Answers the user has given that no save has captured yet — the one condition
   // under which leaving costs them something, and so the gate on both the Save
   // button and the closing save. Mirrored into state because the button's enabled
-  // state has to re-render on it, and into a ref because the closing save reads it
-  // after the modal is gone, where a captured state value would be stale.
+  // state has to re-render on it, and into a ref because the closing save re-reads
+  // it across awaits, where a value captured at call time would be stale.
   const dirtyRef = useRef(false)
   const [dirty, setDirtyState] = useState(false)
   const markDirty = (v) => { dirtyRef.current = v; setDirtyState(v) }
@@ -75,25 +75,30 @@ export default function OnboardingModal({ open, onClose }) {
   // open rather than read live, so saving mid-conversation doesn't relabel the
   // interview the user is still in the middle of.
   const [rerun, setRerun] = useState(false)
+  // The save-and-leave turn, and whether it failed. The modal stays up for the
+  // duration so leaving is something the user watches rather than something that
+  // happens to the profile card behind them.
+  const [closing, setClosing] = useState(false)
+  const [closeError, setCloseError] = useState(false)
 
   const scrollMsgs = () => {
     if (msgsRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight
   }
 
   useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape' && !busy) finishLater() }
+    function onKey(e) { if (e.key === 'Escape' && !busy && !closing) finishLater() }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [onClose, busy])
+  }, [onClose, busy, closing])
 
   // Open → clear the last interview, then run the kickoff turn once. Reopening
   // starts fresh rather than resuming a half-finished interview (the server holds
   // no state; a stale client transcript would be the only thing carrying it).
   //
-  // The clearing happens at *open*, not at close, because `finishLater` lets a
-  // save turn outlive the modal — and that turn reads `historyRef` and `dirtyRef`
-  // on its way out. Wiping them on close would pull the rug out from under work
-  // already in flight. Nothing renders while closed, so stale state costs nothing.
+  // The clearing happens at *open*, not at close, so that everything defining a
+  // fresh interview sits in one block, and so a close racing anything still
+  // settling can't leave the next interview half-wiped. Nothing renders while
+  // closed, so state outliving a close costs nothing.
   useEffect(() => {
     if (!open) {
       startedRef.current = false
@@ -107,6 +112,8 @@ export default function OnboardingModal({ open, onClose }) {
     setMsgs([])
     setInput('')
     setSaved(false)
+    setClosing(false)
+    setCloseError(false)
     setRerun(!!profile?.exists)
     startTurn(KICKOFF, { hidden: true })
   }, [open])
@@ -190,42 +197,58 @@ export default function OnboardingModal({ open, onClose }) {
   }
 
   // Leaving is a first-class action, so "finish later" is not a bare close: it
-  // spends one more turn asking the model to save what it has, then closes
-  // immediately without waiting for the answer. Waiting would be the wrong trade —
-  // the user pressed a button that means "let me go".
-  function finishLater() {
-    if (dirtyRef.current) saveUnfinished(historyRef.current, inflightRef.current)
-    onClose()
+  // spends one more turn asking the model to save what it has.
+  //
+  // It *waits* for that turn, holding the modal open with a saving state, rather
+  // than closing at once and letting the save land whenever it lands. Closing
+  // first looked kinder and was worse: the user is dropped back on the profile
+  // card with nothing saved on it, reads that as "my answers are gone", and then
+  // watches the card silently rewrite itself seconds later. A surface changing
+  // under you with no explanation is a bug even when the write succeeds — and
+  // when it fails, nobody ever finds out. A few seconds of "Saving your answers…"
+  // buys an honest account of both.
+  async function finishLater() {
+    // Nothing unbanked (or a failure they've already been told about and chosen
+    // to walk away from) — leaving is instant, which is the common case once the
+    // Save button has been used.
+    if (!dirtyRef.current || closeError) { onClose(); return }
+    setClosing(true)
+    setCloseError(false)
+    const ok = await saveOnExit()
+    setClosing(false)
+    if (ok) onClose()
+    else setCloseError(true)
   }
 
-  // The detached closing turn. It deliberately writes no component state: the
-  // modal is already gone, so there is no transcript to append to and no error to
-  // show. If it fails, the profile is simply unsaved — exactly where we started.
-  //
-  // `history` is the live array `send` pushes into, and the reset above replaces
-  // the ref rather than mutating it. So waiting on `inflight` here picks up the
-  // turn that was streaming when the user left, and saves the answer inside it.
-  async function saveUnfinished(history, inflight) {
-    if (inflight) {
-      try { await inflight } catch { /* send() already surfaced it */ }
+  // The closing turn. Returns whether it got far enough to speak for itself: a
+  // model that decides there is nothing worth keeping still counts as success —
+  // only a dead request or a stream error means the user's answers went nowhere.
+  async function saveOnExit() {
+    if (inflightRef.current) {
+      try { await inflightRef.current } catch { /* send() already surfaced it */ }
     }
     // That turn may have been a save itself, in which case there is nothing left
     // to write and the model should not be asked to write it twice.
-    if (!dirtyRef.current) return
+    if (!dirtyRef.current) return true
     try {
       const resp = await authFetch(`${apiUrl}/profile/interview/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: FINAL_SAVE, history }),
+        body: JSON.stringify({ text: FINAL_SAVE, history: historyRef.current }),
       })
-      if (!resp.ok) return
+      if (!resp.ok) return false
+      let failed = false
       for await (const d of streamSSE(resp)) {
+        if (d.error) failed = true
         if (d.done && d.profile_saved && d.markdown) {
           markDirty(false)
           adoptSavedProfile(d.markdown)
         }
       }
-    } catch { /* the user has left; an unsaved profile is the status quo, not a regression */ }
+      return !failed
+    } catch {
+      return false
+    }
   }
 
   function autoResize(el) {
@@ -243,9 +266,18 @@ export default function OnboardingModal({ open, onClose }) {
             <h3>{rerun ? t('onboard.titleRerun') : t('onboard.title')}</h3>
             <p className="onboard-modal-sub">{t('onboard.sub')}</p>
           </div>
-          <button className="wf-modal-close" onClick={finishLater} aria-label={t('onboard.close')}>✕</button>
+          {/* The one control that stays live while the closing save runs. Nothing
+              here can time out a hung request, so the corner ✕ keeps its meaning
+              of last resort: it abandons the save rather than trapping the user
+              behind it. */}
+          <button
+            className="wf-modal-close"
+            onClick={closing ? onClose : finishLater}
+            aria-label={t('onboard.close')}
+          >✕</button>
         </div>
         {saved && <div className="onboard-saved">{t('onboard.saved')}</div>}
+        {closeError && <div className="onboard-close-error">{t('onboard.saveFailed')}</div>}
         <div className="msgs" ref={msgsRef}>
           {msgs.map((m, i) => (
             <div key={i} className={`msg ${m.role}`}>
@@ -279,11 +311,11 @@ export default function OnboardingModal({ open, onClose }) {
               }
             }}
             onChange={e => { setInput(e.target.value); autoResize(e.target) }}
-            disabled={busy}
+            disabled={busy || closing}
           />
           <button
             className="btn btn-primary"
-            disabled={busy || !input.trim()}
+            disabled={busy || closing || !input.trim()}
             onClick={() => {
               const text = input.trim()
               if (!text) return
@@ -295,19 +327,26 @@ export default function OnboardingModal({ open, onClose }) {
         </div>
         <div className="onboard-modal-ft">
           {/* Leaving is a first-class action, not an escape hatch: the interview
-              competes with real work and is written to lose gracefully. */}
-          <button className="btn btn-ghost btn-sm" onClick={finishLater}>
-            {saved ? t('onboard.done') : t('onboard.later')}
+              competes with real work and is written to lose gracefully. It does
+              the same thing as the ✕ — both close, both save what is unbanked —
+              but it says so in words, and it changes to "Done" once the profile is
+              written. A corner ✕ reads as "dismiss"; this reads as "stopping here
+              is a fine place to stop", which is the whole posture of the script. */}
+          <button className="btn btn-ghost btn-sm" onClick={finishLater} disabled={closing}>
+            {closing
+              ? t('onboard.savingExit')
+              : closeError
+                ? t('onboard.closeAnyway')
+                : saved ? t('onboard.done') : t('onboard.later')}
           </button>
           {/* Saving on demand, so the user can bank what they've said and keep
-              going — or stop, having watched it land. The closing save covers the
-              same ground silently, but only for someone who didn't think to ask;
-              a durable answer shouldn't depend on the user trusting an invisible
-              mechanism. Disabled with nothing to bank, so it never writes an empty
-              profile. */}
+              going — or stop, having watched it land. Disabled with nothing to
+              bank, so it never writes an empty profile — and it doubles as the
+              retry when the closing save fails, which is why the failure needs no
+              button of its own. */}
           <button
             className="btn btn-sm"
-            disabled={busy || !dirty}
+            disabled={busy || closing || !dirty}
             onClick={() => startTurn(SAVE_NOW)}
           >{t('onboard.saveNow')}</button>
         </div>
