@@ -1,5 +1,109 @@
 # Changelog
 
+## v0.6.0 — 2026-07-27
+
+### Multi-Tenancy & Namespaces
+
+- Namespaces are now a first-class, explicitly-created resource: full CRUD API and UI tab; the implicit default namespace has been removed — apps must live under an explicitly created namespace
+- Namespaces given a distinct internal id separate from the user-facing name; `display_name` removed, namespaces addressed by name everywhere (API, UI, docs)
+- Account id and namespace id threaded through the system store, request API paths, episodic log scoping, session helpers (app-id scoped, download guarded by account boundary), app generation, and the query runner's tenant attribution
+- `whoami` API added to return the calling account id and mode; UI reads account id/mode from it instead of a sidebar account box
+- Benchmarks and examples updated to pass account id and namespace id; example apps fixed to create their namespace, using `demos` as the namespace name
+- Tenancy and namespace docs updated
+
+### Authentication & Access Control
+
+- Email/password signup and signin, scrypt password hashing, HS256 access tokens
+- UI login and auth gate
+- SaaS deployment mode: `jwt_secret` now required and validated when `deployment_mode` is `saas`; `deployment_mode`/`jwt_secret` moved from env vars into the system config yaml
+- Settings tab hidden in saas mode; account id (a UUID) no longer shown on the top panel
+
+### Onboarding / SMB Contract-Analyst Demo
+
+- New accounts are auto-provisioned with a `legal-team` namespace and a `contract-analyst` app (no documents ingested); UI auto-selects that namespace/app after signup and lands on the Ingest tab
+- Post-upload review CTA card guides SMB users to review contracts right after upload — a single upload auto-sends the review chat, multiple uploads prefill (without sending) the first contract; clicking the CTA always opens a new chat
+- `legal-review` and `edit-docx` skills added to the contract-analyst demo app by default; its example queries refined to fit the provisioned (no-document) app
+- New light config PATCH endpoint to customize `query_prompt`, `query_intro`, and `example_queries` without redeploying the full app config; Query tab shows a persistent `query_intro` banner with example chips at the top instead of a stale "Select an app" message
+- Fixed signup landing on the Query tab, caused by a stale application-tier hash surviving into signup
+- Metadata input area hidden in the Ingest tab
+
+### Demo UI
+
+- New focus-driven sidebar layout: tabs grouped by account, workspace/namespace, and application; nav model extracted out of `App.jsx` with a pure hash projection
+- App list lifted into context with an App switcher; namespace select/switcher added, with views reacting to namespace changes; cross-namespace deploy moved into the Build tab
+- Query/Data secondary columns moved into the app sidebar, showing Chats or Collections only for the active tab; references now open in a floating dialog instead of a fixed column
+- Last-used namespace + app remembered per account in local storage and restored on login
+- Removed the unnecessary API/IP URL field from the header
+- Fixed stale App switcher after deploy/delete and duplicated namespace-options logic; fixed the select-app dropdown not auto-refreshing
+
+### Query Runner
+
+- Renamed the `python` tool to `run_python` — OpenAI rejects the tool name `python`
+
+---
+
+## v0.5.0 — 2026-07-16
+
+### Skills
+
+- New **legal-review** skill (evolved from the earlier contract-review skill): segments contract clauses (with CJK section-heading support), reviews for risk, produces a tracked-changes redline docx, and supports follow-up chat to refine the review and update the redline
+- **edit-docx** skill reworked to produce a tracked-changes redline instead of a clean finished document; anchor matching strips markdown emphasis and leading block markers so an anchor copied from the markdown matches the raw paragraph
+- contract-merge skill generalized into the edit-docx skill, with a live LLM test
+- Skills manageable in the UI: view full `SKILL.md` and scripts, assign/unassign per app; deleted-but-still-referenced skills surfaced as broken refs instead of silently skipped
+- Docker image pre-warms built-in skills (moved before the broad `COPY` layer to keep the image cache effective) and sets the skills dir
+
+### Query Runner
+
+- Query runner now maintains a per-session workdir so tool calls and queries in the same session can share files; skill directories resolved to absolute paths so scripts are found correctly
+- `fetch_doc`, `save_artifact`, `fetch_artifact`, and `delete_artifact` tools added; skill-generated files get a guaranteed markdown download link keyed by `app_id`
+- Query responses unified to use answer references; references serialized into the episodic log and included in `TranscriptMessage`
+- Sessions can now be deleted; session summaries saved to the system store; session list/messages loadable from the system store plus the session's episodic log
+- Fixed a long-term memory read error caused by memory collections being created lazily
+- Memory records omitted from `QueryResults` when not referenced in the answer
+- Common stdlib modules pre-imported for skill-generated Python code, avoiding `NameError` (e.g. `json`) failures
+- LLM completion time and end-to-end time logged per document in the ingestion pipeline and workflow runner
+
+### Workflow Engine
+
+- `records_from` added to the `structured-save` tool to save a list of LLM results directly; workflow config agent prompt refined for its guidance
+- Overflow guard added at the `llm_structured` step: fails fast instead of silently truncating, guiding the app creator to narrow upstream filters or distill each item
+- Workflow tasks now created in batch
+- Default workflow trigger changed from `manual` to `after_ingest`
+- Deleting or re-ingesting a document purges its previous workflow records; all docs purged before creating new workflow tasks so cross-document workflows (e.g. contradiction checks) don't run against stale records
+
+### Knowledge Pipeline
+
+- Long-document support in `LLMExtractor`: boundary-aware overlapping splitter, windowed extraction, and dedup of redundant records at merge
+- `document-embed-upsert` handles oversized documents; ingestion's map-reduce summarization consolidated into `summarization.py` (renamed from `compaction.py`; `summarize_transcript` generalized to `summarize_text`)
+- `chunk-embed-upsert` batches requests to the embedding model to avoid exceeding the embedding service's batch limit; embedding model max context length is now configurable
+- Document deletion purges derived data (vector + structured + parsed text) from every pipeline's stores
+- Ingestion reports a per-document summary and logs empty-ingest warnings
+- Original document can be downloaded; fixed handling of non-latin-1 filename characters
+
+### Store Adapters / Infrastructure
+
+- Startup recovery sweep requeues orphaned ingest/distill/workflow tasks, laying groundwork for multi-node task leasing
+- `ui/package-lock.json` tracked so `npm ci` is reproducible across nodes
+- Docker image supports building `latest`-only tags
+- UI supports connecting to a remote node
+
+### Demo UI
+
+- Docx viewer: view the redline docx directly in the Query tab, with auto-collapsing references, drag-to-resize and persisted panel width, and a downloadable link for the edited docx
+- Query tab: streaming answers no longer snap back to bottom while scrolling up to read earlier output; markdown table answers rendered as HTML tables; copy question/answer/table support; hide chats/references panels; fixed CJK filename download bug
+- Data tab: new reusable `DataTable` component shared across all tabs, search box, column sorting, adjustable/selectable columns, hover preview for long cell text (replacing click-to-expand), visible column boundaries
+- Apps tab: view app details (pipeline, workflow, schemas) with tree view and raw JSON view
+- Ingest tab: delete a document directly; fixed stale data left in the Ingest/Data/etc. tabs after deleting the current app
+- English/Chinese multi-language (i18n) support
+- Misc: brightened grey text color for readability; build-app output panel allows scrolling up to read earlier output
+
+### Examples
+
+- `contract_analyst_demo` expanded from 6 to 30 contracts with cross-document tensions; two ingest options (6-contract starter, 30-contract full corpus); `contract_value` restricted to annual value; saas-003 included in quick mode
+- All four demos now upload `.docx` files instead of `.txt`; `contract_analyst_demo` uses this to test merging a saas-001 amendment into the original contract
+
+---
+
 ## v0.4.0 — 2026-06-23
 
 ### Memory Layer
