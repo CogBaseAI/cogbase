@@ -287,7 +287,7 @@ def _to_row(chunk: Chunk) -> tuple[Any, ...]:
 def _from_row(row: Any, include_embedding: bool = True, include_metadata: bool = True) -> Chunk:
     import json
 
-    embedding = list(row["embedding"]) if include_embedding else None
+    embedding = row["embedding"].to_list() if include_embedding else None
     if include_metadata:
         metadata = row["metadata"]
         if isinstance(metadata, str):
