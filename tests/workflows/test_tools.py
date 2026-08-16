@@ -203,6 +203,54 @@ class TestVectorSearchTool:
         with pytest.raises(ValidationError):
             _make_step(tool="vector-search", collection="rules")
 
+    async def test_doc_id_filter_scopes_results(self):
+        """A `filters: {doc_id: ...}` step only returns chunks from that document."""
+        vs = await _make_vector_store()
+        await vs.upsert("rules", [
+            Chunk(chunk_id="a_0", doc_id="doc-a", text="alpha", embedding=[0.1] * 4),
+            Chunk(chunk_id="b_0", doc_id="doc-b", text="beta", embedding=[0.1] * 4),
+        ])
+        embedder = _make_embedder()
+        ctx = {"input": {"doc_id": "doc-a"}}
+        step = _make_step(
+            tool="vector-search",
+            collection="rules",
+            query="q",
+            top_k=5,
+            filters={"doc_id": "{{ input.doc_id }}"},
+        )
+        output = await vs_run(step, ctx, vs, embedder)
+        assert output["chunks"]
+        assert all(c.doc_id == "doc-a" for c in output["chunks"])
+
+    async def test_no_filters_returns_cross_document_results(self):
+        """Without `filters:`, results are not scoped to a single document (no accidental default)."""
+        vs = await _make_vector_store()
+        await vs.upsert("rules", [
+            Chunk(chunk_id="a_0", doc_id="doc-a", text="alpha", embedding=[0.1] * 4),
+            Chunk(chunk_id="b_0", doc_id="doc-b", text="beta", embedding=[0.1] * 4),
+        ])
+        embedder = _make_embedder()
+        step = _make_step(tool="vector-search", collection="rules", query="q", top_k=5)
+        output = await vs_run(step, {}, vs, embedder)
+        assert {c.doc_id for c in output["chunks"]} == {"doc-a", "doc-b"}
+
+    async def test_filters_passed_to_store_search(self):
+        vs = MagicMock()
+        vs.search = AsyncMock(return_value=[])
+        embedder = _make_embedder()
+        ctx = {"input": {"doc_id": "doc-a"}}
+        step = _make_step(
+            tool="vector-search",
+            collection="rules",
+            query="q",
+            filters={"doc_id": "{{ input.doc_id }}"},
+        )
+        await vs_run(step, ctx, vs, embedder)
+        _, kwargs = vs.search.call_args
+        assert kwargs["filters"] is not None
+        assert len(kwargs["filters"]) == 1
+
 
 # ---------------------------------------------------------------------------
 # llm-structured
@@ -489,3 +537,67 @@ class TestStructuredSaveTool:
     def test_missing_collection_raises(self):
         with pytest.raises(ValidationError):
             _make_step(tool="structured-save")
+
+    async def test_fields_overlay_overrides_model_output(self):
+        """`fields:` values win over same-named keys the LLM emitted — the citation-precision fix."""
+        store = await self._make_finding_store()
+        finding = _Finding(finding_id="wrong", status="compliant")
+        ctx = {"input": {"doc_id": "doc-a"}, "steps": {"judge": {"output": finding}}}
+        step = _make_step(
+            tool="structured-save",
+            collection="findings",
+            records=["{{ steps.judge.output }}"],
+            fields={"finding_id": "{{ input.doc_id }}"},
+        )
+        await ss_run(step, ctx, store)
+        rows = await store.query("findings")
+        assert len(rows) == 1
+        assert rows[0]["finding_id"] == "doc-a"
+
+    async def test_no_fields_is_a_noop(self):
+        """A save step with no `fields:` declared round-trips the record unchanged."""
+        store = await self._make_finding_store()
+        finding = _Finding(finding_id="f1", status="compliant")
+        ctx = {"steps": {"judge": {"output": finding}}}
+        step = _make_step(
+            tool="structured-save",
+            collection="findings",
+            records=["{{ steps.judge.output }}"],
+        )
+        output = await ss_run(step, ctx, store)
+        assert output["records"][0] is finding
+
+    async def test_fields_adds_keys_not_on_the_record(self):
+        """`fields:` keys absent from the record are added, not dropped."""
+        store = await self._make_finding_store()
+        ctx = {
+            "input": {"doc_id": "doc-a"},
+            "steps": {"judge": {"output": {"finding_id": "f1", "status": "compliant"}}},
+        }
+        step = _make_step(
+            tool="structured-save",
+            collection="findings",
+            records=["{{ steps.judge.output }}"],
+            fields={"doc_id": "{{ input.doc_id }}"},
+        )
+        output = await ss_run(step, ctx, store)
+        assert output["records"][0]["doc_id"] == "doc-a"
+        assert output["records"][0]["finding_id"] == "f1"
+
+    async def test_fields_overlay_applied_to_records_from(self):
+        store = await self._make_finding_store()
+        ctx = {
+            "input": {"doc_id": "doc-a"},
+            "steps": {"judge": {"output": {"findings": [
+                {"finding_id": "f1", "status": "compliant"},
+                {"finding_id": "f2", "status": "non_compliant"},
+            ]}}},
+        }
+        step = _make_step(
+            tool="structured-save",
+            collection="findings",
+            records_from="{{ steps.judge.output.findings }}",
+            fields={"doc_id": "{{ input.doc_id }}"},
+        )
+        output = await ss_run(step, ctx, store)
+        assert all(r["doc_id"] == "doc-a" for r in output["records"])

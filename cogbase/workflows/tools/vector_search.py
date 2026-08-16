@@ -7,6 +7,7 @@ from typing import Any, TYPE_CHECKING
 
 from cogbase.embeddings.base import EmbeddingBase
 from cogbase.stores import VectorStoreBase
+from cogbase.stores.filters import Col
 from cogbase.workflows.context import render_value
 
 if TYPE_CHECKING:
@@ -28,9 +29,16 @@ async def run(
 
     query_text = str(render_value(step.query, ctx))
     (embedding,) = await embedder.embed([query_text])
-    chunks = await vector_store.search(step.collection, query_text, embedding, top_k=step.top_k)
+    filters = [
+        Col(field) == render_value(val_template, ctx)
+        for field, val_template in step.filters.items()
+    ]
+    chunks = await vector_store.search(
+        step.collection, query_text, embedding, top_k=step.top_k,
+        filters=filters or None,
+    )
     logger.info(
-        "workflow.tool.vector_search collection=%s top_k=%d query=%s chunks=%d",
-        step.collection, step.top_k, query_text[:120], len(chunks),
+        "workflow.tool.vector_search collection=%s top_k=%d query=%s filters=%d chunks=%d",
+        step.collection, step.top_k, query_text[:120], len(filters), len(chunks),
     )
     return {"chunks": chunks}

@@ -652,7 +652,9 @@ class TestStructuredSavePrimaryFieldsAgainstUpstreamSchema:
     )
 
     @staticmethod
-    def _workflow_yaml(output_schema: str, primary_fields: str = "[doc_id, clause_id]") -> str:
+    def _workflow_yaml(
+        output_schema: str, primary_fields: str = "[doc_id, clause_id]", fields_block: str = ""
+    ) -> str:
         # Mirrors the contract_compliance demo: a judge llm-structured step
         # feeds its output into a save_finding structured-save step.
         return textwrap.dedent(f"""\
@@ -685,6 +687,7 @@ class TestStructuredSavePrimaryFieldsAgainstUpstreamSchema:
                     primary_fields: {primary_fields}
                     records:
                       - "{{{{ steps.judge.output }}}}"
+{fields_block}
         """)
 
     def test_primary_fields_subset_of_output_schema_validates(self):
@@ -714,6 +717,34 @@ class TestStructuredSavePrimaryFieldsAgainstUpstreamSchema:
         msg = str(exc_info.value)
         assert "'doc_id'" in msg
         assert "'clause_id'" in msg
+
+    def test_primary_field_supplied_via_fields_overlay_validates(self):
+        # clause_id is missing from the LLM's output_schema, but it is supplied by
+        # the save step's `fields:` overlay (rendered from context, not the model),
+        # so it is a legal source and validation must not raise.
+        fields_block = (
+            "                    fields:\n"
+            '                      clause_id: "{{ item.clause_id }}"\n'
+        )
+        yaml_text = self._workflow_yaml(
+            self._OUTPUT_SCHEMA_MISSING_CLAUSE_ID, fields_block=fields_block
+        )
+        cfg = AppConfig.from_yaml(yaml_text)
+        sc = next(s for s in cfg.structured_collections if s.name == "findings")
+        assert sc.primary_fields == ["doc_id", "clause_id"]
+
+    def test_primary_field_missing_from_both_schema_and_fields_still_raises(self):
+        # clause_id supplied via fields, but doc_id is still missing from both
+        # sources — the check must still catch that.
+        fields_block = (
+            "                    fields:\n"
+            '                      clause_id: "{{ item.clause_id }}"\n'
+        )
+        yaml_text = self._workflow_yaml(
+            self._OUTPUT_SCHEMA_ONLY_STATUS, fields_block=fields_block
+        )
+        with pytest.raises(Exception, match=r"primary_fields \['doc_id'\] missing"):
+            AppConfig.from_yaml(yaml_text)
 
     def test_records_not_referencing_llm_structured_step_skipped(self):
         # records sources from the foreach item rather than an llm-structured step output.

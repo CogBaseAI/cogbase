@@ -320,6 +320,14 @@ class VectorSearchStepConfig(WorkflowStepBase):
         default=5,
         description="Maximum number of vector matches to return.",
     )
+    filters: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Optional equality filters on chunk fields, ANDed. Keys are field names; "
+            "values are Jinja2 templates rendered against the step context "
+            "(e.g. {doc_id: '{{ input.doc_id }}'})."
+        ),
+    )
 
 
 class LLMStructuredStepConfig(WorkflowStepBase):
@@ -386,6 +394,16 @@ class StructuredSaveStepConfig(WorkflowStepBase):
             "(e.g. '{{ steps.judge.output.contradictions }}'). Use to batch-save a "
             "runtime-sized list from one llm-structured call instead of a foreach. "
             "Mutually exclusive with `records`."
+        ),
+    )
+    fields: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Deterministic fields merged onto every saved record after rendering, "
+            "overriding same-named keys. Values are Jinja2 templates rendered "
+            "against the step context (e.g. {doc_id: '{{ input.doc_id }}'}). Use "
+            "for identifiers and provenance that must come from context rather "
+            "than from an LLM's output."
         ),
     )
     purge_by: list[str] = Field(
@@ -514,16 +532,21 @@ def _index_llm_structured_steps(steps: list) -> "dict[str, LLMStructuredStepConf
 
 
 def _validate_save_primary_fields(workflow: "WorkflowConfig") -> None:
-    """structured-save primary_fields must be declared in the upstream llm-structured output_schema.
+    """structured-save primary_fields must come from the upstream output_schema or from `fields:`.
 
     For each structured-save step, find the llm-structured step whose
     ``{{ steps.<id>.output }}`` feeds ``records``, then assert every field in
-    ``primary_fields`` appears as a property in that step's ``output_schema``.
+    ``primary_fields`` appears either as a property in that step's ``output_schema``
+    or as a key in the save step's own `fields:` overlay (which is rendered from
+    context, not the LLM's output, and so is a legal source too).
     Records that don't reference an llm-structured step output are skipped.
     """
     llm_steps = _index_llm_structured_steps(workflow.steps)
     for save_step in _iter_save_steps(workflow.steps):
         if not save_step.primary_fields:
+            continue
+        primary_fields = [f for f in save_step.primary_fields if f not in save_step.fields]
+        if not primary_fields:
             continue
         sources = list(save_step.records)
         if save_step.records_from:
@@ -549,7 +572,7 @@ def _validate_save_primary_fields(workflow: "WorkflowConfig") -> None:
             properties = _resolve_output_properties(schema, match.group(2))
             if properties is None:
                 continue
-            missing = [f for f in save_step.primary_fields if f not in properties]
+            missing = [f for f in primary_fields if f not in properties]
             if missing:
                 raise ValueError(
                     f"Workflow {workflow.name!r} structured-save step {save_step.id!r}: "

@@ -277,7 +277,7 @@ class TestForeachStep:
         captured_queries: list[str] = []
         vs_mock = MagicMock()
 
-        async def _search(collection, query_text, embedding, top_k):
+        async def _search(collection, query_text, embedding, top_k, filters=None):
             captured_queries.append(query_text)
             return []
 

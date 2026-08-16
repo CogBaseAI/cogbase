@@ -31,6 +31,14 @@ async def run(
             )
     else:
         records = [render_value(r, ctx) for r in step.records]
+
+    if step.fields:
+        overlay = {field: render_value(val_template, ctx) for field, val_template in step.fields.items()}
+        records = [
+            {**(r.model_dump() if hasattr(r, "model_dump") else r), **overlay}
+            for r in records
+        ]
+
     if records:
         await structured_store.save(step.collection, records)
     logger.info(
