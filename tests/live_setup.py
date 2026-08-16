@@ -27,6 +27,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# Live tests default to the cheaper "flex" service tier (see
+# cogbase/llms/openai.py). setdefault so an explicit env setting still wins.
+os.environ.setdefault("COGBASE_OPENAI_FLEX_TIER", "true")
+
 _ENV_YAML = Path(__file__).resolve().parent.parent / ".env.yaml"
 
 
@@ -44,12 +48,7 @@ def make_llm():
     from cogbase.llms.factory import build_llm
     if _system_cfg is None or _system_cfg.llm is None:
         return None
-    llm = build_llm(_system_cfg.llm)
-
-    from cogbase.llms.openai import OpenAILLM
-    if isinstance(llm, OpenAILLM):
-        llm.enable_flex_tier()
-    return llm
+    return build_llm(_system_cfg.llm)
 
 
 def make_embedding(*, dimensions: int | None = None):
