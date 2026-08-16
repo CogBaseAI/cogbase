@@ -698,3 +698,16 @@ class CogBaseApp:
     @property
     def document_store(self) -> DocumentStoreBase:
         return self._document_store
+
+    @property
+    def structured_store(self) -> StructuredStoreBase:
+        """The app-scoped structured store, with every collection already declared.
+
+        The counterpart to ``document_store``, for callers that need to write
+        records no ingest or workflow produces — an in-process provisioner seeding
+        reference data into a new account, for instance. Reaching it this way keeps
+        the app's scope prefix and its registered collection schemas; rebuilding a
+        scoped store by hand gets both wrong in ways that surface as a silently
+        empty collection.
+        """
+        return self._structured_store
