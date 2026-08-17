@@ -195,8 +195,13 @@ class ExtractStructuredStepConfig(PipelineStepBase):
         default="extract-structured",
         description="Pipeline tool to run.",
     )
-    extractor: ExtractorConfig = Field(
-        description="Extraction settings for extract-structured steps.",
+    extractor: ExtractorConfig | None = Field(
+        default=None,
+        description=(
+            "Extraction settings for extract-structured steps. Omit it when every "
+            "field of the record comes from 'fields:' — the step then writes one "
+            "record per document from the rendered templates, with no LLM call."
+        ),
     )
     # On the step rather than on ExtractorConfig: an overlay is not an extraction
     # behaviour, and a future non-LLM extractor should inherit it unchanged.
@@ -214,6 +219,22 @@ class ExtractStructuredStepConfig(PipelineStepBase):
         ),
         json_schema_extra={"prompt_skip": True},
     )
+
+    @model_validator(mode="after")
+    def _validate_extraction_source(self) -> "ExtractStructuredStepConfig":
+        """A step must read the text, stamp from metadata, or both — never neither.
+
+        Without an extractor and without fields there is nothing to write but
+        ``doc_id``, and the collection fills with identifier-only rows that no
+        query returns anything useful from and nothing reports as wrong.
+        """
+        if self.extractor is None and not self.fields:
+            raise ValueError(
+                f"extract-structured step for collection {self.collection!r} has "
+                "neither 'extractor' nor 'fields': it would write records "
+                "containing only doc_id"
+            )
+        return self
 
 
 class DocumentEmbedUpsertStepConfig(PipelineStepBase):

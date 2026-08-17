@@ -92,6 +92,29 @@ A template that resolves to nothing raises rather than writing an empty value. U
 
 `fields:` requires jinja2, which arrives with the `[api]` extra. A step that uses it without jinja2 installed fails when the app is built, not partway through an ingest.
 
+### No extractor at all
+
+When *every* column of a collection is a fact about the document rather than a finding in its text, omit `extractor:` and give the step only `fields:`. The step then writes exactly one record per document from the rendered templates, with no LLM call:
+
+```yaml
+- tool: extract-structured
+  collection: regulation_metadata
+  fields:
+    framework:    "{{ doc.metadata.framework }}"
+    part:         "{{ doc.metadata.part }}"
+    subpart:      "{{ doc.metadata.subpart }}"
+    jurisdiction: "{{ doc.metadata.jurisdiction }}"
+```
+
+This replaces the pattern of writing the values into a header block in the document text and prompting a model to copy them back out. The round trip costs a call, can only lose fidelity, and fails silently — a retyped scoping key does not error, it just stops matching, and every query scoped through it quietly returns nothing.
+
+A step with neither `extractor:` nor `fields:` is rejected at config parse: it would write rows containing only `doc_id`.
+
+Two behaviours differ from the LLM extractor, both deliberate:
+
+- **A document with no extractable text still gets its record.** `ExtractorBase.extract` returns `None` for blank text, which is right when the text is the input and wrong when the metadata is. A scanned PDF that yielded no text still has an identity, and without the row every query scoped through it comes back empty rather than erroring.
+- **Values are coerced to the record schema's declared type.** Templates render through a `NativeEnvironment`, so a bare `{{ doc.metadata.part }}` literal-evals `"211"` into the integer `211`. A column declared `string` holding a number stops matching every equality filter against it — silently, since a query that finds nothing is not an error. Fields the schema declares as strings are stringified back.
+
 ## Usage
 
 ```python

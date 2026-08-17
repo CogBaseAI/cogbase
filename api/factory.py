@@ -32,6 +32,8 @@ from cogbase.core.profile import AccountProfileStore
 from cogbase.core.query_runner import MemoryTiers, QueryRunner, RetrievalResources
 from cogbase.memory import Distiller, EpisodicMemory, LongTermMemory, ShortTermMemory
 from cogbase.stores.schema import FieldSchema, FieldType
+from cogbase.pipeline.extraction.base import ExtractorBase
+from cogbase.pipeline.extraction.fields import FieldsExtractor
 from cogbase.pipeline.extraction.llm import LLMExtractor
 from cogbase.pipeline.ingestion_pipeline import (
     IngestionPipeline,
@@ -196,7 +198,7 @@ async def build_app(
     # --- Structured collections ---
     structured_collections: list[StructuredCollection] = []
     structured_schemas: list[CollectionSchema] = []
-    extractors_by_col: dict[str, LLMExtractor] = {}
+    extractors_by_col: dict[str, ExtractorBase] = {}
     step_by_col: dict[str, Any] = {s.collection: s for p in config.pipelines for s in p.steps}
     for sc_cfg in config.structured_collections:
         if structured_store is None:
@@ -220,7 +222,7 @@ async def build_app(
         ext_cfg: ExtractorConfig | None = step.extractor if isinstance(step, ExtractStructuredStepConfig) else None
         if ext_cfg is not None:
             extraction_schema = _json.loads(ext_cfg.extraction_schema)
-            extractor = LLMExtractor(
+            extractors_by_col[sc_cfg.name] = LLMExtractor(
                 llm,
                 extraction_schema=extraction_schema,
                 config=ext_cfg,
@@ -228,7 +230,13 @@ async def build_app(
                 fields=step.fields,
                 app_id=app_id,
             )
-            extractors_by_col[sc_cfg.name] = extractor
+        elif isinstance(step, ExtractStructuredStepConfig):
+            # No extractor, but the step config validator guarantees fields: —
+            # every column comes from the document's metadata, so there is nothing
+            # to read out of the text and no reason to spend an LLM call.
+            extractors_by_col[sc_cfg.name] = FieldsExtractor(
+                step.fields, record_schema=record_schema, app_id=app_id,
+            )
 
     # --- Create collections in backing stores (idempotent) ---
     if app_status != "active":
