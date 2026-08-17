@@ -138,6 +138,59 @@ class VectorStoreBase(abc.ABC):
                              Unknown names are silently ignored.
         """
 
+    async def query(
+        self,
+        collection: str,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[Chunk]:
+        """Return every chunk matching *filters*, without a similarity search.
+
+        The counterpart of :meth:`StructuredStoreBase.query`, and the difference
+        from :meth:`search` is the point: ``search`` ranks by distance and truncates
+        to ``top_k``, so a caller that needs *all* the matches has to guess a ``top_k``
+        large enough and gets silent, distance-ordered truncation when the guess is
+        wrong. This returns the whole matching set, ordered by ``chunk_id`` so the
+        result is stable across backends and calls.
+
+        Use it to enumerate — verifying that seeded reference data landed, listing a
+        document's chunks, counting a collection. Do not use it to retrieve: with no
+        query vector there is nothing to rank by, and ``limit`` here truncates in id
+        order, not by relevance.
+
+        Args:
+            collection: Target collection name.
+            filters:    AND-combined filter expressions, same grammar as ``search``
+                        (top-level ``Chunk`` fields, dot-notation for metadata
+                        sub-keys). ``None`` / ``[]`` returns the whole collection.
+            fields:     Chunk field names to populate. ``None`` / ``[]`` returns all,
+                        matching ``search`` — which means embeddings too. Pass an
+                        explicit list on a large scan; a full read of a chunk
+                        collection is one vector per row of pure payload.
+            limit:      Maximum chunks to return, applied after ordering. ``None``
+                        (the default) returns every match, which is the semantic that
+                        makes this an enumeration API.
+
+        Raises:
+            NotImplementedError: if the backend cannot filter without a query vector.
+
+        **Not abstract, deliberately.** Most backends have this natively — pgvector is
+        SQL, Qdrant has ``scroll``, Milvus ``query``, Chroma ``get(where=)``, Weaviate
+        a filtered ``Get`` — but some are vector-first and genuinely do not: Pinecone's
+        ``query`` requires a vector, and offers only ``fetch`` by id and ``list`` by id
+        prefix. The workaround there is a zero-vector query with a guessed ``top_k``,
+        which is the silent truncation this method exists to avoid, so a backend that
+        cannot do it should say so and let the caller fail rather than emulate it.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot query by filter without a query vector. "
+            "Backends that are vector-first (e.g. Pinecone) support retrieval by "
+            "similarity and fetch by id, but not enumeration by metadata; a caller "
+            "that needs the whole matching set has to keep the records in a "
+            "structured store as well."
+        )
+
     @abc.abstractmethod
     async def delete_collection(self, collection: str) -> None:
         """Drop ``collection`` and all its chunks permanently."""

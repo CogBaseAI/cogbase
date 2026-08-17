@@ -174,6 +174,32 @@ class FAISSMemoryVectorStore(VectorStoreBase):
                 break
         return results
 
+    async def query(
+        self,
+        collection: str,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[Chunk]:
+        """Return every matching chunk in ``chunk_id`` order, with no ANN search.
+
+        Cheaper than the filtered path through ``search``: the chunks live in a dict
+        beside the index, so this never touches FAISS at all, where a filtered
+        ``search`` sets ``k = index.ntotal`` and scans the index first only to discard
+        most of what it ranked.
+
+        Raises:
+            KeyError: If *collection* has not been created via ``create_collection``.
+        """
+        state = self._get_collection(collection)
+        active_filters = filters or []
+        results = [
+            project_chunk(chunk, fields)
+            for _, chunk in sorted(state.chunks.items())
+            if not active_filters or matches(chunk.model_dump(), active_filters)
+        ]
+        return results[:limit] if limit is not None else results
+
     async def delete(self, collection: str, chunk_ids: list[str]) -> None:
         """Remove the chunks identified by ``chunk_ids``.
 
@@ -279,6 +305,16 @@ class FAISSVectorStore(FAISSMemoryVectorStore):
     ) -> list[Chunk]:
         await self._ensure_loaded()
         return await super().search(collection, query, query_embedding, top_k, filters, fields)
+
+    async def query(
+        self,
+        collection: str,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[Chunk]:
+        await self._ensure_loaded()
+        return await super().query(collection, filters, fields, limit)
 
     async def delete(self, collection: str, chunk_ids: list[str]) -> None:
         await self._ensure_loaded()

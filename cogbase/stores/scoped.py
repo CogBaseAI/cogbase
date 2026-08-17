@@ -47,6 +47,15 @@ class ScopedVectorStore(VectorStoreBase):
             self._c(collection), query, query_embedding, top_k, filters, fields
         )
 
+    async def query(
+        self,
+        collection: str,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[Chunk]:
+        return await self._inner.query(self._c(collection), filters, fields, limit)
+
     async def delete_collection(self, collection: str) -> None:
         await self._inner.delete_collection(self._c(collection))
 

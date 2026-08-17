@@ -237,6 +237,54 @@ class PGVectorStore(VectorStoreBase):
             rows = await conn.fetch(sql, *params)
         return [_from_row(row, include_embedding, include_metadata) for row in rows]
 
+    async def query(
+        self,
+        collection: str,
+        filters: list[Filter] | None = None,
+        fields: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[Chunk]:
+        """Return every matching chunk in ``chunk_id`` order, with no ANN search.
+
+        The same SELECT ``search`` issues, minus the ``ORDER BY embedding <=> $1`` —
+        which is all that separates a vector store from a table here, and the reason
+        this is cheap rather than a scan with a distance computation on top. ``limit``
+        is optional: omitted, there is no ``LIMIT`` clause and every match is returned.
+        """
+        tbl = self._c(collection)
+        pool = self._get_pool()
+
+        params: list[Any] = []
+        where_sql = ""
+        if filters:
+            where_clause, filter_params = _build_pg_where(filters, param_offset=len(params))
+            params.extend(filter_params)
+            where_sql = f"WHERE {where_clause}"
+
+        include_embedding = not fields or "embedding" in fields
+        include_metadata = not fields or "metadata" in fields
+        select_cols = "chunk_id, doc_id, text"
+        if include_embedding:
+            select_cols += ", embedding"
+        if include_metadata:
+            select_cols += ", metadata"
+
+        limit_sql = ""
+        if limit is not None:
+            params.append(limit)
+            limit_sql = f"LIMIT ${len(params)}"
+
+        sql = (
+            f"SELECT {select_cols} "
+            f'FROM "{tbl}" '
+            f"{where_sql} "
+            f"ORDER BY chunk_id "
+            f"{limit_sql}"
+        )
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [_from_row(row, include_embedding, include_metadata) for row in rows]
+
     async def delete(self, collection: str, chunk_ids: list[str]) -> None:
         """Remove the chunks identified by ``chunk_ids`` from ``collection``.
 

@@ -303,6 +303,121 @@ async def test_dimension_mismatch_raises():
 
 
 # ------------------------------------------------------------------
+# query — filter-only enumeration, no ANN search
+# ------------------------------------------------------------------
+
+async def test_query_without_create_collection_raises():
+    store = FAISSMemoryVectorStore()
+    with pytest.raises(KeyError, match=COLLECTION):
+        await store.query(COLLECTION)
+
+
+async def test_query_returns_every_chunk_with_no_filters():
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(dim=2))
+    await store.upsert(COLLECTION, [
+        make_chunk(chunk_id="c-2", embedding=[1.0, 0.0]),
+        make_chunk(chunk_id="c-1", embedding=[0.0, 1.0]),
+        make_chunk(chunk_id="c-3", embedding=[1.0, 1.0]),
+    ])
+
+    assert [c.chunk_id for c in await store.query(COLLECTION)] == ["c-1", "c-2", "c-3"]
+
+
+async def test_query_returns_the_whole_matching_set_not_a_top_k():
+    """The reason this exists next to ``search``. A caller enumerating a collection
+    through ``search`` has to guess a top_k above the largest match set, and gets
+    silent distance-ordered truncation when the guess is wrong."""
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(dim=2))
+    await store.upsert(COLLECTION, [
+        make_chunk(chunk_id=f"c-{i:02d}", embedding=[1.0, float(i)]) for i in range(50)
+    ])
+
+    assert len(await store.query(COLLECTION)) == 50
+    assert len(await store.search(COLLECTION, "q", [1.0, 0.0], top_k=10)) == 10
+
+
+async def test_query_applies_filters():
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(dim=2))
+    await store.upsert(COLLECTION, [
+        make_chunk(doc_id="doc-a", chunk_id="a-1", embedding=[1.0, 0.0]),
+        make_chunk(doc_id="doc-a", chunk_id="a-2", embedding=[0.0, 1.0]),
+        make_chunk(doc_id="doc-b", chunk_id="b-1", embedding=[1.0, 1.0]),
+    ])
+
+    got = await store.query(COLLECTION, [Col("doc_id") == "doc-a"])
+    assert [c.chunk_id for c in got] == ["a-1", "a-2"]
+
+
+async def test_query_filters_on_metadata_sub_keys():
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(dim=2))
+    await store.upsert(COLLECTION, [
+        make_chunk(chunk_id="c-1", embedding=[1.0, 0.0], metadata={"section": "definitions"}),
+        make_chunk(chunk_id="c-2", embedding=[0.0, 1.0], metadata={"section": "scope"}),
+    ])
+
+    got = await store.query(COLLECTION, [Col("metadata.section") == "definitions"])
+    assert [c.chunk_id for c in got] == ["c-1"]
+
+
+async def test_query_limit_truncates_in_id_order():
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(dim=2))
+    await store.upsert(COLLECTION, [
+        make_chunk(chunk_id=f"c-{i}", embedding=[1.0, float(i)]) for i in range(5)
+    ])
+
+    assert [c.chunk_id for c in await store.query(COLLECTION, limit=2)] == ["c-0", "c-1"]
+
+
+async def test_query_projects_fields():
+    """The default returns embeddings, matching ``search``; a full scan is exactly
+    where a caller wants to drop them."""
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(dim=2))
+    await store.upsert(COLLECTION, [make_chunk(chunk_id="c-1", embedding=[1.0, 0.0])])
+
+    assert (await store.query(COLLECTION))[0].embedding == [1.0, 0.0]
+    projected = await store.query(COLLECTION, fields=["chunk_id", "doc_id", "text"])
+    assert projected[0].embedding is None
+
+
+async def test_query_on_an_empty_collection_returns_empty():
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(dim=2))
+
+    assert await store.query(COLLECTION) == []
+
+
+async def test_query_sees_deletes():
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(dim=2))
+    await store.upsert(COLLECTION, [
+        make_chunk(chunk_id="c-1", embedding=[1.0, 0.0]),
+        make_chunk(chunk_id="c-2", embedding=[0.0, 1.0]),
+    ])
+
+    await store.delete(COLLECTION, ["c-1"])
+
+    assert [c.chunk_id for c in await store.query(COLLECTION)] == ["c-2"]
+
+
+async def test_file_backed_query_loads_first(tmp_path):
+    """Every FAISSVectorStore method loads lazily before touching state; a query that
+    forgot to would report a persisted collection as empty."""
+    store = FAISSVectorStore(path=tmp_path)
+    await store.create_collection(make_schema(dim=2))
+    await store.upsert(COLLECTION, [make_chunk(chunk_id="c-1", embedding=[1.0, 0.0])])
+    await store.save()
+
+    reopened = FAISSVectorStore(path=tmp_path)
+    assert [c.chunk_id for c in await reopened.query(COLLECTION)] == ["c-1"]
+
+
+# ------------------------------------------------------------------
 # Multiple collections
 # ------------------------------------------------------------------
 
@@ -763,3 +878,10 @@ async def test_non_core_chunk_fields_none_roundtrip():
     store = FAISSMemoryVectorStore()
     await store.create_collection(make_schema(COLLECTION, dim=2))
     await assert_non_core_fields_none_roundtrip(store, COLLECTION, dim=2)
+
+
+async def test_query_enumerates():
+    from tests.stores.vector_store_contract import assert_query_enumerates
+    store = FAISSMemoryVectorStore()
+    await store.create_collection(make_schema(COLLECTION, dim=2))
+    await assert_query_enumerates(store, COLLECTION, dim=2)

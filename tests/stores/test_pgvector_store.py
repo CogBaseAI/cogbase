@@ -524,3 +524,21 @@ async def test_non_core_chunk_fields_none_roundtrip(store):
     from tests.stores.vector_store_contract import assert_non_core_fields_none_roundtrip
     await assert_non_core_fields_none_roundtrip(store, COLLECTION, dim=DIM)
 
+
+
+@pytest.mark.asyncio
+async def test_query_enumerates(store):
+    from tests.stores.vector_store_contract import assert_query_enumerates
+    await assert_query_enumerates(store, COLLECTION, dim=DIM)
+
+
+@pytest.mark.asyncio
+async def test_query_needs_no_query_vector(store):
+    """The whole difference from ``search``: no ORDER BY embedding, so no vector and
+    no top_k to guess. On pgvector that is literally the same SELECT minus one clause."""
+    a = make_chunk(doc_id="doc-1", embedding=[1.0, 0.0, 0.0, 0.0])
+    b = make_chunk(doc_id="doc-1", embedding=[0.0, 1.0, 0.0, 0.0])
+    await store.upsert(COLLECTION, [a, b])
+
+    results = await store.query(COLLECTION, [Col("doc_id") == "doc-1"])
+    assert {c.chunk_id for c in results} == {a.chunk_id, b.chunk_id}
