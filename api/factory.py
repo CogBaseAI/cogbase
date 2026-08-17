@@ -225,6 +225,7 @@ async def build_app(
                 extraction_schema=extraction_schema,
                 config=ext_cfg,
                 record_schema=record_schema,
+                fields=step.fields,
                 app_id=app_id,
             )
             extractors_by_col[sc_cfg.name] = extractor

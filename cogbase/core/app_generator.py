@@ -630,16 +630,31 @@ def _strip_yaml_fences(text: str) -> str:
     return text
 
 
-def _make_record_schema(extraction_schema: dict, id_field: str | None = None) -> dict:
+def _make_record_schema(
+    extraction_schema: dict,
+    id_field: str | None = None,
+    overlay_fields: list[str] | None = None,
+) -> dict:
     """Add required doc_id (and optional id_field) to produce the record schema.
 
     Mirrors the field injection done by ``LLMExtractor`` at extraction time:
     RecordMode.ONE collections get ``doc_id``; RecordMode.MANY collections get
-    ``doc_id`` + ``id_field``.
+    ``doc_id`` + ``id_field``; both get any names the step's ``fields:`` overlay
+    sets. The overlay names have to be here or ``LLMExtractor`` rejects the config
+    it was just handed — a field the collection does not declare is dropped on
+    save, so declaring it is what makes the overlay do anything at all.
+
+    Overlay fields are added as optional: a template may legitimately render to
+    null for a document whose metadata omits the key.
     """
     record = copy.deepcopy(extraction_schema)
     props = record.setdefault("properties", {})
     required = record.setdefault("required", [])
+    for name in overlay_fields or []:
+        props.setdefault(name, {
+            "type": ["string", "null"],
+            "description": "set by the pipeline step's fields: overlay",
+        })
     if id_field:
         props[id_field] = {"type": "string", "description": "record identifier"}
         if id_field not in required:
@@ -667,10 +682,11 @@ def _inject_pipeline_record_schemas(config_dict: dict) -> None:
 
     Pipeline extract-structured targets store records, not raw extraction objects,
     so their collection schema is extraction_schema + injected doc_id (+ id_field
-    for record_mode=many). primary_fields is derived to match: ``[doc_id]`` for
-    RecordMode.ONE, ``[doc_id, id_field]`` for RecordMode.MANY.
+    for record_mode=many, + any names the step's ``fields:`` overlay sets).
+    primary_fields is derived to match: ``[doc_id]`` for RecordMode.ONE,
+    ``[doc_id, id_field]`` for RecordMode.MANY.
     """
-    ext_info: dict[str, tuple[dict, str | None]] = {}
+    ext_info: dict[str, tuple[dict, str | None, list[str]]] = {}
     for pipeline in config_dict.get("pipelines", []):
         for step in pipeline.get("steps", []):
             if step.get("tool") != "extract-structured":
@@ -696,25 +712,32 @@ def _inject_pipeline_record_schemas(config_dict: dict) -> None:
             record_id_field = (
                 extractor.get("id_field") if extractor.get("record_mode") == "many" else None
             )
-            if record_id_field and record_id_field in ext_schema.get("properties", {}):
-                # LLM mistakenly included the id_field in the extraction schema even though
-                # it is injected automatically via id_template. Strip it here so the extractor
-                # doesn't ask the LLM to produce it, and write the cleaned schema back so the
-                # stored config is consistent.
-                ext_schema["properties"].pop(record_id_field)
-                if record_id_field in ext_schema.get("required", []):
-                    ext_schema["required"].remove(record_id_field)
-                extractor["extraction_schema"] = json.dumps(ext_schema, separators=(",", ":"))
+            overlay_fields = list(step.get("fields") or {})
+            # Names the pipeline sets itself, which the extraction schema must not
+            # also ask the model for. Stripped rather than rejected for the same
+            # reason in both cases: the config is being generated, and asking for a
+            # value that is then overwritten is a waste, not an error the operator
+            # can act on. The stored config is rewritten so it stays consistent.
+            for injected in [f for f in [record_id_field, *overlay_fields] if f]:
+                if injected in ext_schema.get("properties", {}):
+                    ext_schema["properties"].pop(injected)
+                    if injected in ext_schema.get("required", []):
+                        ext_schema["required"].remove(injected)
+                    extractor["extraction_schema"] = json.dumps(
+                        ext_schema, separators=(",", ":")
+                    )
 
-            ext_info[collection] = (ext_schema, record_id_field)
+            ext_info[collection] = (ext_schema, record_id_field, overlay_fields)
 
     for sc in config_dict.get("structured_collections", []):
         name = sc.get("name")
         if name not in ext_info:
             continue
-        ext_schema, record_id_field = ext_info[name]
+        ext_schema, record_id_field, overlay_fields = ext_info[name]
         sc["schema"] = json.dumps(
-            _make_record_schema(ext_schema, id_field=record_id_field),
+            _make_record_schema(
+                ext_schema, id_field=record_id_field, overlay_fields=overlay_fields
+            ),
             separators=(",", ":"),
         )
         sc["primary_fields"] = ["doc_id"] + ([record_id_field] if record_id_field else [])

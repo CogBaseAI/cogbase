@@ -15,6 +15,7 @@ from cogbase.llms import LLMBase
 from cogbase.llms.summarization import estimate_tokens
 from cogbase.pipeline.chunking.langchain import split_text_by_tokens
 from cogbase.pipeline.extraction.base import ExtractorBase
+from cogbase.templating import jinja_available, render_defined
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,12 @@ class LLMExtractor(ExtractorBase):
                            injected identity fields.
         record_schema:     JSON Schema dict for the final stored record (includes injected
                            fields such as ``doc_id`` and optional item id).
+        fields:            Deterministic field overlay — ``{name: jinja2 template}``,
+                           rendered against the source document (exposed as ``doc``)
+                           and merged onto every record after extraction. For values
+                           that are a property of the document rather than a finding
+                           in its text, so they come from the ingest rather than from
+                           the model.
         max_retries:       Retries on unparseable JSON.
         app_id:            Stable internal id of the owning application, included
                            in log lines for attribution.
@@ -119,6 +126,7 @@ class LLMExtractor(ExtractorBase):
         *,
         config: ExtractorConfig,
         record_schema: dict,
+        fields: dict[str, str] | None = None,
         max_retries: int = 2,
         app_id: str = "",
     ) -> None:
@@ -126,12 +134,21 @@ class LLMExtractor(ExtractorBase):
         self._llm = llm
         self._extraction_schema = extraction_schema
         self._record_schema = record_schema
+        self._fields = dict(fields or {})
+
+        # Fail here rather than on the first document: an overlay is written into a
+        # config, so a missing renderer is a deployment problem the app build should
+        # report, not something that surfaces mid-ingest.
+        if self._fields and not jinja_available():
+            raise ValueError(
+                "extract-structured 'fields:' requires jinja2: pip install 'cogbase[api]'"
+            )
 
         self._validate_schema_contract(config)
 
         self._record_mode = config.record_mode
         self._response_field = config.response_field
-        self._injected_fields = self._build_injected_fields_from_config(config)
+        self._injected_fields = self._build_injected_fields_from_config(config, self._fields)
         self._system_prompt = self._build_system_prompt_from_config(config)
 
     def _build_system_prompt_from_config(self, config: ExtractorConfig) -> str:
@@ -171,8 +188,35 @@ class LLMExtractor(ExtractorBase):
                 f"record schema must include '{config.id_field}' (id_field) for record_mode=many"
             )
 
+        # The overlay gets the same contract doc_id and the id field already have,
+        # and for the same reason: both ways of getting it wrong are silent. A name
+        # the extraction schema also declares makes the model spend tokens producing
+        # a value that is then overwritten, with nothing to say which one won; a name
+        # the record schema does not declare is dropped by ``save``, which discards
+        # fields the collection has no column for.
+        injected = {"doc_id"} | (
+            {config.id_field} if config.record_mode == RecordMode.MANY and config.id_field
+            else set()
+        )
+        for name in self._fields:
+            if name in injected:
+                raise ValueError(
+                    f"fields must not include '{name}' (it is already injected by the pipeline)"
+                )
+            if name in extraction_fields:
+                raise ValueError(
+                    f"extraction_schema must not include '{name}' (it is set by the step's fields:)"
+                )
+            if name not in record_fields:
+                raise ValueError(
+                    f"record schema must include '{name}' (it is set by the step's fields:, "
+                    "and a field the collection does not declare is dropped on save)"
+                )
+
     @staticmethod
-    def _build_injected_fields_from_config(config: ExtractorConfig) -> dict[str, Callable]:
+    def _build_injected_fields_from_config(
+        config: ExtractorConfig, fields: dict[str, str] | None = None
+    ) -> dict[str, Callable]:
         injected_fields: dict[str, Callable] = {
             "doc_id": lambda doc, item, index: doc.doc_id,
         }
@@ -186,6 +230,15 @@ class LLMExtractor(ExtractorBase):
                 injected_fields[config.id_field] = (
                     lambda doc, item, index: f"{doc.doc_id}__{index:04d}"
                 )
+        # Only ``doc`` is in scope: ``item`` would let an overlay depend on what the
+        # model returned, which is the coupling it exists to remove, and ``index`` is
+        # already spoken for by id_template.
+        for name, template in (fields or {}).items():
+            injected_fields[name] = (
+                lambda doc, item, index, t=template, n=name: render_defined(
+                    t, {"doc": doc}, what=f"fields.{n}"
+                )
+            )
         return injected_fields
 
     def _window_tokens(self) -> int:

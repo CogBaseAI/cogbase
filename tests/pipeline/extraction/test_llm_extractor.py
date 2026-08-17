@@ -988,3 +988,213 @@ def test_split_text_by_tokens_overlaps_consecutive_windows() -> None:
     # With paragraph-sized overlap, at least one paragraph is shared by two windows.
     shared = [p for p in paras if sum(p in w for w in windows) >= 2]
     assert shared
+
+
+# ---------------------------------------------------------------------------
+# fields: — the deterministic overlay
+#
+# Values that are a property of the *document* rather than a finding in its text
+# (provenance known at ingest: jurisdiction, contract id, source url) reach the
+# record from the pipeline instead of from the model. The failure this prevents is
+# silent: a scoping key the model retyped one character wrong matches nothing
+# downstream and reports an empty result rather than an error.
+# ---------------------------------------------------------------------------
+
+_OVERLAY_EXTRACTION = {"type": "object", "properties": {"text": {"type": "string"}}}
+
+
+def _overlay_record_schema(*names: str) -> dict:
+    props = {"text": {"type": "string"}, "doc_id": {"type": "string"}}
+    props.update({name: {"type": ["string", "null"]} for name in names})
+    return {"type": "object", "properties": props}
+
+
+def _overlay_config(**overrides) -> ExtractorConfig:
+    return ExtractorConfig(
+        extraction_schema=json.dumps(_OVERLAY_EXTRACTION),
+        prompt="Extract.",
+        **overrides,
+    )
+
+
+def _overlay_list_config() -> ExtractorConfig:
+    return _overlay_config(
+        record_mode="many",
+        response_field="items",
+        id_field="item_id",
+        id_template="{doc_id}__{index:04d}",
+    )
+
+
+_OVERLAY_DOC = Document(
+    doc_id="doc-1",
+    text="body text",
+    metadata={"framework": "21 CFR", "subpart": "F"},
+)
+
+
+@pytest.mark.asyncio
+async def test_overlay_stamps_document_metadata_onto_a_single_record():
+    extractor = LLMExtractor(
+        _make_llm(json.dumps({"text": "an obligation"})),
+        extraction_schema=_OVERLAY_EXTRACTION,
+        config=_overlay_config(),
+        record_schema=_overlay_record_schema("framework", "subpart"),
+        fields={"framework": "{{ doc.metadata.framework }}", "subpart": "{{ doc.metadata.subpart }}"},
+    )
+
+    records = await extractor.extract(_OVERLAY_DOC)
+
+    assert records == [{
+        "text": "an obligation",
+        "doc_id": "doc-1",
+        "framework": "21 CFR",
+        "subpart": "F",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_overlay_stamps_every_record_in_list_mode():
+    payload = json.dumps({"items": [{"text": "first"}, {"text": "second"}]})
+    extractor = LLMExtractor(
+        _make_llm(payload),
+        extraction_schema=_OVERLAY_EXTRACTION,
+        config=_overlay_list_config(),
+        record_schema={
+            **_overlay_record_schema("subpart"),
+            "properties": {
+                **_overlay_record_schema("subpart")["properties"],
+                "item_id": {"type": "string"},
+            },
+        },
+        fields={"subpart": "{{ doc.metadata.subpart }}"},
+    )
+
+    records = await extractor.extract(_OVERLAY_DOC)
+
+    assert [r["subpart"] for r in records] == ["F", "F"]
+    # Applied after the merge, alongside the generated ids rather than instead of them.
+    assert [r["item_id"] for r in records] == ["doc-1__0000", "doc-1__0001"]
+
+
+@pytest.mark.asyncio
+async def test_overlay_can_read_the_doc_id_and_render_literal_text():
+    extractor = LLMExtractor(
+        _make_llm(json.dumps({"text": "an obligation"})),
+        extraction_schema=_OVERLAY_EXTRACTION,
+        config=_overlay_config(),
+        record_schema=_overlay_record_schema("source"),
+        fields={"source": "ingest:{{ doc.doc_id }}"},
+    )
+
+    records = await extractor.extract(_OVERLAY_DOC)
+
+    assert records[0]["source"] == "ingest:doc-1"
+
+
+@pytest.mark.asyncio
+async def test_overlay_keeps_the_native_type_of_a_metadata_value():
+    """NativeEnvironment: a pure {{ expr }} yields the value, not its repr. The
+    collection's column type comes from the record schema, so a number that
+    arrived as a number has to stay one."""
+    extractor = LLMExtractor(
+        _make_llm(json.dumps({"text": "an obligation"})),
+        extraction_schema=_OVERLAY_EXTRACTION,
+        config=_overlay_config(),
+        record_schema=_overlay_record_schema("page_count"),
+        fields={"page_count": "{{ doc.metadata.page_count }}"},
+    )
+
+    records = await extractor.extract(
+        Document(doc_id="doc-1", text="body", metadata={"page_count": 12})
+    )
+
+    assert records[0]["page_count"] == 12
+
+
+@pytest.mark.asyncio
+async def test_overlay_raises_on_a_metadata_key_the_document_lacks():
+    """StrictUndefined. An empty string written into a field that is matched by
+    exact equality downstream is the silent failure the overlay exists to remove."""
+    extractor = LLMExtractor(
+        _make_llm(json.dumps({"text": "an obligation"})),
+        extraction_schema=_OVERLAY_EXTRACTION,
+        config=_overlay_config(),
+        record_schema=_overlay_record_schema("subpart"),
+        fields={"subpart": "{{ doc.metadata.subpart }}"},
+    )
+
+    with pytest.raises(ValueError, match="fields.subpart"):
+        await extractor.extract(Document(doc_id="doc-1", text="body", metadata={}))
+
+
+@pytest.mark.asyncio
+async def test_overlay_default_filter_covers_an_optional_key():
+    extractor = LLMExtractor(
+        _make_llm(json.dumps({"text": "an obligation"})),
+        extraction_schema=_OVERLAY_EXTRACTION,
+        config=_overlay_config(),
+        record_schema=_overlay_record_schema("subpart"),
+        fields={"subpart": "{{ doc.metadata.get('subpart') | default(None, true) }}"},
+    )
+
+    records = await extractor.extract(Document(doc_id="doc-1", text="body", metadata={}))
+
+    assert records[0]["subpart"] is None
+
+
+def test_overlay_rejects_a_name_the_extraction_schema_also_declares():
+    """Two sources for one value, and nothing to say which won."""
+    with pytest.raises(ValueError, match="set by the step's fields:"):
+        LLMExtractor(
+            _make_llm("{}"),
+            extraction_schema={
+                "type": "object",
+                "properties": {"text": {"type": "string"}, "subpart": {"type": "string"}},
+            },
+            config=_overlay_config(),
+            record_schema=_overlay_record_schema("subpart"),
+            fields={"subpart": "{{ doc.metadata.subpart }}"},
+        )
+
+
+def test_overlay_rejects_a_name_the_record_schema_does_not_declare():
+    """save() drops fields the collection has no column for, so this would stamp
+    a value that silently never lands."""
+    with pytest.raises(ValueError, match="record schema must include 'subpart'"):
+        LLMExtractor(
+            _make_llm("{}"),
+            extraction_schema=_OVERLAY_EXTRACTION,
+            config=_overlay_config(),
+            record_schema=_overlay_record_schema(),
+            fields={"subpart": "{{ doc.metadata.subpart }}"},
+        )
+
+
+@pytest.mark.parametrize("name", ["doc_id", "item_id"])
+def test_overlay_rejects_a_name_the_pipeline_already_injects(name: str):
+    with pytest.raises(ValueError, match="already injected"):
+        LLMExtractor(
+            _make_llm("{}"),
+            extraction_schema=_OVERLAY_EXTRACTION,
+            config=_overlay_list_config(),
+            record_schema={
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "doc_id": {"type": "string"},
+                    "item_id": {"type": "string"},
+                },
+            },
+            fields={name: "{{ doc.doc_id }}"},
+        )
+
+
+def test_no_overlay_leaves_the_injected_fields_untouched():
+    extractor = LLMExtractor(
+        _make_llm("{}"),
+        extraction_schema=_OVERLAY_EXTRACTION,
+        config=_overlay_config(),
+        record_schema=_overlay_record_schema(),
+    )
+    assert list(extractor._injected_fields) == ["doc_id"]

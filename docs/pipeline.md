@@ -61,6 +61,37 @@ Both modes auto-derive the `CollectionSchema` from the Pydantic model's field ty
 
 `ExtractorBase` wraps every extraction attempt in exponential-backoff retry logic (configurable via `max_retries`). A return value of `None` from `_extract_once` signals a retryable failure; an empty list means no records were found and is not retried.
 
+### Deterministic fields (`fields:`)
+
+Some values on a record are a property of the *document* rather than something to find in its text — where it came from, which jurisdiction or contract it belongs to, what version it was captured at. Those are known exactly at ingest, so asking a model to copy them out of the text is both a wasted call and a silent risk: the value is usually matched by exact equality downstream, where one retyped character produces an empty result rather than an error.
+
+An `extract-structured` step can stamp them instead:
+
+```yaml
+- tool: extract-structured
+  collection: requirements
+  fields:
+    framework: "{{ doc.metadata.framework }}"
+    subpart:   "{{ doc.metadata.subpart }}"
+    captured:  "ingest:{{ doc.doc_id }}"
+  extractor:
+    type: llm
+    extraction_schema: requirement_extraction_schema.json
+    prompt: requirement_prompt.txt
+```
+
+Values are Jinja2 templates rendered against the source document, exposed as `doc` — so `doc.doc_id` and `doc.metadata.<key>`. The result is merged onto every record after extraction (after window merging, so a long document behaves the same as a short one), overriding a same-named key. This is the pipeline counterpart of the workflow `structured-save` step's `fields:`.
+
+Three rules are enforced when the extractor is built, because each of them fails silently otherwise:
+
+- a name in `fields:` must **not** appear in `extraction_schema` — otherwise the model is asked for a value that is then overwritten, with nothing to say which won;
+- a name in `fields:` must appear in the collection's **record schema** — `save` drops fields the collection has no column for, so the stamped value would never land;
+- a name in `fields:` must not be `doc_id` or the configured `id_field` — those already have an injector.
+
+A template that resolves to nothing raises rather than writing an empty value. Use an explicit default where a key is genuinely optional: `{{ doc.metadata.get('subpart') | default(None, true) }}`.
+
+`fields:` requires jinja2, which arrives with the `[api]` extra. A step that uses it without jinja2 installed fails when the app is built, not partway through an ingest.
+
 ## Usage
 
 ```python

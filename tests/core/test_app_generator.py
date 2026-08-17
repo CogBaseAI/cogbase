@@ -1581,3 +1581,66 @@ class TestValidateWorkflowCrossPipelineDocIdFilters:
         }
         assert _validate_workflow_cross_pipeline_doc_id_filters(cfg) == []
 
+
+
+class TestInjectPipelineRecordSchemasWithFieldsOverlay:
+    """A generated config that uses the step's `fields:` overlay has to end up with
+    those names in the collection's record schema. Without them ``LLMExtractor``
+    rejects the config the generator just wrote, and even if it did not, ``save``
+    would drop the stamped values — the collection has no column for them."""
+
+    @staticmethod
+    def _config_with_fields(extraction_schema: dict, fields: dict) -> dict:
+        cfg = _make_config(extraction_schema)
+        cfg["pipelines"][0]["steps"][0]["fields"] = fields
+        return cfg
+
+    def test_overlay_names_reach_the_record_schema(self):
+        ext_schema = {"type": "object", "properties": {"text": {"type": "string"}}}
+        cfg = self._config_with_fields(ext_schema, {"framework": "{{ doc.metadata.framework }}"})
+
+        _inject_pipeline_record_schemas(cfg)
+
+        injected = json.loads(cfg["structured_collections"][0]["schema"])
+        assert "framework" in injected["properties"]
+        assert "text" in injected["properties"]
+        assert "doc_id" in injected["properties"]
+
+    def test_overlay_names_are_optional(self):
+        """A template may legitimately render null for a document whose metadata
+        omits the key, so requiring them would reject valid records."""
+        ext_schema = {"type": "object", "properties": {"text": {"type": "string"}}}
+        cfg = self._config_with_fields(ext_schema, {"framework": "{{ doc.metadata.framework }}"})
+
+        _inject_pipeline_record_schemas(cfg)
+
+        injected = json.loads(cfg["structured_collections"][0]["schema"])
+        assert "framework" not in injected.get("required", [])
+
+    def test_an_overlay_name_is_stripped_from_the_extraction_schema(self):
+        """Same treatment id_field already gets: the model must not be asked for a
+        value the pipeline overwrites."""
+        ext_schema = {
+            "type": "object",
+            "properties": {"text": {"type": "string"}, "framework": {"type": "string"}},
+            "required": ["framework"],
+        }
+        cfg = self._config_with_fields(ext_schema, {"framework": "{{ doc.metadata.framework }}"})
+
+        _inject_pipeline_record_schemas(cfg)
+
+        cleaned = json.loads(cfg["pipelines"][0]["steps"][0]["extractor"]["extraction_schema"])
+        assert "framework" not in cleaned["properties"]
+        assert "framework" not in cleaned["required"]
+        # ...and it is still on the record, because the overlay sets it.
+        assert "framework" in json.loads(cfg["structured_collections"][0]["schema"])["properties"]
+
+    def test_no_overlay_is_unchanged(self):
+        ext_schema = {"type": "object", "properties": {"text": {"type": "string"}}}
+        cfg = _make_config(ext_schema)
+
+        _inject_pipeline_record_schemas(cfg)
+
+        assert json.loads(cfg["structured_collections"][0]["schema"]) == _make_record_schema(
+            ext_schema
+        )
