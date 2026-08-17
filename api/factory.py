@@ -12,6 +12,7 @@ from cogbase.config.config import (
     ExtractStructuredStepConfig,
     ExtractorConfig,
     ChunkEmbedUpsertStepConfig,
+    RecordEmbedUpsertStepConfig,
 )
 from cogbase.config.stores import StructuredStoreConfig
 from cogbase.embeddings import build_embedding as _build_embedder
@@ -268,6 +269,11 @@ async def build_app(
             elif isinstance(s, DocumentEmbedUpsertStepConfig):
                 ps.llm = llm
                 ps.doc_prompt = s.doc_prompt or DEFAULT_DOC_PROMPT
+            elif isinstance(s, RecordEmbedUpsertStepConfig):
+                ps.source_collection = s.source_collection
+                ps.id_field = s.id_field
+                ps.text_template = s.text_template
+                ps.metadata_fields = list(s.metadata_fields)
             pipeline_steps.append(ps)
         pipelines.append(IngestionPipeline(
             name=p_cfg.name or config.name,

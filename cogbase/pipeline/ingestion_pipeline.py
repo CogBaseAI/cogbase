@@ -1,6 +1,6 @@
 """IngestionPipeline — ordered steps over multiple vector and structured collections.
 
-Supports three step types:
+Supports four step types:
 
 - ``chunk-embed-upsert``    — chunk document text, embed, upsert to a vector collection
 - ``extract-structured``    — LLM extraction → save to a structured collection
@@ -10,6 +10,10 @@ Supports three step types:
                               llm context window are produced map-reduce; with no ``llm``,
                               a document that overflows the embedding context window raises
                               (it cannot be reduced to a single vector without one)
+- ``record-embed-upsert``   — one vector per *extracted record*, keyed by the record's own
+                              id, for retrieval that must land on an object already
+                              carrying its identifiers rather than on a passage that then
+                              has to be traced back to one
 
 Steps run in declaration order.  For config-driven construction see ``api/factory.py``.
 """
@@ -20,7 +24,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Any, Sequence
 
 from cogbase.core.models import Chunk, Document
 from cogbase.embeddings import EmbeddingBase
@@ -31,8 +35,47 @@ from cogbase.pipeline.extraction.base import ExtractorBase
 from cogbase.pipeline.chunking.base import ChunkerBase
 from cogbase.stores import CollectionSchema, StructuredStoreBase, VectorCollectionSchema, VectorStoreBase
 from cogbase.stores.filters import Col
+from cogbase.templating import jinja_available, render_defined
 
 logger = logging.getLogger(__name__)
+
+
+def _record_to_chunk(record: dict[str, Any], step: "PipelineStep") -> Chunk:
+    """Turn one structured record into the vector record that stands for it.
+
+    Every failure here raises rather than skipping the record. A requirement, a
+    clause, or a policy statement that never got a vector is one no search can ever
+    return — and nothing downstream can tell that absence from "there was no good
+    match", which is the whole reason retrieval is being pointed at records instead
+    of prose.
+    """
+    if not jinja_available():
+        raise ValueError(
+            "record-embed-upsert requires jinja2: pip install 'cogbase[api]'"
+        )
+    chunk_id = record.get(step.id_field or "")
+    doc_id = record.get("doc_id")
+    if not chunk_id or not doc_id:
+        raise ValueError(
+            f"record-embed-upsert: record is missing {step.id_field!r} or 'doc_id' "
+            f"(got id={chunk_id!r}, doc_id={doc_id!r}); both are required to key and "
+            "scope the vector"
+        )
+    text = render_defined(
+        step.text_template or "", {"record": record}, what="record-embed-upsert text_template"
+    )
+    text = str(text).strip()
+    if not text:
+        raise ValueError(
+            f"record-embed-upsert: record {chunk_id!r} rendered to empty text through "
+            f"{step.text_template!r}; it would be unretrievable"
+        )
+    return Chunk(
+        chunk_id=str(chunk_id),
+        doc_id=str(doc_id),
+        text=text,
+        metadata={k: record[k] for k in step.metadata_fields if k in record},
+    )
 
 
 @dataclass
@@ -125,14 +168,19 @@ class PipelineStep:
     """One step in the ingestion pipeline.
 
     Args:
-        tool:       One of ``"chunk-embed-upsert"``, ``"extract-structured"``,
-                    or ``"document-embed-upsert"``.
-        collection: Name of the target collection for this step.
-        chunker:    Chunker for ``chunk-embed-upsert`` steps.
-        extractor:  Extractor for ``extract-structured`` steps.
-        llm:        Optional LLM for ``document-embed-upsert`` steps.  When
-                    ``None`` the raw document text is embedded directly.
-        doc_prompt: System prompt for the document summarization call.
+        tool:              One of ``"chunk-embed-upsert"``, ``"extract-structured"``,
+                           ``"document-embed-upsert"``, or ``"record-embed-upsert"``.
+        collection:        Name of the target collection for this step.
+        chunker:           Chunker for ``chunk-embed-upsert`` steps.
+        extractor:         Extractor for ``extract-structured`` steps.
+        llm:               Optional LLM for ``document-embed-upsert`` steps.  When
+                           ``None`` the raw document text is embedded directly.
+        doc_prompt:        System prompt for the document summarization call.
+        source_collection: Structured collection a ``record-embed-upsert`` step reads.
+        id_field:          Record field a ``record-embed-upsert`` step uses as chunk_id.
+        text_template:     Jinja2 template producing the text to embed, rendered with
+                           the record exposed as ``record``.
+        metadata_fields:   Record fields copied onto each embedded record's metadata.
     """
 
     tool: str
@@ -141,6 +189,10 @@ class PipelineStep:
     extractor: ExtractorBase | None = None
     llm: LLMBase | None = None
     doc_prompt: str = "Summarize this document in a few sentences."
+    source_collection: str | None = None
+    id_field: str | None = None
+    text_template: str | None = None
+    metadata_fields: list[str] = field(default_factory=list)
 
 
 class IngestionPipeline:
@@ -210,6 +262,8 @@ class IngestionPipeline:
             return records, 0, failed
         if step.tool == "document-embed-upsert":
             return 0, await self._run_document_embed_upsert(doc, step), False
+        if step.tool == "record-embed-upsert":
+            return 0, await self._run_record_embed_upsert(doc, step), False
         logger.warning(
             "ingestion_pipeline.ingest.unknown_tool app_id=%s name=%s tool=%s",
             self.app_id, self.name, step.tool,
@@ -235,7 +289,9 @@ class IngestionPipeline:
         vector_names: set[str] = set()
         structured_names: set[str] = set()
         for step in self._steps:
-            if step.tool in ("chunk-embed-upsert", "document-embed-upsert"):
+            if step.tool in (
+                "chunk-embed-upsert", "document-embed-upsert", "record-embed-upsert"
+            ):
                 vector_names.add(step.collection)
             elif step.tool == "extract-structured":
                 structured_names.add(step.collection)
@@ -409,6 +465,126 @@ class IngestionPipeline:
             self.app_id, self.name, doc.doc_id, step.collection,
         )
         return 1
+
+    async def _run_record_embed_upsert(self, doc: Document, step: PipelineStep) -> int:
+        """Embed this document's records from ``step.source_collection``.
+
+        The records are read back out of the structured store rather than passed
+        along from the ``extract-structured`` step that wrote them. That keeps the
+        step independent of what produced the records, which is what lets
+        :meth:`embed_records` replay it over records that were seeded from a file
+        instead of extracted from a document — the same code, so the two paths
+        cannot drift into embedding different text.
+        """
+        sc = self._structured_by_name.get(step.source_collection or "")
+        if sc is None:
+            logger.warning(
+                "ingestion_pipeline.record_embed_upsert.unknown_source app_id=%s name=%s source=%s",
+                self.app_id, self.name, step.source_collection,
+            )
+            return 0
+
+        records = await sc.store.query(sc.schema.name, [Col("doc_id") == doc.doc_id])
+        logger.info(
+            "ingestion_pipeline.record_embed_upsert.loaded app_id=%s name=%s doc_id=%s "
+            "source=%s records=%d",
+            self.app_id, self.name, doc.doc_id, sc.schema.name, len(records),
+        )
+        return await self._embed_records(step, records)
+
+    async def embed_records(
+        self, source_collection: str, records: Sequence[dict[str, Any]]
+    ) -> int:
+        """Run this pipeline's ``record-embed-upsert`` steps over *records* directly.
+
+        For records that reached a collection without passing through this pipeline
+        — reference data seeded into a fresh account, most obviously, which is
+        written straight to the structured store precisely so that no LLM
+        re-extracts it per tenant. Those records still have to be embedded, or every
+        vector search over them silently returns nothing.
+
+        Embeddings cannot be shipped alongside such records: their dimensionality
+        and their meaning both belong to the deployment's configured embedder, so
+        they have to be produced here, against this app's. The text that is embedded
+        is a deterministic template over the record, so every deployment embeds the
+        same string.
+
+        Returns the number of vectors written, ``0`` when no step reads
+        *source_collection* — the caller knows whether its pack declared one and is
+        the only one that can tell a legitimate zero from a missing step.
+
+        Each write is **read back** before the count is returned, which the per-document
+        ingest path does not do. Reference data is seeded once, into an account nobody
+        looks at again, and is then the silent precondition of every run over it; an
+        upsert that returned without raising is not the same fact as a collection that
+        can be searched. This is the vector counterpart of the read-back
+        ``seed_corpus`` already does on the structured side.
+
+        Raises:
+            NotImplementedError: if the vector backend cannot enumerate by filter
+                (see :meth:`VectorStoreBase.query`). Deliberately not degraded to a
+                warning: on such a backend a seeded corpus cannot be verified at all,
+                and finding that out at provisioning is much better than finding it
+                out from a run that searched an empty index and reported nothing.
+        """
+        total = 0
+        for step in self._steps:
+            if step.tool != "record-embed-upsert" or step.source_collection != source_collection:
+                continue
+            total += await self._embed_records(step, records)
+            await self._verify_embedded(step, records)
+        return total
+
+    async def _verify_embedded(self, step: PipelineStep, records: Sequence[dict[str, Any]]) -> None:
+        """Confirm every record in *records* is now readable from the vector store."""
+        vc = self._vector_by_name.get(step.collection)
+        if vc is None or not records or step.id_field is None:
+            return
+        id_field = step.id_field
+        wanted = {str(r[id_field]) for r in records if r.get(id_field)}
+        # `fields` excludes the embedding: this reads the whole matching set, and the
+        # vectors are exactly the part of it nothing here looks at.
+        stored = await vc.store.query(vc.name, fields=["chunk_id", "doc_id", "text"])
+        missing = sorted(wanted - {c.chunk_id for c in stored})
+        if missing:
+            raise ValueError(
+                f"record-embed-upsert: {len(missing)} of {len(wanted)} records seeded "
+                f"into {step.source_collection!r} are not readable from "
+                f"{step.collection!r} after upsert (e.g. {missing[:3]}). A record with "
+                "no vector is one retrieval can never return, and nothing downstream "
+                "can tell that from 'no good match'."
+            )
+
+    async def _embed_records(
+        self, step: PipelineStep, records: Sequence[dict[str, Any]]
+    ) -> int:
+        vc = self._vector_by_name.get(step.collection)
+        if vc is None:
+            logger.warning(
+                "ingestion_pipeline.record_embed_upsert.unknown_collection app_id=%s name=%s collection=%s",
+                self.app_id, self.name, step.collection,
+            )
+            return 0
+        if not records:
+            return 0
+
+        chunks = [_record_to_chunk(record, step) for record in records]
+        embeddings = await vc.embedder.embed([chunk.text for chunk in chunks])
+        if len(embeddings) != len(chunks):
+            raise ValueError(
+                f"Embedder returned {len(embeddings)} embeddings for {len(chunks)} records."
+            )
+        embedded = [
+            chunk.model_copy(update={"embedding": emb})
+            for chunk, emb in zip(chunks, embeddings)
+        ]
+        await vc.store.upsert(vc.name, embedded)
+        logger.info(
+            "ingestion_pipeline.record_embed_upsert.upserted app_id=%s name=%s "
+            "source=%s collection=%s count=%d",
+            self.app_id, self.name, step.source_collection, step.collection, len(embedded),
+        )
+        return len(embedded)
 
     async def _get_document_text(
         self, doc: Document, vc: VectorCollection, step: PipelineStep

@@ -9,7 +9,7 @@ import pytest
 from pydantic import BaseModel
 
 from cogbase.core.app import CogBaseApp
-from cogbase.core.models import Document
+from cogbase.core.models import Chunk, Document
 from cogbase.core.query_runner import MemoryTiers, QueryRunner, RetrievalResources
 from cogbase.embeddings import EmbeddingBase
 from cogbase.llms.base import LLMBase
@@ -486,6 +486,245 @@ class TestThreeStepPipeline:
         rows_b = await struct_store_b.query("col_b")
         assert rows_a == []
         assert rows_b == []
+
+
+# ---------------------------------------------------------------------------
+# record-embed-upsert: one vector per extracted record
+# ---------------------------------------------------------------------------
+
+class TestRecordEmbedUpsert:
+    """The step exists so retrieval lands on an object that already carries its
+    identifiers. Every test here is about that: what the vector is keyed by, what it
+    carries, and the two paths records can arrive by staying identical."""
+
+    _VC_SCHEMA = VectorCollectionSchema(
+        name="tag_vectors", dimensions=4, description="One vector per extracted tag."
+    )
+
+    def _step(self, **overrides) -> PipelineStep:
+        kwargs = dict(
+            tool="record-embed-upsert",
+            collection="tag_vectors",
+            source_collection="tags",
+            id_field="tag_id",
+            text_template="{{ record.value }}",
+            metadata_fields=["value"],
+        )
+        kwargs.update(overrides)
+        return PipelineStep(**kwargs)
+
+    async def _pipeline(self, make_vector_store, make_structured_store, **step_overrides):
+        vector_store = make_vector_store()
+        struct_store = make_structured_store()
+        await vector_store.create_collection(self._VC_SCHEMA)
+        await struct_store.create_collection(StubExtractor().schema)
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[
+                PipelineStep(tool="extract-structured", collection="tags", extractor=StubExtractor()),
+                self._step(**step_overrides),
+            ],
+            vector_collections=[VectorCollection(
+                schema=self._VC_SCHEMA, store=vector_store, embedder=StubEmbedding(dim=4),
+            )],
+            structured_collections=[StructuredCollection(schema=StubExtractor().schema, store=struct_store)],
+        )
+        return pipeline, vector_store, struct_store
+
+    @pytest.mark.asyncio
+    async def test_the_vector_is_keyed_by_the_records_own_id(
+        self, make_vector_store, make_structured_store
+    ):
+        """The whole point of the step. A chunk_id that is the record's id is what
+        lets a search result be resolved back to the record without a second,
+        approximate hop through the prose it came from."""
+        pipeline, vector_store, _ = await self._pipeline(make_vector_store, make_structured_store)
+
+        await pipeline._ingest(Document(doc_id="d-001", text="alpha beta"))
+
+        chunks = await vector_store.search("tag_vectors", "", [0.1] * 4, top_k=10)
+        assert [c.chunk_id for c in chunks] == ["d-001-0"]
+        assert chunks[0].doc_id == "d-001"
+
+    @pytest.mark.asyncio
+    async def test_the_embedded_text_comes_from_the_template(
+        self, make_vector_store, make_structured_store
+    ):
+        pipeline, vector_store, _ = await self._pipeline(
+            make_vector_store, make_structured_store,
+            text_template="tag: {{ record.value }}",
+        )
+
+        await pipeline._ingest(Document(doc_id="d-001", text="alpha beta"))
+
+        chunks = await vector_store.search("tag_vectors", "", [0.1] * 4, top_k=10)
+        assert chunks[0].text == "tag: alpha beta"
+
+    @pytest.mark.asyncio
+    async def test_named_record_fields_ride_along_on_the_vector(
+        self, make_vector_store, make_structured_store
+    ):
+        """So a retrieved vector answers "which record, and what does it say" without
+        the caller going back to the structured store."""
+        pipeline, vector_store, _ = await self._pipeline(make_vector_store, make_structured_store)
+
+        await pipeline._ingest(Document(
+            doc_id="d-001", text="alpha beta", metadata={"doc_type": "memo"},
+        ))
+
+        chunks = await vector_store.search("tag_vectors", "", [0.1] * 4, top_k=10)
+        assert chunks[0].metadata == {"value": "alpha beta"}
+
+    @pytest.mark.asyncio
+    async def test_document_metadata_is_not_projected(
+        self, make_vector_store, make_structured_store
+    ):
+        """Deliberately unlike the chunk and document steps. ``embed_records`` runs the
+        same step over records that never came from a document, and a field present on
+        one path and missing on the other is worse than one missing from both."""
+        schema = self._VC_SCHEMA.model_copy(update={"metadata_fields": ["doc_type"]})
+        vector_store = make_vector_store()
+        struct_store = make_structured_store()
+        await vector_store.create_collection(schema)
+        await struct_store.create_collection(StubExtractor().schema)
+        pipeline = IngestionPipeline(
+            name="app",
+            steps=[
+                PipelineStep(tool="extract-structured", collection="tags", extractor=StubExtractor()),
+                self._step(),
+            ],
+            vector_collections=[VectorCollection(
+                schema=schema, store=vector_store, embedder=StubEmbedding(dim=4),
+            )],
+            structured_collections=[StructuredCollection(schema=StubExtractor().schema, store=struct_store)],
+        )
+
+        await pipeline._ingest(Document(
+            doc_id="d-001", text="alpha beta", metadata={"doc_type": "memo"},
+        ))
+
+        chunks = await vector_store.search("tag_vectors", "", [0.1] * 4, top_k=10)
+        assert "doc_type" not in chunks[0].metadata
+
+    @pytest.mark.asyncio
+    async def test_seeded_records_embed_to_the_same_vectors_as_ingested_ones(
+        self, make_vector_store, make_structured_store
+    ):
+        """``embed_records`` is the path reference data takes into a fresh account:
+        the records are written straight to the structured store, so nothing else
+        would ever embed them. It must produce what an ingest would, or a seeded
+        deployment and a self-ingested one search different things.
+        """
+        ingested, ingested_store, _ = await self._pipeline(make_vector_store, make_structured_store)
+        await ingested._ingest(Document(doc_id="d-001", text="alpha beta"))
+        expected = await ingested_store.search("tag_vectors", "", [0.1] * 4, top_k=10)
+
+        seeded, seeded_store, _ = await self._pipeline(make_vector_store, make_structured_store)
+        written = await seeded.embed_records(
+            "tags", [{"tag_id": "d-001-0", "doc_id": "d-001", "value": "alpha beta"}]
+        )
+
+        assert written == 1
+        actual = await seeded_store.search("tag_vectors", "", [0.1] * 4, top_k=10)
+        assert [(c.chunk_id, c.doc_id, c.text, c.metadata) for c in actual] == \
+               [(c.chunk_id, c.doc_id, c.text, c.metadata) for c in expected]
+
+    @pytest.mark.asyncio
+    async def test_seeded_records_are_read_back_before_the_count_is_returned(
+        self, make_vector_store, make_structured_store
+    ):
+        """Reference data is seeded once into an account nobody looks at again, and is
+        then the silent precondition of every run over it. "upsert returned without
+        raising" is not the same fact as "the collection can be searched", so
+        ``embed_records`` checks — the vector counterpart of the read-back the
+        structured seeding path already does."""
+        pipeline, vector_store, _ = await self._pipeline(make_vector_store, make_structured_store)
+
+        async def _swallow(collection, chunks):  # a store that accepts and drops
+            return None
+
+        vector_store.upsert = _swallow
+
+        with pytest.raises(ValueError, match="not readable"):
+            await pipeline.embed_records(
+                "tags", [{"tag_id": "d-001-0", "doc_id": "d-001", "value": "alpha"}]
+            )
+
+    @pytest.mark.asyncio
+    async def test_the_per_document_ingest_path_does_not_pay_for_the_read_back(
+        self, make_vector_store, make_structured_store
+    ):
+        """Only ``embed_records`` verifies. An ingest just wrote the records itself and
+        reports them through IngestResult, so re-reading the collection on every
+        document would be a scan per ingest for a fact already in hand."""
+        pipeline, vector_store, _ = await self._pipeline(make_vector_store, make_structured_store)
+        reads: list[str] = []
+        original = vector_store.query
+
+        async def _counting(collection, filters=None, fields=None, limit=None):
+            reads.append(collection)
+            return await original(collection, filters, fields, limit)
+
+        vector_store.query = _counting
+
+        await pipeline._ingest(Document(doc_id="d-001", text="alpha beta"))
+        assert reads == []
+
+        await pipeline.embed_records(
+            "tags", [{"tag_id": "d-001-0", "doc_id": "d-001", "value": "alpha beta"}]
+        )
+        assert reads == ["tag_vectors"]
+
+    @pytest.mark.asyncio
+    async def test_embedding_a_collection_no_step_reads_writes_nothing(
+        self, make_vector_store, make_structured_store
+    ):
+        """Reported as a zero rather than an error: only the caller knows whether its
+        pack meant to declare a step for that collection."""
+        pipeline, vector_store, _ = await self._pipeline(make_vector_store, make_structured_store)
+
+        assert await pipeline.embed_records("other", [{"tag_id": "x", "doc_id": "d", "value": "v"}]) == 0
+        assert vector_store.ntotal("tag_vectors") == 0
+
+    @pytest.mark.asyncio
+    async def test_a_record_missing_its_id_raises(
+        self, make_vector_store, make_structured_store
+    ):
+        """Rather than skipping it. A record with no vector is one no search can ever
+        return, and nothing downstream can tell that from "no good match"."""
+        pipeline, _, _ = await self._pipeline(make_vector_store, make_structured_store)
+
+        with pytest.raises(ValueError, match="tag_id"):
+            await pipeline.embed_records("tags", [{"doc_id": "d-001", "value": "alpha"}])
+
+    @pytest.mark.asyncio
+    async def test_a_record_that_renders_to_empty_text_raises(
+        self, make_vector_store, make_structured_store
+    ):
+        pipeline, _, _ = await self._pipeline(make_vector_store, make_structured_store)
+
+        with pytest.raises(ValueError, match="unretrievable"):
+            await pipeline.embed_records(
+                "tags", [{"tag_id": "d-001-0", "doc_id": "d-001", "value": "   "}]
+            )
+
+    @pytest.mark.asyncio
+    async def test_reingest_purges_the_record_vectors(
+        self, make_vector_store, make_structured_store
+    ):
+        """Record ids are positional, so a re-extraction that yields fewer records
+        leaves the trailing vectors of the previous run behind — pointing at records
+        that no longer exist."""
+        pipeline, vector_store, _ = await self._pipeline(make_vector_store, make_structured_store)
+        await pipeline._ingest(Document(doc_id="d-001", text="alpha beta"))
+        await vector_store.upsert("tag_vectors", [Chunk(
+            chunk_id="d-001-1", doc_id="d-001", text="stale", embedding=[0.1] * 4,
+        )])
+
+        await pipeline._ingest(Document(doc_id="d-001", text="alpha beta"))
+
+        chunks = await vector_store.search("tag_vectors", "", [0.1] * 4, top_k=10)
+        assert [c.chunk_id for c in chunks] == ["d-001-0"]
 
 
 # ---------------------------------------------------------------------------

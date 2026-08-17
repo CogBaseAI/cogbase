@@ -1175,6 +1175,108 @@ class TestWorkflowCollectionReferenceValidation:
 
 
 # ---------------------------------------------------------------------------
+# AppConfig._validate — record-embed-upsert
+# ---------------------------------------------------------------------------
+
+
+_RECORD_SCHEMA = (
+    '{"type":"object","properties":{"doc_id":{"type":"string"},'
+    '"rule_id":{"type":"string"},"text":{"type":"string"},'
+    '"citation":{"type":"string"}}}'
+)
+
+
+def _record_embed_yaml(
+    *,
+    embed_block: str,
+    parallel: bool = False,
+    extract_first: bool = True,
+) -> str:
+    """A pipeline that extracts rules and embeds each one as its own vector."""
+    extract = (
+        "              - tool: extract-structured\n"
+        "                collection: rules\n"
+        f"                extractor:\n"
+        f"                  extraction_schema: '{_RECORD_SCHEMA}'\n"
+        '                  prompt: "extract rules"\n'
+    )
+    steps = (extract + embed_block) if extract_first else (embed_block + extract)
+    return textwrap.dedent(f"""\
+        name: record-embed-test
+        llm:
+          model: gpt-4o-mini
+          api_key: sk-test
+        vector_collections:
+          - name: rule_vectors
+            description: One vector per rule.
+        structured_collections:
+          - name: rules
+            description: Extracted rules.
+            schema: '{_RECORD_SCHEMA}'
+            primary_fields: [rule_id]
+        pipelines:
+          - name: regs
+            routing_description: Regulations.
+            parallel: {str(parallel).lower()}
+            steps:
+    """) + steps
+
+
+_EMBED = (
+    "              - tool: record-embed-upsert\n"
+    "                collection: rule_vectors\n"
+    "                source_collection: rules\n"
+    "                id_field: rule_id\n"
+    '                text_template: "{{ record.text }}"\n'
+    "                metadata_fields: [citation]\n"
+)
+
+
+class TestRecordEmbedUpsertValidation:
+    """Every rule here guards a step that embeds nothing or embeds thin records.
+    None of them fail at runtime: the collection is simply emptier than it should
+    be, and a search over it returns fewer results without reporting anything."""
+
+    def test_a_well_formed_step_passes(self):
+        cfg = AppConfig.from_yaml(_record_embed_yaml(embed_block=_EMBED))
+        assert cfg.pipelines[0].steps[1].source_collection == "rules"
+
+    def test_unknown_target_vector_collection_raises(self):
+        block = _EMBED.replace("collection: rule_vectors", "collection: nope")
+        with pytest.raises(Exception, match=r"unknown vector collection.*'nope'"):
+            AppConfig.from_yaml(_record_embed_yaml(embed_block=block))
+
+    def test_unknown_source_structured_collection_raises(self):
+        block = _EMBED.replace("source_collection: rules", "source_collection: ghosts")
+        with pytest.raises(Exception, match=r"unknown structured collection.*'ghosts'"):
+            AppConfig.from_yaml(_record_embed_yaml(embed_block=block))
+
+    def test_embedding_before_the_step_that_writes_the_records_raises(self):
+        """Otherwise the first ingest of a document embeds nothing, and every later
+        one embeds the previous run's records."""
+        with pytest.raises(Exception, match=r"before the extract-structured step"):
+            AppConfig.from_yaml(_record_embed_yaml(embed_block=_EMBED, extract_first=False))
+
+    def test_a_parallel_pipeline_raises(self):
+        """`parallel: true` runs the steps concurrently, so the embed races the write
+        it depends on and lands whatever happens to be there."""
+        with pytest.raises(Exception, match=r"parallel.*record-embed-upsert"):
+            AppConfig.from_yaml(_record_embed_yaml(embed_block=_EMBED, parallel=True))
+
+    def test_an_id_field_the_collection_has_no_column_for_raises(self):
+        """`save` drops what the schema does not declare, so the id would be absent
+        from the record and therefore from every vector."""
+        block = _EMBED.replace("id_field: rule_id", "id_field: clause_id")
+        with pytest.raises(Exception, match=r"clause_id"):
+            AppConfig.from_yaml(_record_embed_yaml(embed_block=block))
+
+    def test_a_metadata_field_the_collection_has_no_column_for_raises(self):
+        block = _EMBED.replace("metadata_fields: [citation]", "metadata_fields: [subpart]")
+        with pytest.raises(Exception, match=r"subpart"):
+            AppConfig.from_yaml(_record_embed_yaml(embed_block=block))
+
+
+# ---------------------------------------------------------------------------
 # AppConfig._validate — multi-extractor conflict detection
 # ---------------------------------------------------------------------------
 

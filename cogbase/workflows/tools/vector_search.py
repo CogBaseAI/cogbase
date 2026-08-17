@@ -53,4 +53,18 @@ async def run(
         "workflow.tool.vector_search collection=%s top_k=%d query=%s filters=%d chunks=%d",
         step.collection, step.top_k, query_text[:120], len(filters), len(chunks),
     )
+    # The counterpart of structured-query's min_records, and it exists for the same
+    # failure: a search over a collection that was never populated returns [], the
+    # step that consumes the chunks has nothing to judge, and the run *succeeds*
+    # having examined nothing. Left at its default of 0 an empty result is treated
+    # as a legitimate "no match", which it is for any search whose collection is
+    # produced by the run rather than seeded before it.
+    if len(chunks) < step.min_chunks:
+        raise RuntimeError(
+            f"vector-search step {step.id!r}: collection {step.collection!r} returned "
+            f"{len(chunks)} chunks, below min_chunks={step.min_chunks}. The collection "
+            "is a precondition of this run — it is empty, or the filters exclude "
+            "everything in it — so the run fails rather than reporting that nothing "
+            "was found."
+        )
     return {"chunks": chunks}

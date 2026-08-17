@@ -248,8 +248,67 @@ class DocumentEmbedUpsertStepConfig(PipelineStepBase):
     )
 
 
+class RecordEmbedUpsertStepConfig(PipelineStepBase):
+    """Embed each *extracted record* as its own vector, keyed by the record's id.
+
+    The third iteration unit, after the passage (``chunk-embed-upsert``) and the
+    document (``document-embed-upsert``). It exists for retrieval that must land on
+    an object already carrying its identifiers: searching prose chunks returns a
+    passage, and recovering which record that passage belongs to takes a second hop
+    that is approximate exactly where the record model is precise.
+
+    ``collection`` is the *vector* collection written; ``source_collection`` is the
+    structured collection read. Records are re-read from the store rather than
+    handed over from the preceding step, so the same step can be replayed over
+    records that were seeded rather than extracted (see
+    ``IngestionPipeline.embed_records``).
+    """
+
+    tool: Literal["record-embed-upsert"] = Field(
+        default="record-embed-upsert",
+        description="Pipeline tool to run.",
+    )
+    source_collection: str = Field(
+        description=(
+            "Structured collection whose records are embedded. On a document "
+            "ingest, the records carrying this document's doc_id are read back "
+            "from it after the extract-structured step that wrote them."
+        ),
+    )
+    id_field: str = Field(
+        description=(
+            "Record field used as the vector's chunk_id — the point of the step. "
+            "Retrieval then returns an object a reader can resolve back to the "
+            "record it came from without a similarity match."
+        ),
+    )
+    text_template: str = Field(
+        description=(
+            "Jinja2 template producing the text to embed, rendered with the record "
+            "exposed as `record` (e.g. '{{ record.subject }}\\n{{ record.text }}'). "
+            "A record rendering to empty text raises: a record with no vector is "
+            "one retrieval can never return, which is invisible at query time."
+        ),
+    )
+    metadata_fields: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Record fields copied onto each vector's metadata, so a retrieved "
+            "vector carries them without a lookup. Document metadata is "
+            "deliberately NOT projected here (unlike the chunk and document "
+            "steps): the same step also runs over seeded records, where there is "
+            "no document, and a field present on one path and absent on the other "
+            "is worse than a field absent from both."
+        ),
+        json_schema_extra={"prompt_skip": True},
+    )
+
+
 PipelineStepConfig = Annotated[
-    ChunkEmbedUpsertStepConfig | ExtractStructuredStepConfig | DocumentEmbedUpsertStepConfig,
+    ChunkEmbedUpsertStepConfig
+    | ExtractStructuredStepConfig
+    | DocumentEmbedUpsertStepConfig
+    | RecordEmbedUpsertStepConfig,
     Field(discriminator="tool"),
 ]
 
@@ -377,6 +436,21 @@ class VectorSearchStepConfig(WorkflowStepBase):
             "Optional equality filters on chunk fields, ANDed. Keys are field names; "
             "values are Jinja2 templates rendered against the step context "
             "(e.g. {doc_id: '{{ input.doc_id }}'})."
+        ),
+    )
+    min_chunks: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Minimum number of chunks the search must return. Below it the step "
+            "raises instead of returning, and the run fails. The vector-search "
+            "counterpart of structured-query's `min_records`, and set for the same "
+            "reason: where the collection being searched is a *precondition* — "
+            "reference data seeded before the run rather than produced by it — an "
+            "empty result means it was never populated, not that nothing matched. "
+            "Note a filtered search legitimately returns nothing, so this belongs "
+            "on unfiltered searches over a collection that is never meant to be "
+            "empty. Default 0: an empty result is legitimate."
         ),
     )
 
@@ -635,6 +709,64 @@ def _validate_save_primary_fields(workflow: "WorkflowConfig") -> None:
                 )
 
 
+def _validate_record_embed_steps(
+    pipeline: "PipelineConfig", sc_by_name: dict
+) -> None:
+    """Check every ``record-embed-upsert`` step against the collection it reads.
+
+    All four rules guard the same failure: a step that embeds nothing, or embeds
+    records missing the fields retrieval is supposed to hand back. None of them
+    raise at runtime — the collection is simply empty or thin, and a search over it
+    returns fewer results than it should without anything reporting a problem.
+    """
+    embed_steps = [s for s in pipeline.steps if isinstance(s, RecordEmbedUpsertStepConfig)]
+    if not embed_steps:
+        return
+
+    if pipeline.parallel:
+        raise ValueError(
+            f"Pipeline {pipeline.name!r} is parallel and has a record-embed-upsert "
+            "step: it reads records a preceding extract-structured step writes, so "
+            "running the steps concurrently races the write and embeds whatever "
+            "happens to be there."
+        )
+
+    order = {step.collection: i for i, step in enumerate(pipeline.steps)}
+    for i, step in enumerate(pipeline.steps):
+        if not isinstance(step, RecordEmbedUpsertStepConfig):
+            continue
+        source = sc_by_name.get(step.source_collection)
+        if source is None:
+            raise ValueError(
+                f"Pipeline {pipeline.name!r} record-embed-upsert step references "
+                f"unknown structured collection: {step.source_collection!r}"
+            )
+        # An extract-structured step for the same collection *after* this one means
+        # the first ingest of a document embeds the previous ingest's records, or
+        # none at all.
+        writer = order.get(step.source_collection)
+        if writer is not None and writer > i:
+            raise ValueError(
+                f"Pipeline {pipeline.name!r} embeds {step.source_collection!r} before "
+                "the extract-structured step that writes it; move the "
+                "record-embed-upsert step after it."
+            )
+
+        # save() drops what the collection has no column for, so a name absent from
+        # the record schema is silently absent from every vector too.
+        try:
+            record_fields = set(json.loads(source.schema_).get("properties", {}))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        unknown = sorted({step.id_field, *step.metadata_fields} - record_fields)
+        if unknown:
+            raise ValueError(
+                f"Pipeline {pipeline.name!r} record-embed-upsert step names "
+                f"{unknown}, which {step.source_collection!r} has no column for "
+                f"(available: {sorted(record_fields)})."
+            )
+
+
 class WorkflowConfig(ConfigPromptMixin, BaseModel):
     name: str = Field(description="Workflow name.")
     trigger: WorkflowTriggerConfig = Field(
@@ -851,7 +983,7 @@ class AppConfig(ConfigPromptMixin, BaseModel):
         # Validate pipeline collection references.
         for pipeline in self.pipelines:
             for step in pipeline.steps:
-                if isinstance(step, (ChunkEmbedUpsertStepConfig, DocumentEmbedUpsertStepConfig)) and step.collection not in vc_names:
+                if isinstance(step, (ChunkEmbedUpsertStepConfig, DocumentEmbedUpsertStepConfig, RecordEmbedUpsertStepConfig)) and step.collection not in vc_names:
                     raise ValueError(
                         f"Pipeline {pipeline.name!r} step references unknown vector collection: {step.collection!r}"
                     )
@@ -859,6 +991,7 @@ class AppConfig(ConfigPromptMixin, BaseModel):
                     raise ValueError(
                         f"Pipeline {pipeline.name!r} step references unknown structured collection: {step.collection!r}"
                     )
+            _validate_record_embed_steps(pipeline, sc_by_name)
 
         # Reject ambiguous multi-extractor writes to the same structured collection.
         # Two extract-structured steps may share a collection only if their schema and

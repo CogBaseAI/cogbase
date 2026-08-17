@@ -270,6 +270,45 @@ class TestVectorSearchTool:
         again = await vs.search("rules", "q", [0.1] * 4, top_k=3)
         assert again[0].embedding == [0.1] * 4
 
+    async def test_min_chunks_raises_when_the_search_comes_back_short(self):
+        """The `min_records` failure through the vector door.
+
+        A search over a collection that was never populated returns nothing, the step
+        that consumes the chunks judges nothing, and the run *succeeds* having
+        examined nothing. Set it where the collection is a precondition — reference
+        data seeded before the run rather than produced by it.
+        """
+        vs = await _make_vector_store()
+        step = _make_step(
+            tool="vector-search", collection="rules", query="q", top_k=3, min_chunks=1,
+        )
+        with pytest.raises(RuntimeError, match="min_chunks=1"):
+            await vs_run(step, {}, vs, _make_embedder())
+
+    async def test_min_chunks_is_satisfied_by_exactly_that_many(self):
+        vs = await _make_vector_store()
+        await vs.upsert("rules", [
+            Chunk(chunk_id="a_0", doc_id="doc-a", text="alpha", embedding=[0.1] * 4),
+        ])
+        step = _make_step(
+            tool="vector-search", collection="rules", query="q", top_k=3, min_chunks=1,
+        )
+        assert len((await vs_run(step, {}, vs, _make_embedder()))["chunks"]) == 1
+
+    async def test_min_chunks_defaults_to_allowing_an_empty_result(self):
+        """Every config written before the field existed keeps its behaviour — and an
+        empty result is the correct one for most searches."""
+        vs = await _make_vector_store()
+        step = _make_step(tool="vector-search", collection="rules", query="q", top_k=3)
+        assert step.min_chunks == 0
+        assert (await vs_run(step, {}, vs, _make_embedder()))["chunks"] == []
+
+    def test_negative_min_chunks_is_rejected(self):
+        with pytest.raises(ValidationError):
+            _make_step(
+                tool="vector-search", collection="rules", query="q", min_chunks=-1,
+            )
+
     async def test_doc_id_filter_scopes_results(self):
         """A `filters: {doc_id: ...}` step only returns chunks from that document."""
         vs = await _make_vector_store()
