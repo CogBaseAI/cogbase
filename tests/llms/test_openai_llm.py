@@ -145,6 +145,33 @@ async def test_complete_stream_yields_delta_content() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-5", "gpt-5.5", "gpt-5.6-terra", "gpt-5-mini"])
+async def test_temperature_is_dropped_for_models_that_reject_it(model: str) -> None:
+    """Matched by family prefix, not by exact name.
+
+    The exact-name list held "gpt-5.5" and every sibling then failed with a 400 at
+    the first call that passed a temperature — which in practice is `llm-structured`,
+    several steps into a workflow, where it reads as the workflow being broken.
+    """
+    client = _make_non_stream_client("hello")
+    llm = OpenAILLM(client, model=model)
+
+    await llm.complete([{"role": "user", "content": "hi"}], temperature=0.0)
+
+    assert "temperature" not in client.chat.completions.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_temperature_is_still_passed_to_models_that_accept_it() -> None:
+    client = _make_non_stream_client("hello")
+    llm = OpenAILLM(client, model="gpt-4o")
+
+    await llm.complete([{"role": "user", "content": "hi"}], temperature=0.0)
+
+    assert client.chat.completions.create.call_args.kwargs["temperature"] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_complete_passes_reasoning_effort() -> None:
     client = _make_non_stream_client("hello")
     llm = OpenAILLM(client, model="gpt-5")

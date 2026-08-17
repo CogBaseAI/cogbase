@@ -37,6 +37,18 @@ async def run(
         step.collection, query_text, embedding, top_k=step.top_k,
         filters=filters or None,
     )
+    # Drop the vectors before the chunks enter the step context. Stores return
+    # them populated, and the usual next step is `llm-structured` with
+    # `{{ steps.<id>.chunks }}` as an input — which JSON-serializes each chunk in
+    # full, so a top_k of 6 over 1536-dimension embeddings spends ~45k tokens per
+    # call on numbers no model can read. Nothing downstream can use a raw vector:
+    # this step is the only thing that embeds, and it does its own.
+    #
+    # Stripped here rather than via the `fields` projection `search()` accepts, so
+    # the result is identical on every backend — the projection's per-field
+    # semantics differ between FAISS and pgvector, and this needs to be a fact
+    # about the tool, not about the store behind it.
+    chunks = [c.model_copy(update={"embedding": None}) for c in chunks]
     logger.info(
         "workflow.tool.vector_search collection=%s top_k=%d query=%s filters=%d chunks=%d",
         step.collection, step.top_k, query_text[:120], len(filters), len(chunks),

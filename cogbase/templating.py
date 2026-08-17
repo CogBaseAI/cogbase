@@ -4,6 +4,16 @@ Uses ``NativeEnvironment`` so that a pure ``{{ expr }}`` template returns the
 native Python value (list, dict, BaseModel …) rather than a string.  Templates
 that mix literal text with expressions are always rendered as strings.
 
+One correction to that environment, in ``_concat`` below: a lone ``{{ expr }}``
+returns the context object *unchanged*, including when it is a ``str``.  Jinja's
+own ``native_concat`` runs ``ast.literal_eval`` over it, which silently retypes
+string data that happens to look like a Python literal — ``"211"`` becomes the
+integer ``211``, ``"3"`` becomes ``3``, while ``"007"`` and ``"F"`` survive
+because they fail to parse.  Every caller here renders such values into equality
+filters and record fields, where a retyped value does not raise: it simply stops
+matching a string column, and a workflow scoped by it reports an empty result as
+though there were nothing to find.
+
 ``StrictUndefined`` is deliberate: a template naming something the context does
 not have raises rather than rendering an empty string.  Both callers use these
 templates for identifiers and provenance that are matched by exact equality
@@ -25,9 +35,35 @@ from typing import Any
 
 try:
     from jinja2 import StrictUndefined, is_undefined
-    from jinja2.nativetypes import NativeEnvironment
+    from jinja2.nativetypes import NativeEnvironment, NativeTemplate, native_concat
 
-    _env = NativeEnvironment(undefined=StrictUndefined)
+    def _concat(values: Any) -> Any:
+        """``native_concat``, minus the ``literal_eval`` on a single node.
+
+        A template of exactly one ``{{ expr }}`` yields one node, and that node is
+        already the object the context held — there is nothing to parse, so it is
+        returned untouched.  Multi-node templates keep Jinja's behaviour: they are
+        genuinely text being assembled, and anything that survives ``literal_eval``
+        there was written as a literal by the config author.
+        """
+        nodes = list(values)
+        if not nodes:
+            return None
+        if len(nodes) == 1:
+            return nodes[0]
+        return native_concat(nodes)
+
+    class _Environment(NativeEnvironment):
+        concat = staticmethod(_concat)  # type: ignore[assignment]
+
+    class _Template(NativeTemplate):
+        # NativeTemplate.render reaches for ``environment_class.concat`` rather
+        # than the instance's environment, so overriding ``concat`` alone is not
+        # enough — the template class has to point back at the subclass.
+        environment_class = _Environment
+
+    _Environment.template_class = _Template
+    _env = _Environment(undefined=StrictUndefined)
 except ImportError:  # pragma: no cover
     _env = None  # type: ignore[assignment]
 

@@ -40,8 +40,14 @@ def _coerce_message_content(content: Any) -> str:
     return str(content)
 
 
-# Models that reject the temperature parameter entirely.
-_NO_TEMPERATURE_MODELS: frozenset[str] = frozenset({"gpt-5.5"})
+# Model families that reject the temperature parameter entirely, matched by prefix.
+#
+# Prefix rather than exact name because the rejection is a property of the family,
+# not of one release: "gpt-5.5" was listed exactly, and "gpt-5.6-terra" then failed
+# the same way. An exact list needs an entry per model name, and the entry is missing
+# until someone hits the 400 — which lands on whichever call path first passes a
+# temperature (in practice `llm-structured`, several steps into a workflow).
+_NO_TEMPERATURE_MODEL_PREFIXES: tuple[str, ...] = ("gpt-5",)
 
 # Opt-in switch for the "flex" service tier (half price, slower/less
 # available), e.g. for cost-sensitive tests/benchmarks. Not set in production
@@ -216,7 +222,7 @@ class OpenAILLM(LLMBase):
             kwargs["stream_options"] = {"include_usage": True}
         if max_tokens is not None:
             kwargs["max_completion_tokens"] = max_tokens
-        if temperature is not None and resolved_model not in _NO_TEMPERATURE_MODELS:
+        if temperature is not None and not resolved_model.startswith(_NO_TEMPERATURE_MODEL_PREFIXES):
             kwargs["temperature"] = temperature
         effective_reasoning_effort = reasoning_effort or self._reasoning_effort
         if effective_reasoning_effort is not None:

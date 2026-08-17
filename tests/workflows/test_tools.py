@@ -143,6 +143,49 @@ class TestStructuredQueryTool:
         with pytest.raises(ValidationError):
             _make_step(tool="structured-query")
 
+    async def test_min_records_raises_when_the_query_comes_back_short(self):
+        """An empty reference collection must fail the run, not empty it.
+
+        Without this the foreach downstream iterates zero times, nothing is saved,
+        and the workflow *succeeds* — a run that never checked anything is
+        indistinguishable from one that found nothing to report.
+        """
+        store = await _make_structured_store()
+        step = _make_step(tool="structured-query", collection="clauses", min_records=1)
+        with pytest.raises(RuntimeError, match="min_records=1"):
+            await sq_run(step, {}, store)
+
+    async def test_min_records_reports_the_rendered_filter_values(self):
+        """The template alone does not say what it rendered to, and a value that
+        matches no row is the usual cause."""
+        store = await _make_structured_store({"clause_id": "c1", "text": "alpha"})
+        step = _make_step(
+            tool="structured-query",
+            collection="clauses",
+            filters={"clause_id": "{{ input.doc_id }}"},
+            min_records=1,
+        )
+        ctx = {"input": {"doc_id": "nonexistent"}, "steps": {}}
+        with pytest.raises(RuntimeError, match="nonexistent"):
+            await sq_run(step, ctx, store)
+
+    async def test_min_records_is_satisfied_by_exactly_that_many(self):
+        store = await _make_structured_store({"clause_id": "c1", "text": "alpha"})
+        step = _make_step(tool="structured-query", collection="clauses", min_records=1)
+        output = await sq_run(step, {}, store)
+        assert len(output["records"]) == 1
+
+    async def test_min_records_defaults_to_allowing_an_empty_result(self):
+        """Every config written before the field existed keeps its behaviour."""
+        store = await _make_structured_store()
+        step = _make_step(tool="structured-query", collection="clauses")
+        assert step.min_records == 0
+        assert (await sq_run(step, {}, store))["records"] == []
+
+    def test_negative_min_records_is_rejected(self):
+        with pytest.raises(ValidationError):
+            _make_step(tool="structured-query", collection="clauses", min_records=-1)
+
 
 # ---------------------------------------------------------------------------
 # vector-search
@@ -202,6 +245,30 @@ class TestVectorSearchTool:
     def test_missing_query_raises(self):
         with pytest.raises(ValidationError):
             _make_step(tool="vector-search", collection="rules")
+
+    async def test_returned_chunks_carry_no_embedding(self):
+        """The store populates it; the next step almost always JSON-serializes the
+        chunks into an LLM input, where 1536 floats per chunk are pure spend."""
+        vs = await _make_vector_store()
+        await vs.upsert("rules", [
+            Chunk(chunk_id="a_0", doc_id="doc-a", text="alpha", embedding=[0.1] * 4),
+        ])
+        step = _make_step(tool="vector-search", collection="rules", query="q", top_k=3)
+        output = await vs_run(step, {}, vs, _make_embedder())
+        assert [c.chunk_id for c in output["chunks"]] == ["a_0"]
+        assert all(c.embedding is None for c in output["chunks"])
+
+    async def test_stripping_the_embedding_leaves_the_stored_chunk_intact(self):
+        """A copy, not a mutation — the FAISS store hands out its own Chunk objects,
+        so clearing the field in place would empty the collection's vectors."""
+        vs = await _make_vector_store()
+        await vs.upsert("rules", [
+            Chunk(chunk_id="a_0", doc_id="doc-a", text="alpha", embedding=[0.1] * 4),
+        ])
+        step = _make_step(tool="vector-search", collection="rules", query="q", top_k=3)
+        await vs_run(step, {}, vs, _make_embedder())
+        again = await vs.search("rules", "q", [0.1] * 4, top_k=3)
+        assert again[0].embedding == [0.1] * 4
 
     async def test_doc_id_filter_scopes_results(self):
         """A `filters: {doc_id: ...}` step only returns chunks from that document."""

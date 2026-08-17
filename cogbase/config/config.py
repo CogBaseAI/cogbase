@@ -337,6 +337,20 @@ class StructuredQueryStepConfig(WorkflowStepBase):
             "(e.g. '{{ input.doc_id }}', '{{ item.clause_type }}')."
         ),
     )
+    min_records: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Minimum number of records the query must return. Below it the step "
+            "raises instead of returning, and the run fails. Set it where an empty "
+            "result means a precondition was never met — a reference collection "
+            "nothing seeded, a join key that matches no row — rather than that "
+            "there is nothing to do. Without it a later foreach over the result "
+            "iterates zero times and the workflow *succeeds* having written "
+            "nothing, which is indistinguishable from a run that found nothing to "
+            "report. Default 0: an empty result is legitimate."
+        ),
+    )
 
 
 class VectorSearchStepConfig(WorkflowStepBase):
