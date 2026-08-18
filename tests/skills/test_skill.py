@@ -156,3 +156,28 @@ def test_uploaded_skill_cannot_claim_a_surface(tmp_path):
     skill = load_skill_dir(skill_dir, skill_id="abc123")
     assert skill.surface == APPLICATION_SURFACE
     assert skill.metadata["surface"] == "account-onboarding"
+
+
+def test_load_skills_can_skip_dependency_installation(tmp_path, monkeypatch):
+    """Inspecting a skills_dir must not build a venv or reach the network.
+
+    A caller validating that a skill is present, parses, and sits on the surface it
+    claims wants none of ``ensure_skill_deps``' side effects — and a pack validator
+    that pip-installed as a side effect of a check would do it on every startup.
+    """
+    (tmp_path / "needs-pip").mkdir()
+    (tmp_path / "needs-pip" / "SKILL.md").write_text(
+        "---\nname: needs-pip\ndescription: Has deps.\n"
+        "metadata:\n  install:\n    - type: pip\n      packages: [python-docx]\n---\n# body\n"
+    )
+    called = []
+    monkeypatch.setattr(
+        "cogbase.skills.skill.ensure_skill_deps",
+        lambda skill, *a, **kw: called.append(skill.name),
+    )
+
+    skills = load_skills(["needs-pip"], tmp_path, install_deps=False)
+
+    assert called == []
+    assert skills[0].site_packages is None
+    assert skills[0].builtin is True          # still the operator-written load path

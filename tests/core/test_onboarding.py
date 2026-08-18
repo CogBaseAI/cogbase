@@ -17,6 +17,7 @@ from cogbase.core.onboarding import (
     SAVE_COMPANY_PROFILE_TOOL_NAME,
     build_interview_system_prompt,
     resolve_interview_script,
+    resolve_interview_skill_name,
 )
 from cogbase.skills.registry import SkillRegistry
 from cogbase.skills.skill import APPLICATION_SURFACE, ONBOARDING_SURFACE, Skill
@@ -108,6 +109,48 @@ class TestBuildInterviewSystemPrompt:
     def test_only_the_save_tool_is_offered(self):
         """The interview has one job, so it gets one tool."""
         assert [t["name"] for t in INTERVIEW_TOOLS] == [SAVE_COMPANY_PROFILE_TOOL_NAME]
+
+
+class TestResolveInterviewSkillName:
+    """Which script, before loading it.
+
+    A deployment serving two verticals has to answer this per account;
+    ``INTERVIEW_SKILL_NAME`` is one process-wide value and cannot.
+    """
+
+    async def test_no_resolver_is_the_deployment_default(self):
+        assert await resolve_interview_skill_name(None, "acme") == INTERVIEW_SKILL_NAME
+
+    async def test_a_sync_resolver_chooses_per_account(self):
+        names = {"acme": "interview-legal", "pharma": "interview-sop"}
+
+        assert await resolve_interview_skill_name(names.get, "pharma") == "interview-sop"
+        assert await resolve_interview_skill_name(names.get, "acme") == "interview-legal"
+
+    async def test_an_async_resolver_is_awaited(self):
+        """The mapping it needs usually lives in a store, so async is the shape a
+        real resolver takes."""
+        async def resolver(account_id: str) -> str:
+            return f"interview-for-{account_id}"
+
+        assert await resolve_interview_skill_name(resolver, "pharma") == "interview-for-pharma"
+
+    @pytest.mark.parametrize("answer", [None, ""])
+    async def test_no_answer_falls_back_to_the_default(self, answer):
+        """"I have no mapping for this account" is not an error — an account
+        provisioned before the resolver existed still needs an interview."""
+        assert await resolve_interview_skill_name(
+            lambda _: answer, "acme"
+        ) == INTERVIEW_SKILL_NAME
+
+    async def test_a_failing_resolver_raises_rather_than_defaulting(self):
+        """The default is one vertical's questionnaire. A resolver that raised did
+        not say "use it" — and the wrong interview's answers are saved forever."""
+        def resolver(account_id: str) -> str:
+            raise RuntimeError("account→pack lookup is down")
+
+        with pytest.raises(RuntimeError, match="lookup is down"):
+            await resolve_interview_skill_name(resolver, "acme")
 
 
 class TestResolveInterviewScript:

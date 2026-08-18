@@ -120,8 +120,18 @@ def _load_skill_cached(file_path: str, skill_id: str | None = None) -> Skill | N
     return skill
 
 
-def load_skills(skill_names: list[str], skills_dir: str | Path) -> list[Skill]:
-    """Load named skills from *skills_dir*, using an mtime-based cache."""
+def load_skills(
+    skill_names: list[str], skills_dir: str | Path, *, install_deps: bool = True
+) -> list[Skill]:
+    """Load named skills from *skills_dir*, using an mtime-based cache.
+
+    *install_deps* materializes each skill's declared pip packages into its venv,
+    which is what a running deployment needs and what a caller only *inspecting*
+    the directory does not: validating that a skill is present, parses, and sits on
+    the surface it claims should not build a venv or reach the network as a side
+    effect. Skills loaded with it off carry ``site_packages=None`` and must not be
+    executed.
+    """
     skills_dir = str(skills_dir)
     if not os.path.exists(skills_dir):
         logger.error("[skills] directory '%s' not found — no skills loaded", skills_dir)
@@ -143,7 +153,8 @@ def load_skills(skill_names: list[str], skills_dir: str | Path) -> list[Skill]:
             # is a deployment decision, not something an uploaded bundle can claim.
             declared = skill.metadata.get("surface")
             skill.surface = declared if isinstance(declared, str) and declared else APPLICATION_SURFACE
-            skill.site_packages = ensure_skill_deps(skill)
+            if install_deps:
+                skill.site_packages = ensure_skill_deps(skill)
             skills.append(skill)
             logger.info("[skills] loaded '%s' from %s", skill.name, file_path)
     return skills

@@ -192,6 +192,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.skill_registry = skill_registry
     app.state.skill_bundle_store = skill_bundle_store
     app.state.app_cache = app_cache
+    # Set so the attribute always exists and is discoverable here; a deployment
+    # serving more than one vertical replaces it after the lifespan has run (or
+    # reuses this lifespan from its own app and sets it there). ``None`` means
+    # every account gets COGBASE_INTERVIEW_SKILL — see
+    # cogbase/core/onboarding.py::InterviewSkillResolver.
+    app.state.interview_skill_resolver = None
 
     # Requeue background tasks (ingest/distill/workflow) left unfinished by a
     # previous process: an in-process create_task is lost on crash/deploy/OOM,

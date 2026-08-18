@@ -34,9 +34,11 @@ so rather than onboarding everyone with a generic one.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import re
+from collections.abc import Awaitable, Callable
 from datetime import date
 
 from cogbase.llms.base import ToolDefinition
@@ -163,7 +165,44 @@ INTERVIEW_SKILL_NAME = os.environ.get(
     "COGBASE_INTERVIEW_SKILL", "account-onboarding-interview-legal"
 )
 
+#: Picks the interview script for one account, by name. A deployment that serves
+#: more than one vertical installs one of these (on ``app.state``, read by the
+#: interview route) because ``INTERVIEW_SKILL_NAME`` is a single process-wide
+#: value: without a resolver, an account onboarded for vertical A is interviewed
+#: with vertical B's questions and the answers are saved forever.
+#:
+#: May be sync or async — the mapping it needs (which vertical is this account on)
+#: usually lives in a store, and requiring a blocking read inside an async route
+#: would be the wrong shape. Returning ``None`` means "no per-account answer",
+#: which falls back to ``INTERVIEW_SKILL_NAME``; raising means the deployment
+#: *could not decide*, which the caller must not paper over with the default.
+InterviewSkillResolver = Callable[[str], str | None | Awaitable[str | None]]
+
 _FRONT_MATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
+
+
+async def resolve_interview_skill_name(
+    resolver: InterviewSkillResolver | None, account_id: str
+) -> str:
+    """Return the interview skill *name* for *account_id*.
+
+    The name is what :func:`resolve_interview_script` then looks up. Kept apart
+    from it because the two questions have different owners: *which script* is a
+    deployment's tenancy concern (which vertical is this account on), while
+    *loading* it is the registry's.
+
+    Exceptions propagate deliberately. A resolver that fails has not said "use the
+    default" — it has said nothing, and the default is one specific vertical's
+    interview. Asking a pharma customer the legal questionnaire and storing the
+    answers as their company profile is worse than telling them onboarding is
+    unavailable.
+    """
+    if resolver is None:
+        return INTERVIEW_SKILL_NAME
+    resolved = resolver(account_id)
+    if inspect.isawaitable(resolved):
+        resolved = await resolved
+    return resolved or INTERVIEW_SKILL_NAME
 
 
 def _strip_front_matter(markdown: str) -> str:

@@ -114,7 +114,7 @@ async def deps():
     }
 
 
-async def _run(llm, deps, *, text="hi", account_id="acme", history=None):
+async def _run(llm, deps, *, text="hi", account_id="acme", history=None, resolver=None):
     return await interview_chat(
         account_id,
         InterviewChatRequest(text=text, history=history or []),
@@ -122,6 +122,7 @@ async def _run(llm, deps, *, text="hi", account_id="acme", history=None):
         deps["system_store"],
         deps["app_cache"],
         deps["registry"],
+        resolver,
     )
 
 
@@ -236,6 +237,90 @@ class TestScriptSelection:
 
         assert response.content == "hi"
         assert "BEGIN CURRENT PROFILE" not in _system_prompt(llm)
+
+
+class TestPerAccountScript:
+    """One deployment, two verticals, two interviews.
+
+    Without a resolver the script is a module-level env read, so every account in
+    the process is asked the same questions — right for a single-vertical
+    deployment and wrong for anything hosting more than one pack.
+    """
+
+    @staticmethod
+    def _vertical_skill(name: str, body: str) -> Skill:
+        return Skill(
+            name=name, description="d", raw_markdown=body, id=name,
+            builtin=True, surface=ONBOARDING_SURFACE,
+        )
+
+    def _two_verticals(self, deps) -> None:
+        deps["registry"].register(
+            self._vertical_skill("interview-legal", "# Legal\n\nAsk which side they sign on.\n"),
+            account_id=None,
+        )
+        deps["registry"].register(
+            self._vertical_skill("interview-sop", "# SOP\n\nAsk which dosage forms they make.\n"),
+            account_id=None,
+        )
+
+    async def test_two_accounts_on_different_packs_get_different_interviews(self, deps):
+        self._two_verticals(deps)
+        by_account = {"acme": "interview-legal", "pharma": "interview-sop"}.get
+
+        legal_llm, sop_llm = _make_llm("hi"), _make_llm("hi")
+        await _run(legal_llm, deps, account_id="acme", resolver=by_account)
+        await _run(sop_llm, deps, account_id="pharma", resolver=by_account)
+
+        assert "which side they sign on" in _system_prompt(legal_llm)
+        assert "dosage forms" in _system_prompt(sop_llm)
+
+    async def test_an_async_resolver_works_too(self, deps):
+        """The account→vertical mapping is a store read in any real deployment."""
+        self._two_verticals(deps)
+
+        async def resolver(account_id: str) -> str:
+            return "interview-sop"
+
+        llm = _make_llm("hi")
+        await _run(llm, deps, account_id="pharma", resolver=resolver)
+
+        assert "dosage forms" in _system_prompt(llm)
+
+    async def test_without_a_resolver_the_deployment_default_still_wins(self, deps):
+        self._two_verticals(deps)
+        llm = _make_llm("hi")
+
+        await _run(llm, deps, account_id="pharma")
+
+        assert "Ask who they are" in _system_prompt(llm)   # the default skill
+
+    async def test_an_unregistered_choice_names_itself_in_the_503(self, deps):
+        """The operator's mistake is the resolver's answer, not the env default, so
+        that is the name the error has to print."""
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            await _run(_make_llm("hi"), deps, resolver=lambda _: "interview-sop")
+
+        assert exc.value.status_code == 503
+        assert "interview-sop" in exc.value.detail
+
+    async def test_a_failing_resolver_does_not_fall_back_to_the_default(self, deps):
+        """Falling back would onboard a pharma account with the legal questionnaire
+        and save the answers as its company profile."""
+        from fastapi import HTTPException
+
+        def broken(account_id: str) -> str:
+            raise RuntimeError("account→pack lookup is down")
+
+        llm = _make_llm("hi")
+        with pytest.raises(HTTPException) as exc:
+            await _run(llm, deps, account_id="pharma", resolver=broken)
+
+        assert exc.value.status_code == 503
+        assert "lookup is down" in exc.value.detail
+        llm.complete_stream.assert_not_called()
 
 
 class TestSaving:

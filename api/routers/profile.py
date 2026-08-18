@@ -37,6 +37,7 @@ from api.dependencies import (
     AccountIdDep,
     AccountProfileStoreDep,
     AppCacheDep,
+    InterviewSkillResolverDep,
     SkillRegistryDep,
     SystemResourcesDep,
     SystemStoreDep,
@@ -52,11 +53,12 @@ from api.models import (
 from api.system_resources import SystemResources
 from api.system_store import ProfileRecord, SystemStore
 from cogbase.core.onboarding import (
-    INTERVIEW_SKILL_NAME,
     INTERVIEW_TOOLS,
     SAVE_COMPANY_PROFILE_TOOL_NAME,
+    InterviewSkillResolver,
     build_interview_system_prompt,
     resolve_interview_script,
+    resolve_interview_skill_name,
 )
 from cogbase.core.profile import AccountProfileStore
 
@@ -297,6 +299,7 @@ async def _interview_turn_events(
     system_store: SystemStore | None = None,
     app_cache: AppCache | None = None,
     skill_registry=None,
+    interview_skill_resolver: InterviewSkillResolver | None = None,
 ):
     """Run one interview turn, yielding ``token`` / ``result`` / ``error`` events.
 
@@ -314,7 +317,28 @@ async def _interview_turn_events(
         "%s start account=%s history=%d", log_prefix, account_id, len(body.history)
     )
 
-    script = resolve_interview_script(skill_registry, account_id)
+    # Which script, then the script. The deployment's resolver (if any) answers the
+    # first question per account; without one every account in the process gets the
+    # env-level default, which is right for a single-vertical deployment and wrong
+    # for anything serving two.
+    try:
+        skill_name = await resolve_interview_skill_name(
+            interview_skill_resolver, account_id
+        )
+    except Exception as exc:
+        logger.exception("%s interview resolver failed account=%s", log_prefix, account_id)
+        # Not a fallback to the default: a resolver that raised did not say "use the
+        # default", and the default is one vertical's questionnaire saved as this
+        # account's profile forever.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not determine which onboarding interview applies to this "
+                f"account: {exc}"
+            ),
+        ) from exc
+
+    script = resolve_interview_script(skill_registry, account_id, name=skill_name)
     if script is None:
         # The interview *is* its script — questions and profile template both live
         # in a SKILL.md, so there is nothing to fall back to. Failing loudly beats
@@ -323,7 +347,7 @@ async def _interview_turn_events(
             status_code=503,
             detail=(
                 f"No onboarding interview script is registered (expected a skill "
-                f"named '{INTERVIEW_SKILL_NAME}')."
+                f"named '{skill_name}')."
             ),
         )
 
@@ -430,6 +454,7 @@ async def interview_chat(
     system_store: SystemStoreDep,
     app_cache: AppCacheDep,
     skill_registry: SkillRegistryDep,
+    interview_skill_resolver: InterviewSkillResolverDep = None,
 ) -> InterviewChatResponse:
     """One onboarding-interview turn.
 
@@ -448,6 +473,7 @@ async def interview_chat(
         system_store=system_store,
         app_cache=app_cache,
         skill_registry=skill_registry,
+        interview_skill_resolver=interview_skill_resolver,
     ):
         if event["type"] == "result":
             content = event["result"]["content"]
@@ -467,6 +493,7 @@ async def interview_chat_stream(
     system_store: SystemStoreDep,
     app_cache: AppCacheDep,
     skill_registry: SkillRegistryDep,
+    interview_skill_resolver: InterviewSkillResolverDep = None,
 ) -> StreamingResponse:
     """Stream an interview turn as Server-Sent Events.
 
@@ -483,6 +510,7 @@ async def interview_chat_stream(
                 system_store=system_store,
                 app_cache=app_cache,
                 skill_registry=skill_registry,
+                interview_skill_resolver=interview_skill_resolver,
             ):
                 if event["type"] == "token":
                     yield f"data: {json.dumps({'token': event['token']})}\n\n"

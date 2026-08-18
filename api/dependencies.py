@@ -11,6 +11,7 @@ from api.app_cache import AppCache
 from api.auth import InvalidToken, decode_token
 from api.system_resources import SystemResources
 from api.system_store import SystemStore
+from cogbase.core.onboarding import InterviewSkillResolver
 from cogbase.core.profile import AccountProfileStore
 from cogbase.skills.registry import SkillRegistry
 from cogbase.skills.store import SkillBundleStore
@@ -173,6 +174,18 @@ def get_skill_registry(request: Request) -> SkillRegistry:
     return request.app.state.skill_registry  # type: ignore[no-any-return]
 
 
+def get_interview_skill_resolver(request: Request) -> InterviewSkillResolver | None:
+    """The deployment's per-account onboarding-interview resolver, if it set one.
+
+    ``getattr`` rather than attribute access because this one is optional and
+    genuinely absent in most deployments: a single-vertical process wants the
+    process-wide ``COGBASE_INTERVIEW_SKILL`` and installs nothing here. An
+    embedder that serves several verticals sets ``app.state.interview_skill_resolver``
+    during startup — see :data:`cogbase.core.onboarding.InterviewSkillResolver`.
+    """
+    return getattr(request.app.state, "interview_skill_resolver", None)
+
+
 def get_skill_bundle_store(request: Request) -> SkillBundleStore:
     store = request.app.state.skill_bundle_store
     if store is None:
@@ -212,4 +225,7 @@ AppCacheDep = Annotated[AppCache, Depends(get_app_cache)]
 SystemResourcesDep = Annotated[SystemResources, Depends(get_system_resources)]
 SkillRegistryDep = Annotated[SkillRegistry, Depends(get_skill_registry)]
 SkillBundleStoreDep = Annotated[SkillBundleStore, Depends(get_skill_bundle_store)]
+InterviewSkillResolverDep = Annotated[
+    InterviewSkillResolver | None, Depends(get_interview_skill_resolver)
+]
 AccountProfileStoreDep = Annotated[AccountProfileStore, Depends(get_account_profile_store)]
