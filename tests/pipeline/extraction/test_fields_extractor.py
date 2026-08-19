@@ -22,6 +22,7 @@ _RECORD_SCHEMA = {
         "framework": {"type": "string"},
         "part": {"type": "string"},
         "subpart": {"type": ["string", "null"]},
+        "reviewed": {"type": "boolean"},
     },
 }
 
@@ -57,6 +58,17 @@ async def test_a_string_column_stays_a_string() -> None:
     assert records is not None
     assert records[0]["part"] == "211"
     assert isinstance(records[0]["part"], str)
+
+
+async def test_a_non_string_field_is_a_constant_not_a_template() -> None:
+    """And it has to be, because the template form cannot express it: Jinja folds
+    ``{{ false }}`` to a literal at compile time, so it renders as the *string*
+    "False", which a boolean column stores as True — silently, a non-empty string
+    being truthy. A config that means the constant writes the constant."""
+    extractor = FieldsExtractor({"reviewed": False}, record_schema=_RECORD_SCHEMA)
+    records = await extractor.extract(_doc())
+    assert records is not None
+    assert records[0]["reviewed"] is False
 
 
 async def test_doc_id_is_injected_not_declared() -> None:

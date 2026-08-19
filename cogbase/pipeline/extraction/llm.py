@@ -108,12 +108,13 @@ class LLMExtractor(ExtractorBase):
                            injected identity fields.
         record_schema:     JSON Schema dict for the final stored record (includes injected
                            fields such as ``doc_id`` and optional item id).
-        fields:            Deterministic field overlay — ``{name: jinja2 template}``,
-                           rendered against the source document (exposed as ``doc``)
-                           and merged onto every record after extraction. For values
-                           that are a property of the document rather than a finding
-                           in its text, so they come from the ingest rather than from
-                           the model.
+        fields:            Deterministic field overlay — ``{name: value}``, merged
+                           onto every record after extraction. A ``str`` value is a
+                           Jinja2 template rendered against the source document
+                           (exposed as ``doc``); anything else is a constant, stored
+                           as written. For values that are a property of the document
+                           rather than a finding in its text, so they come from the
+                           ingest rather than from the model.
         max_retries:       Retries on unparseable JSON.
         app_id:            Stable internal id of the owning application, included
                            in log lines for attribution.
@@ -126,7 +127,7 @@ class LLMExtractor(ExtractorBase):
         *,
         config: ExtractorConfig,
         record_schema: dict,
-        fields: dict[str, str] | None = None,
+        fields: dict[str, Any] | None = None,
         max_retries: int = 2,
         app_id: str = "",
     ) -> None:
@@ -138,8 +139,9 @@ class LLMExtractor(ExtractorBase):
 
         # Fail here rather than on the first document: an overlay is written into a
         # config, so a missing renderer is a deployment problem the app build should
-        # report, not something that surfaces mid-ingest.
-        if self._fields and not jinja_available():
+        # report, not something that surfaces mid-ingest. Only templates need one —
+        # a constant overlay is renderer-free.
+        if any(isinstance(v, str) for v in self._fields.values()) and not jinja_available():
             raise ValueError(
                 "extract-structured 'fields:' requires jinja2: pip install 'cogbase[api]'"
             )
@@ -215,7 +217,7 @@ class LLMExtractor(ExtractorBase):
 
     @staticmethod
     def _build_injected_fields_from_config(
-        config: ExtractorConfig, fields: dict[str, str] | None = None
+        config: ExtractorConfig, fields: dict[str, Any] | None = None
     ) -> dict[str, Callable]:
         injected_fields: dict[str, Callable] = {
             "doc_id": lambda doc, item, index: doc.doc_id,
@@ -233,9 +235,17 @@ class LLMExtractor(ExtractorBase):
         # Only ``doc`` is in scope: ``item`` would let an overlay depend on what the
         # model returned, which is the coupling it exists to remove, and ``index`` is
         # already spoken for by id_template.
-        for name, template in (fields or {}).items():
+        for name, value in (fields or {}).items():
+            if not isinstance(value, str):
+                # A constant, stored as written. It cannot go through the template
+                # path even by writing it as one: ``{{ false }}`` is folded to a
+                # literal at compile time and comes back as the *string* "False",
+                # which a boolean column then stores as True — silently, because a
+                # non-empty string is truthy.
+                injected_fields[name] = lambda doc, item, index, v=value: v
+                continue
             injected_fields[name] = (
-                lambda doc, item, index, t=template, n=name: render_defined(
+                lambda doc, item, index, t=value, n=name: render_defined(
                     t, {"doc": doc}, what=f"fields.{n}"
                 )
             )

@@ -1113,6 +1113,33 @@ async def test_overlay_keeps_the_native_type_of_a_metadata_value():
 
 
 @pytest.mark.asyncio
+async def test_overlay_writes_a_non_string_value_as_a_constant():
+    """A field that is a constant of the column's type cannot be written as a
+    template: Jinja folds ``{{ false }}`` to a literal at compile time, so it
+    renders as the *string* "False", which a boolean column stores as True —
+    silently, a non-empty string being truthy. So a non-string value in ``fields:``
+    is the constant, stored as written."""
+    extractor = LLMExtractor(
+        _make_llm(json.dumps({"text": "an obligation"})),
+        extraction_schema=_OVERLAY_EXTRACTION,
+        config=_overlay_config(),
+        record_schema={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "doc_id": {"type": "string"},
+                "reviewed": {"type": "boolean"},
+            },
+        },
+        fields={"reviewed": False},
+    )
+
+    records = await extractor.extract(_OVERLAY_DOC)
+
+    assert records[0]["reviewed"] is False
+
+
+@pytest.mark.asyncio
 async def test_overlay_raises_on_a_metadata_key_the_document_lacks():
     """StrictUndefined. An empty string written into a field that is matched by
     exact equality downstream is the silent failure the overlay exists to remove."""

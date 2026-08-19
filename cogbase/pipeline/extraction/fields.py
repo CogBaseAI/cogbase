@@ -60,9 +60,11 @@ class FieldsExtractor(ExtractorBase):
     """Emit one record per document from rendered ``fields:`` templates.
 
     Args:
-        fields:        ``{name: jinja2 template}``, rendered with the document
-                       exposed as ``doc``. Must be non-empty — a step with neither
-                       an extractor nor fields would write empty records forever.
+        fields:        ``{name: value}``. A ``str`` value is a Jinja2 template
+                       rendered with the document exposed as ``doc``; anything else
+                       is a constant, stored as written. Must be non-empty — a step
+                       with neither an extractor nor fields would write empty
+                       records forever.
         record_schema: JSON Schema of the stored record, used to check every field
                        name is a column the collection actually has.
         app_id:        Owning application, for log attribution.
@@ -74,7 +76,7 @@ class FieldsExtractor(ExtractorBase):
 
     def __init__(
         self,
-        fields: dict[str, str],
+        fields: dict[str, Any],
         *,
         record_schema: dict,
         app_id: str = "",
@@ -87,7 +89,7 @@ class FieldsExtractor(ExtractorBase):
                 "extract-structured with no 'extractor' requires 'fields': the step "
                 "would otherwise write a record containing only doc_id"
             )
-        if not jinja_available():
+        if any(isinstance(value, str) for value in fields.values()) and not jinja_available():
             raise ValueError(
                 "extract-structured 'fields:' requires jinja2: pip install 'cogbase[api]'"
             )
@@ -114,8 +116,15 @@ class FieldsExtractor(ExtractorBase):
 
     async def _extract_once(self, doc: Document) -> list[dict[str, Any]] | None:
         record: dict[str, Any] = {}
-        for name, template in self._fields.items():
-            value = render_defined(template, {"doc": doc}, what=f"fields.{name}")
+        for name, declared in self._fields.items():
+            # A non-string is a constant, and has to stay one: written as a template
+            # instead, ``{{ false }}`` is constant-folded to a literal at compile
+            # time and renders as the *string* "False", which a boolean column
+            # stores as True — silently, a non-empty string being truthy.
+            if not isinstance(declared, str):
+                record[name] = declared
+                continue
+            value = render_defined(declared, {"doc": doc}, what=f"fields.{name}")
             # Templates render through a NativeEnvironment, so a bare ``{{ x }}``
             # returns the literal-eval'd Python object: metadata "211" arrives as
             # int 211. A column the schema declares as a string then holds a number,

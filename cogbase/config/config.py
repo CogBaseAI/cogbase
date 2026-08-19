@@ -205,17 +205,18 @@ class ExtractStructuredStepConfig(PipelineStepBase):
     )
     # On the step rather than on ExtractorConfig: an overlay is not an extraction
     # behaviour, and a future non-LLM extractor should inherit it unchanged.
-    fields: dict[str, str] = Field(
+    fields: dict[str, Any] = Field(
         default_factory=dict,
         description=(
             "Deterministic fields merged onto every extracted record, overriding "
-            "same-named keys. Values are Jinja2 templates rendered against the "
-            "source document, which is exposed as `doc` (e.g. "
-            "{framework: '{{ doc.metadata.framework }}'}). Use for provenance that "
-            "is a property of the document rather than a finding in its text, and "
-            "so is known exactly at ingest rather than read out of the text by an "
-            "LLM. A name used here must be absent from the extractor's "
-            "extraction_schema and present in the collection's record schema."
+            "same-named keys. A string value is a Jinja2 template rendered against "
+            "the source document, which is exposed as `doc` (e.g. "
+            "{framework: '{{ doc.metadata.framework }}'}); a non-string value is a "
+            "constant, stored as written. Use for provenance that is a property of "
+            "the document rather than a finding in its text, and so is known "
+            "exactly at ingest rather than read out of the text by an LLM. A name "
+            "used here must be absent from the extractor's extraction_schema and "
+            "present in the collection's record schema."
         ),
         json_schema_extra={"prompt_skip": True},
     )
