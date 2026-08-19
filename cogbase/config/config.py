@@ -709,6 +709,52 @@ def _validate_save_primary_fields(workflow: "WorkflowConfig") -> None:
                 )
 
 
+def _same_extractor(
+    a: "ExtractStructuredStepConfig", b: "ExtractStructuredStepConfig"
+) -> bool:
+    """Whether two extract-structured steps run the same extraction.
+
+    Two steps with no extractor at all are the same extraction: each writes one
+    record per document from its own ``fields:`` templates, and neither can shape
+    the record differently from the other in a way a schema would express.
+    """
+    if a.extractor is None or b.extractor is None:
+        return a.extractor is None and b.extractor is None
+    return (
+        a.extractor.extraction_schema == b.extractor.extraction_schema
+        and a.extractor.prompt == b.extractor.prompt
+    )
+
+
+def _routing_is_disjoint(a: "PipelineConfig", b: "PipelineConfig") -> bool:
+    """Whether no single document can reach both pipelines by metadata routing.
+
+    True when both declare a ``match`` and the two disagree on the value of some
+    key they share. ``WhenCondition.metadata`` is a conjunction of equalities, so
+    one key with two values is enough: a document satisfying one condition fails
+    the other, whichever order they are tried in.
+
+    This is what lets one structured collection be written by a different extractor
+    per framework — the case the vertical packs need, where an obligation's citation
+    grammar belongs to the regulation it came from and a union grammar would accept
+    every framework's citations under every other framework's prefix.
+
+    Deliberately conservative in both directions it can be wrong:
+
+    - A pipeline with no ``match`` is never disjoint from anything. It is reachable
+      only by LLM routing, which can send any document to it.
+    - Metadata routing is first-match-wins and falls back to the LLM on a miss
+      (``CogBaseApp._find_pipeline``), so a document that matches *neither* condition
+      can still land in either pipeline. Disjointness makes the ambiguity a routing
+      question rather than a silent per-document coin flip; it does not remove it.
+      Keep match conditions exhaustive over the documents a pack expects.
+    """
+    if a.match is None or b.match is None:
+        return False
+    shared = set(a.match.metadata) & set(b.match.metadata)
+    return any(a.match.metadata[key] != b.match.metadata[key] for key in shared)
+
+
 def _validate_record_embed_steps(
     pipeline: "PipelineConfig", sc_by_name: dict
 ) -> None:
@@ -993,28 +1039,34 @@ class AppConfig(ConfigPromptMixin, BaseModel):
                     )
             _validate_record_embed_steps(pipeline, sc_by_name)
 
-        # Reject ambiguous multi-extractor writes to the same structured collection.
-        # Two extract-structured steps may share a collection only if their schema and
-        # prompt are identical (same extractor, different routing condition).
-        extractor_by_collection: dict[str, tuple[str, ExtractStructuredStepConfig]] = {}
+        # Reject *ambiguous* multi-extractor writes to the same structured collection.
+        # Two extract-structured steps may share a collection when either their
+        # extractor is identical (same schema and prompt, different routing
+        # condition), or their pipelines cannot both receive one document — see
+        # _routing_is_disjoint. What is rejected is two different extractors that a
+        # single document could reach, where which schema shapes the record then
+        # depends on pipeline order.
+        extractor_by_collection: dict[str, tuple[PipelineConfig, ExtractStructuredStepConfig]] = {}
         for pipeline in self.pipelines:
             for step in pipeline.steps:
                 if not isinstance(step, ExtractStructuredStepConfig):
                     continue
                 if step.collection not in extractor_by_collection:
-                    extractor_by_collection[step.collection] = (pipeline.name, step)
+                    extractor_by_collection[step.collection] = (pipeline, step)
                 else:
                     first_pipeline, first_step = extractor_by_collection[step.collection]
-                    if (
-                        step.extractor.extraction_schema != first_step.extractor.extraction_schema
-                        or step.extractor.prompt != first_step.extractor.prompt
-                    ):
-                        raise ValueError(
-                            f"Structured collection {step.collection!r} is written by "
-                            f"extract-structured steps with different schemas or prompts: "
-                            f"pipeline {first_pipeline!r} and pipeline {pipeline.name!r}. "
-                            "Each structured collection must have a single consistent extractor."
-                        )
+                    if _same_extractor(step, first_step):
+                        continue
+                    if _routing_is_disjoint(first_pipeline, pipeline):
+                        continue
+                    raise ValueError(
+                        f"Structured collection {step.collection!r} is written by "
+                        f"extract-structured steps with different schemas or prompts: "
+                        f"pipeline {first_pipeline.name!r} and pipeline {pipeline.name!r}, "
+                        "whose match conditions do not tell their documents apart. "
+                        "Either give them one extractor, or give the pipelines "
+                        "metadata match conditions that disagree on a shared key."
+                    )
 
         # Validate workflow collection references and save-step primary_fields.
         for workflow in self.workflows:

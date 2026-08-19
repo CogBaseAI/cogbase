@@ -964,6 +964,74 @@ pipelines:
 """
 
 
+_SHARED_COLLECTION_TWO_EXTRACTORS_YAML = textwrap.dedent("""\
+    name: two-frameworks
+    llm:
+      model: gpt-4o-mini
+      api_key: sk-test
+    structured_collections:
+      - name: requirements
+        description: Obligations from any framework.
+        schema: '{"type":"object","properties":{"doc_id":{"type":"string"},"citation":{"type":"string"}}}'
+        primary_fields: [citation]
+    pipelines:
+      - name: rules-a
+        routing_description: Framework A rules.
+        match: {metadata: {doc_type: rule, framework: A}}
+        steps:
+          - tool: extract-structured
+            collection: requirements
+            extractor:
+              extraction_schema: '{"type":"object","properties":{"citation":{"type":"string","pattern":"^A [0-9]+$"}}}'
+              prompt: "extract A citations"
+      - name: rules-b
+        routing_description: Framework B rules.
+        match: {metadata: {doc_type: rule, framework: B}}
+        steps:
+          - tool: extract-structured
+            collection: requirements
+            extractor:
+              extraction_schema: '{"type":"object","properties":{"citation":{"type":"string","pattern":"^B [0-9]+$"}}}'
+              prompt: "extract B citations"
+""")
+
+
+class TestBuildAppPerStepExtractors:
+    """One extractor per extract-structured *step*, not per collection.
+
+    Extractors used to be built in a dict keyed by collection name, from a
+    ``{s.collection: s}`` comprehension over every pipeline — so when two pipelines
+    wrote one collection, the last one in the config supplied the extractor for
+    both. Nothing raised: documents routed to the first pipeline were extracted
+    against the second's schema and prompt, and the records looked plausible.
+    """
+
+    @patch("api.factory._build_llm")
+    async def test_each_pipeline_keeps_its_own_extractor(self, mock_build_llm):
+        mock_build_llm.return_value = _mock_llm()
+        cfg = AppConfig.from_yaml(_SHARED_COLLECTION_TWO_EXTRACTORS_YAML)
+        app = await build_app(
+            cfg,
+            system=SystemResources(
+                structured_store=InMemoryStructuredStore(),
+                document_store=InMemoryDocumentStore(),
+            ),
+            app_id=cfg.name, app_status="initializing",
+            task_store=_mock_task_store(),
+        )
+
+        by_pipeline = {
+            p.name: next(s for s in p._steps if s.collection == "requirements").extractor
+            for p in app._pipelines
+        }
+        patterns = {
+            name: extractor._extraction_schema["properties"]["citation"]["pattern"]
+            for name, extractor in by_pipeline.items()
+        }
+        assert patterns == {"rules-a": "^A [0-9]+$", "rules-b": "^B [0-9]+$"}
+        assert by_pipeline["rules-a"] is not by_pipeline["rules-b"]
+
+
 class TestBuildAppMatchMetadataFields:
     @patch("api.factory._build_llm")
     @patch("api.factory._build_embedder")

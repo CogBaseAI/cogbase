@@ -1285,7 +1285,9 @@ _SCHEMA_A = '{"type":"object","properties":{"a":{"type":"string"}}}'
 _SCHEMA_B = '{"type":"object","properties":{"b":{"type":"string"}}}'
 
 
-def _multi_extractor_yaml(*, schema2: str, prompt2: str) -> str:
+def _multi_extractor_yaml(
+    *, schema2: str, prompt2: str, match1: str = "", match2: str = ""
+) -> str:
     """Two pipelines each with an extract-structured step targeting the same collection."""
     return textwrap.dedent(f"""\
         name: conflict-test
@@ -1300,6 +1302,7 @@ def _multi_extractor_yaml(*, schema2: str, prompt2: str) -> str:
         pipelines:
           - name: pipeline-a
             routing_description: Doc type A.
+            {match1}
             steps:
               - tool: extract-structured
                 collection: shared
@@ -1308,6 +1311,7 @@ def _multi_extractor_yaml(*, schema2: str, prompt2: str) -> str:
                   prompt: "extract A"
           - name: pipeline-b
             routing_description: Doc type B.
+            {match2}
             steps:
               - tool: extract-structured
                 collection: shared
@@ -1315,6 +1319,12 @@ def _multi_extractor_yaml(*, schema2: str, prompt2: str) -> str:
                   extraction_schema: '{schema2}'
                   prompt: "{prompt2}"
     """)
+
+
+#: ``match:`` blocks at the indentation _multi_extractor_yaml interpolates them at.
+_MATCH_A = "match: {metadata: {doc_type: rule, framework: A}}"
+_MATCH_B = "match: {metadata: {doc_type: rule, framework: B}}"
+_MATCH_SAME = "match: {metadata: {doc_type: rule}}"
 
 
 class TestMultiExtractorConflictValidation:
@@ -1333,6 +1343,75 @@ class TestMultiExtractorConflictValidation:
         yaml_text = _multi_extractor_yaml(schema2=_SCHEMA_A, prompt2="extract B differently")
         with pytest.raises(Exception, match=r"'shared'.*different schemas or prompts"):
             AppConfig.from_yaml(yaml_text)
+
+    def test_disjoint_match_conditions_allow_different_extractors(self):
+        """One collection, one extractor per document kind — the case a vertical pack
+        needs when a field's grammar belongs to the source rather than to the column.
+
+        The rule this relaxes is about *ambiguity*, not about variety: with the two
+        pipelines disagreeing on ``framework``, no document satisfies both conditions,
+        so which extractor shapes a record is decided by the document rather than by
+        which pipeline the config happens to list first.
+        """
+        yaml_text = _multi_extractor_yaml(
+            schema2=_SCHEMA_B, prompt2="extract B", match1=_MATCH_A, match2=_MATCH_B
+        )
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert [p.match.metadata["framework"] for p in cfg.pipelines] == ["A", "B"]
+
+    def test_match_conditions_agreeing_on_every_key_still_raises(self):
+        """Both pipelines match the same documents, so the first one always wins and
+        the second extractor is unreachable — the original ambiguity, unchanged."""
+        yaml_text = _multi_extractor_yaml(
+            schema2=_SCHEMA_B, prompt2="extract B", match1=_MATCH_SAME, match2=_MATCH_SAME
+        )
+        with pytest.raises(Exception, match=r"'shared'.*different schemas or prompts"):
+            AppConfig.from_yaml(yaml_text)
+
+    def test_one_pipeline_without_a_match_still_raises(self):
+        """A pipeline with no match is reachable only by LLM routing, which can send
+        it any document — including every document the matched pipeline wanted."""
+        yaml_text = _multi_extractor_yaml(
+            schema2=_SCHEMA_B, prompt2="extract B", match1=_MATCH_A
+        )
+        with pytest.raises(Exception, match=r"'shared'.*different schemas or prompts"):
+            AppConfig.from_yaml(yaml_text)
+
+    def test_two_steps_with_no_extractor_are_not_a_conflict(self):
+        """A step with no extractor writes one record per document from its own
+        ``fields:`` templates. Two of them cannot disagree about a schema, and
+        reading ``.extractor.extraction_schema`` off one used to raise
+        AttributeError here — surfacing as an opaque 422 rather than as a config
+        error naming anything.
+        """
+        yaml_text = textwrap.dedent(f"""\
+            name: stamped-test
+            llm:
+              model: gpt-4o-mini
+              api_key: sk-test
+            structured_collections:
+              - name: shared
+                description: Shared structured collection.
+                schema: '{_SCHEMA_A}'
+                primary_fields: [a]
+            pipelines:
+              - name: pipeline-a
+                routing_description: Doc type A.
+                steps:
+                  - tool: extract-structured
+                    collection: shared
+                    fields:
+                      a: "{{{{ doc.metadata.a }}}}"
+              - name: pipeline-b
+                routing_description: Doc type B.
+                steps:
+                  - tool: extract-structured
+                    collection: shared
+                    fields:
+                      a: "{{{{ doc.metadata.a }}}}"
+        """)
+        cfg = AppConfig.from_yaml(yaml_text)
+        assert len(cfg.pipelines) == 2
 
     def test_error_names_both_conflicting_pipelines(self):
         yaml_text = _multi_extractor_yaml(schema2=_SCHEMA_B, prompt2="extract B")

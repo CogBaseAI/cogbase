@@ -10,7 +10,6 @@ from cogbase.config.config import (
     ChunkerConfig,
     DocumentEmbedUpsertStepConfig,
     ExtractStructuredStepConfig,
-    ExtractorConfig,
     ChunkEmbedUpsertStepConfig,
     RecordEmbedUpsertStepConfig,
 )
@@ -86,6 +85,40 @@ def _build_chunker(cfg: ChunkerConfig) -> Any:
         from cogbase.pipeline.chunking.langchain import build_recursive_chunker
         return build_recursive_chunker(cfg.chunk_size, cfg.overlap)
     raise ValueError(f"Unknown chunker type: {cfg.type!r}")
+
+
+def _build_extractor(
+    step: ExtractStructuredStepConfig,
+    record_schema: dict | None,
+    llm: Any,
+    app_id: str,
+) -> ExtractorBase | None:
+    """Build the extractor for one ``extract-structured`` step.
+
+    Per step rather than per collection. Two pipelines may write one structured
+    collection — the same table read by one workflow, filled from documents that
+    need different extraction — and when they do, each step's own schema and prompt
+    are what run against the documents that pipeline routes.
+
+    Returns ``None`` when the collection has no record schema, which
+    ``AppConfig._validate`` has already rejected; the pipeline step then extracts
+    nothing rather than raising here.
+    """
+    if record_schema is None:
+        return None
+    if step.extractor is not None:
+        return LLMExtractor(
+            llm,
+            extraction_schema=_json.loads(step.extractor.extraction_schema),
+            config=step.extractor,
+            record_schema=record_schema,
+            fields=step.fields,
+            app_id=app_id,
+        )
+    # No extractor, but the step config validator guarantees fields: — every column
+    # comes from the document's metadata, so there is nothing to read out of the
+    # text and no reason to spend an LLM call.
+    return FieldsExtractor(step.fields, record_schema=record_schema, app_id=app_id)
 
 
 async def build_app(
@@ -199,8 +232,16 @@ async def build_app(
     # --- Structured collections ---
     structured_collections: list[StructuredCollection] = []
     structured_schemas: list[CollectionSchema] = []
-    extractors_by_col: dict[str, ExtractorBase] = {}
-    step_by_col: dict[str, Any] = {s.collection: s for p in config.pipelines for s in p.steps}
+    # Record schemas, kept for the pipeline loop below. Extractors are built there,
+    # one per extract-structured *step*, rather than one per collection: a collection
+    # may be written by more than one pipeline, and when those pipelines route on
+    # different metadata their extractors are legitimately different — one citation
+    # grammar per regulatory framework, say, over one shared obligations table. Keyed
+    # by collection, the last pipeline in the config silently supplied the extractor
+    # for all of them, and every document was then extracted against the wrong schema
+    # with nothing raising. AppConfig rejects the genuinely ambiguous case (two
+    # extractors whose pipelines' match conditions do not tell their documents apart).
+    record_schema_by_col: dict[str, dict] = {}
     for sc_cfg in config.structured_collections:
         if structured_store is None:
             raise ValueError(
@@ -209,6 +250,7 @@ async def build_app(
             )
 
         record_schema = _json.loads(sc_cfg.schema_)
+        record_schema_by_col[sc_cfg.name] = record_schema
         sc_schema = CollectionSchema(
             name=sc_cfg.name,
             description=sc_cfg.description,
@@ -218,26 +260,6 @@ async def build_app(
 
         structured_collections.append(StructuredCollection(schema=sc_schema, store=structured_store))
         structured_schemas.append(sc_schema)
-
-        step = step_by_col.get(sc_cfg.name)
-        ext_cfg: ExtractorConfig | None = step.extractor if isinstance(step, ExtractStructuredStepConfig) else None
-        if ext_cfg is not None:
-            extraction_schema = _json.loads(ext_cfg.extraction_schema)
-            extractors_by_col[sc_cfg.name] = LLMExtractor(
-                llm,
-                extraction_schema=extraction_schema,
-                config=ext_cfg,
-                record_schema=record_schema,
-                fields=step.fields,
-                app_id=app_id,
-            )
-        elif isinstance(step, ExtractStructuredStepConfig):
-            # No extractor, but the step config validator guarantees fields: —
-            # every column comes from the document's metadata, so there is nothing
-            # to read out of the text and no reason to spend an LLM call.
-            extractors_by_col[sc_cfg.name] = FieldsExtractor(
-                step.fields, record_schema=record_schema, app_id=app_id,
-            )
 
     # --- Create collections in backing stores (idempotent) ---
     if app_status != "active":
@@ -265,7 +287,9 @@ async def build_app(
             if isinstance(s, ChunkEmbedUpsertStepConfig):
                 ps.chunker = _build_chunker(s.chunker)
             elif isinstance(s, ExtractStructuredStepConfig):
-                ps.extractor = extractors_by_col.get(s.collection)
+                ps.extractor = _build_extractor(
+                    s, record_schema_by_col.get(s.collection), llm, app_id
+                )
             elif isinstance(s, DocumentEmbedUpsertStepConfig):
                 ps.llm = llm
                 ps.doc_prompt = s.doc_prompt or DEFAULT_DOC_PROMPT
