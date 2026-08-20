@@ -18,7 +18,27 @@ deployment_mode: dev
 # HMAC secret used to sign and verify access tokens. Must be identical on every
 # node. Required in saas mode (the service refuses to start without it); omit it
 # in dev mode to use an insecure built-in development secret.
+#
+# Prefer the COGBASE_JWT_SECRET env var over this YAML field for anything but
+# local dev: the env var is read once at startup and deleted from the process
+# environment before any request is served, so a tenant-triggered subprocess
+# (run_python/shell) has nothing to inherit even if the allowlist ever widened
+# by mistake. A value set here stays in the process environment/on disk for the
+# life of the container. Same reasoning applies to llm.api_key /
+# embedding.api_key below — prefer COGBASE_LLM_API_KEY / COGBASE_EMBEDDING_API_KEY.
 # jwt_secret: change-me-to-a-long-random-string
+
+# Whether an authenticated account may upload/replace/delete its own skills via
+# POST/PUT/DELETE /skills. Defaults to false — a tenant-uploaded skill can
+# declare arbitrary pip installs, so the safe configuration is the one you get
+# by not thinking about it. Only set this if this deployment genuinely wants
+# tenant-uploaded skills.
+# tenant_skill_upload: false
+
+# Whether PATCH /system/config may live-patch the system LLM/embedding config.
+# Defaults to false: the route has no authentication of its own, so a managed
+# deployment leaves it closed and edits this file (then restarts) instead.
+# system_config_writable: false
 
 # Store backend for the application registry (CogBase's own metadata).
 # Supports the same backends as application stores: sqlite, postgres, or memory.

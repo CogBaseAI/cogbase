@@ -65,6 +65,17 @@ class SystemConfig(BaseModel):
                           be identical on every node. Required in ``saas`` mode
                           (enforced at startup); when ``None`` an insecure built-in
                           development secret is used with a warning.
+        tenant_skill_upload: Whether an authenticated account may upload/replace/
+                          delete its own skills via ``POST/PUT/DELETE /skills``.
+                          Defaults to ``False`` — the safe configuration is the
+                          one you get by not thinking about it. A deployment that
+                          wants tenant-uploaded skills (arbitrary ``pip install``
+                          on upload) opts in explicitly.
+        system_config_writable: Whether ``PATCH /system/config`` may live-patch
+                          the system LLM/embedding config. Defaults to ``False``;
+                          the route is unauthenticated by construction, so a
+                          managed deployment leaves it closed and edits the
+                          system YAML (then restarts) instead.
     """
 
     system_db: StructuredStoreConfig = StructuredStoreConfig(
@@ -79,6 +90,8 @@ class SystemConfig(BaseModel):
     llm: LLMConfig | None = None
     embedding: EmbeddingConfig | None = None
     skills_dir: str | None = None  # directory containing <skill_name>/SKILL.md files
+    tenant_skill_upload: bool = False
+    system_config_writable: bool = False
 
     @classmethod
     def from_yaml(cls, yaml_text: str) -> "SystemConfig":

@@ -9,7 +9,13 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from api.app_cache import AppCache
-from api.dependencies import get_app_cache, get_system_resources, get_system_store, get_skill_registry
+from api.dependencies import (
+    get_app_cache,
+    get_system_resources,
+    get_system_store,
+    get_skill_registry,
+    set_system_config_writable,
+)
 from api.main import app
 from api.system_resources import SystemResources
 from api.system_store import SystemStore
@@ -56,11 +62,17 @@ async def client_with_resources(request):
     app.dependency_overrides[get_system_resources] = lambda: resources
     app.dependency_overrides[get_skill_registry] = lambda: SkillRegistry()
 
+    # This file exercises GET/PATCH mechanics, not the system_config_writable
+    # gate itself (see TestPatchDisabledByDefault below) — opt in explicitly
+    # rather than relying on a permissive test-only default.
+    set_system_config_writable(True)
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac, resources, app_cache, system_store
 
     app.dependency_overrides.clear()
+    set_system_config_writable(False)
 
 
 # ---------------------------------------------------------------------------
@@ -389,3 +401,49 @@ class TestPatchSystemConfig:
         assert resp.status_code == 422
         overrides = await system_store.load_system_config_overrides()
         assert "llm" not in overrides
+
+
+# ---------------------------------------------------------------------------
+# system_config_writable gate (closed by default)
+# ---------------------------------------------------------------------------
+
+class TestPatchDisabledByDefault:
+    """PATCH /system/config has no authentication of its own — closed by
+    default is what stands in for it. GET must stay open (it's masked,
+    read-only diagnostics)."""
+
+    @pytest_asyncio.fixture
+    async def disabled_client(self):
+        resources = SystemResources()
+        system_store = SystemStore(store=InMemoryStructuredStore())
+        await system_store.setup()
+
+        app.dependency_overrides[get_system_store] = lambda: system_store
+        app.dependency_overrides[get_app_cache] = lambda: AppCache()
+        app.dependency_overrides[get_system_resources] = lambda: resources
+        app.dependency_overrides[get_skill_registry] = lambda: SkillRegistry()
+        set_system_config_writable(False)  # explicit: this is the default under test
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_patch_returns_403(self, disabled_client):
+        resp = await disabled_client.patch("/system/config", json={
+            "llm": {
+                "provider": "openai",
+                "model": "gpt-4o",
+                "api_key": "sk-abcdefgh",
+                "base_url": "https://api.openai.com/v1",
+            }
+        })
+        assert resp.status_code == 403
+        assert "disabled" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_get_is_unaffected(self, disabled_client):
+        resp = await disabled_client.get("/system/config")
+        assert resp.status_code == 200

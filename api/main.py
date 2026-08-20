@@ -18,7 +18,11 @@ from fastapi.staticfiles import StaticFiles
 
 from cogbase.config.config import AppConfig
 from api.auth import require_configured_jwt_secret, set_jwt_secret
-from api.dependencies import set_deployment_mode
+from api.dependencies import (
+    set_deployment_mode,
+    set_system_config_writable,
+    set_tenant_skill_upload,
+)
 from api.factory import build_app
 from cogbase.embeddings import build_embedding
 from cogbase.llms import build_llm
@@ -73,12 +77,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("system_config loaded system_db=%s mode=%s",
                 system_cfg.system_db, system_cfg.deployment_mode)
 
+    # Secrets-never-on-disk: let jwt_secret and the provider api_keys arrive as
+    # env vars instead of (or on top of) whatever the system YAML has, so an
+    # image's YAML need carry no real secret. Applied before anything reads
+    # system_cfg.jwt_secret/llm/embedding; the env vars themselves are deleted
+    # below, before `yield`, so no later request-time code — including a
+    # tenant-triggered subprocess inheriting os.environ — can read them back.
+    if secret := os.environ.get("COGBASE_JWT_SECRET"):
+        system_cfg.jwt_secret = secret
+    if system_cfg.llm and (key := os.environ.get("COGBASE_LLM_API_KEY")):
+        system_cfg.llm.api_key = key
+    if system_cfg.embedding and (key := os.environ.get("COGBASE_EMBEDDING_API_KEY")):
+        system_cfg.embedding.api_key = key
+
     # Apply the operator-declared mode and signing secret, then refuse to boot a
     # managed deployment on the forgeable dev secret — in saas mode the access
     # token is the tenant boundary.
     set_deployment_mode(system_cfg.deployment_mode)
     set_jwt_secret(system_cfg.jwt_secret)
     require_configured_jwt_secret(system_cfg.deployment_mode)
+    set_tenant_skill_upload(system_cfg.tenant_skill_upload)
+    set_system_config_writable(system_cfg.system_config_writable)
 
     system_db_store = build_structured_store(system_cfg.system_db)
     system_store = SystemStore(store=system_db_store)
@@ -228,6 +247,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.exception("startup task recovery failed")
 
     asyncio.create_task(_recover())
+
+    # Everything above that needed these has already read them (set_jwt_secret,
+    # build_llm/build_embedding baking the key into their HTTP clients). Nothing
+    # after this point may reconstruct a secret from os.environ — most notably
+    # cogbase.core.query_runner._tool_env, which hands a tenant-triggered
+    # subprocess a copy of the process environment.
+    for var in ("COGBASE_JWT_SECRET", "COGBASE_LLM_API_KEY", "COGBASE_EMBEDDING_API_KEY"):
+        os.environ.pop(var, None)
 
     yield
 

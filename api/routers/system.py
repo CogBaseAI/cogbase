@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, status
 from cogbase.config.models import EmbeddingConfig, LLMConfig
 from cogbase.embeddings import build_embedding
 from cogbase.llms import build_llm
-from api.dependencies import AppCacheDep, SystemResourcesDep, SystemStoreDep
+from api.dependencies import AppCacheDep, SystemResourcesDep, SystemStoreDep, get_system_config_writable
 from api.models import (
     SystemConfigResponse,
     SystemEmbeddingConfigResponse,
@@ -79,6 +79,15 @@ async def update_system_config(
     and do not persist across service restarts — update your system YAML file to
     make them permanent.
     """
+    if not get_system_config_writable():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "System config updates are disabled on this deployment; "
+                "edit the system YAML and restart."
+            ),
+        )
+
     if body.llm is None and body.embedding is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

@@ -465,6 +465,22 @@ def test_tool_env_exposes_workdir_and_skill_dir(tmp_path):
     assert "COGBASE_SKILL_DIR" not in bare
 
 
+def test_tool_env_only_carries_allowlisted_vars(tmp_path, monkeypatch):
+    # A tenant-triggered subprocess (the document text it reads is
+    # attacker-influenced) must not inherit an arbitrary process env var —
+    # only the ones _TOOL_ENV_ALLOWLIST names, plus what _tool_env itself adds.
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("SOME_OTHER_SECRET_LOOKING_VAR", "should-not-leak")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-should-not-leak")
+
+    runner = _runner(MagicMock())
+    env = runner._tool_env(None, None)
+
+    assert "SOME_OTHER_SECRET_LOOKING_VAR" not in env
+    assert "OPENAI_API_KEY" not in env
+    assert env.get("PATH") == "/usr/bin"
+
+
 def test_system_prompt_advertises_paths(tmp_path):
     from pathlib import Path
 

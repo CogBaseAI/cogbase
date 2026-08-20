@@ -81,6 +81,16 @@ logger = logging.getLogger(__name__)
 
 _TOOL_TIMEOUT = 30  # seconds
 
+# `_tool_env` builds the environment for a tenant-triggered subprocess
+# (`run_python`/`shell`) from this allowlist rather than a full copy of the
+# service process's own environment — the process env may hold secrets
+# (jwt_secret, provider api_keys) the subprocess must never see, since the
+# document text it's fed is attacker-influenced (see docs/extension-points.md
+# §2.8). PATH/HOME/TMPDIR are what a subprocess needs to resolve interpreters
+# and binaries and behave predictably; LANG/LC_ALL avoid encoding surprises in
+# its output. Widen only for a real, observed tool need — never back to a copy.
+_TOOL_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
+
 # Common stdlib modules pre-imported before every inline `python` snippet. The
 # model frequently uses these (json.dump, re.sub, datetime, pathlib) without
 # emitting the corresponding `import`, which fails as a NameError even though the
@@ -1753,7 +1763,7 @@ class QueryRunner:
 
     @staticmethod
     def _tool_env(skill, workdir: str | None = None) -> dict:
-        env = os.environ.copy()
+        env = {k: v for k, v in os.environ.items() if k in _TOOL_ENV_ALLOWLIST}
         if skill and skill.site_packages:
             existing = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = f"{skill.site_packages}:{existing}" if existing else skill.site_packages

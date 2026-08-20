@@ -26,16 +26,35 @@ from api.auth import (
     require_configured_jwt_secret,
     set_jwt_secret,
 )
-from api.dependencies import get_deployment_mode, set_deployment_mode
+from api.dependencies import (
+    get_deployment_mode,
+    get_system_config_writable,
+    get_tenant_skill_upload,
+    set_deployment_mode,
+    set_system_config_writable,
+    set_tenant_skill_upload,
+)
 from api.system_config import SystemConfig
 
 
 @pytest.fixture(autouse=True)
 def _restore_module_state():
     """Snapshot and restore the auth/deployment module globals around each test."""
-    saved = (auth._jwt_secret, auth._warned_dev_secret, dependencies._deployment_mode)
+    saved = (
+        auth._jwt_secret,
+        auth._warned_dev_secret,
+        dependencies._deployment_mode,
+        dependencies._tenant_skill_upload,
+        dependencies._system_config_writable,
+    )
     yield
-    auth._jwt_secret, auth._warned_dev_secret, dependencies._deployment_mode = saved
+    (
+        auth._jwt_secret,
+        auth._warned_dev_secret,
+        dependencies._deployment_mode,
+        dependencies._tenant_skill_upload,
+        dependencies._system_config_writable,
+    ) = saved
 
 
 # ---------------------------------------------------------------------------
@@ -135,11 +154,15 @@ class TestSystemConfigFields:
         cfg = SystemConfig()
         assert cfg.deployment_mode == "dev"
         assert cfg.jwt_secret is None
+        assert cfg.tenant_skill_upload is False
+        assert cfg.system_config_writable is False
 
     def test_omitted_keys_keep_defaults(self):
         cfg = SystemConfig.from_yaml("system_db: {type: memory}")
         assert cfg.deployment_mode == "dev"
         assert cfg.jwt_secret is None
+        assert cfg.tenant_skill_upload is False
+        assert cfg.system_config_writable is False
 
     def test_values_parsed_from_yaml(self):
         cfg = SystemConfig.from_yaml("deployment_mode: saas\njwt_secret: hunter2\n")
@@ -149,3 +172,38 @@ class TestSystemConfigFields:
     def test_invalid_deployment_mode_rejected(self):
         with pytest.raises(ValidationError):
             SystemConfig.from_yaml("deployment_mode: bogus")
+
+    def test_tenant_skill_upload_parsed_from_yaml(self):
+        cfg = SystemConfig.from_yaml("tenant_skill_upload: true")
+        assert cfg.tenant_skill_upload is True
+
+    def test_system_config_writable_parsed_from_yaml(self):
+        cfg = SystemConfig.from_yaml("system_config_writable: true")
+        assert cfg.system_config_writable is True
+
+
+# ---------------------------------------------------------------------------
+# tenant_skill_upload / system_config_writable setter / getter
+# ---------------------------------------------------------------------------
+
+
+class TestTenantSkillUploadState:
+    def test_default_is_closed(self):
+        # No permissive pre-startup fallback, unlike deployment_mode: the safe
+        # default must be what a bare-ASGI unit test gets too.
+        assert dependencies._tenant_skill_upload is False
+        assert get_tenant_skill_upload() is False
+
+    def test_set_overrides_for_process_lifetime(self):
+        set_tenant_skill_upload(True)
+        assert get_tenant_skill_upload() is True
+
+
+class TestSystemConfigWritableState:
+    def test_default_is_closed(self):
+        assert dependencies._system_config_writable is False
+        assert get_system_config_writable() is False
+
+    def test_set_overrides_for_process_lifetime(self):
+        set_system_config_writable(True)
+        assert get_system_config_writable() is True

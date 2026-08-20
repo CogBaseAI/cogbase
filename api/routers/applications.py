@@ -245,13 +245,14 @@ def _to_filter(fr: FilterRequest) -> Filter:
     return Filter(field=fr.field, op=op, value=fr.value)
 
 
-def _validate_skills(skill_ids: list[str], skill_registry) -> None:
-    """Raise HTTP 422 if a skill id is unknown or is not an application skill."""
+def _validate_skills(skill_ids: list[str], skill_registry, account_id: str) -> None:
+    """Raise HTTP 422 if a skill id is unknown, not visible to *account_id*, or
+    is not an application skill."""
     unknown = []
     wrong_surface = []
     for skill_id in skill_ids:
         try:
-            skill = skill_registry.get(skill_id)
+            skill = skill_registry.get(skill_id, account_id)
         except KeyError:
             unknown.append(skill_id)
             continue
@@ -321,7 +322,7 @@ async def create_application(
     yaml_text, config = _parse_bundle(await bundle.read())
 
     if config.skills:
-        _validate_skills(config.skills, skill_registry)
+        _validate_skills(config.skills, skill_registry, scope.account_id)
 
     if await system_store.get_app(scope.account_id, scope.namespace_id, config.name) is not None:
         raise HTTPException(
@@ -437,7 +438,7 @@ async def update_application(
     yaml_text, config = _parse_bundle(await bundle.read())
 
     if config.skills:
-        _validate_skills(config.skills, skill_registry)
+        _validate_skills(config.skills, skill_registry, scope.account_id)
 
     if config.name != app_name and await system_store.get_app(scope.account_id, scope.namespace_id, config.name) is not None:
         raise HTTPException(

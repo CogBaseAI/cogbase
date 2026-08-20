@@ -22,6 +22,7 @@ from api.dependencies import (
     SkillBundleStoreDep,
     SkillRegistryDep,
     SystemStoreDep,
+    get_tenant_skill_upload,
 )
 from api.models import (
     SkillContentResponse,
@@ -125,6 +126,15 @@ def _reject_if_builtin(skill) -> None:
         )
 
 
+def _reject_if_tenant_upload_disabled() -> None:
+    """Block skill upload/replace/delete unless the operator has opted in."""
+    if not get_tenant_skill_upload():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant skill upload is disabled on this deployment.",
+        )
+
+
 async def _ingest_bundle(
     skill_id: str,
     raw: bytes,
@@ -182,6 +192,7 @@ async def upload_skill(
     bundle: UploadFile = File(..., description="ZIP bundle containing SKILL.md and any scripts/assets"),
 ) -> SkillResponse:
     """Upload a new skill from a ZIP bundle. Assigns and returns a stable id."""
+    _reject_if_tenant_upload_disabled()
     raw = await bundle.read()
     skill_id = uuid.uuid4().hex
     return await _ingest_bundle(
@@ -199,6 +210,7 @@ async def replace_skill(
     bundle: UploadFile = File(..., description="Updated ZIP bundle containing SKILL.md and any scripts/assets"),
 ) -> SkillResponse:
     """Replace an existing skill's bundle by name, keeping its id (and so all app references)."""
+    _reject_if_tenant_upload_disabled()
     skill = _get_skill_by_name(skill_registry, skill_name, account_id)
     _reject_if_builtin(skill)
     if await system_store.get_skill(skill.id) is None:
@@ -295,6 +307,7 @@ async def delete_skill(
     A skill that is still assigned to one or more applications cannot be deleted;
     unassign it from those apps first (DELETE /applications/{name}/skills/{skill_name}).
     """
+    _reject_if_tenant_upload_disabled()
     skill = _get_skill_by_name(skill_registry, skill_name, account_id)
     _reject_if_builtin(skill)
     if await system_store.get_skill(skill.id) is None:

@@ -467,6 +467,25 @@ class TestSkillsInConfig:
         assert "ghost-skill" in resp.json()["detail"]
 
     @pytest.mark.asyncio
+    async def test_create_with_another_accounts_skill_id_returns_422(self, client, registry):
+        # skill_registry.get() is account-agnostic by id (ids are globally
+        # unique), so a naive lookup would resolve any tenant's skill id. A
+        # bundle's config.skills must only be able to reference skills visible
+        # to the creating account — its own plus global builtins — not another
+        # account's private skill just because the attacker knows/guesses its id.
+        registry.register(_make_skill("private-skill"), account_id="other-account")
+
+        config = _BASE_CONFIG + "skills:\n  - private-skill\n"
+        bundle = _make_bundle(config)
+        with patch("api.routers.applications.build_app", new_callable=AsyncMock, return_value=_mock_app_instance()):
+            resp = await client.post(
+                "/namespaces/default/applications",
+                files={"bundle": ("bundle.zip", bundle, "application/zip")},
+            )
+        assert resp.status_code == 422
+        assert "private-skill" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
     async def test_skills_visible_in_app_config_response(self, client):
         config = _BASE_CONFIG + "skills:\n  - skill-alpha\n"
         await _create_app(client, config)

@@ -19,6 +19,7 @@ from api.dependencies import (
     get_skill_bundle_store,
     get_skill_registry,
     get_system_store,
+    set_tenant_skill_upload,
 )
 from api.main import app
 from api.system_store import AppRecord, SystemStore
@@ -51,11 +52,18 @@ async def ctx(tmp_path):
     app.dependency_overrides[get_skill_registry] = lambda: registry
     app.dependency_overrides[get_skill_bundle_store] = lambda: bundle_store
 
+    # This file exercises upload/replace/delete mechanics, not the
+    # tenant_skill_upload gate itself (see TestTenantUploadDisabled below) — so
+    # opt in explicitly rather than relying on a permissive test-only default,
+    # which would mask what the real (closed) default does in production.
+    set_tenant_skill_upload(True)
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac, system_store, registry, bundle_store
 
     app.dependency_overrides.clear()
+    set_tenant_skill_upload(False)
 
 
 async def _upload(client, files: dict[str, str]):
@@ -312,6 +320,63 @@ class TestDeleteRejectsReferencedSkill:
         assert resp.status_code == 204
         with pytest.raises(KeyError):
             registry.get(skill_id)
+
+
+class TestTenantUploadDisabled:
+    """The tenant_skill_upload gate closes all three write routes by default —
+    unlike the other tests in this file, these must NOT rely on `ctx`'s
+    set_tenant_skill_upload(True), since that's exactly the setting under
+    test."""
+
+    @pytest_asyncio.fixture
+    async def disabled_ctx(self, tmp_path):
+        system_store = SystemStore(store=InMemoryStructuredStore())
+        await system_store.setup()
+        registry = SkillRegistry()
+        bundle_store = SkillBundleStore(
+            LocalFSDocumentStore(tmp_path / "docs"), cache_dir=tmp_path / "cache"
+        )
+
+        app.dependency_overrides[get_system_store] = lambda: system_store
+        app.dependency_overrides[get_skill_registry] = lambda: registry
+        app.dependency_overrides[get_skill_bundle_store] = lambda: bundle_store
+        set_tenant_skill_upload(False)  # explicit: this is the default under test
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac, system_store, registry, bundle_store
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_post_returns_403(self, disabled_ctx):
+        client, *_ = disabled_ctx
+        resp = await _upload(client, {"SKILL.md": VALID_MD})
+        assert resp.status_code == 403
+        assert "disabled" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_put_returns_403(self, disabled_ctx):
+        client, *_ = disabled_ctx
+        resp = await client.put(
+            "/skills/greeter",
+            files={"bundle": ("skill.zip", _zip({"SKILL.md": VALID_MD}), "application/zip")},
+        )
+        assert resp.status_code == 403
+        assert "disabled" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_delete_returns_403(self, disabled_ctx):
+        client, *_ = disabled_ctx
+        resp = await client.delete("/skills/greeter")
+        assert resp.status_code == 403
+        assert "disabled" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_get_is_unaffected(self, disabled_ctx):
+        # Listing built-ins is still the point even with uploads disabled.
+        client, *_ = disabled_ctx
+        assert (await client.get("/skills")).status_code == 200
 
 
 class TestBuiltinSkillsAreReadOnly:

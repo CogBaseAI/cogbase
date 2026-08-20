@@ -61,6 +61,35 @@ def test_get_unknown_raises():
         registry.get("nonexistent")
 
 
+def test_get_without_account_id_is_account_agnostic():
+    registry = SkillRegistry()
+    registry.register(_make_skill("echo"), account_id="account-a")
+    # No account_id passed: today's behavior for every existing caller.
+    assert registry.get("echo").name == "echo"
+
+
+def test_get_with_owning_account_id_succeeds():
+    registry = SkillRegistry()
+    registry.register(_make_skill("echo"), account_id="account-a")
+    assert registry.get("echo", "account-a").name == "echo"
+
+
+def test_get_with_global_builtin_succeeds_for_any_account():
+    registry = SkillRegistry()
+    registry.register(_make_skill("echo"))  # account_id=None -> global builtin
+    assert registry.get("echo", "some-account").name == "echo"
+
+
+def test_get_with_a_different_accounts_id_raises():
+    # This is the cross-tenant hole: an id is globally unique, so knowing/
+    # guessing another account's skill id must not resolve it when the caller
+    # passes its own account_id.
+    registry = SkillRegistry()
+    registry.register(_make_skill("echo"), account_id="account-a")
+    with pytest.raises(KeyError):
+        registry.get("echo", "account-b")
+
+
 def test_all_skills():
     registry = SkillRegistry()
     a, b = _make_skill("alpha"), _make_skill("beta")

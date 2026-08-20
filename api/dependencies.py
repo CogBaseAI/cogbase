@@ -61,6 +61,47 @@ def get_deployment_mode() -> str:
     return _deployment_mode
 
 
+#: Whether an authenticated account may upload/replace/delete its own skills,
+#: set by the operator through ``SystemConfig.tenant_skill_upload`` and applied
+#: at startup via :func:`set_tenant_skill_upload`. Defaults closed (``False``)
+#: — unlike :data:`_deployment_mode`, this has no permissive pre-startup
+#: fallback: the safe default is what a bare-ASGI unit test gets too, so a test
+#: exercising upload/replace/delete must opt in explicitly via
+#: :func:`set_tenant_skill_upload` rather than relying on an ergonomic default.
+_tenant_skill_upload = False
+
+
+def set_tenant_skill_upload(enabled: bool) -> None:
+    """Apply the operator-declared tenant-skill-upload flag from system config."""
+    global _tenant_skill_upload
+    _tenant_skill_upload = enabled
+
+
+def get_tenant_skill_upload() -> bool:
+    """Whether tenant skill upload is enabled (see :data:`_tenant_skill_upload`)."""
+    return _tenant_skill_upload
+
+
+#: Whether ``PATCH /system/config`` may live-patch the system LLM/embedding
+#: config, set by the operator through ``SystemConfig.system_config_writable``
+#: and applied at startup via :func:`set_system_config_writable`. Defaults
+#: closed (``False``) for the same reason as :data:`_tenant_skill_upload`: the
+#: route is unauthenticated by construction, so the safe default has no
+#: permissive pre-startup fallback.
+_system_config_writable = False
+
+
+def set_system_config_writable(enabled: bool) -> None:
+    """Apply the operator-declared system-config-writable flag from system config."""
+    global _system_config_writable
+    _system_config_writable = enabled
+
+
+def get_system_config_writable() -> bool:
+    """Whether ``PATCH /system/config`` is enabled (see :data:`_system_config_writable`)."""
+    return _system_config_writable
+
+
 def principal_claims(authorization: str | None) -> dict | None:
     """Return the verified access-token claims from an ``Authorization`` header.
 

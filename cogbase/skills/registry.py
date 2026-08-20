@@ -62,9 +62,20 @@ class SkillRegistry:
         self._skills.pop(skill_id, None)
         self._accounts.pop(skill_id, None)
 
-    def get(self, skill_id: str) -> Skill:
-        """Return the skill for *skill_id* (account-agnostic). Raises ``KeyError``."""
+    def get(self, skill_id: str, account_id: str | None = None) -> Skill:
+        """Return the skill for *skill_id*. Raises ``KeyError``.
+
+        Account-agnostic by default (any registered id resolves, matching the
+        class docstring), for the many callers who already trust the id they
+        pass in. Pass *account_id* when the id instead came from untrusted
+        input — an uploaded app config's ``skills`` list, say — so a caller
+        cannot resolve another account's private skill id just because ids are
+        globally unique.
+        """
         if skill_id not in self._skills:
+            known = ", ".join(sorted(self._skills)) or "(none)"
+            raise KeyError(f"No skill with id '{skill_id}'. Known ids: {known}")
+        if account_id is not None and skill_id not in self._visible(account_id):
             known = ", ".join(sorted(self._skills)) or "(none)"
             raise KeyError(f"No skill with id '{skill_id}'. Known ids: {known}")
         return self._skills[skill_id]
