@@ -63,6 +63,37 @@ class TestSystemStoreSetup:
         assert await ss.list_apps() == []
 
 
+class TestSystemStoreStoreProperty:
+    @pytest.mark.asyncio
+    async def test_exposes_the_same_backend_passed_to_the_constructor(self):
+        backend = InMemoryStructuredStore()
+        ss = SystemStore(store=backend)
+        assert ss.store is backend
+
+    @pytest.mark.asyncio
+    async def test_an_embedder_can_declare_its_own_collection_on_it(self):
+        """docs/extension-points.md §2.24: the seam an embedder's own
+        system-level table (e.g. a service's OTP codes) attaches to, without
+        forking SystemStore's fixed schema set."""
+        from cogbase.stores.filters import Col
+        from cogbase.stores.schema import CollectionSchema, FieldSchema, FieldType
+
+        backend = InMemoryStructuredStore()
+        ss = SystemStore(store=backend)
+        await ss.setup()
+
+        schema = CollectionSchema(
+            name="embedder_widgets",
+            description="test",
+            primary_fields=["id"],
+            fields={"id": FieldSchema(type=FieldType.STRING, nullable=False)},
+        )
+        await ss.store.create_collection(schema)
+        await ss.store.save("embedder_widgets", [{"id": "w1"}])
+        rows = await ss.store.query("embedder_widgets", filters=[Col("id") == "w1"])
+        assert rows == [{"id": "w1"}]
+
+
 class TestSystemStoreSaveAndGet:
     @pytest.mark.asyncio
     async def test_save_and_get_app(self, store):

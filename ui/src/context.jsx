@@ -251,39 +251,46 @@ export function AppProvider({ children }) {
     return resp
   }, [accountId, accessToken, refreshToken, refreshAccess])
 
-  // Auth actions the login screen and header call. login/signup adopt the returned
-  // session; logout best-effort revokes the refresh token server-side then clears
-  // local state so the gate reappears.
-  const login = useCallback(async (emailArg, password) => {
-    const resp = await fetch(`${apiUrl}/auth/login`, {
+  // Auth actions the login screen and header call. There is no separate sign-in /
+  // sign-up: a known address is logged in and a first-seen one is signed up by the
+  // same /auth/otp/verify call, and the caller (LoginScreen) never has to know
+  // which happened. logout best-effort revokes the refresh token server-side then
+  // clears local state so the gate reappears.
+  //
+  // requestOtp always resolves on a 202 whether or not the address is known — an
+  // account-enumeration oracle is exactly what a differing response would be — so
+  // the only failure surfaced here is a throttle (429) or a malformed address.
+  const requestOtp = useCallback(async (emailArg, inviteToken) => {
+    const resp = await fetch(`${apiUrl}/auth/otp/request`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: emailArg, password }),
+      body: JSON.stringify({ email: emailArg, invite_token: inviteToken || undefined }),
     })
     if (!resp.ok) {
       const msg = await resp.json().catch(() => ({}))
-      throw new Error(msg.detail || 'Login failed')
-    }
-    applySession(await resp.json())
-  }, [apiUrl, applySession])
-
-  const signup = useCallback(async (emailArg, password, inviteToken) => {
-    const resp = await fetch(`${apiUrl}/auth/signup`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: emailArg, password, invite_token: inviteToken || undefined }),
-    })
-    if (!resp.ok) {
-      const msg = await resp.json().catch(() => ({}))
-      // FastAPI validation errors arrive as an array under detail.
       const detail = Array.isArray(msg.detail) ? msg.detail.map(d => d.msg).join('; ') : msg.detail
-      throw new Error(detail || 'Signup failed')
+      throw new Error(detail || 'Could not send the code')
     }
-    applySession(await resp.json())
-    // Only a no-invite signup mints a fresh account (an invitee joins an existing
-    // one and gets no provisioning), so only that path seeds the starter workspace.
-    // Raise the one-shot so App.jsx auto-selects the provisioned contract-analyst app.
-    if (!inviteToken) setAutoSelectApp(true)
+  }, [apiUrl])
+
+  const verifyOtp = useCallback(async (emailArg, code) => {
+    const resp = await fetch(`${apiUrl}/auth/otp/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: emailArg, code }),
+    })
+    if (!resp.ok) {
+      const msg = await resp.json().catch(() => ({}))
+      const detail = Array.isArray(msg.detail) ? msg.detail.map(d => d.msg).join('; ') : msg.detail
+      throw new Error(detail || 'Incorrect or expired code')
+    }
+    const data = await resp.json()
+    applySession(data)
+    // Only a no-invite first-seen address mints a fresh account (an invitee joins
+    // an existing one and gets no provisioning), so only that path seeds the
+    // starter workspace. Raise the one-shot so App.jsx auto-selects the
+    // provisioned contract-analyst app.
+    if (data.new_account) setAutoSelectApp(true)
   }, [apiUrl, applySession])
 
   const logout = useCallback(async () => {
@@ -479,12 +486,12 @@ export function AppProvider({ children }) {
     demoCatalog, setDemoCatalog,
     llmConfigured, setLlmConfigured, embConfigured, setEmbConfigured,
     // auth (saas mode)
-    accessToken, email, role, authChecked, login, signup, logout,
+    accessToken, email, role, authChecked, requestOtp, verifyOtp, logout,
     autoSelectApp, setAutoSelectApp,
     // company profile
     profile, profileLoaded, refreshProfile, saveProfile, deleteProfile, adoptSavedProfile,
     onboardingDismissed, dismissOnboarding,
-  }), [apiUrl, accountId, mode, bootstrap, namespaceName, namespaces, namespacesLoaded, refreshNamespaces, ensureNamespace, apps, appsNs, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName, accessToken, email, role, authChecked, login, signup, logout, autoSelectApp, profile, profileLoaded, refreshProfile, saveProfile, deleteProfile, adoptSavedProfile, onboardingDismissed, dismissOnboarding])
+  }), [apiUrl, accountId, mode, bootstrap, namespaceName, namespaces, namespacesLoaded, refreshNamespaces, ensureNamespace, apps, appsNs, refreshApps, nsBase, appBase, authFetch, currentApp, setCurrentApp, demoCatalog, llmConfigured, embConfigured, setAccountId, setNamespaceName, accessToken, email, role, authChecked, requestOtp, verifyOtp, logout, autoSelectApp, profile, profileLoaded, refreshProfile, saveProfile, deleteProfile, adoptSavedProfile, onboardingDismissed, dismissOnboarding])
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
 }

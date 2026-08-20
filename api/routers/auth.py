@@ -36,8 +36,15 @@ from api.auth import (
     hash_refresh_token,
     verify_password,
 )
-from api.dependencies import AppCacheDep, SystemResourcesDep, SystemStoreDep
+from api.app_cache import AppCache
+from api.dependencies import (
+    AppCacheDep,
+    SystemResourcesDep,
+    SystemStoreDep,
+    get_deployment_mode,
+)
 from api.provisioning import provision_default_workspace
+from api.system_resources import SystemResources
 from api.models import (
     AccessTokenResponse,
     InviteRequest,
@@ -81,6 +88,21 @@ def _normalize_email(email: str) -> str:
 def _parse_ts(ts: str) -> datetime:
     """Parse an ISO-8601 UTC timestamp back to an aware datetime."""
     return datetime.fromisoformat(ts)
+
+
+def _reject_if_saas_mode() -> None:
+    """Block password signup/login once a deployment requires OTP.
+
+    ``saas`` mode is where a service embedder's email-OTP router replaces these
+    routes end to end; leaving them live would make OTP decorative — anyone
+    could mint a password-backed account and skip email verification entirely.
+    Other modes (dev, single_tenant) are trust-on-declaration and unaffected.
+    """
+    if get_deployment_mode() == "saas":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password authentication is disabled on this deployment.",
+        )
 
 
 async def _issue_tokens(store: SystemStore, user: UserRecord) -> TokenResponse:
@@ -143,20 +165,25 @@ async def get_current_principal(
     return user
 
 
-@router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def signup(
-    body: SignupRequest,
-    system_store: SystemStoreDep,
-    app_cache: AppCacheDep,
-    system_resources: SystemResourcesDep,
-) -> TokenResponse:
-    """Create a user. Without an invite, mint a new account and become its owner."""
-    email = _normalize_email(body.email)
-    if not _EMAIL_RE.match(email):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Invalid email address",
-        )
+async def create_user_and_account(
+    email: str,
+    password_hash: str,
+    invite_token: str | None,
+    *,
+    system_store: SystemStore,
+    app_cache: AppCache,
+    system_resources: SystemResources,
+) -> UserRecord:
+    """Create a user, minting a fresh account or joining one via invite.
+
+    Everything ``signup()`` does *after* deriving a credential — the duplicate
+    check, invite-or-new-account branch, record creation, invite redemption /
+    starter-workspace provisioning. Factored out so a second credential path
+    (e.g. an email-OTP verify) mints accounts identically instead of
+    reimplementing this and silently drifting from it; only the credential
+    itself (a password hash here) is the caller's concern. Raises the same
+    ``HTTPException``s ``signup()`` used to raise inline.
+    """
     if await system_store.get_user_by_email(email) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -164,8 +191,8 @@ async def signup(
         )
 
     now = _now()
-    if body.invite_token:
-        invite = await system_store.get_invite(body.invite_token)
+    if invite_token:
+        invite = await system_store.get_invite(invite_token)
         if (
             invite is None
             or invite.accepted_at is not None
@@ -195,14 +222,14 @@ async def signup(
     user = UserRecord(
         user_id=new_user_id(),
         email=email,
-        password_hash=hash_password(body.password),
+        password_hash=password_hash,
         account_id=account_id,
         role=role,
         created_at=now.isoformat(),
     )
     await system_store.save_user(user)
-    if body.invite_token:
-        await system_store.mark_invite_accepted(body.invite_token)
+    if invite_token:
+        await system_store.mark_invite_accepted(invite_token)
     else:
         # Fresh account: seed a starter workspace (legal-team namespace +
         # contract-analyst app). Best-effort — never fails the signup.
@@ -212,13 +239,40 @@ async def signup(
             app_cache=app_cache,
             system_resources=system_resources,
         )
-    logger.info("user signed up user_id=%s account=%s role=%s", user.user_id, account_id, role)
+    logger.info("user created user_id=%s account=%s role=%s", user.user_id, account_id, role)
+    return user
+
+
+@router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+async def signup(
+    body: SignupRequest,
+    system_store: SystemStoreDep,
+    app_cache: AppCacheDep,
+    system_resources: SystemResourcesDep,
+) -> TokenResponse:
+    """Create a user. Without an invite, mint a new account and become its owner."""
+    _reject_if_saas_mode()
+    email = _normalize_email(body.email)
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid email address",
+        )
+    user = await create_user_and_account(
+        email,
+        hash_password(body.password),
+        body.invite_token,
+        system_store=system_store,
+        app_cache=app_cache,
+        system_resources=system_resources,
+    )
     return await _issue_tokens(system_store, user)
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, system_store: SystemStoreDep) -> TokenResponse:
     """Verify credentials and issue tokens."""
+    _reject_if_saas_mode()
     email = _normalize_email(body.email)
     user = await system_store.get_user_by_email(email)
     # Same error whether the user is unknown or the password is wrong, so the

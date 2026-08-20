@@ -429,6 +429,18 @@ class SystemStore:
     def __init__(self, store: StructuredStoreBase) -> None:
         self._store = store
 
+    @property
+    def store(self) -> StructuredStoreBase:
+        """The underlying structured store, for an embedder's own collections.
+
+        ``system_db`` is one physical store; an embedder that needs its own
+        system-level table (e.g. a service's OTP codes) declares its own
+        ``CollectionSchema`` and calls ``create_collection``/``save``/``query_as``
+        on this directly, rather than forking ``SystemStore``'s fixed schema set
+        or duplicating the ``system_db`` config to stand up a second store.
+        """
+        return self._store
+
     async def setup(self) -> None:
         """Create managed collections if they do not exist. Idempotent."""
         await self._store.create_collection(DOC_REGISTRY_SCHEMA)
