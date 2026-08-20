@@ -28,7 +28,6 @@ _OFFSET_CONFLICT_CODES = {
     "ConditionalRequestConflict",
 }
 
-# TODO add unit test when start using it
 class S3LogStore(LogStoreBase):
     """Stores each log as one append-only NDJSON object in a directory bucket.
 
