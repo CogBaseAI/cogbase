@@ -285,6 +285,7 @@ def create_app(
     *,
     extra_routers: Sequence[APIRouter] = (),
     extra_lifespan: Lifespan | None = None,
+    mount_ui: bool = True,
 ) -> FastAPI:
     """Build the CogBase FastAPI app.
 
@@ -302,6 +303,12 @@ def create_app(
     lifespan's body, so no single composition order serves both. An embedder
     that wants either (or both) writes its own lifespan that wraps
     :func:`lifespan` itself and passes that as ``extra_lifespan``.
+
+    ``mount_ui=False`` skips mounting this repo's own ``ui/dist``, for the same
+    reason ``extra_routers`` exists: the mount is a Starlette ``Mount("/")``, so
+    an embedder that wants to serve its own UI at ``/`` instead has to stop this
+    function from claiming that route first, then mount its own build onto the
+    app this function returns.
     """
     app = FastAPI(
         title="CogBase API",
@@ -371,7 +378,7 @@ def create_app(
         from examples.gen_demos_json import build_catalog
         return build_catalog()
 
-    if _UI_DIST.is_dir():
+    if mount_ui and _UI_DIST.is_dir():
         app.mount("/", StaticFiles(directory=_UI_DIST, html=True), name="ui")
 
     return app

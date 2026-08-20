@@ -165,20 +165,17 @@ function mockWhoami({ account_id = 'default', mode = 'dev' } = {}) {
 
 describe('Layout — account bootstrap (/whoami)', () => {
   it('adopts the server-resolved account without surfacing the id in the top bar', async () => {
-    // saas mode now requires a session; seed one so the auth gate passes and the
-    // app renders. The account id is an opaque UUID, so it isn't shown in the header.
-    window.localStorage.setItem('cogbase.accessToken', 'test-token')
+    // The account id is an opaque UUID, so it isn't shown in the header. This UI
+    // has no login gate — /whoami's account_id is adopted as soon as it resolves.
     mockWhoami({ account_id: 'acct-saas', mode: 'saas' })
     render(<App />)
-    // Wait for the app to render, then confirm the account id is nowhere in the UI…
-    await waitFor(() => expect(screen.getByText('Sign out')).toBeInTheDocument())
+    await waitFor(() => expect(document.title).toBe('CogBase — acct-saas'))
     expect(screen.queryByText('acct-saas')).toBeNull()
     // …and there is no editable account field anywhere — it's not a nav knob.
     expect(screen.queryByLabelText('Account')).toBeNull()
   })
 
   it('reflects a real account in the document title', async () => {
-    window.localStorage.setItem('cogbase.accessToken', 'test-token')
     mockWhoami({ account_id: 'acct-saas', mode: 'saas' })
     render(<App />)
     await waitFor(() => expect(document.title).toBe('CogBase — acct-saas'))
@@ -192,11 +189,10 @@ describe('Layout — account bootstrap (/whoami)', () => {
   })
 
   it('keeps the Settings tab in saas mode but drops the provider sections', async () => {
-    window.localStorage.setItem('cogbase.accessToken', 'test-token')
     mockWhoami({ account_id: 'acct-saas', mode: 'saas' })
     const user = userEvent.setup()
     render(<App />)
-    await waitFor(() => expect(screen.getByText('Sign out')).toBeInTheDocument())
+    await waitFor(() => expect(document.title).toBe('CogBase — acct-saas'))
     await user.click(within(sidebar()).getByRole('button', { name: 'Account' }))
     await user.click(within(sidebar()).getByRole('button', { name: 'Settings' }))
     // The account-scoped company profile lives here in every mode; the providers

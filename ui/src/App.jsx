@@ -14,7 +14,6 @@ import QueryTab from './components/tabs/QueryTab'
 import MemoryTab from './components/tabs/MemoryTab'
 import SkillsTab from './components/tabs/SkillsTab'
 import SettingsTab from './components/tabs/SettingsTab'
-import LoginScreen from './components/LoginScreen'
 import DocModal from './components/modals/DocModal'
 import OnboardingModal from './components/modals/OnboardingModal'
 import ConfigModal from './components/modals/ConfigModal'
@@ -25,7 +24,7 @@ import TaskProgressModal from './components/modals/TaskProgressModal'
 // in ./nav alongside the hash router that also consumes them.
 
 function Layout() {
-  const { accountId, mode, email, logout, namespaceName, setNamespaceName, namespaces, namespacesLoaded, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp, autoSelectApp, setAutoSelectApp, apiUrl, authFetch, refreshProfile } = useApp()
+  const { accountId, namespaceName, setNamespaceName, namespaces, namespacesLoaded, refreshNamespaces, apps, appsNs, refreshApps, currentApp, setCurrentApp, apiUrl, authFetch, refreshProfile } = useApp()
   const { t, lang, setLang } = useT()
 
   // Keep the auto-provisioned contract-analyst's Query starter panel (query_intro
@@ -131,53 +130,11 @@ function Layout() {
   // so the application tier falls back to its empty state instead of querying a
   // phantom app. Gated on appsNs === namespaceName so a deep-linked app isn't
   // wiped before its namespace list arrives.
-  //
-  // Suspended while a fresh-signup auto-select is pending: a stale application-tier
-  // hash can survive into the seeded workspace (a prior session's deep link — the
-  // login gate doesn't clear the URL), making currentApp a phantom the moment the
-  // seeded namespace's apps load. Clearing it here would race the auto-select below,
-  // which itself replaces that phantom with the seeded app. Let the one-shot own the
-  // decision until it's consumed.
   useEffect(() => {
-    if (autoSelectApp) return
     if (appsNs === namespaceName && currentApp && !apps.some(a => a.name === currentApp)) {
       setCurrentApp('')
     }
-  }, [autoSelectApp, appsNs, apps, currentApp, namespaceName, setCurrentApp])
-
-  // First landing after a brand-new-account signup: the server seeded a starter
-  // workspace (legal-team namespace + contract-analyst app; api/provisioning.py). The
-  // namespace auto-selects via the reconcile above; this adopts the provisioned app and
-  // drops the owner on Ingest — the seeded app has no documents yet, so uploading is the
-  // one thing to do next (rather than the pick-an-app empty state or the Build tab).
-  // One-shot: raised only by the signup path (context.jsx) and consumed the moment the
-  // seeded app loads, so a normal namespace switch never auto-picks an app or hijacks
-  // navigation — that keeps the deliberate pick-an-app empty state for everyone else.
-  useEffect(() => {
-    if (!autoSelectApp || !namespaceName || appsNs !== namespaceName) return
-    // Consume the flag only once the resolved namespace's apps have actually
-    // arrived (apps.length) — otherwise the transient empty default-namespace
-    // window would clear it before the seeded workspace loads. If provisioning
-    // yielded no app, it simply lingers until one appears, then adopts it.
-    if (apps.length) {
-      // Adopt the seeded app on Ingest. Set the whole (app, focus, tab) tuple
-      // imperatively AND mirror it into the hash in one shot: the imperative state
-      // is what keeps currentApp a real selection (not the stale phantom the URL may
-      // have deep-linked), so the reconcile above never clears it out from under us —
-      // the failure mode when this relied on the hash round-trip alone, which left
-      // currentApp stale until an async hashchange applied and let the reconcile +
-      // hash-writer strand the owner on the pick-an-app empty state. Writing the hash
-      // here too keeps the URL authoritative, so any stale in-flight hashchange (e.g.
-      // the namespace-tier route queued when the namespace resolved) reads the live
-      // app route rather than reverting the selection.
-      const target = apps.some(a => a.name === currentApp) ? currentApp : apps[0].name
-      setCurrentApp(target, namespaceName)
-      setFocus('application')
-      setActiveTab('ingest')
-      window.location.hash = buildHash({ focus: 'application', namespaceName, currentApp: target, activeTab: 'ingest' })
-      setAutoSelectApp(false)
-    }
-  }, [autoSelectApp, appsNs, namespaceName, apps, currentApp, setCurrentApp, setAutoSelectApp])
+  }, [appsNs, apps, currentApp, namespaceName, setCurrentApp])
 
   // ── Hash routing (docs/ui-navigation.md, milestone B step 5) ──
   // A pure mirror of the (focus, namespace, app, tab) tuple onto location.hash, so
@@ -253,13 +210,6 @@ function Layout() {
           <span>{currentApp || t('header.noApp')}</span>
           {currentApp && <span className="app-pill-ns">{namespaceName}</span>}
         </div>
-        {/* Signed-in user + sign-out, only in the authenticated (saas) mode. */}
-        {mode === 'saas' && (
-          <div className="user-row" title={email}>
-            {email && <span className="user-email">{email}</span>}
-            <button className="btn btn-sm" onClick={logout}>Sign out</button>
-          </div>
-        )}
         <div className="lang-row" title={t('header.language')}>
           <select className="lang-select" value={lang} onChange={e => setLang(e.target.value)} aria-label={t('header.language')}>
             {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
@@ -449,25 +399,17 @@ function NavPanelIcon() {
   )
 }
 
-// Auth gate: resolves the deployment mode + identity from /whoami on mount, then
-// either shows the login screen (saas mode with no valid session) or the app. In
-// dev/single_tenant/demo modes there is no gate — the app renders straight away,
-// exactly as before. Bootstrap lives here (not in Layout) so it also runs while
-// unauthenticated, before Layout ever mounts.
-function AuthGate() {
-  const { mode, accessToken, bootstrap } = useApp()
+// Resolves the deployment identity from /whoami on mount, then renders the app.
+// There is no login gate here — this UI is the dev/single_tenant demo shell;
+// account-gated (saas) auth lives in cogbase-service's own UI. Bootstrap lives
+// in its own component (rather than Layout) purely so it runs on first mount,
+// before Layout's own effects fire.
+function Bootstrap() {
+  const { bootstrap } = useApp()
   useEffect(() => { bootstrap() }, [bootstrap])
-
-  // Only saas mode gates. mode is seeded from the last-known value (persisted in
-  // context) and confirmed by /whoami, so a returning saas visitor sees the login
-  // screen immediately rather than a flash of the app shell. dev/single_tenant/demo
-  // render the app straight through, exactly as before.
-  if (mode === 'saas' && !accessToken) {
-    return <LoginScreen />
-  }
   return <Layout />
 }
 
 export default function App() {
-  return <I18nProvider><AppProvider><AuthGate /></AppProvider></I18nProvider>
+  return <I18nProvider><AppProvider><Bootstrap /></AppProvider></I18nProvider>
 }
