@@ -70,25 +70,63 @@ async def _close_store(store: object) -> None:
             await result
 
 
+_SECRET_ENV_VARS = (
+    "COGBASE_JWT_SECRET",
+    "COGBASE_LLM_API_KEY",
+    "COGBASE_EMBEDDING_API_KEY",
+    "COGBASE_POSTGRES_DSN",
+    "COGBASE_PGVECTOR_DSN",
+)
+
+
+def _apply_secret_env_overrides(system_cfg: SystemConfig, env: dict[str, str]) -> None:
+    """Secrets-never-on-disk: let jwt_secret, the provider api_keys, and the
+    Postgres DSN(s) arrive as env vars instead of (or on top of) whatever the
+    system YAML has, so an image's YAML need carry no real secret.
+
+    Pure w.r.t. ``os.environ`` — takes an explicit mapping — so it is testable
+    without exercising a real store connection. ``lifespan`` calls this with
+    ``os.environ`` itself, before anything reads ``system_cfg.jwt_secret``/
+    ``llm``/``embedding``/store urls, and deletes the same vars from
+    ``os.environ`` before ``yield`` — see the callers for why.
+    """
+    if secret := env.get("COGBASE_JWT_SECRET"):
+        system_cfg.jwt_secret = secret
+    if system_cfg.llm and (key := env.get("COGBASE_LLM_API_KEY")):
+        system_cfg.llm.api_key = key
+    if system_cfg.embedding and (key := env.get("COGBASE_EMBEDDING_API_KEY")):
+        system_cfg.embedding.api_key = key
+    # A "postgres"/"pgvector" type in the YAML declares the backend, but the
+    # credential-bearing url comes from the environment. One deployment
+    # typically points system_db and structured_store at the same instance
+    # (per docs/launch-plan.md §C); pgvector falls back to the same DSN when
+    # no separate one is given, since pgvector is usually the same Postgres
+    # instance with the extension enabled.
+    if (pg_dsn := env.get("COGBASE_POSTGRES_DSN")):
+        if system_cfg.system_db.type == "postgres":
+            system_cfg.system_db.url = pg_dsn
+        if system_cfg.structured_store and system_cfg.structured_store.type == "postgres":
+            system_cfg.structured_store.url = pg_dsn
+    if system_cfg.vector_store and system_cfg.vector_store.type == "pgvector":
+        pgvector_dsn = env.get("COGBASE_PGVECTOR_DSN") or env.get("COGBASE_POSTGRES_DSN")
+        if pgvector_dsn:
+            system_cfg.vector_store.url = pgvector_dsn
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Load system config from file / env vars / defaults.
     system_cfg = SystemConfig.load()
-    logger.info("system_config loaded system_db=%s mode=%s",
-                system_cfg.system_db, system_cfg.deployment_mode)
+    # system_db.url carries the DSN — credentials and all, for a postgres
+    # backend — so only its type is safe to put in a log line.
+    logger.info("system_config loaded system_db_type=%s mode=%s",
+                system_cfg.system_db.type, system_cfg.deployment_mode)
 
-    # Secrets-never-on-disk: let jwt_secret and the provider api_keys arrive as
-    # env vars instead of (or on top of) whatever the system YAML has, so an
-    # image's YAML need carry no real secret. Applied before anything reads
-    # system_cfg.jwt_secret/llm/embedding; the env vars themselves are deleted
-    # below, before `yield`, so no later request-time code — including a
-    # tenant-triggered subprocess inheriting os.environ — can read them back.
-    if secret := os.environ.get("COGBASE_JWT_SECRET"):
-        system_cfg.jwt_secret = secret
-    if system_cfg.llm and (key := os.environ.get("COGBASE_LLM_API_KEY")):
-        system_cfg.llm.api_key = key
-    if system_cfg.embedding and (key := os.environ.get("COGBASE_EMBEDDING_API_KEY")):
-        system_cfg.embedding.api_key = key
+    # Applied before anything reads system_cfg.jwt_secret/llm/embedding/store
+    # urls; the env vars themselves are deleted below, before `yield`, so no
+    # later request-time code — including a tenant-triggered subprocess
+    # inheriting os.environ — can read them back.
+    _apply_secret_env_overrides(system_cfg, os.environ)
 
     # Apply the operator-declared mode and signing secret, then refuse to boot a
     # managed deployment on the forgeable dev secret — in saas mode the access
@@ -253,7 +291,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # after this point may reconstruct a secret from os.environ — most notably
     # cogbase.core.query_runner._tool_env, which hands a tenant-triggered
     # subprocess a copy of the process environment.
-    for var in ("COGBASE_JWT_SECRET", "COGBASE_LLM_API_KEY", "COGBASE_EMBEDDING_API_KEY"):
+    for var in _SECRET_ENV_VARS:
         os.environ.pop(var, None)
 
     yield

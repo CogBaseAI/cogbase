@@ -101,7 +101,7 @@ async def _chat_turn_events(
 
             if not tool_calls:
                 final_content = "".join(streamed_chunks).strip()
-                logger.info("%s discussion final_content=%s", log_prefix, final_content)
+                logger.info("%s discussion final_content_len=%d", log_prefix, len(final_content))
                 break
 
             tc = tool_calls[0]

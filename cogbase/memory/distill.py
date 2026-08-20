@@ -915,10 +915,12 @@ class Distiller:
                     raise ValueError("no `memories` array in extraction output")
                 normalized = {"memories": memories}
                 jsonschema.validate(instance=normalized, schema=_EXTRACTION_SCHEMA)
-                logger.debug("[distill] parsed=%s messages=%s", normalized, messages)
+                logger.debug("[distill] parsed memory_count=%d", len(normalized["memories"]))
                 return normalized
             except (json.JSONDecodeError, jsonschema.ValidationError, ValueError):
-                logger.error("[distill] extraction JSON invalid, attempt=%d content=%s", attempt, content)
+                logger.error(
+                    "[distill] extraction JSON invalid, attempt=%d content_len=%d", attempt, len(content)
+                )
                 if attempt < self._max_retries:
                     continue
                 logger.warning("[distill] extraction JSON invalid after retries", exc_info=True)

@@ -919,7 +919,7 @@ class QueryRunner:
         chosen = (result["content"] or "").lower().strip("'\"")
 
         if chosen == "none":
-            logger.info("[runner] no skill selected for: %s", user_input[:100])
+            logger.info("[runner] no skill selected, question_len=%d", len(user_input))
             return None
 
         for skill in skills:
@@ -1072,7 +1072,7 @@ class QueryRunner:
         episodic_on = self._episodic is not None and session_id is not None
         long_term_on = self._long_term is not None
 
-        logger.info("[runner] start, session=%s question=%s", session_id, user_input)
+        logger.info("[runner] start, session=%s question_len=%d", session_id, len(user_input))
 
         # Slot 0 is reserved for the system prompt; updated each iteration.
         messages: list[ChatMessage] = [{"role": "system", "content": ""}]

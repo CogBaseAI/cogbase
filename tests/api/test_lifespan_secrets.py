@@ -75,3 +75,70 @@ async def test_yaml_value_used_when_env_var_absent(system_config_file, monkeypat
     async with lifespan(app):
         assert app.state.system_resources.llm_config.api_key == "yaml-placeholder-not-a-real-key"
         assert app.state.system_resources.embedding_config.api_key == "yaml-placeholder-not-a-real-key"
+
+
+class TestPostgresDsnOverride:
+    """``_apply_secret_env_overrides`` is pure w.r.t. ``os.environ`` (an
+    explicit mapping is passed in), so the Postgres-DSN half of D2's
+    secrets-never-on-disk rule is testable without a real database — unlike
+    the jwt/api-key half above, which drives the full ``lifespan`` because
+    ``type: memory`` needs no real connection. ``type: postgres`` does.
+    """
+
+    def _cfg(self, **overrides):
+        # A placeholder url satisfies the postgres/pgvector validators (they
+        # require *some* url) so the test can assert the env override
+        # replaces it, the same way the YAML template's placeholder does.
+        from api.system_config import SystemConfig
+        return SystemConfig.model_validate({
+            "system_db": {"type": "postgres", "url": "postgresql://placeholder/db"},
+            "structured_store": {"type": "postgres", "url": "postgresql://placeholder/db"},
+            "vector_store": {"type": "pgvector", "url": "postgresql://placeholder/db"},
+            **overrides,
+        })
+
+    def test_postgres_dsn_overrides_system_db_and_structured_store(self):
+        from api.main import _apply_secret_env_overrides
+        cfg = self._cfg()
+        _apply_secret_env_overrides(cfg, {"COGBASE_POSTGRES_DSN": "postgresql://u:p@host/db"})
+        assert cfg.system_db.url == "postgresql://u:p@host/db"
+        assert cfg.structured_store.url == "postgresql://u:p@host/db"
+
+    def test_pgvector_dsn_falls_back_to_postgres_dsn(self):
+        from api.main import _apply_secret_env_overrides
+        cfg = self._cfg()
+        _apply_secret_env_overrides(cfg, {"COGBASE_POSTGRES_DSN": "postgresql://u:p@host/db"})
+        assert cfg.vector_store.url == "postgresql://u:p@host/db"
+
+    def test_pgvector_dsn_env_var_takes_priority_over_postgres_dsn(self):
+        from api.main import _apply_secret_env_overrides
+        cfg = self._cfg()
+        _apply_secret_env_overrides(cfg, {
+            "COGBASE_POSTGRES_DSN": "postgresql://u:p@host/db",
+            "COGBASE_PGVECTOR_DSN": "postgresql://u:p@vector-host/db",
+        })
+        assert cfg.vector_store.url == "postgresql://u:p@vector-host/db"
+        assert cfg.structured_store.url == "postgresql://u:p@host/db"
+
+    def test_sqlite_and_faiss_types_are_untouched(self):
+        from api.main import _apply_secret_env_overrides
+        cfg = self._cfg(
+            system_db={"type": "sqlite", "path": "./x.db"},
+            structured_store=None,
+            vector_store=None,
+        )
+        _apply_secret_env_overrides(cfg, {"COGBASE_POSTGRES_DSN": "postgresql://u:p@host/db"})
+        assert cfg.system_db.url is None
+
+    @pytest.mark.asyncio
+    async def test_lifespan_deletes_dsn_env_vars_before_serving(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "system.yaml"
+        config_file.write_text("system_db:\n  type: memory\n")
+        monkeypatch.setenv("COGBASE_CONFIG", str(config_file))
+        monkeypatch.setenv("COGBASE_POSTGRES_DSN", "postgresql://u:p@host/db")
+        monkeypatch.setenv("COGBASE_PGVECTOR_DSN", "postgresql://u:p@vector-host/db")
+
+        app = FastAPI()
+        async with lifespan(app):
+            assert "COGBASE_POSTGRES_DSN" not in os.environ
+            assert "COGBASE_PGVECTOR_DSN" not in os.environ
