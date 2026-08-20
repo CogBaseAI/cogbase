@@ -127,6 +127,8 @@ async def run_ingest_task(
             summary = IngestResultSummary(
                 chunks_written=result.chunks_written,
                 records_extracted=result.records_extracted,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
                 warning=warning,
             )
             await system_store.update_task(

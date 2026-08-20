@@ -34,6 +34,8 @@ class _FakeIngestResult:
     success: bool = True
     records_extracted: int = 1
     chunks_written: int = 2
+    input_tokens: int = 0
+    output_tokens: int = 0
     error: Exception | None = None
 
     @property

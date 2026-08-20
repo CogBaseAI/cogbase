@@ -96,6 +96,11 @@ class IngestResult:
                            blank document).  The document may still be partially
                            ingested (e.g. vector chunks were written); this flag
                            distinguishes that from a hard ingest failure.
+        input_tokens:      Prompt tokens across every LLM completion this ingest
+                           made (extraction, document summarization) — 0 when the
+                           pipeline made no LLM calls or the provider reported no
+                           usage. See ``cogbase.llms.timing``.
+        output_tokens:     Completion tokens, same scope as ``input_tokens``.
         error:             The exception raised, when *success* is ``False``.
     """
 
@@ -104,6 +109,8 @@ class IngestResult:
     records_extracted: int = 0
     chunks_written: int = 0
     extraction_failed: bool = False
+    input_tokens: int = 0
+    output_tokens: int = 0
     error: Exception | None = field(default=None, repr=False)
 
     @property
@@ -305,13 +312,14 @@ class IngestionPipeline:
             if sc is not None:
                 await sc.store.delete_records(sc.schema.name, [Col("doc_id") == doc_id])
 
-    async def _ingest(self, doc: Document, *, purge: bool = True) -> tuple[int, int, bool]:
+    async def _ingest(self, doc: Document, *, purge: bool = True) -> tuple[int, int, bool, int, int]:
         """Ingest a document by executing each step, sequentially or in parallel.
 
         Returns:
-            ``(records_extracted, chunks_written, extraction_failed)`` —
-            ``extraction_failed`` is ``True`` if any ``extract-structured`` step
-            failed after all retries.
+            ``(records_extracted, chunks_written, extraction_failed, input_tokens,
+            output_tokens)`` — ``extraction_failed`` is ``True`` if any
+            ``extract-structured`` step failed after all retries; the token counts
+            are ``llm_timing``'s totals across every LLM call this ingest made.
         """
         logger.info(
             "ingestion_pipeline.ingest.start app_id=%s name=%s doc_id=%s steps=%d parallel=%s",
@@ -351,11 +359,16 @@ class IngestionPipeline:
 
         logger.info(
             "ingestion_pipeline.ingest.done app_id=%s name=%s doc_id=%s records_extracted=%d "
-            "chunks_written=%d extraction_failed=%s llm_calls=%d llm_seconds=%.3f total_seconds=%.3f",
+            "chunks_written=%d extraction_failed=%s llm_calls=%d llm_seconds=%.3f total_seconds=%.3f "
+            "input_tokens=%d output_tokens=%d",
             self.app_id, self.name, doc.doc_id, records_extracted, chunks_written, extraction_failed,
             llm_timing.calls, llm_timing.seconds, total_seconds,
+            llm_timing.input_tokens, llm_timing.output_tokens,
         )
-        return records_extracted, chunks_written, extraction_failed
+        return (
+            records_extracted, chunks_written, extraction_failed,
+            llm_timing.input_tokens, llm_timing.output_tokens,
+        )
 
     async def _run_chunk_embed_upsert(self, doc: Document, step: PipelineStep) -> int:
         vc = self._vector_by_name.get(step.collection)
@@ -669,8 +682,8 @@ class IngestionPipeline:
         async def _ingest_one(doc: Document) -> IngestResult:
             try:
                 purge = purge_all or doc.doc_id in reingested_ids
-                records_extracted, chunks_written, extraction_failed = await self._ingest(
-                    doc, purge=purge
+                records_extracted, chunks_written, extraction_failed, input_tokens, output_tokens = (
+                    await self._ingest(doc, purge=purge)
                 )
                 return IngestResult(
                     doc_id=doc.doc_id,
@@ -678,6 +691,8 @@ class IngestionPipeline:
                     records_extracted=records_extracted,
                     chunks_written=chunks_written,
                     extraction_failed=extraction_failed,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.exception(

@@ -700,6 +700,8 @@ def _mock_upload_app(
         records_extracted: int
         error: Exception | None
         chunks_written: int = 0
+        input_tokens: int = 0
+        output_tokens: int = 0
 
         @property
         def ingested_nothing(self) -> bool:

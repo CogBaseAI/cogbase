@@ -20,7 +20,7 @@ from cogbase.llms.base import (
     ToolCall,
     ToolDefinition,
 )
-from cogbase.llms.timing import measure_llm_call
+from cogbase.llms.timing import measure_llm_call, record_llm_tokens
 
 
 def _coerce_message_content(content: Any) -> str:
@@ -128,6 +128,7 @@ class OpenAILLM(LLMBase):
                 input_tokens=getattr(raw_usage, "prompt_tokens", 0) or 0,
                 output_tokens=getattr(raw_usage, "completion_tokens", 0) or 0,
             )
+        record_llm_tokens(usage)
         return CompletionResult(content=content, tool_calls=tool_calls, usage=usage)
 
     async def complete_stream(
@@ -163,6 +164,7 @@ class OpenAILLM(LLMBase):
                             input_tokens=getattr(raw_usage, "prompt_tokens", 0) or 0,
                             output_tokens=getattr(raw_usage, "completion_tokens", 0) or 0,
                         )
+                        record_llm_tokens(usage)
                     continue
                 delta = chunk.choices[0].delta
                 if delta.content:

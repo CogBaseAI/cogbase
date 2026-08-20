@@ -217,6 +217,8 @@ class IngestResultSummary(BaseModel):
 
     chunks_written: int = 0
     records_extracted: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
     warning: str | None = Field(
         default=None,
         description=(
