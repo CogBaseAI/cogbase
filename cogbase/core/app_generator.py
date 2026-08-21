@@ -16,9 +16,25 @@ import jsonschema
 import yaml
 
 from cogbase.config.config import AppConfig, StructuredCollectionConfig, WorkflowConfig
-from cogbase.llms.base import LLMBase, ToolDefinition
+from cogbase.llms.base import CompletionResult, LLMBase, ToolDefinition
 
 logger = logging.getLogger(__name__)
+
+#: Running input/output token totals for one propose_app_config call. Passed by
+#: reference into each sub-step so a failed schema/config attempt still counts —
+#: the retry loop below still spent tokens on it.
+UsageTotals = dict[str, int]
+
+
+def _new_usage_totals() -> UsageTotals:
+    return {"input_tokens": 0, "output_tokens": 0}
+
+
+def _accumulate_usage(result: CompletionResult, totals: UsageTotals) -> None:
+    usage = result.get("usage")
+    if usage:
+        totals["input_tokens"] += usage.get("input_tokens", 0)
+        totals["output_tokens"] += usage.get("output_tokens", 0)
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -920,43 +936,80 @@ async def propose_app_config(llm: LLMBase, messages: list, *, needs_workflow: bo
     """Orchestrate the app config generation pipeline.
 
     Yields ``{"type": "token", "token": ...}`` progress events followed by a single
-    ``{"type": "result", "generation_context": ..., "config_yaml": ...}`` event.
-    Runs 2 steps for pipeline-only apps, 4 steps when ``needs_workflow`` is True.
+    ``{"type": "result", "generation_context": ..., "config_yaml": ..., "input_tokens": ...,
+    "output_tokens": ...}`` event. Runs 2 steps for pipeline-only apps, 4 steps when
+    ``needs_workflow`` is True. Token totals cover every sub-step's LLM calls, including
+    failed retries — they are yielded even on failure since those calls still consumed
+    tokens the caller (``cogbase_service.billing.usage.record_usage``) needs to meter.
     """
+    usage_totals = _new_usage_totals()
+
     yield {"type": "token", "token": "Generating extraction schemas...\n"}
-    ext_output, extraction_schemas = await _run_propose_extraction_schemas(llm, messages)
+    ext_output, extraction_schemas = await _run_propose_extraction_schemas(
+        llm, messages, usage_totals
+    )
     if extraction_schemas is None:
-        yield {"type": "result", "generation_context": f"Extraction schema generation failed: {ext_output}", "config_yaml": None}
+        yield {
+            "type": "result",
+            "generation_context": f"Extraction schema generation failed: {ext_output}",
+            "config_yaml": None,
+            **usage_totals,
+        }
         return
 
     yield {"type": "token", "token": "Generating pipeline config...\n"}
     pipe_output, pipeline_config_dict, record_schemas, stored_yaml = (
-        await _run_propose_pipeline_config(llm, messages, extraction_schemas)
+        await _run_propose_pipeline_config(llm, messages, extraction_schemas, usage_totals)
     )
     if pipeline_config_dict is None:
-        yield {"type": "result", "generation_context": f"Pipeline config generation failed: {pipe_output}", "config_yaml": None}
+        yield {
+            "type": "result",
+            "generation_context": f"Pipeline config generation failed: {pipe_output}",
+            "config_yaml": None,
+            **usage_totals,
+        }
         return
 
     if not needs_workflow:
-        yield {"type": "result", "generation_context": "Config generation complete.", "config_yaml": stored_yaml}
+        yield {
+            "type": "result",
+            "generation_context": "Config generation complete.",
+            "config_yaml": stored_yaml,
+            **usage_totals,
+        }
         return
 
     yield {"type": "token", "token": "Generating workflow schemas...\n"}
     wf_schema_output, workflow_schemas = await _run_propose_workflow_schemas(
-        llm, messages, record_schemas
+        llm, messages, record_schemas, usage_totals
     )
     if workflow_schemas is None:
-        yield {"type": "result", "generation_context": f"Workflow schema generation failed: {wf_schema_output}", "config_yaml": None}
+        yield {
+            "type": "result",
+            "generation_context": f"Workflow schema generation failed: {wf_schema_output}",
+            "config_yaml": None,
+            **usage_totals,
+        }
         return
 
     yield {"type": "token", "token": "Generating workflow config...\n"}
     wf_config_output, wf_config_yaml = await _run_propose_workflow_config(
-        llm, messages, pipeline_config_dict, record_schemas, workflow_schemas
+        llm, messages, pipeline_config_dict, record_schemas, workflow_schemas, usage_totals
     )
     if wf_config_yaml is None:
-        yield {"type": "result", "generation_context": f"Workflow config generation failed: {wf_config_output}", "config_yaml": None}
+        yield {
+            "type": "result",
+            "generation_context": f"Workflow config generation failed: {wf_config_output}",
+            "config_yaml": None,
+            **usage_totals,
+        }
     else:
-        yield {"type": "result", "generation_context": "Config generation complete.", "config_yaml": wf_config_yaml}
+        yield {
+            "type": "result",
+            "generation_context": "Config generation complete.",
+            "config_yaml": wf_config_yaml,
+            **usage_totals,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1004,8 +1057,9 @@ def _extract_record_schemas(pipeline_config_dict: dict) -> dict[str, str]:
 
 
 async def _run_propose_extraction_schemas(
-    llm: LLMBase, conversation_messages: list
+    llm: LLMBase, conversation_messages: list, usage_totals: UsageTotals | None = None
 ) -> tuple[str, dict[str, str] | None]:
+    usage_totals = _new_usage_totals() if usage_totals is None else usage_totals
     sub_messages = [{"role": "system", "content": _EXTRACTION_SCHEMA_AGENT_SYSTEM_PROMPT}] + [
         {"role": m["role"], "content": m.get("content") or ""}
         for m in conversation_messages
@@ -1015,6 +1069,7 @@ async def _run_propose_extraction_schemas(
     errors: list[str] = []
     for attempt in range(_MAX_SCHEMA_RETRIES):
         result = await llm.complete(sub_messages, temperature=0.2)
+        _accumulate_usage(result, usage_totals)
         schemas_yaml = _strip_yaml_fences(result.get("content") or "")
         schemas, errors = _parse_and_validate_schemas(
             schemas_yaml,
@@ -1063,7 +1118,9 @@ async def _run_propose_workflow_schemas(
     llm: LLMBase,
     conversation_messages: list,
     record_schemas: dict[str, str],
+    usage_totals: UsageTotals | None = None,
 ) -> tuple[str, dict[str, str] | None]:
+    usage_totals = _new_usage_totals() if usage_totals is None else usage_totals
     # The tool description tells the model to call this only when the design has
     # workflow output collections, but we also accept an empty `{}` result as a
     # safety net so a misjudged call returns a clear instruction instead of an
@@ -1088,6 +1145,7 @@ async def _run_propose_workflow_schemas(
     errors: list[str] = []
     for attempt in range(_MAX_SCHEMA_RETRIES):
         result = await llm.complete(sub_messages, temperature=0.2)
+        _accumulate_usage(result, usage_totals)
         schemas_yaml = _strip_yaml_fences(result.get("content") or "")
         schemas, errors = _parse_and_validate_schemas(
             schemas_yaml,
@@ -1146,6 +1204,7 @@ async def _run_propose_pipeline_config(
     llm: LLMBase,
     conversation_messages: list,
     extraction_schemas: dict[str, str],
+    usage_totals: UsageTotals | None = None,
 ) -> tuple[str, dict | None, dict[str, str] | None, str | None]:
     """Generate and validate the pipeline section of the app config.
 
@@ -1154,6 +1213,7 @@ async def _run_propose_pipeline_config(
     record_schemas contains the full stored record schemas (extraction fields + doc_id +
     id_field) for each pipeline-backed structured collection.
     """
+    usage_totals = _new_usage_totals() if usage_totals is None else usage_totals
     system_prompt = _PIPELINE_CONFIG_AGENT_SYSTEM_PROMPT + _schemas_context(
         "Validated pipeline extraction schemas",
         extraction_schemas,
@@ -1168,6 +1228,7 @@ async def _run_propose_pipeline_config(
     errors: list[str] = []
     for attempt in range(_MAX_CONFIG_RETRIES):
         result = await llm.complete(sub_messages, temperature=0.2)
+        _accumulate_usage(result, usage_totals)
         config_yaml = _strip_yaml_fences(result.get("content") or "")
         try:
             config_dict = yaml.safe_load(config_yaml)
@@ -1218,12 +1279,14 @@ async def _run_propose_workflow_config(
     pipeline_config_dict: dict | None,
     record_schemas: dict[str, str],
     workflow_schemas: dict[str, str],
+    usage_totals: UsageTotals | None = None,
 ) -> tuple[str, str | None]:
     """Generate the workflow additions and assemble the final validated app config.
 
     The LLM generates only the workflow output structured_collections and workflows.
     These are merged with the already-validated pipeline_config_dict.
     """
+    usage_totals = _new_usage_totals() if usage_totals is None else usage_totals
     if not pipeline_config_dict:
         return "Pipeline config not available — call propose_pipeline_config first.", None
 
@@ -1257,6 +1320,7 @@ async def _run_propose_workflow_config(
     errors: list[str] = []
     for attempt in range(_MAX_CONFIG_RETRIES):
         result = await llm.complete(sub_messages, temperature=0.2)
+        _accumulate_usage(result, usage_totals)
         workflow_yaml = _strip_yaml_fences(result.get("content") or "")
         try:
             workflow_additions = yaml.safe_load(workflow_yaml)

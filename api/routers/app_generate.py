@@ -85,6 +85,8 @@ async def _chat_turn_events(
     validated_config_yaml: str | None = None
     final_content: str = ""
     streamed_chunks: list[str] = []
+    total_input_tokens = 0
+    total_output_tokens = 0
 
     try:
         for call_num in range(_MAX_AGENT_CALLS):
@@ -96,6 +98,12 @@ async def _chat_turn_events(
                     yield {"type": "token", "token": chunk}
                 else:
                     result = chunk
+
+            if result is not None:
+                usage = result.get("usage")
+                if usage:
+                    total_input_tokens += usage.get("input_tokens", 0)
+                    total_output_tokens += usage.get("output_tokens", 0)
 
             tool_calls = result.get("tool_calls") if result else None
 
@@ -144,14 +152,24 @@ async def _chat_turn_events(
                 else:
                     generation_context = event["generation_context"]
                     validated_config_yaml = event["config_yaml"]
+                    total_input_tokens += event.get("input_tokens", 0)
+                    total_output_tokens += event.get("output_tokens", 0)
 
             # Final LLM turn: user-facing summary or error explanation (no tools)
             messages.append({"role": "user", "content": generation_context})
             streamed_chunks = []
+            final_result = None
             async for chunk in llm.complete_stream(messages, tools=[], temperature=0.3):
                 if isinstance(chunk, str):
                     streamed_chunks.append(chunk)
                     yield {"type": "token", "token": chunk}
+                else:
+                    final_result = chunk
+            if final_result is not None:
+                usage = final_result.get("usage")
+                if usage:
+                    total_input_tokens += usage.get("input_tokens", 0)
+                    total_output_tokens += usage.get("output_tokens", 0)
             final_content = "".join(streamed_chunks).strip()
             break
         else:
@@ -173,7 +191,12 @@ async def _chat_turn_events(
         )
         yield {
             "type": "result",
-            "result": {"content": final_content, "config_yaml": validated_config_yaml},
+            "result": {
+                "content": final_content,
+                "config_yaml": validated_config_yaml,
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+            },
         }
     except Exception as exc:
         logger.exception("%s failed", log_prefix)
@@ -202,6 +225,8 @@ async def chat(
     """
     validated_config_yaml: str | None = None
     final_content: str = ""
+    input_tokens = 0
+    output_tokens = 0
     async for event in _chat_turn_events(
         body, system_resources, account_id=account_id, log_prefix="generate/chat"
     ):
@@ -209,6 +234,8 @@ async def chat(
             result = event["result"]
             final_content = result["content"]
             validated_config_yaml = result["config_yaml"]
+            input_tokens = result["input_tokens"]
+            output_tokens = result["output_tokens"]
         elif event["type"] == "error":
             raise HTTPException(status_code=500, detail=event["error"])
 
@@ -222,6 +249,8 @@ async def chat(
     return GenerateChatResponse(
         content=final_content,
         config_yaml=validated_config_yaml,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
 
 
@@ -234,7 +263,8 @@ async def chat_stream(
     """Stream a generate chat turn as Server-Sent Events.
 
     Token events:  ``{"token": "<text>"}``
-    Final event:   ``{"result": {"content": "...", "config_yaml": "..."}}``
+    Final event:   ``{"result": {"content": "...", "config_yaml": "...", "input_tokens": ...,
+                     "output_tokens": ...}}``
     Sentinel:      ``data: [DONE]``
 
     Account-scoped (``X-Account-Id`` header) for multi-tenancy; no namespace is

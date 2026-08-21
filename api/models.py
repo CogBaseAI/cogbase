@@ -652,6 +652,8 @@ class GenerateChatRequest(BaseModel):
 class GenerateChatResponse(BaseModel):
     content: str        # display text (CONFIG markers stripped); store full in history
     config_yaml: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class GenerateDeployRequest(BaseModel):
