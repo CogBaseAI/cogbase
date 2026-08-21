@@ -112,6 +112,47 @@ class InMemoryStructuredStore(StructuredStoreBase):
                 )
         self._frames[key] = pd.concat([surviving, new_df], ignore_index=True)
 
+    async def _increment(
+        self,
+        collection: str,
+        key: dict,
+        deltas: dict,
+        set_fields: dict,
+    ) -> dict:
+        # Safe without a lock: nothing here awaits, so within one process no
+        # other task can interleave between the lookup and the write — the
+        # same guarantee a real backend gets from doing it in one SQL
+        # statement. That's specific to this store being in-process/single-
+        # writer; it is not a pattern a networked backend could copy.
+        schema = self._get_schema(collection)
+        frame_key = self._c(collection)
+        df = self._frames[frame_key]
+
+        mask = pd.Series(True, index=df.index)
+        for k, v in key.items():
+            mask &= df[k] == v
+        match = df.index[mask] if not df.empty else df.index
+
+        if len(match) > 0:
+            idx = match[0]
+            for field_name, delta in deltas.items():
+                current = df.at[idx, field_name]
+                current = 0 if pd.isna(current) else current
+                df.at[idx, field_name] = current + delta
+            for field_name, value in set_fields.items():
+                df.at[idx, field_name] = value
+            self._frames[frame_key] = df
+            row = {c: _clean(df.at[idx, c]) for c in schema.fields}
+        else:
+            new_row = {c: None for c in schema.fields}
+            new_row.update(key)
+            new_row.update(deltas)
+            new_row.update(set_fields)
+            new_df = _to_frame([_serialize(new_row, schema)], schema)
+            self._frames[frame_key] = pd.concat([df, new_df], ignore_index=True)
+            row = {c: _clean(new_row.get(c)) for c in schema.fields}
+        return row
+
     async def query(
         self,
         collection: str,

@@ -144,6 +144,43 @@ class SQLiteStructuredStore(StructuredStoreBase):
         self._conn.executemany(sql, [_to_sql_row(r, schema) for r in records])
         self._conn.commit()
 
+    async def _increment(
+        self,
+        collection: str,
+        key: dict,
+        deltas: dict,
+        set_fields: dict,
+    ) -> dict:
+        schema = self._get_schema(collection)
+        tbl = self._c(collection)
+        cols = list(schema.fields.keys())
+
+        # See PostgresStructuredStore._increment: the VALUES row is only used
+        # directly on a fresh insert (baseline 0 + delta), and via `excluded`
+        # in the SET clause on conflict.
+        row: dict = dict.fromkeys(cols)
+        row.update(key)
+        row.update(deltas)
+        row.update(set_fields)
+
+        col_list = ", ".join(f'"{c}"' for c in cols)
+        placeholders = ", ".join(["?"] * len(cols))
+        conflict_target = ", ".join(f'"{f}"' for f in schema.primary_fields)
+        set_clauses = [f'"{c}" = "{c}" + excluded."{c}"' for c in deltas]
+        set_clauses += [f'"{c}" = excluded."{c}"' for c in set_fields]
+        sql = (
+            f'INSERT INTO "{tbl}" ({col_list}) VALUES ({placeholders}) '
+            f"ON CONFLICT ({conflict_target}) DO UPDATE SET {', '.join(set_clauses)}"
+        )
+        self._conn.execute(sql, _to_sql_row(row, schema))
+        self._conn.commit()
+
+        key_where = " AND ".join(f'"{f}" = ?' for f in schema.primary_fields)
+        key_params = [key[f] for f in schema.primary_fields]
+        cur = self._conn.execute(f'SELECT {col_list} FROM "{tbl}" WHERE {key_where}', key_params)
+        result = cur.fetchone()
+        return _from_sql_row(dict(result), schema)
+
     async def query(
         self,
         collection: str,

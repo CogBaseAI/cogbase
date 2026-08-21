@@ -113,6 +113,15 @@ class ScopedStructuredStore(StructuredStoreBase):
     ) -> None:
         await self._inner.delete_records(self._c(collection), filters)
 
+    async def _increment(
+        self,
+        collection: str,
+        key: dict[str, object],
+        deltas: dict[str, int | float],
+        set_fields: dict[str, object],
+    ) -> dict:
+        return await self._inner._increment(self._c(collection), key, deltas, set_fields)
+
 
 class ScopedDocumentStore(DocumentStoreBase):
     """Document store proxy that transparently prefixes every collection name."""

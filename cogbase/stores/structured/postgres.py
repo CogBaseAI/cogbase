@@ -170,6 +170,46 @@ class PostgresStructuredStore(StructuredStoreBase):
         async with pool.acquire() as conn:
             await conn.executemany(sql, rows)
 
+    async def _increment(
+        self,
+        collection: str,
+        key: dict[str, Any],
+        deltas: dict[str, int | float],
+        set_fields: dict[str, Any],
+    ) -> dict:
+        schema = self._get_schema(collection)
+        tbl = self._c(collection)
+        pool = self._get_pool()
+        cols = list(schema.fields.keys())
+
+        # The VALUES row: key fields as given, delta fields at their delta
+        # amount (the right value for a freshly-created row, whose baseline is
+        # 0), set_fields as given, everything else NULL. On conflict this row
+        # is never used directly — only via EXCLUDED in the SET clause below.
+        row: dict[str, Any] = dict.fromkeys(cols)
+        row.update(key)
+        row.update(deltas)
+        row.update(set_fields)
+
+        col_list = ", ".join(f'"{c}"' for c in cols)
+        placeholders = ", ".join(f"${i + 1}" for i in range(len(cols)))
+        conflict_target = ", ".join(f'"{f}"' for f in schema.primary_fields)
+        # The existing row's value must be table-qualified here — inside an
+        # ON CONFLICT DO UPDATE SET, a bare column name is ambiguous between
+        # the target table and `excluded` (unlike a plain UPDATE, where it
+        # would unambiguously mean the target).
+        set_clauses = [f'"{c}" = "{tbl}"."{c}" + EXCLUDED."{c}"' for c in deltas]
+        set_clauses += [f'"{c}" = EXCLUDED."{c}"' for c in set_fields]
+        sql = (
+            f'INSERT INTO "{tbl}" ({col_list}) VALUES ({placeholders}) '
+            f"ON CONFLICT ({conflict_target}) DO UPDATE SET {', '.join(set_clauses)} "
+            f"RETURNING {col_list}"
+        )
+        values = _to_pg_row(row, schema)
+        async with pool.acquire() as conn:
+            result = await conn.fetchrow(sql, *values)
+        return _from_pg_row(dict(result), schema)
+
     async def query(
         self,
         collection: str,

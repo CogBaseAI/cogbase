@@ -54,6 +54,19 @@ CONTRADICTIONS_SCHEMA = CollectionSchema(
     },
 )
 
+COUNTERS_SCHEMA = CollectionSchema(
+    name="counters",
+    description="Rollup counters keyed by id — exercises increment()'s atomic upsert-plus-arithmetic.",
+    primary_fields=["counter_id"],
+    fields={
+        "counter_id": FieldSchema(type=FieldType.STRING,  nullable=False),
+        "count":      FieldSchema(type=FieldType.INTEGER, nullable=True),
+        "total":      FieldSchema(type=FieldType.FLOAT,   nullable=True),
+        "label":      FieldSchema(type=FieldType.STRING,  nullable=True),
+        "updated_at": FieldSchema(type=FieldType.STRING,  nullable=True),
+    },
+)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -73,6 +86,7 @@ async def structured_store(request, tmp_path):
     await store.create_collection(FACTS_SCHEMA)
     await store.create_collection(EVENTS_SCHEMA)
     await store.create_collection(CONTRADICTIONS_SCHEMA)
+    await store.create_collection(COUNTERS_SCHEMA)
     return store
 
 
@@ -150,12 +164,13 @@ async def postgres_store(postgres_container):
     await store.connect()
 
     async with store._get_pool().acquire() as conn:
-        for name in ("facts", "events", "contradictions"):
+        for name in ("facts", "events", "contradictions", "counters"):
             await conn.execute(f'DROP TABLE IF EXISTS "{name}"')
 
     await store.create_collection(FACTS_SCHEMA)
     await store.create_collection(EVENTS_SCHEMA)
     await store.create_collection(CONTRADICTIONS_SCHEMA)
+    await store.create_collection(COUNTERS_SCHEMA)
 
     yield store
     await store.close()
@@ -172,4 +187,5 @@ async def memory_store():
     await store.create_collection(FACTS_SCHEMA)
     await store.create_collection(EVENTS_SCHEMA)
     await store.create_collection(CONTRADICTIONS_SCHEMA)
+    await store.create_collection(COUNTERS_SCHEMA)
     return store

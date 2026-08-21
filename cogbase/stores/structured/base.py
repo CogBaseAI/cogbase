@@ -82,6 +82,84 @@ class StructuredStoreBase(abc.ABC):
     async def _save(self, collection: str, records: list[dict]) -> None:
         """Backend implementation of save; always receives plain dicts."""
 
+    async def increment(
+        self,
+        collection: str,
+        key: dict[str, object],
+        deltas: dict[str, int | float],
+        *,
+        set_fields: dict[str, object] | None = None,
+    ) -> dict:
+        """Atomically add *deltas* to one row's fields, upserting it first.
+
+        ``save`` is a whole-row upsert — the caller supplies the row's final
+        value, so "add N to whatever the current value is" can only be done by
+        a caller-side read, then a ``save`` of the sum. Two callers doing that
+        concurrently for the same row both read the same starting value, and
+        the second ``save`` clobbers the first's — a lost update, and on a
+        row every request touches (e.g. a deployment-wide daily counter) that
+        is not a rare race, it is routine. ``increment`` is the store's one
+        atomic read-modify-write primitive: every backend applies
+        ``col = col + delta`` as a single statement, so both callers' deltas
+        land.
+
+        Args:
+            key:         Primary-key values identifying the row. Must supply
+                         every field in ``primary_fields``.
+            deltas:      Field name -> amount to add to that field's current
+                         value (``0`` if the row does not exist yet, i.e. the
+                         value becomes the delta itself).
+            set_fields:  Field name -> value to write as-is, on both create and
+                         update, rather than accumulated (e.g. an
+                         ``updated_at`` timestamp).
+
+        Every field named in ``key``/``deltas``/``set_fields`` must be in the
+        schema. A field named in none of them keeps its current value (or
+        ``None`` on first creation) — ``increment`` never touches a column
+        the caller didn't ask it to. Returns the row's resulting state.
+
+        Concrete-with-a-raise rather than abstract, the same way
+        :meth:`VectorStoreBase.query` is: most backends have a native atomic
+        upsert-with-arithmetic (Postgres/SQLite's ``ON CONFLICT ... DO UPDATE
+        SET col = col + EXCLUDED.col``; the in-memory store's single-process,
+        no-``await``-in-between critical section), but forcing every backend
+        to have one would either break out-of-tree implementations that
+        predate this method or push them toward faking atomicity with a
+        caller-side lock that doesn't hold across processes — silently
+        reintroducing the exact race this method exists to remove. A backend
+        without a real atomic path should say so loudly, not pretend.
+        """
+        schema = self._get_schema(collection)
+        missing = [f for f in schema.primary_fields if f not in key]
+        if missing:
+            raise ValueError(f"increment() key missing primary field(s): {missing}")
+        set_fields = set_fields or {}
+        if not deltas and not set_fields:
+            raise ValueError("increment() needs at least one of deltas/set_fields")
+        named = {**key, **deltas, **set_fields}
+        unknown = [f for f in named if f not in schema.fields]
+        if unknown:
+            raise ValueError(f"increment() references unknown field(s): {unknown}")
+        return await self._increment(collection, key, deltas, set_fields)
+
+    async def _increment(
+        self,
+        collection: str,
+        key: dict[str, object],
+        deltas: dict[str, int | float],
+        set_fields: dict[str, object],
+    ) -> dict:
+        """Backend implementation of increment; always receives validated plain dicts.
+
+        Raises by default — see :meth:`increment`'s docstring for why this
+        isn't abstract. Override in a backend that can do the upsert-plus-
+        arithmetic as one atomic statement.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement atomic increment(); "
+            "override _increment() to add it"
+        )
+
     @abc.abstractmethod
     async def query(
         self,

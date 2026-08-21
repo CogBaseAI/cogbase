@@ -1039,3 +1039,81 @@ async def test_register_schema_unknown_collection_still_raises_on_save(structure
     # In InMemoryStructuredStore, save uses self._frames which won't have "ghost".
     with pytest.raises(KeyError):
         await structured_store.save("ghost", [{"id": "x"}])
+
+
+# ------------------------------------------------------------------
+# increment — atomic upsert-plus-arithmetic
+# ------------------------------------------------------------------
+
+async def test_increment_creates_row_with_deltas_as_initial_value(structured_store):
+    row = await structured_store.increment("counters", {"counter_id": "c1"}, {"count": 3, "total": 1.5})
+    assert row["counter_id"] == "c1"
+    assert row["count"] == 3
+    assert row["total"] == 1.5
+
+    rows = await structured_store.query("counters", filters=[Col("counter_id") == "c1"])
+    assert len(rows) == 1
+    assert rows[0]["count"] == 3
+
+
+async def test_increment_adds_to_an_existing_row(structured_store):
+    await structured_store.increment("counters", {"counter_id": "c1"}, {"count": 3})
+    row = await structured_store.increment("counters", {"counter_id": "c1"}, {"count": 4})
+    assert row["count"] == 7
+
+    rows = await structured_store.query("counters", filters=[Col("counter_id") == "c1"])
+    assert rows[0]["count"] == 7
+
+
+async def test_increment_set_fields_overwrite_rather_than_accumulate(structured_store):
+    await structured_store.increment(
+        "counters", {"counter_id": "c1"}, {"count": 1}, set_fields={"label": "first"}
+    )
+    row = await structured_store.increment(
+        "counters", {"counter_id": "c1"}, {"count": 1}, set_fields={"label": "second"}
+    )
+    assert row["count"] == 2
+    assert row["label"] == "second"  # overwritten, not "firstsecond" or similar
+
+
+async def test_increment_fields_named_in_neither_deltas_nor_set_fields_are_untouched(structured_store):
+    await structured_store.increment(
+        "counters", {"counter_id": "c1"}, {"count": 1}, set_fields={"label": "kept"}
+    )
+    row = await structured_store.increment("counters", {"counter_id": "c1"}, {"count": 1})
+    assert row["label"] == "kept"
+
+
+async def test_increment_missing_primary_field_in_key_raises(structured_store):
+    with pytest.raises(ValueError, match="primary field"):
+        await structured_store.increment("counters", {}, {"count": 1})
+
+
+async def test_increment_unknown_field_raises(structured_store):
+    with pytest.raises(ValueError, match="unknown field"):
+        await structured_store.increment("counters", {"counter_id": "c1"}, {"nope": 1})
+
+
+async def test_increment_needs_at_least_one_delta_or_set_field(structured_store):
+    with pytest.raises(ValueError, match="deltas/set_fields"):
+        await structured_store.increment("counters", {"counter_id": "c1"}, {})
+
+
+async def test_increment_concurrent_increments_of_the_same_row_are_not_lost(structured_store):
+    """Regression test for the lost-update race `increment()` exists to close.
+
+    A caller-side read-then-`save()` loses updates when two writers interleave
+    between the read and the write — see `cogbase_service`'s
+    `billing/usage.py`, which hit exactly this on its deployment-wide daily
+    rollup (one row, written by every billable request). `increment()` must
+    apply every delta even when many callers target the same row concurrently.
+    """
+    import asyncio
+
+    n = 20
+    await asyncio.gather(*[
+        structured_store.increment("counters", {"counter_id": "c1"}, {"count": 1})
+        for _ in range(n)
+    ])
+    rows = await structured_store.query("counters", filters=[Col("counter_id") == "c1"])
+    assert rows[0]["count"] == n

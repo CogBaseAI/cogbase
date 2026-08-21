@@ -64,6 +64,14 @@ from tests.stores.test_structured_store import (
     test_delete_collection_removes_collection_and_data,
     test_delete_collection_unknown_is_noop,
     test_delete_collection_leaves_other_collections_intact,
+    test_increment_creates_row_with_deltas_as_initial_value,
+    test_increment_adds_to_an_existing_row,
+    test_increment_set_fields_overwrite_rather_than_accumulate,
+    test_increment_fields_named_in_neither_deltas_nor_set_fields_are_untouched,
+    test_increment_missing_primary_field_in_key_raises,
+    test_increment_unknown_field_raises,
+    test_increment_needs_at_least_one_delta_or_set_field,
+    test_increment_concurrent_increments_of_the_same_row_are_not_lost,
 )
 
 
